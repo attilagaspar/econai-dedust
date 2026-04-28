@@ -12,6 +12,7 @@ or via econai.py (coming soon).
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from pathlib import Path
 from typing import Optional
@@ -21,6 +22,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from app.pipeline import (
+    list_projects,
+    load_config,
+    load_pipeline,
+    save_pipeline,
+    stages_for,
+    project_dir,
+    advance_stage,
+    set_stage,
+)
 
 app = FastAPI(title="EconAI", version="0.1.0")
 
@@ -295,10 +307,216 @@ def get_cell(
 
 
 # ---------------------------------------------------------------------------
-# Root — redirect to viewer
+# Routes — project management
+# ---------------------------------------------------------------------------
+
+@app.get("/api/projects")
+def api_list_projects():
+    return {"projects": list_projects()}
+
+
+@app.get("/api/project/{name}")
+def api_get_project(name: str):
+    try:
+        cfg   = load_config(name)
+        state = load_pipeline(name)
+        pdir  = project_dir(name)
+        ann   = pdir / "annotations"
+        n_json = len(list(ann.glob("*.json"))) if ann.exists() else 0
+        n_img  = len(list(ann.glob("*.png")) + list(ann.glob("*.jpg"))) if ann.exists() else 0
+        return {
+            "config":  cfg,
+            "pipeline": state,
+            "stats":   {"json": n_json, "images": n_img},
+            "stages":  stages_for(cfg["type"]),
+            "annotations_path": str(ann),
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class ConfigUpdate(BaseModel):
+    server: Optional[dict] = None
+    llm:    Optional[dict] = None
+    labels: Optional[list] = None
+
+
+@app.patch("/api/project/{name}/config")
+def api_update_config(name: str, body: ConfigUpdate):
+    try:
+        cfg  = load_config(name)
+        pdir = project_dir(name)
+        if body.server is not None:
+            cfg["server"] = {**cfg.get("server", {}), **body.server}
+        if body.llm is not None:
+            cfg["llm"] = {**cfg.get("llm", {}), **body.llm}
+        if body.labels is not None:
+            cfg["labels"] = body.labels
+        (pdir / "config.json").write_text(
+            json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return {"ok": True, "config": cfg}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class NewProject(BaseModel):
+    name:   str
+    type:   str = "A"
+    labels: list = []
+
+@app.post("/api/project/new")
+def api_new_project(body: NewProject):
+    from app.pipeline import create_project
+    try:
+        pdir = create_project(body.name, body.type, body.labels)
+        return {"ok": True, "path": str(pdir)}
+    except (FileExistsError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/project/{name}/advance")
+def api_advance(name: str):
+    try:
+        new_stage = advance_stage(name)
+        return {"ok": True, "stage": new_stage}
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/project/{name}/set-stage")
+def api_set_stage(name: str, stage: str = Query(...)):
+    try:
+        set_stage(name, stage)
+        return {"ok": True, "stage": stage}
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Routes — SSH / server operations
+# ---------------------------------------------------------------------------
+
+def _server_cfg(name: str) -> dict:
+    cfg = load_config(name)
+    srv = cfg.get("server", {})
+    if not srv.get("host"):
+        raise HTTPException(status_code=400, detail="Server host not configured")
+    if not srv.get("user"):
+        raise HTTPException(status_code=400, detail="Server user not configured")
+    if not srv.get("key_path"):
+        raise HTTPException(status_code=400, detail="Server key_path not configured")
+    return srv
+
+
+@app.post("/api/project/{name}/server/test")
+def api_server_test(name: str):
+    from app import ssh_ops
+    try:
+        srv = _server_cfg(name)
+        return ssh_ops.test_connection(srv["host"], srv["user"], srv["key_path"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/project/{name}/server/push")
+def api_server_push(name: str):
+    """Upload the project's annotations/ folder to the server."""
+    from app import ssh_ops
+    try:
+        srv  = _server_cfg(name)
+        pdir = project_dir(name)
+        local_ann  = pdir / "annotations"
+        remote_ann = posixpath.join(srv["remote_path"], name, "annotations")
+        if not local_ann.exists():
+            raise HTTPException(status_code=400, detail="annotations/ folder does not exist")
+        return ssh_ops.push_folder(
+            srv["host"], srv["user"], srv["key_path"],
+            local_ann, remote_ann,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/project/{name}/server/pull")
+def api_server_pull(name: str, subfolder: str = Query("annotations")):
+    """Download a subfolder (default: annotations/) back from the server."""
+    from app import ssh_ops
+    try:
+        srv  = _server_cfg(name)
+        pdir = project_dir(name)
+        remote = posixpath.join(srv["remote_path"], name, subfolder)
+        local  = pdir / subfolder
+        return ssh_ops.pull_folder(
+            srv["host"], srv["user"], srv["key_path"],
+            remote, local,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class JobSubmit(BaseModel):
+    command: str
+
+
+@app.post("/api/project/{name}/job/submit")
+def api_job_submit(name: str, body: JobSubmit):
+    """Submit an arbitrary shell command as a background job on the server."""
+    from app import ssh_ops
+    import time as _time
+    try:
+        srv      = _server_cfg(name)
+        log_path = posixpath.join(
+            srv["remote_path"], name, f"job_{int(_time.time())}.log"
+        )
+        result = ssh_ops.submit_job(
+            srv["host"], srv["user"], srv["key_path"],
+            body.command, log_path,
+        )
+        if result["ok"]:
+            # persist pid + log_path in pipeline.json so we can poll later
+            state = load_pipeline(name)
+            state["job"] = {"pid": result["pid"], "log_path": log_path,
+                            "command": body.command}
+            save_pipeline(name, state)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/project/{name}/job/status")
+def api_job_status(name: str):
+    """Poll the status of the last submitted background job."""
+    from app import ssh_ops
+    try:
+        srv   = _server_cfg(name)
+        state = load_pipeline(name)
+        job   = state.get("job")
+        if not job:
+            return {"ok": True, "running": False, "log_tail": "(no job submitted yet)"}
+        return ssh_ops.job_status(
+            srv["host"], srv["user"], srv["key_path"],
+            job.get("pid"), job["log_path"],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Root — redirect to dashboard
 # ---------------------------------------------------------------------------
 
 @app.get("/")
 def root():
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/index.html")
+    return RedirectResponse(url="/static/dashboard.html")

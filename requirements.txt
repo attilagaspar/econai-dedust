@@ -1,6 +1,12 @@
-# Step 1 — pipeline state machine (no extra deps, stdlib only)
-# Step 2 will add: fastapi uvicorn python-multipart pillow
-# Step 3 will add: paramiko (server SSH)
+# Core web server
+fastapi
+uvicorn[standard]
+python-multipart
+pillow
+psutil
+
+# SSH / SFTP for GPU server operations
+paramiko
 
 # Already in your environment from econai-llmocr:
 # openai pandas openpyxl pytesseract opencv-python pillow PyQt5

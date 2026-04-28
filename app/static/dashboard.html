@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EconAI — Dashboard</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
+
+header {
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+  padding: 14px 28px;
+  display: flex; align-items: center; gap: 16px;
+}
+header h1 { font-size: 1.3rem; font-weight: 600; color: #e94560; letter-spacing: 1px; }
+header span { color: #888; font-size: 0.85rem; }
+
+.layout { display: flex; height: calc(100vh - 53px); }
+
+/* ── LEFT PANEL: project list ── */
+.sidebar {
+  width: 340px; flex-shrink: 0;
+  background: #16213e;
+  border-right: 1px solid #0f3460;
+  display: flex; flex-direction: column;
+}
+.sidebar-header {
+  padding: 14px 16px 10px;
+  display: flex; justify-content: space-between; align-items: center;
+  border-bottom: 1px solid #0f3460;
+}
+.sidebar-header h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+#btn-new-project {
+  background: #e94560; color: #fff; border: none; border-radius: 4px;
+  padding: 5px 11px; font-size: 0.8rem; cursor: pointer; font-weight: 600;
+}
+#btn-new-project:hover { background: #c73652; }
+
+#project-list { flex: 1; overflow-y: auto; }
+.project-row {
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #0d1b35;
+  transition: background 0.1s;
+}
+.project-row:hover { background: #1d2e50; }
+.project-row.active { background: #0f3460; border-left: 3px solid #e94560; }
+.project-row .proj-name { font-weight: 600; font-size: 0.95rem; }
+.project-row .proj-meta { font-size: 0.75rem; color: #888; margin-top: 3px; display: flex; gap: 12px; }
+.project-row .stage-pill {
+  display: inline-block; font-size: 0.7rem; padding: 1px 7px; border-radius: 10px;
+  font-weight: 600; margin-top: 5px;
+}
+
+/* ── RIGHT PANEL: project detail ── */
+.detail {
+  flex: 1; overflow-y: auto;
+  padding: 24px 32px;
+  background: #1a1a2e;
+}
+.detail h2 { font-size: 1.4rem; margin-bottom: 6px; }
+.detail .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 24px; }
+
+.card {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+.card h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 14px; }
+
+/* Pipeline progress bar */
+.pipeline-stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.ps {
+  padding: 4px 12px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
+  border: 1px solid #333;
+  color: #888; background: #1a1a2e;
+}
+.ps.done-stage { color: #4caf50; border-color: #4caf50; }
+.ps.current-stage { color: #fff; background: #e94560; border-color: #e94560; }
+.ps.future-stage { color: #555; border-color: #333; }
+
+/* Buttons */
+.btn {
+  border: none; border-radius: 5px; cursor: pointer; font-size: 0.82rem; padding: 7px 16px; font-weight: 600;
+  transition: opacity 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-primary   { background: #e94560; color: #fff; }
+.btn-secondary { background: #0f3460; color: #ccc; }
+.btn-success   { background: #4caf50; color: #fff; }
+.btn-warning   { background: #ff9800; color: #000; }
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+
+/* Form fields */
+.field-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+.field-row label { width: 110px; font-size: 0.8rem; color: #aaa; flex-shrink: 0; }
+.field-row input, .field-row select {
+  flex: 1; background: #0d1b35; border: 1px solid #0f3460; color: #e0e0e0;
+  border-radius: 4px; padding: 6px 10px; font-size: 0.85rem;
+}
+.field-row input:focus, .field-row select:focus { outline: none; border-color: #e94560; }
+
+/* Log box */
+#job-log {
+  background: #0d1020; border: 1px solid #0f3460; border-radius: 5px;
+  padding: 12px; font-family: monospace; font-size: 0.78rem; color: #a0c8a0;
+  min-height: 80px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  margin-top: 12px;
+}
+
+/* Status indicator */
+.status-dot {
+  width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px;
+}
+.dot-green  { background: #4caf50; }
+.dot-yellow { background: #ff9800; animation: blink 1.2s infinite; }
+.dot-red    { background: #e94560; }
+.dot-grey   { background: #555; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* Empty state */
+.empty { text-align: center; padding: 60px 20px; color: #555; }
+.empty .big { font-size: 3rem; margin-bottom: 12px; }
+
+/* Modal */
+.modal-bg {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 100; align-items: center; justify-content: center;
+}
+.modal-bg.open { display: flex; }
+.modal {
+  background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+  padding: 28px; width: 420px; max-width: 95vw;
+}
+.modal h3 { margin-bottom: 18px; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>EconAI</h1>
+  <span>Historical document digitization pipeline</span>
+</header>
+
+<div class="layout">
+
+  <!-- ── LEFT: project list ── -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h2>Projects</h2>
+      <button id="btn-new-project" onclick="openNewProjectModal()">+ New</button>
+    </div>
+    <div id="project-list">
+      <div class="empty"><div class="big">📂</div>Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT: detail panel ── -->
+  <div class="detail" id="detail-panel">
+    <div class="empty">
+      <div class="big">👈</div>
+      <div>Select a project to view details</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- New-project modal -->
+<div class="modal-bg" id="new-project-modal">
+  <div class="modal">
+    <h3>New Project</h3>
+    <div class="field-row">
+      <label>Name</label>
+      <input id="np-name" placeholder="e.g. machines1935" />
+    </div>
+    <div class="field-row">
+      <label>Type</label>
+      <select id="np-type">
+        <option value="A">A — Tables (statistical yearbooks)</option>
+        <option value="B">B — Structured text (company registers)</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <label>Labels</label>
+      <input id="np-labels" placeholder="label1 label2 label3  (space-separated)" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeNewProjectModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitNewProject()">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+let projects   = [];
+let activeProj = null;
+let jobPollTimer = null;
+
+const STAGE_COLORS = {
+  raw:            '#555',
+  annotating:     '#9c27b0',
+  training:       '#ff9800',
+  predicting:     '#ff9800',
+  correcting:     '#2196f3',
+  superstructure: '#2196f3',
+  ocr:            '#00bcd4',
+  llm_cleaning:   '#00bcd4',
+  validating:     '#4caf50',
+  exporting:      '#8bc34a',
+  done:           '#4caf50',
+};
+
+// ============================================================
+// Boot
+// ============================================================
+loadProjects();
+
+async function loadProjects() {
+  const res  = await fetch('/api/projects');
+  const data = await res.json();
+  projects   = data.projects || [];
+  renderProjectList();
+}
+
+// ============================================================
+// Sidebar rendering
+// ============================================================
+function renderProjectList() {
+  const el = document.getElementById('project-list');
+  if (!projects.length) {
+    el.innerHTML = `<div class="empty"><div class="big">📂</div>No projects yet.<br>Click <b>+ New</b> to create one.</div>`;
+    return;
+  }
+  el.innerHTML = projects.map(p => {
+    const color = STAGE_COLORS[p.stage] || '#888';
+    const active = activeProj && activeProj.name === p.name ? 'active' : '';
+    return `
+      <div class="project-row ${active}" onclick="selectProject('${p.name}')">
+        <div class="proj-name">${p.name}</div>
+        <div class="proj-meta">
+          <span>Type ${p.type}</span>
+          <span>${p.pages} pages</span>
+          <span>${p.updated ? p.updated.slice(0,10) : ''}</span>
+        </div>
+        <span class="stage-pill" style="background:${color}22;color:${color};border-color:${color}55">
+          ${p.stage}
+        </span>
+      </div>`;
+  }).join('');
+}
+
+// ============================================================
+// Project detail
+// ============================================================
+async function selectProject(name) {
+  const res  = await fetch(`/api/project/${name}`);
+  const data = await res.json();
+  activeProj = { name, ...data };
+  renderProjectList(); // re-render sidebar to update active highlight
+  renderDetail();
+}
+
+function renderDetail() {
+  if (!activeProj) return;
+  const { config: cfg, pipeline: pl, stats, stages, annotations_path } = activeProj;
+  const detail = document.getElementById('detail-panel');
+
+  const stagesHtml = stages.map(s => {
+    const idx_s = stages.indexOf(s);
+    const idx_c = stages.indexOf(pl.stage);
+    let cls = idx_s < idx_c ? 'done-stage' : idx_s === idx_c ? 'current-stage' : 'future-stage';
+    return `<span class="ps ${cls}">${s}</span>`;
+  }).join('');
+
+  const srv = cfg.server || {};
+  const connStatus = srv.host
+    ? `<span class="status-dot dot-grey"></span>${srv.user}@${srv.host}`
+    : '<span class="status-dot dot-grey"></span>Not configured';
+
+  detail.innerHTML = `
+    <h2>${cfg.name}</h2>
+    <div class="subtitle">Type ${cfg.type} &nbsp;·&nbsp; ${cfg.type === 'A' ? 'Tables' : 'Structured text'} &nbsp;·&nbsp; ${stats.json} pages (${stats.images} images)</div>
+
+    <!-- Pipeline progress -->
+    <div class="card">
+      <h3>Pipeline</h3>
+      <div class="pipeline-stages">${stagesHtml}</div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="openEditor()">📝 Open Editor</button>
+        <button class="btn btn-secondary" onclick="advanceStage()">▶ Advance Stage</button>
+      </div>
+    </div>
+
+    <!-- Server config -->
+    <div class="card">
+      <h3>GPU Server &nbsp;<small id="conn-status-label">${connStatus}</small></h3>
+      <div class="field-row">
+        <label>Host</label>
+        <input id="srv-host" value="${srv.host||''}" placeholder="gpu.myuni.edu" />
+      </div>
+      <div class="field-row">
+        <label>User</label>
+        <input id="srv-user" value="${srv.user||''}" placeholder="username" />
+      </div>
+      <div class="field-row">
+        <label>Key file</label>
+        <input id="srv-key"  value="${srv.key_path||''}" placeholder="C:/Users/you/.ssh/id_rsa" />
+      </div>
+      <div class="field-row">
+        <label>Remote path</label>
+        <input id="srv-remote" value="${srv.remote_path||''}" placeholder="/home/user/econai" />
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="saveServerConfig()">💾 Save</button>
+        <button class="btn btn-secondary" onclick="testConnection()">🔌 Test connection</button>
+      </div>
+    </div>
+
+    <!-- File transfer -->
+    <div class="card">
+      <h3>File Transfer</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
+        Push your local <code>annotations/</code> folder to the server before training.<br>
+        Pull back after inference to get predicted layouts.
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-warning" onclick="pushAnnotations()">⬆ Push annotations → server</button>
+        <button class="btn btn-success" onclick="pullAnnotations()">⬇ Pull annotations ← server</button>
+      </div>
+    </div>
+
+    <!-- Job submission -->
+    <div class="card">
+      <h3>Remote Job</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:10px">
+        Run any command on the GPU server as a background job. Use this to submit training or inference.
+      </p>
+      <div class="field-row">
+        <label>Command</label>
+        <input id="job-cmd" placeholder="docker exec econai python train.py --config /path/to/cfg.yaml" />
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="submitJob()">🚀 Submit job</button>
+        <button class="btn btn-secondary" onclick="pollJobStatus()">🔄 Refresh status</button>
+      </div>
+      <div id="job-log">(no job submitted yet)</div>
+    </div>
+  `;
+
+  // If there's a running job, start polling
+  if (pl.job) {
+    document.getElementById('job-cmd').value = pl.job.command || '';
+    startJobPolling();
+  }
+}
+
+// ============================================================
+// Editor
+// ============================================================
+function openEditor() {
+  if (!activeProj) return;
+  const ann = activeProj.annotations_path.replaceAll('\\', '/');
+  window.location.href = `/static/index.html?folder=${encodeURIComponent(ann)}`;
+}
+
+// ============================================================
+// Pipeline stage
+// ============================================================
+async function advanceStage() {
+  if (!activeProj) return;
+  if (!confirm(`Advance "${activeProj.name}" to the next stage?`)) return;
+  const res  = await fetch(`/api/project/${activeProj.name}/advance`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) {
+    await selectProject(activeProj.name);
+  } else {
+    alert('Error: ' + (data.detail || JSON.stringify(data)));
+  }
+}
+
+// ============================================================
+// Server config
+// ============================================================
+async function saveServerConfig() {
+  if (!activeProj) return;
+  const body = {
+    server: {
+      host:        document.getElementById('srv-host').value.trim(),
+      user:        document.getElementById('srv-user').value.trim(),
+      key_path:    document.getElementById('srv-key').value.trim(),
+      remote_path: document.getElementById('srv-remote').value.trim(),
+    }
+  };
+  const res  = await fetch(`/api/project/${activeProj.name}/config`, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    activeProj.config.server = data.config.server;
+    showToast('Server settings saved.');
+  } else {
+    alert('Error: ' + (data.detail || JSON.stringify(data)));
+  }
+}
+
+async function testConnection() {
+  const label = document.getElementById('conn-status-label');
+  if (!label) return;
+  await saveServerConfig();
+  label.innerHTML = `<span class="status-dot dot-yellow"></span>Testing…`;
+  const res  = await fetch(`/api/project/${activeProj.name}/server/test`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) {
+    label.innerHTML = `<span class="status-dot dot-green"></span>${data.hostname} &nbsp;·&nbsp; GPU: ${data.gpu || 'n/a'}`;
+  } else {
+    label.innerHTML = `<span class="status-dot dot-red"></span>${data.error || 'Connection failed'}`;
+  }
+}
+
+// ============================================================
+// File transfer
+// ============================================================
+async function pushAnnotations() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  showToast('Pushing annotations to server…', 0);
+  const res  = await fetch(`/api/project/${activeProj.name}/server/push`, { method: 'POST' });
+  const data = await res.json();
+  clearToast();
+  if (data.ok) {
+    showToast(`✓ Pushed ${data.files_uploaded} files to ${data.remote_path}`);
+  } else {
+    showToast('Error: ' + data.error, 4000, 'red');
+  }
+}
+
+async function pullAnnotations() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  if (!confirm('This will overwrite your local annotations/ folder with the server copy. Continue?')) return;
+  showToast('Pulling annotations from server…', 0);
+  const res  = await fetch(`/api/project/${activeProj.name}/server/pull`, { method: 'POST' });
+  const data = await res.json();
+  clearToast();
+  if (data.ok) {
+    showToast(`✓ Downloaded ${data.files_downloaded} files to ${data.local_path}`);
+    await selectProject(activeProj.name);
+  } else {
+    showToast('Error: ' + data.error, 4000, 'red');
+  }
+}
+
+// ============================================================
+// Job submission & polling
+// ============================================================
+async function submitJob() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  const cmd = document.getElementById('job-cmd').value.trim();
+  if (!cmd) { alert('Enter a command first.'); return; }
+  const log = document.getElementById('job-log');
+  log.textContent = 'Submitting job…';
+  const res  = await fetch(`/api/project/${activeProj.name}/job/submit`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ command: cmd }),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    log.textContent = `Job started — PID ${data.pid}\nLog: ${data.log_path}\n\nWaiting for output…`;
+    startJobPolling();
+  } else {
+    log.textContent = 'Error: ' + (data.error || JSON.stringify(data));
+  }
+}
+
+function startJobPolling() {
+  if (jobPollTimer) return;
+  jobPollTimer = setInterval(pollJobStatus, 5000);
+  pollJobStatus();
+}
+
+function stopJobPolling() {
+  if (jobPollTimer) { clearInterval(jobPollTimer); jobPollTimer = null; }
+}
+
+async function pollJobStatus() {
+  if (!activeProj) return;
+  const res  = await fetch(`/api/project/${activeProj.name}/job/status`);
+  const data = await res.json();
+  const log  = document.getElementById('job-log');
+  if (!log) { stopJobPolling(); return; }
+  if (!data.ok) {
+    log.textContent = 'Error: ' + (data.error || JSON.stringify(data));
+    stopJobPolling();
+    return;
+  }
+  const header = data.running
+    ? `● JOB RUNNING  PID ${data.pid}  Log: ${data.log_path}\n${'─'.repeat(60)}\n`
+    : `■ JOB FINISHED  PID ${data.pid}  Log: ${data.log_path}\n${'─'.repeat(60)}\n`;
+  log.textContent = header + (data.log_tail || '(empty log)');
+  log.scrollTop = log.scrollHeight;
+  if (!data.running) stopJobPolling();
+}
+
+// ============================================================
+// New-project modal
+// ============================================================
+function openNewProjectModal() {
+  document.getElementById('new-project-modal').classList.add('open');
+  document.getElementById('np-name').focus();
+}
+function closeNewProjectModal() {
+  document.getElementById('new-project-modal').classList.remove('open');
+}
+async function submitNewProject() {
+  const name   = document.getElementById('np-name').value.trim();
+  const type   = document.getElementById('np-type').value;
+  const labels = document.getElementById('np-labels').value.trim().split(/\s+/).filter(Boolean);
+  if (!name) { alert('Name is required.'); return; }
+
+  const res  = await fetch('/api/project/new', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name, type, labels }),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    closeNewProjectModal();
+    await loadProjects();
+    selectProject(name);
+  } else {
+    alert('Error: ' + (data.detail || JSON.stringify(data)));
+  }
+}
+
+// ============================================================
+// Toast notification
+// ============================================================
+let toastTimer = null;
+let toastEl    = null;
+
+function showToast(msg, duration = 3000, color = 'green') {
+  if (!toastEl) {
+    toastEl = document.createElement('div');
+    toastEl.style.cssText = `
+      position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+      background:#222; color:#fff; padding:10px 22px; border-radius:20px;
+      font-size:0.85rem; z-index:999; border:1px solid #444;
+      transition: opacity 0.3s;
+    `;
+    document.body.appendChild(toastEl);
+  }
+  toastEl.textContent = msg;
+  toastEl.style.borderColor = color === 'red' ? '#e94560' : '#4caf50';
+  toastEl.style.opacity = '1';
+  if (toastTimer) clearTimeout(toastTimer);
+  if (duration > 0) {
+    toastTimer = setTimeout(() => { if (toastEl) toastEl.style.opacity = '0'; }, duration);
+  }
+}
+function clearToast() { if (toastEl) toastEl.style.opacity = '0'; }
+
+// Keyboard shortcut: Escape closes modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeNewProjectModal();
+});
+</script>
+
+</body>
+</html>
