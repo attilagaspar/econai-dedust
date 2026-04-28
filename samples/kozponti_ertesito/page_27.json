@@ -1,0 +1,106 @@
+{
+    "version": "4.5.9",
+    "flags": {},
+    "shapes": [
+        {
+            "label": "kep",
+            "points": [
+                [
+                    157.1833038330078,
+                    1821.99951171875
+                ],
+                [
+                    1250.3289794921875,
+                    3193.56787109375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1386.4315185546875,
+                    1832.8126220703125
+                ],
+                [
+                    2472.961669921875,
+                    3198.886962890625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    233.79791259765625,
+                    390.5758361816406
+                ],
+                [
+                    1260.25927734375,
+                    1656.391845703125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1434.1298828125,
+                    392.4975280761719
+                ],
+                [
+                    2477.943603515625,
+                    1694.9742431640625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "oldalfejlec",
+            "points": [
+                [
+                    294.1011657714844,
+                    157.6163330078125
+                ],
+                [
+                    2414.816650390625,
+                    263.1324768066406
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "rovatcim",
+            "points": [
+                [
+                    307.15020751953125,
+                    298.25531005859375
+                ],
+                [
+                    2442.292724609375,
+                    373.9197692871094
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        }
+    ],
+    "imagePath": "page_27.jpg",
+    "imageData": null,
+    "imageHeight": 3588,
+    "imageWidth": 2734
+}

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Project data (large files, not for version control)
+projects/*/annotations/
+projects/*/intermediate/
+projects/*/output/
+
+# Sample data images (keep JSONs if you want, but images are large)
+samples/**/*.jpg
+samples/**/*.jpeg
+samples/**/*.png
+samples/**/*.tif
+samples/**/*.tiff
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets / local config overrides
+*.env
+*.key
+*.pem
+
+# Claude Code session data
+.claude/
+
+# Temp/lock files
+~$*
+*.tmp

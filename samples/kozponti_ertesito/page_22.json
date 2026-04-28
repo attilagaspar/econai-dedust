@@ -1,0 +1,154 @@
+{
+    "version": "4.5.9",
+    "flags": {},
+    "shapes": [
+        {
+            "label": "szovegdoboz",
+            "points": [
+                [
+                    353.9906921386719,
+                    2956.8583984375
+                ],
+                [
+                    1442.453125,
+                    3448.105224609375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "oldalfejlec",
+            "points": [
+                [
+                    333.355224609375,
+                    184.29595947265625
+                ],
+                [
+                    2578.3037109375,
+                    278.21881103515625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "szovegdoboz",
+            "points": [
+                [
+                    1510.3841552734375,
+                    2960.6669921875
+                ],
+                [
+                    2704.3115234375,
+                    3455.9228515625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "szovegdoboz",
+            "points": [
+                [
+                    1538.2496337890625,
+                    1644.3553466796875
+                ],
+                [
+                    2693.374267578125,
+                    2403.453857421875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "szovegdoboz",
+            "points": [
+                [
+                    312.2725830078125,
+                    1647.112060546875
+                ],
+                [
+                    1486.6142578125,
+                    2476.26025390625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    251.13534545898438,
+                    367.1803894042969
+                ],
+                [
+                    2664.256591796875,
+                    692.6640014648438
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    280.3823547363281,
+                    1689.0570068359375
+                ],
+                [
+                    1491.268310546875,
+                    2204.374267578125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1478.7691650390625,
+                    1681.982177734375
+                ],
+                [
+                    2688.57421875,
+                    2444.2333984375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    114.32833862304688,
+                    2486.262451171875
+                ],
+                [
+                    2738.4736328125,
+                    2754.025146484375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        }
+    ],
+    "imagePath": "page_22.jpg",
+    "imageData": null,
+    "imageHeight": 3621,
+    "imageWidth": 2779
+}

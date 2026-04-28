@@ -1,0 +1,1594 @@
+{
+    "version": "4.5.9",
+    "flags": {},
+    "shapes": [
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    2118.04345703125,
+                    1050.726318359375
+                ],
+                [
+                    2175.39111328125,
+                    1147.4921875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    183.51109313964844,
+                    2528.642822265625
+                ],
+                [
+                    386.86260986328125,
+                    2700.34228515625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    185.75283813476562,
+                    1730.1246337890625
+                ],
+                [
+                    384.91522216796875,
+                    1893.289306640625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    2193.083984375,
+                    1047.5191650390625
+                ],
+                [
+                    2498.607421875,
+                    1147.64453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    183.8727569580078,
+                    1535.9071044921875
+                ],
+                [
+                    388.1910095214844,
+                    1710.1602783203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1178.3563232421875,
+                    2947.3740234375
+                ],
+                [
+                    1828.6522216796875,
+                    3151.81640625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    181.5284423828125,
+                    1350.9088134765625
+                ],
+                [
+                    387.0567321777344,
+                    1519.960693359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1186.523193359375,
+                    1907.9560546875
+                ],
+                [
+                    1835.7135009765625,
+                    2083.582763671875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    962.4715576171875,
+                    2099.918701171875
+                ],
+                [
+                    1170.4951171875,
+                    2276.893798828125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1182.072265625,
+                    1340.92041015625
+                ],
+                [
+                    1822.844970703125,
+                    1520.6585693359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    399.7796630859375,
+                    1538.094482421875
+                ],
+                [
+                    608.5411376953125,
+                    1713.4962158203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    961.2969970703125,
+                    1346.9105224609375
+                ],
+                [
+                    1167.16650390625,
+                    1521.5130615234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    629.0856323242188,
+                    2935.7919921875
+                ],
+                [
+                    951.115234375,
+                    3138.033203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    628.8150024414062,
+                    1906.34814453125
+                ],
+                [
+                    945.88037109375,
+                    2081.37890625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2185.37060546875,
+                    2290.768310546875
+                ],
+                [
+                    2502.780517578125,
+                    2525.09912109375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    950.7684326171875,
+                    1044.7073974609375
+                ],
+                [
+                    1175.904296875,
+                    1140.888671875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    399.4424743652344,
+                    1349.266357421875
+                ],
+                [
+                    609.1820068359375,
+                    1525.8785400390625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    400.206298828125,
+                    2099.804443359375
+                ],
+                [
+                    611.340576171875,
+                    2275.6328125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    962.2609252929688,
+                    1911.0902099609375
+                ],
+                [
+                    1168.6773681640625,
+                    2087.443115234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    180.69393920898438,
+                    2097.000732421875
+                ],
+                [
+                    386.7590637207031,
+                    2275.795166015625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    400.1468811035156,
+                    1726.1610107421875
+                ],
+                [
+                    610.6968994140625,
+                    1900.71240234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1189.9251708984375,
+                    3164.039794921875
+                ],
+                [
+                    1833.78515625,
+                    3341.7314453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2179.040771484375,
+                    2719.551513671875
+                ],
+                [
+                    2500.357666015625,
+                    2933.103759765625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1843.6512451171875,
+                    2288.39453125
+                ],
+                [
+                    2111.70556640625,
+                    2521.559814453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1192.8873291015625,
+                    2288.05908203125
+                ],
+                [
+                    1819.5869140625,
+                    2520.004150390625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1181.7236328125,
+                    1530.9620361328125
+                ],
+                [
+                    1819.32421875,
+                    1712.7919921875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    401.4184265136719,
+                    1043.593994140625
+                ],
+                [
+                    613.4064331054688,
+                    1145.218505859375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    400.2254943847656,
+                    2713.858154296875
+                ],
+                [
+                    611.9027709960938,
+                    2923.55224609375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1183.4508056640625,
+                    2097.880126953125
+                ],
+                [
+                    1825.2965087890625,
+                    2276.663818359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2121.49365234375,
+                    2536.774658203125
+                ],
+                [
+                    2175.035400390625,
+                    2702.200927734375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1844.9852294921875,
+                    1723.5125732421875
+                ],
+                [
+                    2105.971435546875,
+                    1900.3514404296875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    625.843017578125,
+                    1348.1707763671875
+                ],
+                [
+                    946.3656005859375,
+                    1519.2459716796875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2181.36669921875,
+                    2938.7734375
+                ],
+                [
+                    2505.907958984375,
+                    3153.91552734375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1842.791748046875,
+                    2946.49853515625
+                ],
+                [
+                    2106.669677734375,
+                    3157.326904296875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    400.608154296875,
+                    1914.371826171875
+                ],
+                [
+                    612.3233032226562,
+                    2086.709228515625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    635.0525512695312,
+                    2282.065185546875
+                ],
+                [
+                    947.105224609375,
+                    2508.186279296875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2185.609130859375,
+                    1915.2696533203125
+                ],
+                [
+                    2505.964599609375,
+                    2086.48193359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    405.0369873046875,
+                    2289.414794921875
+                ],
+                [
+                    615.9822387695312,
+                    2516.02197265625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    628.2062377929688,
+                    3159.21826171875
+                ],
+                [
+                    946.1624145507812,
+                    3339.39306640625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    181.99258422851562,
+                    2717.95166015625
+                ],
+                [
+                    387.36181640625,
+                    2927.14501953125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1844.62744140625,
+                    1912.2437744140625
+                ],
+                [
+                    2102.6259765625,
+                    2089.99267578125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    1842.197021484375,
+                    1049.1944580078125
+                ],
+                [
+                    2100.6025390625,
+                    1144.2010498046875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    959.5323486328125,
+                    1534.85888671875
+                ],
+                [
+                    1167.7042236328125,
+                    1708.2930908203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    182.07908630371094,
+                    2941.02197265625
+                ],
+                [
+                    387.9460144042969,
+                    3146.64794921875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1844.6796875,
+                    2101.1943359375
+                ],
+                [
+                    2107.447265625,
+                    2277.774658203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1846.755615234375,
+                    3169.522216796875
+                ],
+                [
+                    2107.712890625,
+                    3343.583740234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    964.3049926757812,
+                    2533.5654296875
+                ],
+                [
+                    1169.622802734375,
+                    2704.75439453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    402.9946594238281,
+                    2531.273193359375
+                ],
+                [
+                    614.5579223632812,
+                    2702.332763671875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "folyoiratcim",
+            "points": [
+                [
+                    160.17245483398438,
+                    326.982421875
+                ],
+                [
+                    2555.4462890625,
+                    874.5913696289062
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    399.6028747558594,
+                    1162.5050048828125
+                ],
+                [
+                    610.0077514648438,
+                    1334.257568359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    181.10186767578125,
+                    2288.85107421875
+                ],
+                [
+                    388.50311279296875,
+                    2510.354248046875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    959.3958129882812,
+                    1160.44775390625
+                ],
+                [
+                    1168.0048828125,
+                    1334.805908203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1176.0574951171875,
+                    2710.03662109375
+                ],
+                [
+                    1831.8087158203125,
+                    2932.4892578125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    961.2489013671875,
+                    2285.239501953125
+                ],
+                [
+                    1173.7423095703125,
+                    2508.77001953125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1175.6385498046875,
+                    1719.446533203125
+                ],
+                [
+                    1831.921875,
+                    1894.1832275390625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    630.8338012695312,
+                    2523.374267578125
+                ],
+                [
+                    943.9992065429688,
+                    2697.456298828125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1844.345458984375,
+                    1164.7835693359375
+                ],
+                [
+                    2104.519775390625,
+                    1337.544189453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    400.78424072265625,
+                    2939.87451171875
+                ],
+                [
+                    611.926025390625,
+                    3147.28515625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    963.8334350585938,
+                    2941.838134765625
+                ],
+                [
+                    1171.173095703125,
+                    3153.154541015625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1843.5802001953125,
+                    1534.07568359375
+                ],
+                [
+                    2110.04833984375,
+                    1705.5653076171875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1840.46533203125,
+                    1346.546875
+                ],
+                [
+                    2100.249267578125,
+                    1521.0892333984375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1844.3050537109375,
+                    2716.963134765625
+                ],
+                [
+                    2110.312255859375,
+                    2934.135498046875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    180.0687255859375,
+                    1163.27294921875
+                ],
+                [
+                    382.7814025878906,
+                    1334.412353515625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1845.1007080078125,
+                    2529.49755859375
+                ],
+                [
+                    2107.584716796875,
+                    2709.853759765625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    966.2299194335938,
+                    3167.689697265625
+                ],
+                [
+                    1172.8828125,
+                    3341.149658203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2180.169921875,
+                    1729.3741455078125
+                ],
+                [
+                    2505.02490234375,
+                    1900.9678955078125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    184.16729736328125,
+                    3165.70751953125
+                ],
+                [
+                    388.5317077636719,
+                    3339.736328125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    626.151611328125,
+                    1045.0386962890625
+                ],
+                [
+                    941.2922973632812,
+                    1143.5645751953125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    630.3925170898438,
+                    2095.9521484375
+                ],
+                [
+                    946.3721923828125,
+                    2269.246337890625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    962.444091796875,
+                    2716.321044921875
+                ],
+                [
+                    1174.7193603515625,
+                    2931.78125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    181.8281707763672,
+                    1910.0401611328125
+                ],
+                [
+                    385.31072998046875,
+                    2082.101318359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    629.6239013671875,
+                    2712.559814453125
+                ],
+                [
+                    942.9854736328125,
+                    2920.3349609375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1174.6781005859375,
+                    1160.0338134765625
+                ],
+                [
+                    1827.23974609375,
+                    1332.505859375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    629.69091796875,
+                    1532.94677734375
+                ],
+                [
+                    944.654541015625,
+                    1708.0941162109375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    1178.031494140625,
+                    2524.366943359375
+                ],
+                [
+                    1831.3011474609375,
+                    2704.36865234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    178.10968017578125,
+                    1048.04345703125
+                ],
+                [
+                    383.3014221191406,
+                    1142.9161376953125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2122.416748046875,
+                    2721.017333984375
+                ],
+                [
+                    2170.761474609375,
+                    2929.1162109375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatfejlec",
+            "points": [
+                [
+                    1188.6431884765625,
+                    1046.02197265625
+                ],
+                [
+                    1827.0615234375,
+                    1144.4166259765625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    966.9629516601562,
+                    1724.314697265625
+                ],
+                [
+                    1170.7130126953125,
+                    1898.689697265625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2182.51513671875,
+                    1529.1822509765625
+                ],
+                [
+                    2501.849853515625,
+                    1715.9874267578125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2117.899658203125,
+                    1159.0196533203125
+                ],
+                [
+                    2172.98828125,
+                    1333.318115234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2185.35302734375,
+                    2533.05859375
+                ],
+                [
+                    2494.39794921875,
+                    2707.65234375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2120.588623046875,
+                    2100.523193359375
+                ],
+                [
+                    2173.425537109375,
+                    2273.163330078125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2117.876708984375,
+                    1538.8951416015625
+                ],
+                [
+                    2171.7216796875,
+                    1711.2266845703125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2194.934326171875,
+                    2100.667236328125
+                ],
+                [
+                    2499.015380859375,
+                    2276.933837890625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2120.743408203125,
+                    1724.0531005859375
+                ],
+                [
+                    2171.294677734375,
+                    1893.3375244140625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2183.837158203125,
+                    3162.642578125
+                ],
+                [
+                    2497.555419921875,
+                    3339.378662109375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2124.700927734375,
+                    2286.751708984375
+                ],
+                [
+                    2169.3349609375,
+                    2509.747314453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    401.9705505371094,
+                    3168.387939453125
+                ],
+                [
+                    612.9890747070312,
+                    3337.638916015625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    632.3336181640625,
+                    1159.1729736328125
+                ],
+                [
+                    942.11962890625,
+                    1334.119873046875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2186.3173828125,
+                    1167.3883056640625
+                ],
+                [
+                    2503.97607421875,
+                    1335.6845703125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2186.513916015625,
+                    1350.75390625
+                ],
+                [
+                    2497.128173828125,
+                    1516.9654541015625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    630.4401245117188,
+                    1720.2550048828125
+                ],
+                [
+                    951.9193115234375,
+                    1894.66943359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2123.183349609375,
+                    2936.809326171875
+                ],
+                [
+                    2174.824951171875,
+                    3151.760498046875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2114.820556640625,
+                    1345.8619384765625
+                ],
+                [
+                    2166.0537109375,
+                    1517.3011474609375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2122.03857421875,
+                    3170.6318359375
+                ],
+                [
+                    2174.7470703125,
+                    3342.62939453125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "tablazatelem",
+            "points": [
+                [
+                    2120.114013671875,
+                    1909.8870849609375
+                ],
+                [
+                    2172.533935546875,
+                    2079.76513671875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "rovatcim",
+            "points": [
+                [
+                    163.42953491210938,
+                    904.6953735351562
+                ],
+                [
+                    2508.51025390625,
+                    1023.109130859375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "oldalfejlec",
+            "points": [
+                [
+                    229.2136993408203,
+                    208.96942138671875
+                ],
+                [
+                    2451.458740234375,
+                    313.8930358886719
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        }
+    ],
+    "imagePath": "page_29.jpg",
+    "imageData": null,
+    "imageHeight": 3633,
+    "imageWidth": 2787
+}

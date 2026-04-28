@@ -1,0 +1,122 @@
+{
+    "version": "4.5.9",
+    "flags": {},
+    "shapes": [
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    1303.9912109375,
+                    732.5950927734375
+                ],
+                [
+                    2649.052978515625,
+                    1009.2906494140625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    245.58042907714844,
+                    309.5689697265625
+                ],
+                [
+                    1287.2808837890625,
+                    1655.742919921875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    490.3963623046875,
+                    1641.6790771484375
+                ],
+                [
+                    2328.931640625,
+                    2074.533447265625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1556.9443359375,
+                    2094.65771484375
+                ],
+                [
+                    2635.01806640625,
+                    3433.315673828125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1334.38232421875,
+                    1192.7965087890625
+                ],
+                [
+                    2614.717529296875,
+                    1611.3167724609375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    285.634521484375,
+                    2246.410888671875
+                ],
+                [
+                    1549.682373046875,
+                    2956.753173828125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "oldalfejlec",
+            "points": [
+                [
+                    321.8623352050781,
+                    184.65748596191406
+                ],
+                [
+                    2484.004638671875,
+                    291.9884033203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        }
+    ],
+    "imagePath": "page_12.jpg",
+    "imageData": null,
+    "imageHeight": 3603,
+    "imageWidth": 2723
+}

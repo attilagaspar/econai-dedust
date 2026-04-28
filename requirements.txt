@@ -1,0 +1,6 @@
+# Step 1 — pipeline state machine (no extra deps, stdlib only)
+# Step 2 will add: fastapi uvicorn python-multipart pillow
+# Step 3 will add: paramiko (server SSH)
+
+# Already in your environment from econai-llmocr:
+# openai pandas openpyxl pytesseract opencv-python pillow PyQt5

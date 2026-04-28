@@ -1,0 +1,19 @@
+{
+  "name": "machines1935",
+  "type": "A",
+  "labels": [
+    "tablazatelem",
+    "tablazatfejlec",
+    "numerical_cell"
+  ],
+  "server": {
+    "host": "",
+    "user": "",
+    "key_path": "",
+    "remote_path": ""
+  },
+  "llm": {
+    "model": "gpt-4o-mini",
+    "prompt": ""
+  }
+}

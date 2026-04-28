@@ -1,0 +1,90 @@
+{
+    "version": "4.5.9",
+    "flags": {},
+    "shapes": [
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1489.2598876953125,
+                    1929.20703125
+                ],
+                [
+                    2559.456298828125,
+                    3251.794677734375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1461.827392578125,
+                    402.04107666015625
+                ],
+                [
+                    2517.255859375,
+                    1698.79443359375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    184.87002563476562,
+                    1908.2044677734375
+                ],
+                [
+                    1324.0211181640625,
+                    3233.211669921875
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    270.6313781738281,
+                    413.04962158203125
+                ],
+                [
+                    1281.0172119140625,
+                    1678.782958984375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "oldalfejlec",
+            "points": [
+                [
+                    256.861083984375,
+                    200.7950897216797
+                ],
+                [
+                    2452.849609375,
+                    284.45587158203125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        }
+    ],
+    "imagePath": "page_26.jpg",
+    "imageData": null,
+    "imageHeight": 3591,
+    "imageWidth": 2734
+}

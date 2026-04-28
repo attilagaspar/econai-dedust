@@ -1,0 +1,106 @@
+{
+    "version": "4.5.9",
+    "flags": {},
+    "shapes": [
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    149.9436492919922,
+                    316.5432434082031
+                ],
+                [
+                    2640.048095703125,
+                    530.5554809570312
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    261.82244873046875,
+                    509.1492614746094
+                ],
+                [
+                    2389.223388671875,
+                    1706.4473876953125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    1269.1148681640625,
+                    2390.43115234375
+                ],
+                [
+                    2562.751220703125,
+                    3482.92822265625
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kep",
+            "points": [
+                [
+                    861.90478515625,
+                    1658.1900634765625
+                ],
+                [
+                    1849.2481689453125,
+                    2382.548828125
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "kepalairas",
+            "points": [
+                [
+                    127.618408203125,
+                    2781.60986328125
+                ],
+                [
+                    1263.7384033203125,
+                    3127.323974609375
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        },
+        {
+            "label": "oldalfejlec",
+            "points": [
+                [
+                    243.47007751464844,
+                    233.8067169189453
+                ],
+                [
+                    2468.505859375,
+                    325.3515319824219
+                ]
+            ],
+            "group_id": null,
+            "shape_type": "rectangle",
+            "flags": {}
+        }
+    ],
+    "imagePath": "page_25.jpg",
+    "imageData": null,
+    "imageHeight": 3591,
+    "imageWidth": 2734
+}
