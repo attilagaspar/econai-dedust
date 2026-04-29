@@ -265,6 +265,16 @@ const STAGE_COLORS = {
   done:           '#4caf50',
 };
 
+function errMsg(data) {
+  const d = data.detail ?? data.error ?? data;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) return d.map(e => {
+    const field = Array.isArray(e.loc) ? e.loc.slice(-1)[0] : '';
+    return field ? `${field}: ${e.msg}` : (e.msg || JSON.stringify(e));
+  }).join('; ');
+  return JSON.stringify(d);
+}
+
 // ============================================================
 // Boot
 // ============================================================
@@ -436,7 +446,8 @@ function renderDetail() {
 function openEditor() {
   if (!activeProj) return;
   const ann = activeProj.annotations_path.replaceAll('\\', '/');
-  window.location.href = `/static/index.html?folder=${encodeURIComponent(ann)}`;
+  const labels = (activeProj.config.labels || []).join(',');
+  window.location.href = `/static/index.html?folder=${encodeURIComponent(ann)}&labels=${encodeURIComponent(labels)}`;
 }
 
 // ============================================================
@@ -450,7 +461,7 @@ async function advanceStage() {
   if (data.ok) {
     await selectProject(activeProj.name);
   } else {
-    alert('Error: ' + (data.detail || JSON.stringify(data)));
+    alert('Error: ' + (errMsg(data)));
   }
 }
 
@@ -481,7 +492,7 @@ async function saveServerConfig() {
     activeProj.config.server = data.config.server;
     showToast('Server settings saved.');
   } else {
-    alert('Error: ' + (data.detail || JSON.stringify(data)));
+    alert('Error: ' + (errMsg(data)));
   }
 }
 
@@ -498,7 +509,7 @@ async function testConnection() {
   if (data.ok) {
     label.innerHTML = `<span class="status-dot dot-green"></span>${data.hostname} &nbsp;·&nbsp; GPU: ${data.gpu || 'n/a'}`;
   } else {
-    label.innerHTML = `<span class="status-dot dot-red"></span>${data.error || 'Connection failed'}`;
+    label.innerHTML = `<span class="status-dot dot-red"></span>${errMsg(data) || 'Connection failed'}`;
   }
 }
 
@@ -542,7 +553,7 @@ async function importFromPath() {
     showToast(`Imported ${data.total} page(s).`);
     await selectProject(activeProj.name);
   } else {
-    results.innerHTML = `<div class="err">${data.detail || JSON.stringify(data)}</div>`;
+    results.innerHTML = `<div class="err">${errMsg(data)}</div>`;
   }
 }
 
@@ -560,7 +571,7 @@ async function prepareTrainingData() {
       COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
     showToast('Training data prepared.');
   } else {
-    el.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+    el.textContent = 'Error: ' + (errMsg(data));
   }
 }
 
@@ -674,7 +685,7 @@ async function pullPredictions() {
     showToast(`✓ Downloaded ${data.files_downloaded} prediction files.`);
     await selectProject(activeProj.name);
   } else {
-    showToast('Error: ' + data.error, 4000, 'red');
+    showToast('Error: ' + errMsg(data), 4000, 'red');
   }
 }
 
@@ -694,7 +705,7 @@ async function pushAnnotations() {
   if (data.ok) {
     showToast(`✓ Pushed ${data.files_uploaded} files to ${data.remote_path}`);
   } else {
-    showToast('Error: ' + data.error, 4000, 'red');
+    showToast('Error: ' + errMsg(data), 4000, 'red');
   }
 }
 
@@ -713,7 +724,7 @@ async function pullAnnotations() {
     showToast(`✓ Downloaded ${data.files_downloaded} files to ${data.local_path}`);
     await selectProject(activeProj.name);
   } else {
-    showToast('Error: ' + data.error, 4000, 'red');
+    showToast('Error: ' + errMsg(data), 4000, 'red');
   }
 }
 
@@ -736,7 +747,7 @@ async function submitJob() {
     log.textContent = `Job started — PID ${data.pid}\nLog: ${data.log_path}\n\nWaiting for output…`;
     startJobPolling();
   } else {
-    log.textContent = 'Error: ' + (data.error || JSON.stringify(data));
+    log.textContent = 'Error: ' + (errMsg(data));
   }
 }
 
@@ -758,7 +769,7 @@ async function pollJobStatus() {
   const log  = document.getElementById('job-log');
   if (!log) { stopJobPolling(); return; }
   if (!data.ok) {
-    log.textContent = 'Error: ' + (data.error || JSON.stringify(data));
+    log.textContent = 'Error: ' + (errMsg(data));
     stopJobPolling();
     return;
   }
@@ -796,7 +807,7 @@ async function submitNewProject() {
     await loadProjects();
     selectProject(name);
   } else {
-    alert('Error: ' + (data.detail || JSON.stringify(data)));
+    alert('Error: ' + (errMsg(data)));
   }
 }
 

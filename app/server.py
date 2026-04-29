@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,10 +35,6 @@ from app.pipeline import (
 )
 
 app = FastAPI(title="EconAI", version="0.1.0")
-
-# Keep uploaded files in memory (avoid Windows temp-file deletion errors)
-from starlette.datastructures import UploadFile as _UploadFile
-_UploadFile.spool_max_size = 256 * 1024 * 1024  # 256 MB
 
 # Allow the browser (same host, any port) to call the API
 app.add_middleware(
