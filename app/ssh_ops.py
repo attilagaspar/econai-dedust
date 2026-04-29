@@ -1,8 +1,6 @@
 """
 SSH / SFTP operations for the EconAI pipeline.
-
-Used to push/pull annotation folders and submit GPU jobs on the remote server.
-Requires: paramiko  (pip install paramiko)
+Requires: paramiko >= 3.0  (pip install --upgrade paramiko)
 """
 
 from __future__ import annotations
@@ -14,24 +12,46 @@ from pathlib import Path
 from typing import Optional
 
 
-def _client(host: str, user: str, key_path: str):
-    """Return an authenticated paramiko SSHClient."""
+def _load_key(kp: Path, passphrase: str = None):
     import paramiko
+    pwd = passphrase.encode() if isinstance(passphrase, str) and passphrase else None
+    header = kp.read_text(encoding="utf-8", errors="ignore").splitlines()[0] if kp.exists() else ""
+    if "RSA" in header:
+        return paramiko.RSAKey.from_private_key_file(str(kp), password=pwd)
+    if "EC" in header or "ECDSA" in header:
+        return paramiko.ECDSAKey.from_private_key_file(str(kp), password=pwd)
+    if "DSA" in header or "DSS" in header:
+        return paramiko.DSSKey.from_private_key_file(str(kp), password=pwd)
+    if "OPENSSH" in header:
+        for cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+            try:
+                return cls.from_private_key_file(str(kp), password=pwd)
+            except (paramiko.SSHException, ValueError):
+                continue
+    raise paramiko.SSHException(f"Unrecognised key format: {header!r}")
+
+
+def _client(host: str, user: str, key_path: str, passphrase: str = None):
+    import paramiko
+    kp = Path(key_path.strip().strip('"').strip("'")).expanduser()
+    if kp.suffix.lower() == ".ppk":
+        raise ValueError(
+            "PuTTY .ppk keys are not supported. "
+            "In PuTTYgen: load the key → Conversions → Export OpenSSH key → save as .pem"
+        )
+    pkey = _load_key(kp, passphrase)
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(
-        hostname=host,
-        username=user,
-        key_filename=str(Path(key_path).expanduser()),
-        timeout=15,
-    )
+    c.connect(hostname=host, username=user, pkey=pkey, timeout=15)
     return c
 
 
-def test_connection(host: str, user: str, key_path: str) -> dict:
+def test_connection(host: str, user: str, key_path: str, passphrase: str = None) -> dict:
     try:
-        c = _client(host, user, key_path)
-        _, stdout, _ = c.exec_command("uname -n && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo '(no GPU info)'")
+        c = _client(host, user, key_path, passphrase)
+        _, stdout, _ = c.exec_command(
+            "uname -n && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo '(no GPU info)'"
+        )
         out = stdout.read().decode().strip()
         c.close()
         lines = out.splitlines()
@@ -40,12 +60,7 @@ def test_connection(host: str, user: str, key_path: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-# ---------------------------------------------------------------------------
-# SFTP helpers
-# ---------------------------------------------------------------------------
-
 def _sftp_mkdir_p(sftp, remote_dir: str):
-    """Recursively create remote directory (like mkdir -p)."""
     parts = remote_dir.replace("\\", "/").split("/")
     path = ""
     for part in parts:
@@ -60,7 +75,6 @@ def _sftp_mkdir_p(sftp, remote_dir: str):
 
 
 def _sftp_put_dir(sftp, local_dir: Path, remote_dir: str):
-    """Recursively upload a local directory via SFTP. Returns file count."""
     _sftp_mkdir_p(sftp, remote_dir)
     count = 0
     for item in local_dir.iterdir():
@@ -74,7 +88,6 @@ def _sftp_put_dir(sftp, local_dir: Path, remote_dir: str):
 
 
 def _sftp_get_dir(sftp, remote_dir: str, local_dir: Path):
-    """Recursively download a remote directory via SFTP. Returns file count."""
     local_dir.mkdir(parents=True, exist_ok=True)
     count = 0
     for entry in sftp.listdir_attr(remote_dir):
@@ -89,41 +102,32 @@ def _sftp_get_dir(sftp, remote_dir: str, local_dir: Path):
 
 
 def push_folder(host: str, user: str, key_path: str,
-                local_path: Path, remote_path: str) -> dict:
-    """Upload local_path → remote_path via SFTP."""
+                local_path: Path, remote_path: str, passphrase: str = None) -> dict:
     try:
-        c = _client(host, user, key_path)
+        c = _client(host, user, key_path, passphrase)
         sftp = c.open_sftp()
         count = _sftp_put_dir(sftp, local_path, remote_path)
-        sftp.close()
-        c.close()
+        sftp.close(); c.close()
         return {"ok": True, "files_uploaded": count, "remote_path": remote_path}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 def pull_folder(host: str, user: str, key_path: str,
-                remote_path: str, local_path: Path) -> dict:
-    """Download remote_path → local_path via SFTP."""
+                remote_path: str, local_path: Path, passphrase: str = None) -> dict:
     try:
-        c = _client(host, user, key_path)
+        c = _client(host, user, key_path, passphrase)
         sftp = c.open_sftp()
         count = _sftp_get_dir(sftp, remote_path, local_path)
-        sftp.close()
-        c.close()
+        sftp.close(); c.close()
         return {"ok": True, "files_downloaded": count, "local_path": str(local_path)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-# ---------------------------------------------------------------------------
-# Remote job submission
-# ---------------------------------------------------------------------------
-
-def run_command(host: str, user: str, key_path: str, cmd: str) -> dict:
-    """Run a command synchronously and return stdout/stderr/returncode."""
+def run_command(host: str, user: str, key_path: str, cmd: str, passphrase: str = None) -> dict:
     try:
-        c = _client(host, user, key_path)
+        c = _client(host, user, key_path, passphrase)
         _, stdout, stderr = c.exec_command(cmd)
         rc  = stdout.channel.recv_exit_status()
         out = stdout.read().decode(errors="replace")
@@ -135,14 +139,10 @@ def run_command(host: str, user: str, key_path: str, cmd: str) -> dict:
 
 
 def submit_job(host: str, user: str, key_path: str,
-               cmd: str, log_path: str) -> dict:
-    """
-    Run cmd in the background on the server, redirecting output to log_path.
-    Returns the PID so status can be polled later.
-    """
+               cmd: str, log_path: str, passphrase: str = None) -> dict:
     wrapped = f"nohup bash -c {repr(cmd)} > {log_path} 2>&1 & echo $!"
     try:
-        c = _client(host, user, key_path)
+        c = _client(host, user, key_path, passphrase)
         _, stdout, stderr = c.exec_command(wrapped)
         out = stdout.read().decode().strip()
         err = stderr.read().decode().strip()
@@ -155,26 +155,15 @@ def submit_job(host: str, user: str, key_path: str,
 
 
 def job_status(host: str, user: str, key_path: str,
-               pid: Optional[int], log_path: str) -> dict:
-    """
-    Check whether a background job is still running and return the last lines
-    of its log.
-    """
+               pid: Optional[int], log_path: str, passphrase: str = None) -> dict:
     try:
-        c = _client(host, user, key_path)
-
-        # Check if process is alive
-        running = False
-        if pid is not None:
-            _, stdout, _ = c.exec_command(f"kill -0 {pid} 2>/dev/null && echo running || echo stopped")
-            running = stdout.read().decode().strip() == "running"
-
-        # Tail the log
-        _, stdout, _ = c.exec_command(f"tail -n 60 {log_path} 2>/dev/null || echo '(log not found)'")
-        log_tail = stdout.read().decode(errors="replace")
-
+        c = _client(host, user, key_path, passphrase)
+        check = f"kill -0 {pid} 2>/dev/null && echo running || echo stopped" if pid else "echo stopped"
+        _, stdout, _ = c.exec_command(f"{check}; tail -n 60 {log_path} 2>/dev/null || echo '(log not found)'")
+        lines = stdout.read().decode(errors="replace").splitlines()
+        running = lines[0].strip() == "running" if lines else False
+        log_tail = "\n".join(lines[1:]) if len(lines) > 1 else "(empty)"
         c.close()
-        return {"ok": True, "running": running, "pid": pid,
-                "log_path": log_path, "log_tail": log_tail}
+        return {"ok": True, "running": running, "pid": pid, "log_path": log_path, "log_tail": log_tail}
     except Exception as e:
         return {"ok": False, "error": str(e)}
