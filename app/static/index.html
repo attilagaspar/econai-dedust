@@ -328,10 +328,11 @@ let folder        = '';
 let pages         = [];
 let pageIdx       = 0;
 let pageData      = null;
-let selIdx        = -1;
+let selIdx        = -1;          // primary selected shape (for panel display)
+let selSet        = new Set();   // all selected indices
 let editMode      = false;
 let dragState     = null;        // active drag: {type,idx,handle,startX,startY,origPts}
-let dragCurrentPts = null;       // live-updated points during drag
+let dragCurrentPts = null;       // live-updated points during drag (primary shape)
 let lastUsedLabel  = null;       // remembered label for new box drawing
 let projectLabels  = [];         // labels from project config (passed via URL)
 let clipboard      = null;       // copied shape for Ctrl+V
@@ -346,7 +347,7 @@ async function undo() {
   if (!undoStack.length) return;
   const prev = undoStack.pop();
   pageData.shapes = prev;
-  if (selIdx >= pageData.shapes.length) { selIdx = -1; }
+  selIdx = -1; selSet.clear();
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem});
   await fetch(`${API}/api/page/shapes?${params}`, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -458,7 +459,12 @@ function drawOverlay() {
   svgOverlay.style.pointerEvents = editMode ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
-    const pts = (dragState?.idx===i && dragCurrentPts && dragState.type!=='copy') ? dragCurrentPts : shape.points;
+    const pts = (() => {
+    if (!dragState || !dragCurrentPts) return shape.points;
+    if (dragState.type==='resize' && dragState.idx===i) return dragCurrentPts;
+    if (dragState.type==='move' && dragState.ptsMap?.[i]) return dragState.ptsMap[i];
+    return shape.points;
+  })();
     if (!pts || pts.length < 2) return;
     const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
     const tl=imgToScreen(Math.min(...xs),Math.min(...ys));
@@ -466,7 +472,8 @@ function drawOverlay() {
     if (!tl||!br) return;
 
     const fillColor = colorFor(shape.label);
-    statusBorders(shape, i===selIdx).forEach((border, bi) => {
+    const isSel = selSet.has(i);
+    statusBorders(shape, isSel).forEach((border, bi) => {
       const ins=border.inset;
       const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');
       rect.setAttribute('x',      tl.x+ins);
@@ -474,15 +481,23 @@ function drawOverlay() {
       rect.setAttribute('width',  Math.max(0,br.x-tl.x-ins*2));
       rect.setAttribute('height', Math.max(0,br.y-tl.y-ins*2));
       rect.setAttribute('fill',         bi===0 ? fillColor : 'none');
-      rect.setAttribute('fill-opacity', bi===0 ? (i===selIdx?0.35:0.15) : 0);
+      rect.setAttribute('fill-opacity', bi===0 ? (isSel?0.35:0.15) : 0);
       rect.setAttribute('stroke',        border.color);
       rect.setAttribute('stroke-width',  border.width);
       rect.setAttribute('stroke-opacity','1');
       rect.style.pointerEvents = 'all';
       rect.style.cursor = editMode ? 'move' : 'pointer';
       rect.addEventListener('mousedown', e => {
-        e.stopPropagation(); selectShape(i);
-        if (editMode) {
+        e.stopPropagation();
+        const ctrl = e.ctrlKey || e.metaKey;
+        if (ctrl) {
+          selectShape(i, true);
+        } else if (!selSet.has(i)) {
+          selectShape(i, false);
+        } else {
+          selIdx = i; drawOverlay(); updatePanel();
+        }
+        if (editMode && !ctrl) {
           if (e.button===2) startCopyDrag(e, i);
           else startMoveDrag(e, i);
         }
@@ -510,12 +525,13 @@ function drawOverlay() {
     }
   });
 
-  // Ghost outline for copy-drag
-  if (dragState?.type==='copy' && dragCurrentPts) {
-    const pts=dragCurrentPts;
-    const tl=imgToScreen(Math.min(pts[0][0],pts[1][0]),Math.min(pts[0][1],pts[1][1]));
-    const br=imgToScreen(Math.max(pts[0][0],pts[1][0]),Math.max(pts[0][1],pts[1][1]));
-    if (tl&&br) {
+  // Ghost outlines for copy-drag (one per mover)
+  if (dragState?.type==='copy' && dragState.ptsMap) {
+    dragState.movers.forEach(mi => {
+      const pts=dragState.ptsMap[mi]; if (!pts) return;
+      const tl=imgToScreen(Math.min(pts[0][0],pts[1][0]),Math.min(pts[0][1],pts[1][1]));
+      const br=imgToScreen(Math.max(pts[0][0],pts[1][0]),Math.max(pts[0][1],pts[1][1]));
+      if (!tl||!br) return;
       const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
       r.setAttribute('x',tl.x); r.setAttribute('y',tl.y);
       r.setAttribute('width',Math.max(0,br.x-tl.x));
@@ -524,7 +540,7 @@ function drawOverlay() {
       r.setAttribute('stroke','#e94560'); r.setAttribute('stroke-width','2');
       r.setAttribute('stroke-dasharray','6 3');
       svgOverlay.appendChild(r);
-    }
+    });
   }
 
   // In-progress new-box outline
@@ -549,18 +565,21 @@ function drawOverlay() {
 function startMoveDrag(e, idx) {
   pushUndo();
   viewer.setMouseNavEnabled(false);
-  dragState = { type:'move', idx, startX:e.clientX, startY:e.clientY,
-                origPts: pageData.shapes[idx].points.map(p=>[...p]) };
-  dragCurrentPts = dragState.origPts.map(p=>[...p]);
+  const movers = selSet.has(idx) ? [...selSet] : [idx];
+  const origPtsMap = {};
+  movers.forEach(i => origPtsMap[i] = pageData.shapes[i].points.map(p=>[...p]));
+  dragState = { type:'move', idx, startX:e.clientX, startY:e.clientY, movers, origPtsMap, ptsMap:{...origPtsMap} };
+  dragCurrentPts = origPtsMap[idx].map(p=>[...p]);
 }
 
 // ── Drag: copy ───────────────────────────────────────────────
 function startCopyDrag(e, idx) {
   viewer.setMouseNavEnabled(false);
-  dragState = { type:'copy', idx, startX:e.clientX, startY:e.clientY,
-                origPts: pageData.shapes[idx].points.map(p=>[...p]),
-                label:   pageData.shapes[idx].label };
-  dragCurrentPts = dragState.origPts.map(p=>[...p]);
+  const movers = selSet.has(idx) ? [...selSet] : [idx];
+  const origPtsMap = {};
+  movers.forEach(i => origPtsMap[i] = pageData.shapes[i].points.map(p=>[...p]));
+  dragState = { type:'copy', idx, startX:e.clientX, startY:e.clientY, movers, origPtsMap, ptsMap:{...origPtsMap} };
+  dragCurrentPts = origPtsMap[idx].map(p=>[...p]);
 }
 
 // ── Drag: resize ─────────────────────────────────────────────────────────────
@@ -590,7 +609,7 @@ function onSvgBackground(e) {
   // Snapshot for undo, grab label before clearing selection
   pushUndo();
   const drawLabel = lastUsedLabel || (pageData.shapes.length ? pageData.shapes[pageData.shapes.length-1].label : (projectLabels[0] || 'cell'));
-  selIdx = -1;
+  selIdx = -1; selSet.clear();
   viewer.setMouseNavEnabled(false);
   const p=screenToImg(e.clientX, e.clientY);
   dragState = { type:'draw', startX:e.clientX, startY:e.clientY,
@@ -604,7 +623,10 @@ window.addEventListener('mousemove', e => {
   const dx=e.clientX-dragState.startX, dy=e.clientY-dragState.startY;
   if (dragState.type==='move'||dragState.type==='copy') {
     const d=screenDeltaToImg(dx,dy);
-    dragCurrentPts=dragState.origPts.map(p=>[p[0]+d.dx,p[1]+d.dy]);
+    const ptsMap={};
+    dragState.movers.forEach(i => { ptsMap[i]=dragState.origPtsMap[i].map(p=>[p[0]+d.dx,p[1]+d.dy]); });
+    dragState.ptsMap=ptsMap;
+    dragCurrentPts=ptsMap[dragState.idx];
   } else if (dragState.type==='resize') {
     const d=screenDeltaToImg(dx,dy);
     dragCurrentPts=applyResize(dragState.origPts,dragState.handle,d.dx,d.dy);
@@ -620,22 +642,35 @@ window.addEventListener('mouseup', async e => {
   const state=dragState; dragState=null;
   viewer.setMouseNavEnabled(!editMode);  // keep nav disabled if still in edit mode
 
-  if (state.type==='move'||state.type==='resize') {
+  if (state.type==='resize') {
     pageData.shapes[state.idx].points=dragCurrentPts;
     dragCurrentPts=null; drawOverlay();
     await patchShape(state.idx, { points: pageData.shapes[state.idx].points });
-    if (state.idx===selIdx) updatePanel();
+    updatePanel();
+
+  } else if (state.type==='move') {
+    dragCurrentPts=null;
+    state.movers.forEach(i => { pageData.shapes[i].points=state.ptsMap[i]; });
+    drawOverlay();
+    await Promise.all(state.movers.map(i => patchShape(i, { points: pageData.shapes[i].points })));
+    updatePanel();
 
   } else if (state.type==='copy') {
-    const pts=dragCurrentPts; dragCurrentPts=null;
-    const body={ label: state.label, points: pts };
+    dragCurrentPts=null;
     const params=new URLSearchParams({folder, stem:pages[pageIdx].stem});
     pushUndo();
-    const r=await fetch(`${API}/api/page/shape?${params}`,{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(body),
-    });
-    if (r.ok) { const data=await r.json(); await reloadPageData(); selectShape(data.idx); }
+    const newIdxs=[];
+    for (const i of state.movers) {
+      const r=await fetch(`${API}/api/page/shape?${params}`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ label:pageData.shapes[i].label, points:state.ptsMap[i] }),
+      });
+      if (r.ok) { const data=await r.json(); newIdxs.push(data.idx); }
+    }
+    await reloadPageData();
+    selSet.clear(); selIdx=-1;
+    newIdxs.forEach(i => { selSet.add(i); selIdx=i; });
+    drawOverlay(); updatePanel();
 
   } else if (state.type==='draw') {
     const pts=dragCurrentPts; dragCurrentPts=null;
@@ -676,66 +711,103 @@ async function patchShape(idx, body) {
 }
 
 function copyShape() {
-  if (selIdx < 0) return;
-  clipboard = JSON.parse(JSON.stringify(pageData.shapes[selIdx]));
+  if (selSet.size === 0) return;
+  clipboard = [...selSet].map(i => JSON.parse(JSON.stringify(pageData.shapes[i])));
 }
 
 async function cloneInDirection(arrowKey) {
-  if (selIdx < 0) return;
-  const shape = pageData.shapes[selIdx];
-  const pts = shape.points;
-  const x1 = Math.min(pts[0][0], pts[1][0]), y1 = Math.min(pts[0][1], pts[1][1]);
-  const x2 = Math.max(pts[0][0], pts[1][0]), y2 = Math.max(pts[0][1], pts[1][1]);
-  const w = x2 - x1, h = y2 - y1;
-  let nx1 = x1, ny1 = y1;
-  if (arrowKey === 'ArrowRight') nx1 = x2;
-  else if (arrowKey === 'ArrowLeft') nx1 = x1 - w;
-  else if (arrowKey === 'ArrowDown') ny1 = y2;
-  else if (arrowKey === 'ArrowUp') ny1 = y1 - h;
-  const body = { label: shape.label, points: [[nx1, ny1], [nx1 + w, ny1 + h]] };
+  if (selSet.size === 0) return;
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem});
   pushUndo();
-  const r = await fetch(`${API}/api/page/shape?${params}`, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  });
-  if (r.ok) { const data = await r.json(); await reloadPageData(); selectShape(data.idx); }
+  const newIdxs = [];
+  for (const i of selSet) {
+    const shape = pageData.shapes[i];
+    const pts = shape.points;
+    const x1=Math.min(pts[0][0],pts[1][0]), y1=Math.min(pts[0][1],pts[1][1]);
+    const x2=Math.max(pts[0][0],pts[1][0]), y2=Math.max(pts[0][1],pts[1][1]);
+    const w=x2-x1, h=y2-y1;
+    let nx1=x1, ny1=y1;
+    if (arrowKey==='ArrowRight') nx1=x2;
+    else if (arrowKey==='ArrowLeft') nx1=x1-w;
+    else if (arrowKey==='ArrowDown') ny1=y2;
+    else if (arrowKey==='ArrowUp') ny1=y1-h;
+    const r = await fetch(`${API}/api/page/shape?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ label: shape.label, points: [[nx1,ny1],[nx1+w,ny1+h]] }),
+    });
+    if (r.ok) { const data = await r.json(); newIdxs.push(data.idx); }
+  }
+  await reloadPageData();
+  selSet.clear(); selIdx=-1;
+  newIdxs.forEach(i => { selSet.add(i); selIdx=i; });
+  drawOverlay(); updatePanel();
 }
 
 async function pasteShape() {
-  if (!clipboard) return;
+  if (!clipboard?.length) return;
   const OFFSET = 10;
-  const pts = clipboard.points;
-  const newPts = pts.map(([x, y]) => [x + OFFSET, y + OFFSET]);
-  const body = { label: clipboard.label, points: newPts };
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem});
   pushUndo();
-  const r = await fetch(`${API}/api/page/shape?${params}`, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
-  });
-  if (r.ok) {
-    const data = await r.json();
-    await reloadPageData();
-    selectShape(data.idx);
+  const newIdxs = [];
+  for (const shape of clipboard) {
+    const newPts = shape.points.map(([x,y]) => [x+OFFSET, y+OFFSET]);
+    const r = await fetch(`${API}/api/page/shape?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ label: shape.label, points: newPts }),
+    });
+    if (r.ok) { const data = await r.json(); newIdxs.push(data.idx); }
   }
+  await reloadPageData();
+  selSet.clear(); selIdx=-1;
+  newIdxs.forEach(i => { selSet.add(i); selIdx=i; });
+  drawOverlay(); updatePanel();
+}
+
+async function cloneSelectionToPage(delta) {
+  if (selSet.size === 0) return;
+  const targetIdx = pageIdx + delta;
+  if (targetIdx < 0 || targetIdx >= pages.length) return;
+  const shapesToClone = [...selSet].map(i => ({
+    label: pageData.shapes[i].label,
+    points: pageData.shapes[i].points.map(p => [...p]),
+  }));
+  await loadPage(targetIdx);
+  const params = new URLSearchParams({folder, stem: pages[targetIdx].stem});
+  const newIdxs = [];
+  for (const shape of shapesToClone) {
+    const r = await fetch(`${API}/api/page/shape?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(shape),
+    });
+    if (r.ok) { const data = await r.json(); newIdxs.push(data.idx); }
+  }
+  await reloadPageData();
+  selSet.clear(); selIdx = -1;
+  newIdxs.forEach(i => { selSet.add(i); selIdx = i; });
+  drawOverlay(); updatePanel();
 }
 
 async function deleteSelectedShape() {
-  if (selIdx<0) return;
-  if (!confirm(`Delete this "${pageData.shapes[selIdx].label}" box?`)) return;
+  if (selSet.size === 0) return;
+  const count = selSet.size;
+  if (!confirm(`Delete ${count} box${count>1?'es':''}?`)) return;
   pushUndo();
-  const params=new URLSearchParams({folder,stem:pages[pageIdx].stem,idx:selIdx});
-  const r=await fetch(`${API}/api/page/shape?${params}`,{method:'DELETE'});
-  if (r.ok) { await reloadPageData(); selIdx=-1; drawOverlay(); updatePanel(); }
+  const newShapes = pageData.shapes.filter((_,i) => !selSet.has(i));
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem});
+  await fetch(`${API}/api/page/shapes?${params}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ shapes: newShapes }),
+  });
+  selSet.clear(); selIdx=-1;
+  await reloadPageData(); drawOverlay(); updatePanel();
 }
 
 async function changeLabel(newLabel) {
-  if (selIdx<0) return;
+  if (selSet.size === 0) return;
   pushUndo();
-  lastUsedLabel=newLabel;
-  pageData.shapes[selIdx].label=newLabel;
-  await patchShape(selIdx,{label:newLabel});
+  lastUsedLabel = newLabel;
+  selSet.forEach(i => { pageData.shapes[i].label = newLabel; });
+  await Promise.all([...selSet].map(i => patchShape(i, {label: newLabel})));
   drawOverlay();
 }
 
@@ -777,8 +849,15 @@ function buildLegend() {
 }
 
 // ── Selection & panel ────────────────────────────────────────────────────────
-function selectShape(idx) {
-  selIdx=idx;
+function selectShape(idx, addToSel=false) {
+  if (addToSel && idx >= 0) {
+    if (selSet.has(idx)) { selSet.delete(idx); if (selIdx===idx) selIdx=selSet.size>0?[...selSet].at(-1):-1; }
+    else { selSet.add(idx); selIdx=idx; }
+  } else {
+    selSet.clear();
+    if (idx >= 0) { selSet.add(idx); selIdx=idx; }
+    else selIdx=-1;
+  }
   if (idx>=0&&pageData?.shapes[idx]) lastUsedLabel=pageData.shapes[idx].label;
   drawOverlay(); updatePanel();
 }
@@ -796,6 +875,27 @@ function updatePanel() {
     return;
   }
   noSel.style.display='none'; content.style.display='flex';
+
+  // Multi-selection: show simplified panel (label + delete only)
+  if (selSet.size > 1) {
+    cropImg.style.display='none'; cropPh.style.display='block';
+    const staticLbl=document.getElementById('f-label');
+    const selectLbl=document.getElementById('f-label-select');
+    const labels=[...new Set([...projectLabels,...(pageData.shapes||[]).map(s=>s.label)])].sort();
+    const commonLabel=[...selSet].map(i=>pageData.shapes[i]?.label);
+    const allSame=commonLabel.every(l=>l===commonLabel[0]);
+    staticLbl.style.display='none'; selectLbl.style.display='block';
+    selectLbl.innerHTML=labels.map(l=>`<option value="${l}"${allSame&&l===commonLabel[0]?' selected':''}>${l}</option>`).join('');
+    document.getElementById('fg-super').style.display='none';
+    document.getElementById('fg-ocr').style.display='none';
+    document.getElementById('fg-llm').style.display='none';
+    document.getElementById('cell-meta').textContent=`${selSet.size} shapes selected`;
+    document.getElementById('save-btn').disabled=true;
+    document.getElementById('save-status').textContent='';
+    delBtn.style.display=editMode?'block':'none';
+    return;
+  }
+
   const shape=pageData.shapes[selIdx];
 
   cropImg.src=`${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}&idx=${selIdx}`;
@@ -861,6 +961,8 @@ document.addEventListener('keydown', e => {
   if (inField) return;
   if (e.key==='Delete'||e.key==='Backspace') { deleteSelectedShape(); return; }
   if (e.key==='e'||e.key==='E') { if(pages.length) toggleEditMode(); return; }
+  if (e.key==='n'||e.key==='N') { cloneSelectionToPage(+1); return; }
+  if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
   if (e.key==='ArrowRight'||e.key==='ArrowDown') goPage(+1);
   if (e.key==='ArrowLeft' ||e.key==='ArrowUp')   goPage(-1);
 });
@@ -887,7 +989,7 @@ async function loadFolder() {
 }
 
 async function loadPage(idx) {
-  pageIdx=idx; selIdx=-1; editMode=false; dragState=null;
+  pageIdx=idx; selIdx=-1; selSet.clear(); editMode=false; dragState=null;
   document.getElementById('prev-btn').disabled=idx===0;
   document.getElementById('next-btn').disabled=idx===pages.length-1;
   document.getElementById('page-label').textContent=`${idx+1} / ${pages.length}`;
