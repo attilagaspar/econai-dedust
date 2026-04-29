@@ -36,6 +36,10 @@ from app.pipeline import (
 
 app = FastAPI(title="EconAI", version="0.1.0")
 
+# Keep uploaded files in memory (avoid Windows temp-file deletion errors)
+from starlette.datastructures import UploadFile as _UploadFile
+_UploadFile.spool_max_size = 256 * 1024 * 1024  # 256 MB
+
 # Allow the browser (same host, any port) to call the API
 app.add_middleware(
     CORSMiddleware,
@@ -523,20 +527,23 @@ def api_job_status(name: str, passphrase: Optional[str] = Query(None)):
 # Routes — page import
 # ---------------------------------------------------------------------------
 
+class ImportRequest(BaseModel):
+    source_path: str  # local folder or single file path
+
 @app.post("/api/project/{name}/import")
-async def api_import_pages(name: str, files: list[UploadFile] = File(...)):
-    """Upload PDFs or images; split into pages and create empty LabelMe JSONs."""
-    from app.page_import import import_files
+def api_import_pages(name: str, body: ImportRequest):
+    """Import PDFs/images from a local path directly — no upload needed."""
+    from app.page_import import import_from_path
     try:
         pdir    = project_dir(name)
         ann_dir = pdir / "annotations"
-        data    = [(f.filename, await f.read()) for f in files]
-        results = import_files(data, ann_dir)
+        results = import_from_path(Path(body.source_path), ann_dir)
         return {"ok": True, "pages": results, "total": len(results)}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
 
 
 # ---------------------------------------------------------------------------

@@ -163,19 +163,6 @@ header span { color: #888; font-size: 0.85rem; }
   font-size: 0.8rem; color: #888;
 }
 
-/* Drop zone */
-.drop-zone {
-  border: 2px dashed #0f3460; border-radius: 8px;
-  padding: 28px; text-align: center; cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-  color: #666; font-size: 0.85rem;
-}
-.drop-zone:hover, .drop-zone.dragover {
-  border-color: #e94560; background: #1d1030; color: #ccc;
-}
-.drop-zone .dz-icon { font-size: 2rem; margin-bottom: 8px; }
-.drop-zone input[type=file] { display: none; }
-
 /* Import result list */
 .import-results {
   margin-top: 12px; max-height: 140px; overflow-y: auto;
@@ -362,15 +349,20 @@ function renderDetail() {
     <!-- Import pages -->
     <div class="card">
       <h3>Import Pages</h3>
-      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
-           ondragover="event.preventDefault();this.classList.add('dragover')"
-           ondragleave="this.classList.remove('dragover')"
-           ondrop="handleDrop(event)">
-        <input type="file" id="file-input" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
-               onchange="handleFileInput(this.files)">
-        <div class="dz-icon">📄</div>
-        <div>Drag &amp; drop PDFs or images here, or click to browse</div>
-        <div style="font-size:0.75rem;margin-top:6px;color:#555">PDF pages are split automatically</div>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
+        Enter the path to a PDF, image file, or folder of files on your computer.<br>
+        PDFs are split into pages automatically.
+      </p>
+      <div class="field-row">
+        <label>Folder path</label>
+        <input id="import-path" placeholder="C:/Users/you/Documents/scans" />
+        <input type="file" id="folder-picker" webkitdirectory multiple style="display:none"
+               onchange="fillPathFromPicker(this)">
+        <button class="btn btn-secondary" style="white-space:nowrap"
+                onclick="document.getElementById('folder-picker').click()">📁 Browse</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="importFromPath()">📥 Import</button>
       </div>
       <div class="import-results" id="import-results"></div>
     </div>
@@ -513,20 +505,33 @@ async function testConnection() {
 // ============================================================
 // File import
 // ============================================================
-function handleDrop(e) {
-  e.preventDefault();
-  document.getElementById('drop-zone').classList.remove('dragover');
-  uploadFiles(e.dataTransfer.files);
+function fillPathFromPicker(input) {
+  if (!input.files.length) return;
+  // webkitRelativePath = "foldername/file.pdf" — extract the folder name
+  // but we need the full OS path, which the browser won't give us.
+  // Best we can do: fill the folder name so the user can correct it.
+  const rel  = input.files[0].webkitRelativePath;
+  const folder = rel.split('/')[0];
+  const el   = document.getElementById('import-path');
+  // If input already has a value that ends with this folder, leave it
+  if (!el.value.endsWith(folder)) {
+    el.value = folder;
+    el.focus();
+    el.setSelectionRange(0, el.value.length);
+  }
+  showToast(`Folder "${folder}" selected — verify the full path then click Import.`, 5000);
 }
-function handleFileInput(files) { uploadFiles(files); }
 
-async function uploadFiles(files) {
-  if (!activeProj || !files.length) return;
-  const form = new FormData();
-  for (const f of files) form.append('files', f);
+async function importFromPath() {
+  if (!activeProj) return;
+  const path    = document.getElementById('import-path').value.trim();
+  if (!path) { alert('Enter a path first.'); return; }
   const results = document.getElementById('import-results');
-  results.innerHTML = '<div>Uploading…</div>';
-  const res  = await fetch(`/api/project/${activeProj.name}/import`, { method: 'POST', body: form });
+  results.innerHTML = '<div>Importing…</div>';
+  const res  = await fetch(`/api/project/${activeProj.name}/import`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ source_path: path }),
+  });
   const data = await res.json();
   if (data.ok) {
     results.innerHTML = data.pages.map(p =>
@@ -822,10 +827,14 @@ function showToast(msg, duration = 3000, color = 'green') {
 }
 function clearToast() { if (toastEl) toastEl.style.opacity = '0'; }
 
-// Keyboard shortcut: Escape closes modal
+// Keyboard shortcut: Escape closes modals
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeNewProjectModal();
+  if (e.key === 'Escape') { closeNewProjectModal(); closeLogModal(); }
 });
+
+// Prevent browser from opening dropped files anywhere on the page
+document.addEventListener('dragover',  e => e.preventDefault());
+document.addEventListener('drop', e => { e.preventDefault(); });
 </script>
 
 </body>
