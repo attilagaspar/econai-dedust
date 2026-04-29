@@ -543,6 +543,23 @@ function drawOverlay() {
     });
   }
 
+  // Rubber-band selection rect
+  if (dragState?.type==='select-rect' && dragCurrentPts) {
+    const pts=dragCurrentPts;
+    const tl=imgToScreen(Math.min(pts[0][0],pts[1][0]),Math.min(pts[0][1],pts[1][1]));
+    const br=imgToScreen(Math.max(pts[0][0],pts[1][0]),Math.max(pts[0][1],pts[1][1]));
+    if (tl&&br) {
+      const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+      r.setAttribute('x',tl.x); r.setAttribute('y',tl.y);
+      r.setAttribute('width',Math.max(0,br.x-tl.x));
+      r.setAttribute('height',Math.max(0,br.y-tl.y));
+      r.setAttribute('fill','#4ecdc4'); r.setAttribute('fill-opacity','0.08');
+      r.setAttribute('stroke','#4ecdc4'); r.setAttribute('stroke-width','1.5');
+      r.setAttribute('stroke-dasharray','5 3');
+      svgOverlay.appendChild(r);
+    }
+  }
+
   // In-progress new-box outline
   if (dragState?.type==='draw' && dragCurrentPts) {
     const pts=dragCurrentPts;
@@ -602,19 +619,25 @@ function applyResize(origPts, handle, dxi, dyi) {
   return [[x1,y1],[x2,y2]];
 }
 
-// ── Drag: draw new box ───────────────────────────────────────────────────────
+// ── Drag: draw new box OR rubber-band select ─────────────────────────────────
 function onSvgBackground(e) {
   if (!editMode || e.target!==svgOverlay) return;
   e.preventDefault();
-  // Snapshot for undo, grab label before clearing selection
-  pushUndo();
-  const drawLabel = lastUsedLabel || (pageData.shapes.length ? pageData.shapes[pageData.shapes.length-1].label : (projectLabels[0] || 'cell'));
-  selIdx = -1; selSet.clear();
   viewer.setMouseNavEnabled(false);
   const p=screenToImg(e.clientX, e.clientY);
-  dragState = { type:'draw', startX:e.clientX, startY:e.clientY,
-                origPts:[[p.x,p.y],[p.x,p.y]], drawLabel };
-  dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
+  if (e.ctrlKey||e.metaKey) {
+    // Rubber-band selection — don't clear existing selection, add to it
+    dragState = { type:'select-rect', startX:e.clientX, startY:e.clientY,
+                  origPts:[[p.x,p.y],[p.x,p.y]] };
+    dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
+  } else {
+    pushUndo();
+    const drawLabel = lastUsedLabel || (pageData.shapes.length ? pageData.shapes[pageData.shapes.length-1].label : (projectLabels[0] || 'cell'));
+    selIdx = -1; selSet.clear();
+    dragState = { type:'draw', startX:e.clientX, startY:e.clientY,
+                  origPts:[[p.x,p.y],[p.x,p.y]], drawLabel };
+    dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
+  }
 }
 
 // ── Global mouse tracking ────────────────────────────────────────────────────
@@ -630,7 +653,7 @@ window.addEventListener('mousemove', e => {
   } else if (dragState.type==='resize') {
     const d=screenDeltaToImg(dx,dy);
     dragCurrentPts=applyResize(dragState.origPts,dragState.handle,d.dx,d.dy);
-  } else if (dragState.type==='draw') {
+  } else if (dragState.type==='draw'||dragState.type==='select-rect') {
     const p=screenToImg(e.clientX,e.clientY);
     dragCurrentPts=[dragState.origPts[0],[p.x,p.y]];
   }
@@ -642,7 +665,21 @@ window.addEventListener('mouseup', async e => {
   const state=dragState; dragState=null;
   viewer.setMouseNavEnabled(!editMode);  // keep nav disabled if still in edit mode
 
-  if (state.type==='resize') {
+  if (state.type==='select-rect') {
+    const pts=dragCurrentPts; dragCurrentPts=null;
+    if (!pts) { drawOverlay(); return; }
+    const rx1=Math.min(pts[0][0],pts[1][0]), ry1=Math.min(pts[0][1],pts[1][1]);
+    const rx2=Math.max(pts[0][0],pts[1][0]), ry2=Math.max(pts[0][1],pts[1][1]);
+    (pageData.shapes||[]).forEach((shape,i) => {
+      const sp=shape.points||[];
+      const sx1=Math.min(sp[0][0],sp[1][0]), sy1=Math.min(sp[0][1],sp[1][1]);
+      const sx2=Math.max(sp[0][0],sp[1][0]), sy2=Math.max(sp[0][1],sp[1][1]);
+      const overlaps = sx1<rx2 && sx2>rx1 && sy1<ry2 && sy2>ry1;
+      if (overlaps) { selSet.add(i); selIdx=i; }
+    });
+    drawOverlay(); updatePanel();
+
+  } else if (state.type==='resize') {
     pageData.shapes[state.idx].points=dragCurrentPts;
     dragCurrentPts=null; drawOverlay();
     await patchShape(state.idx, { points: pageData.shapes[state.idx].points });
@@ -652,7 +689,7 @@ window.addEventListener('mouseup', async e => {
     dragCurrentPts=null;
     state.movers.forEach(i => { pageData.shapes[i].points=state.ptsMap[i]; });
     drawOverlay();
-    await Promise.all(state.movers.map(i => patchShape(i, { points: pageData.shapes[i].points })));
+    await replaceAllShapes();
     updatePanel();
 
   } else if (state.type==='copy') {
@@ -707,6 +744,14 @@ async function patchShape(idx, body) {
   const params=new URLSearchParams({folder,stem:pages[pageIdx].stem,idx});
   await fetch(`${API}/api/page/shape?${params}`,{
     method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
+  });
+}
+
+async function replaceAllShapes() {
+  const params=new URLSearchParams({folder,stem:pages[pageIdx].stem});
+  await fetch(`${API}/api/page/shapes?${params}`,{
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({shapes:pageData.shapes}),
   });
 }
 
@@ -807,7 +852,7 @@ async function changeLabel(newLabel) {
   pushUndo();
   lastUsedLabel = newLabel;
   selSet.forEach(i => { pageData.shapes[i].label = newLabel; });
-  await Promise.all([...selSet].map(i => patchShape(i, {label: newLabel})));
+  await replaceAllShapes();
   drawOverlay();
 }
 
