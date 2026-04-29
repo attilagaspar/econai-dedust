@@ -17,9 +17,9 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -409,12 +409,24 @@ def _server_cfg(name: str) -> dict:
     return srv
 
 
+class SshRequest(BaseModel):
+    passphrase: Optional[str] = None
+
+class SshPullRequest(BaseModel):
+    passphrase: Optional[str] = None
+    subfolder:  str = "annotations"
+
+class JobSubmit(BaseModel):
+    command:    str
+    passphrase: Optional[str] = None
+
+
 @app.post("/api/project/{name}/server/test")
-def api_server_test(name: str):
+def api_server_test(name: str, body: SshRequest = SshRequest()):
     from app import ssh_ops
     try:
         srv = _server_cfg(name)
-        return ssh_ops.test_connection(srv["host"], srv["user"], srv["key_path"])
+        return ssh_ops.test_connection(srv["host"], srv["user"], srv["key_path"], body.passphrase)
     except HTTPException:
         raise
     except Exception as e:
@@ -422,7 +434,7 @@ def api_server_test(name: str):
 
 
 @app.post("/api/project/{name}/server/push")
-def api_server_push(name: str):
+def api_server_push(name: str, body: SshRequest = SshRequest()):
     """Upload the project's annotations/ folder to the server."""
     from app import ssh_ops
     try:
@@ -434,7 +446,7 @@ def api_server_push(name: str):
             raise HTTPException(status_code=400, detail="annotations/ folder does not exist")
         return ssh_ops.push_folder(
             srv["host"], srv["user"], srv["key_path"],
-            local_ann, remote_ann,
+            local_ann, remote_ann, body.passphrase,
         )
     except HTTPException:
         raise
@@ -443,26 +455,22 @@ def api_server_push(name: str):
 
 
 @app.post("/api/project/{name}/server/pull")
-def api_server_pull(name: str, subfolder: str = Query("annotations")):
+def api_server_pull(name: str, body: SshPullRequest = SshPullRequest()):
     """Download a subfolder (default: annotations/) back from the server."""
     from app import ssh_ops
     try:
         srv  = _server_cfg(name)
         pdir = project_dir(name)
-        remote = posixpath.join(srv["remote_path"], name, subfolder)
-        local  = pdir / subfolder
+        remote = posixpath.join(srv["remote_path"], name, body.subfolder)
+        local  = pdir / body.subfolder
         return ssh_ops.pull_folder(
             srv["host"], srv["user"], srv["key_path"],
-            remote, local,
+            remote, local, body.passphrase,
         )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-class JobSubmit(BaseModel):
-    command: str
 
 
 @app.post("/api/project/{name}/job/submit")
@@ -477,10 +485,9 @@ def api_job_submit(name: str, body: JobSubmit):
         )
         result = ssh_ops.submit_job(
             srv["host"], srv["user"], srv["key_path"],
-            body.command, log_path,
+            body.command, log_path, body.passphrase,
         )
         if result["ok"]:
-            # persist pid + log_path in pipeline.json so we can poll later
             state = load_pipeline(name)
             state["job"] = {"pid": result["pid"], "log_path": log_path,
                             "command": body.command}
@@ -493,7 +500,7 @@ def api_job_submit(name: str, body: JobSubmit):
 
 
 @app.get("/api/project/{name}/job/status")
-def api_job_status(name: str):
+def api_job_status(name: str, passphrase: Optional[str] = Query(None)):
     """Poll the status of the last submitted background job."""
     from app import ssh_ops
     try:
@@ -504,8 +511,228 @@ def api_job_status(name: str):
             return {"ok": True, "running": False, "log_tail": "(no job submitted yet)"}
         return ssh_ops.job_status(
             srv["host"], srv["user"], srv["key_path"],
-            job.get("pid"), job["log_path"],
+            job.get("pid"), job["log_path"], passphrase,
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Routes — page import
+# ---------------------------------------------------------------------------
+
+@app.post("/api/project/{name}/import")
+async def api_import_pages(name: str, files: list[UploadFile] = File(...)):
+    """Upload PDFs or images; split into pages and create empty LabelMe JSONs."""
+    from app.page_import import import_files
+    try:
+        pdir    = project_dir(name)
+        ann_dir = pdir / "annotations"
+        data    = [(f.filename, await f.read()) for f in files]
+        results = import_files(data, ann_dir)
+        return {"ok": True, "pages": results, "total": len(results)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Routes — prepare training data (LabelMe → COCO)
+# ---------------------------------------------------------------------------
+
+BASE_YAML = Path(__file__).parent.parent / "samples" / "ertesito2" / "fast_rcnn_R_50_FPN_3x.yaml"
+
+@app.post("/api/project/{name}/prepare")
+def api_prepare(name: str):
+    """Convert annotated LabelMe JSONs → COCO JSON + generate training scripts."""
+    from app.coco_convert import prepare_training_data
+    try:
+        cfg  = load_config(name)
+        pdir = project_dir(name)
+        result = prepare_training_data(
+            project_name    = name,
+            ann_dir         = pdir / "annotations",
+            labels          = cfg["labels"],
+            intermediate_dir= pdir / "intermediate",
+            base_yaml_path  = BASE_YAML,
+        )
+        return {"ok": True, **result}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Routes — train / infer with SSE streaming
+# ---------------------------------------------------------------------------
+
+class TrainRequest(BaseModel):
+    passphrase: Optional[str] = None
+
+
+async def _sse_stream(gen):
+    """Wrap a sync generator as an SSE response."""
+    import asyncio
+    import json as _json
+
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen)
+            while True:
+                try:
+                    line = await loop.run_in_executor(pool, next, it)
+                    payload = _json.dumps({"line": line.rstrip("\n")})
+                    yield f"data: {payload}\n\n"
+                except StopIteration:
+                    yield "data: {\"done\": true}\n\n"
+                    break
+                except Exception as e:
+                    yield f"data: {_json.dumps({'error': str(e)})}\n\n"
+                    break
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+def _push_training_data(name: str, srv: dict, passphrase: str):
+    """Push images + COCO JSON + config + scripts to the server."""
+    from app import ssh_ops
+    pdir   = project_dir(name)
+    inter  = pdir / "intermediate"
+    remote = srv["remote_path"].rstrip("/")
+
+    results = {}
+
+    # Push images
+    r = ssh_ops.push_folder(srv["host"], srv["user"], srv["key_path"],
+                            pdir / "annotations",
+                            f"{remote}/{name}/images", passphrase)
+    results["push_images"] = r
+    if not r["ok"]:
+        return results
+
+    # Push COCO JSON
+    r2 = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"],
+                             f"mkdir -p {remote}/{name}", passphrase)
+    import paramiko, io as _io
+    c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+    sftp = c.open_sftp()
+    sftp.put(str(inter / "annotations.json"),
+             f"{remote}/{name}/annotations.json")
+
+    # Push config yaml
+    cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
+    ssh_ops._sftp_mkdir_p(sftp, f"{remote}/layout-model-training/configs/{name}")
+    sftp.put(str(cfg_local),
+             f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml")
+
+    # Push infer_layout.py script
+    infer_script = Path(__file__).parent / "infer_layout.py"
+    sftp.put(str(infer_script),
+             f"{remote}/layout-model-training/tools/infer_layout.py")
+
+    # Push training script
+    ssh_ops._sftp_mkdir_p(sftp, f"{remote}/layout-model-training/scripts")
+    sftp.put(str(inter / "train.sh"),
+             f"{remote}/layout-model-training/scripts/{name}.sh")
+    sftp.put(str(inter / "infer.sh"),
+             f"{remote}/layout-model-training/scripts/{name}_infer.sh")
+
+    sftp.close()
+    c.close()
+    results["push_data"] = {"ok": True}
+    return results
+
+
+@app.post("/api/project/{name}/train")
+async def api_train(name: str, body: TrainRequest = TrainRequest()):
+    """Push data to server then run training inside Docker. Streams log via SSE."""
+    from app import ssh_ops
+
+    try:
+        cfg = load_config(name)
+        srv = _server_cfg(name)
+        passphrase = body.passphrase
+        remote = srv["remote_path"].rstrip("/")
+
+        # Ensure intermediate data is prepared
+        pdir  = project_dir(name)
+        inter = pdir / "intermediate"
+        if not (inter / "annotations.json").exists():
+            raise HTTPException(status_code=400,
+                                detail="Run 'Prepare training data' first")
+
+        # Push everything to server
+        push_results = _push_training_data(name, srv, passphrase)
+        for k, v in push_results.items():
+            if not v.get("ok"):
+                raise HTTPException(status_code=500,
+                                    detail=f"Push failed ({k}): {v.get('error')}")
+
+        # Build docker command
+        docker_cmd = (
+            f"docker start detectron_training_container && "
+            f"docker exec detectron_training_container "
+            f"bash /workspace/layout-model-training/scripts/{name}.sh"
+        )
+
+        gen = ssh_ops.stream_command(srv["host"], srv["user"],
+                                     srv["key_path"], docker_cmd, passphrase)
+        return await _sse_stream(gen)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/project/{name}/infer")
+async def api_infer(name: str, body: TrainRequest = TrainRequest()):
+    """Run inference on the server. Streams log via SSE."""
+    from app import ssh_ops
+    try:
+        srv        = _server_cfg(name)
+        passphrase = body.passphrase
+        remote     = srv["remote_path"].rstrip("/")
+
+        docker_cmd = (
+            f"docker start detectron_predicting_container && "
+            f"docker exec detectron_predicting_container "
+            f"bash /workspace/layout-model-training/scripts/{name}_infer.sh"
+        )
+
+        gen = ssh_ops.stream_command(srv["host"], srv["user"],
+                                     srv["key_path"], docker_cmd, passphrase)
+        return await _sse_stream(gen)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/project/{name}/pull-predictions")
+def api_pull_predictions(name: str, body: TrainRequest = TrainRequest()):
+    """Pull predicted JSONs from server back to local annotations/ folder."""
+    from app import ssh_ops
+    try:
+        srv    = _server_cfg(name)
+        pdir   = project_dir(name)
+        remote = srv["remote_path"].rstrip("/")
+        result = ssh_ops.pull_folder(
+            srv["host"], srv["user"], srv["key_path"],
+            f"{remote}/{name}/predictions",
+            pdir / "annotations",
+            body.passphrase,
+        )
+        return result
     except HTTPException:
         raise
     except Exception as e:

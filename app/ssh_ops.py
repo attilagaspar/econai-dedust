@@ -154,6 +154,19 @@ def submit_job(host: str, user: str, key_path: str,
         return {"ok": False, "error": str(e)}
 
 
+def stream_command(host: str, user: str, key_path: str, cmd: str,
+                   passphrase: str = None):
+    """
+    Generator — yields output lines from a remote command in real time.
+    Uses get_pty=True so stdout/stderr are merged and unbuffered.
+    """
+    c = _client(host, user, key_path, passphrase)
+    _, stdout, _ = c.exec_command(cmd, get_pty=True)
+    for line in iter(lambda: stdout.readline(), ""):
+        yield line
+    c.close()
+
+
 def job_status(host: str, user: str, key_path: str,
                pid: Optional[int], log_path: str, passphrase: str = None) -> dict:
     try:

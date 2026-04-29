@@ -139,6 +139,50 @@ header span { color: #888; font-size: 0.85rem; }
 }
 .modal h3 { margin-bottom: 18px; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+/* Live-log modal */
+.log-modal {
+  background: #0d1020; border: 1px solid #0f3460; border-radius: 10px;
+  width: 780px; max-width: 96vw; max-height: 88vh;
+  display: flex; flex-direction: column;
+}
+.log-modal-header {
+  padding: 14px 20px; border-bottom: 1px solid #0f3460;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.log-modal-header h3 { font-size: 1rem; }
+.log-modal-body {
+  flex: 1; overflow-y: auto; padding: 14px 16px;
+  font-family: monospace; font-size: 0.78rem; color: #a0c8a0;
+  white-space: pre-wrap; word-break: break-all;
+  min-height: 200px;
+}
+.log-modal-footer {
+  padding: 10px 20px; border-top: 1px solid #0f3460;
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.8rem; color: #888;
+}
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed #0f3460; border-radius: 8px;
+  padding: 28px; text-align: center; cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  color: #666; font-size: 0.85rem;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: #e94560; background: #1d1030; color: #ccc;
+}
+.drop-zone .dz-icon { font-size: 2rem; margin-bottom: 8px; }
+.drop-zone input[type=file] { display: none; }
+
+/* Import result list */
+.import-results {
+  margin-top: 12px; max-height: 140px; overflow-y: auto;
+  font-size: 0.78rem; color: #888;
+}
+.import-results .ok  { color: #4caf50; }
+.import-results .err { color: #e94560; }
 </style>
 </head>
 <body>
@@ -169,6 +213,21 @@ header span { color: #888; font-size: 0.85rem; }
     </div>
   </div>
 
+</div>
+
+<!-- Live-log modal -->
+<div class="modal-bg" id="log-modal-bg">
+  <div class="log-modal">
+    <div class="log-modal-header">
+      <h3 id="log-modal-title">Server log</h3>
+      <span id="log-modal-status"></span>
+    </div>
+    <div class="log-modal-body" id="log-modal-body"></div>
+    <div class="log-modal-footer">
+      <span id="log-modal-info">Connecting…</span>
+      <button class="btn btn-secondary" id="log-modal-close" onclick="closeLogModal()">Close</button>
+    </div>
+  </div>
 </div>
 
 <!-- New-project modal -->
@@ -300,6 +359,48 @@ function renderDetail() {
       </div>
     </div>
 
+    <!-- Import pages -->
+    <div class="card">
+      <h3>Import Pages</h3>
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+           ondragover="event.preventDefault();this.classList.add('dragover')"
+           ondragleave="this.classList.remove('dragover')"
+           ondrop="handleDrop(event)">
+        <input type="file" id="file-input" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
+               onchange="handleFileInput(this.files)">
+        <div class="dz-icon">📄</div>
+        <div>Drag &amp; drop PDFs or images here, or click to browse</div>
+        <div style="font-size:0.75rem;margin-top:6px;color:#555">PDF pages are split automatically</div>
+      </div>
+      <div class="import-results" id="import-results"></div>
+    </div>
+
+    <!-- Prepare training data -->
+    <div class="card">
+      <h3>Prepare Training Data</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
+        Converts your annotated LabelMe JSONs to COCO format and generates the training &amp; inference scripts.
+        Run this after annotating a subset of pages in the editor.
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
+      </div>
+      <div id="prepare-result" style="font-size:0.8rem;color:#888;margin-top:10px"></div>
+    </div>
+
+    <!-- Train & Infer -->
+    <div class="card">
+      <h3>Train &amp; Infer on GPU Server</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
+        Pushes data to the server, runs training or inference inside Docker, and streams the live log.
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-warning" onclick="runTrain()">🚀 Train model</button>
+        <button class="btn btn-success" onclick="runInfer()">🔍 Run inference</button>
+        <button class="btn btn-secondary" onclick="pullPredictions()">⬇ Pull predictions</button>
+      </div>
+    </div>
+
     <!-- Server config -->
     <div class="card">
       <h3>GPU Server &nbsp;<small id="conn-status-label">${connStatus}</small></h3>
@@ -319,40 +420,14 @@ function renderDetail() {
         <label>Remote path</label>
         <input id="srv-remote" value="${srv.remote_path||''}" placeholder="/home/user/econai" />
       </div>
+      <div class="field-row">
+        <label>Passphrase</label>
+        <input id="srv-pass" type="password" placeholder="(leave blank if key has no passphrase)" />
+      </div>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="saveServerConfig()">💾 Save</button>
         <button class="btn btn-secondary" onclick="testConnection()">🔌 Test connection</button>
       </div>
-    </div>
-
-    <!-- File transfer -->
-    <div class="card">
-      <h3>File Transfer</h3>
-      <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
-        Push your local <code>annotations/</code> folder to the server before training.<br>
-        Pull back after inference to get predicted layouts.
-      </p>
-      <div class="btn-row">
-        <button class="btn btn-warning" onclick="pushAnnotations()">⬆ Push annotations → server</button>
-        <button class="btn btn-success" onclick="pullAnnotations()">⬇ Pull annotations ← server</button>
-      </div>
-    </div>
-
-    <!-- Job submission -->
-    <div class="card">
-      <h3>Remote Job</h3>
-      <p style="font-size:0.82rem;color:#888;margin-bottom:10px">
-        Run any command on the GPU server as a background job. Use this to submit training or inference.
-      </p>
-      <div class="field-row">
-        <label>Command</label>
-        <input id="job-cmd" placeholder="docker exec econai python train.py --config /path/to/cfg.yaml" />
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="submitJob()">🚀 Submit job</button>
-        <button class="btn btn-secondary" onclick="pollJobStatus()">🔄 Refresh status</button>
-      </div>
-      <div id="job-log">(no job submitted yet)</div>
     </div>
   `;
 
@@ -390,13 +465,18 @@ async function advanceStage() {
 // ============================================================
 // Server config
 // ============================================================
+function getPassphrase() {
+  const el = document.getElementById('srv-pass');
+  return el ? el.value : '';
+}
+
 async function saveServerConfig() {
   if (!activeProj) return;
   const body = {
     server: {
       host:        document.getElementById('srv-host').value.trim(),
       user:        document.getElementById('srv-user').value.trim(),
-      key_path:    document.getElementById('srv-key').value.trim(),
+      key_path:    document.getElementById('srv-key').value.trim().replace(/^["']+|["']+$/g, ''),
       remote_path: document.getElementById('srv-remote').value.trim(),
     }
   };
@@ -418,7 +498,10 @@ async function testConnection() {
   if (!label) return;
   await saveServerConfig();
   label.innerHTML = `<span class="status-dot dot-yellow"></span>Testing…`;
-  const res  = await fetch(`/api/project/${activeProj.name}/server/test`, { method: 'POST' });
+  const res  = await fetch(`/api/project/${activeProj.name}/server/test`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ passphrase: getPassphrase() }),
+  });
   const data = await res.json();
   if (data.ok) {
     label.innerHTML = `<span class="status-dot dot-green"></span>${data.hostname} &nbsp;·&nbsp; GPU: ${data.gpu || 'n/a'}`;
@@ -428,13 +511,179 @@ async function testConnection() {
 }
 
 // ============================================================
-// File transfer
+// File import
+// ============================================================
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('dragover');
+  uploadFiles(e.dataTransfer.files);
+}
+function handleFileInput(files) { uploadFiles(files); }
+
+async function uploadFiles(files) {
+  if (!activeProj || !files.length) return;
+  const form = new FormData();
+  for (const f of files) form.append('files', f);
+  const results = document.getElementById('import-results');
+  results.innerHTML = '<div>Uploading…</div>';
+  const res  = await fetch(`/api/project/${activeProj.name}/import`, { method: 'POST', body: form });
+  const data = await res.json();
+  if (data.ok) {
+    results.innerHTML = data.pages.map(p =>
+      p.error
+        ? `<div class="err">✗ ${p.stem}: ${p.error}</div>`
+        : `<div class="ok">✓ ${p.stem} (${p.width}×${p.height})</div>`
+    ).join('');
+    showToast(`Imported ${data.total} page(s).`);
+    await selectProject(activeProj.name);
+  } else {
+    results.innerHTML = `<div class="err">${data.detail || JSON.stringify(data)}</div>`;
+  }
+}
+
+// ============================================================
+// Prepare training data
+// ============================================================
+async function prepareTrainingData() {
+  if (!activeProj) return;
+  const el = document.getElementById('prepare-result');
+  el.textContent = 'Converting annotations…';
+  const res  = await fetch(`/api/project/${activeProj.name}/prepare`, { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) {
+    el.innerHTML = `✓ ${data.n_annotated} annotated pages · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
+      COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
+    showToast('Training data prepared.');
+  } else {
+    el.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+  }
+}
+
+// ============================================================
+// Train / Infer (SSE live log)
+// ============================================================
+let activeSSE = null;
+
+function openLogModal(title) {
+  document.getElementById('log-modal-title').textContent = title;
+  document.getElementById('log-modal-body').textContent  = '';
+  document.getElementById('log-modal-info').textContent  = 'Connecting…';
+  document.getElementById('log-modal-status').innerHTML  =
+    '<span class="status-dot dot-yellow"></span>Running';
+  document.getElementById('log-modal-bg').classList.add('open');
+}
+
+function closeLogModal() {
+  document.getElementById('log-modal-bg').classList.remove('open');
+  if (activeSSE) { activeSSE.close(); activeSSE = null; }
+}
+
+function startSSE(url, title, passphrase) {
+  openLogModal(title);
+  const body   = document.getElementById('log-modal-body');
+  const info   = document.getElementById('log-modal-info');
+  const status = document.getElementById('log-modal-status');
+
+  // POST first to start job, then use EventSource (GET) for SSE stream
+  // Since EventSource doesn't support POST, we POST with fetch using streaming
+  const ctrl = new AbortController();
+  activeSSE  = ctrl;
+
+  fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ passphrase }),
+    signal:  ctrl.signal,
+  }).then(async res => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      body.textContent += '\nError: ' + (err.detail || res.statusText);
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const match = part.match(/^data: (.+)$/m);
+        if (!match) continue;
+        try {
+          const msg = JSON.parse(match[1]);
+          if (msg.done) {
+            status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+            info.textContent = 'Completed.';
+            return;
+          }
+          if (msg.error) {
+            body.textContent += '\nError: ' + msg.error;
+            status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+            return;
+          }
+          if (msg.line !== undefined) {
+            body.textContent += msg.line + '\n';
+            body.scrollTop    = body.scrollHeight;
+          }
+        } catch {}
+      }
+    }
+    status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+    info.textContent = 'Stream ended.';
+  }).catch(err => {
+    if (err.name !== 'AbortError') {
+      body.textContent += '\nConnection error: ' + err.message;
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+    }
+  });
+}
+
+async function runTrain() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  startSSE(`/api/project/${activeProj.name}/train`, '🚀 Training — ' + activeProj.name, getPassphrase());
+}
+
+async function runInfer() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  startSSE(`/api/project/${activeProj.name}/infer`, '🔍 Inference — ' + activeProj.name, getPassphrase());
+}
+
+async function pullPredictions() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  if (!confirm('Pull predicted JSONs from server into local annotations/ folder?')) return;
+  showToast('Pulling predictions…', 0);
+  const res  = await fetch(`/api/project/${activeProj.name}/pull-predictions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passphrase: getPassphrase() }),
+  });
+  const data = await res.json();
+  clearToast();
+  if (data.ok) {
+    showToast(`✓ Downloaded ${data.files_downloaded} prediction files.`);
+    await selectProject(activeProj.name);
+  } else {
+    showToast('Error: ' + data.error, 4000, 'red');
+  }
+}
+
+// ============================================================
+// File transfer (legacy push/pull — kept for manual use)
 // ============================================================
 async function pushAnnotations() {
   if (!activeProj) return;
   await saveServerConfig();
   showToast('Pushing annotations to server…', 0);
-  const res  = await fetch(`/api/project/${activeProj.name}/server/push`, { method: 'POST' });
+  const res  = await fetch(`/api/project/${activeProj.name}/server/push`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ passphrase: getPassphrase() }),
+  });
   const data = await res.json();
   clearToast();
   if (data.ok) {
@@ -449,7 +698,10 @@ async function pullAnnotations() {
   await saveServerConfig();
   if (!confirm('This will overwrite your local annotations/ folder with the server copy. Continue?')) return;
   showToast('Pulling annotations from server…', 0);
-  const res  = await fetch(`/api/project/${activeProj.name}/server/pull`, { method: 'POST' });
+  const res  = await fetch(`/api/project/${activeProj.name}/server/pull`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ passphrase: getPassphrase() }),
+  });
   const data = await res.json();
   clearToast();
   if (data.ok) {
@@ -472,7 +724,7 @@ async function submitJob() {
   log.textContent = 'Submitting job…';
   const res  = await fetch(`/api/project/${activeProj.name}/job/submit`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ command: cmd }),
+    body: JSON.stringify({ command: cmd, passphrase: getPassphrase() }),
   });
   const data = await res.json();
   if (data.ok) {
@@ -495,7 +747,8 @@ function stopJobPolling() {
 
 async function pollJobStatus() {
   if (!activeProj) return;
-  const res  = await fetch(`/api/project/${activeProj.name}/job/status`);
+  const pass = encodeURIComponent(getPassphrase());
+  const res  = await fetch(`/api/project/${activeProj.name}/job/status?passphrase=${pass}`);
   const data = await res.json();
   const log  = document.getElementById('job-log');
   if (!log) { stopJobPolling(); return; }
