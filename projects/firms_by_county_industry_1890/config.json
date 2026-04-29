@@ -1,0 +1,20 @@
+{
+  "name": "firms_by_county_industry_1890",
+  "type": "A",
+  "labels": [
+    "table_header",
+    "text_cell",
+    "numerical_cell",
+    "page_header"
+  ],
+  "server": {
+    "host": "gpu.koren.work",
+    "user": "gaspar",
+    "key_path": "C:\\Users\\agaspar\\Documents\\korenwork_gaspar_private.pem",
+    "remote_path": "/home/gaspar/econai/koren"
+  },
+  "llm": {
+    "model": "gpt-4o-mini",
+    "prompt": ""
+  }
+}

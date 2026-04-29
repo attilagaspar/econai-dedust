@@ -577,6 +577,17 @@ class TrainRequest(BaseModel):
     passphrase: Optional[str] = None
 
 
+_SSE_DONE = object()
+
+
+def _safe_next(it):
+    """Return next item, or _SSE_DONE sentinel — never raises StopIteration."""
+    try:
+        return next(it)
+    except StopIteration:
+        return _SSE_DONE
+
+
 async def _sse_stream(gen):
     """Wrap a sync generator as an SSE response."""
     import asyncio
@@ -589,12 +600,12 @@ async def _sse_stream(gen):
             it = iter(gen)
             while True:
                 try:
-                    line = await loop.run_in_executor(pool, next, it)
+                    line = await loop.run_in_executor(pool, _safe_next, it)
+                    if line is _SSE_DONE:
+                        yield "data: {\"done\": true}\n\n"
+                        break
                     payload = _json.dumps({"line": line.rstrip("\n")})
                     yield f"data: {payload}\n\n"
-                except StopIteration:
-                    yield "data: {\"done\": true}\n\n"
-                    break
                 except Exception as e:
                     yield f"data: {_json.dumps({'error': str(e)})}\n\n"
                     break
@@ -604,54 +615,73 @@ async def _sse_stream(gen):
                                       "X-Accel-Buffering": "no"})
 
 
-def _push_training_data(name: str, srv: dict, passphrase: str):
-    """Push images + COCO JSON + config + scripts to the server."""
+def _push_training_data_gen(name: str, srv: dict, passphrase: str):
+    """Generator: push images + COCO JSON + config + scripts, yielding progress lines."""
     from app import ssh_ops
     pdir   = project_dir(name)
     inter  = pdir / "intermediate"
     remote = srv["remote_path"].rstrip("/")
 
-    results = {}
-
-    # Push images
-    r = ssh_ops.push_folder(srv["host"], srv["user"], srv["key_path"],
-                            pdir / "annotations",
-                            f"{remote}/{name}/images", passphrase)
-    results["push_images"] = r
-    if not r["ok"]:
-        return results
-
-    # Push COCO JSON
-    r2 = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"],
-                             f"mkdir -p {remote}/{name}", passphrase)
-    import paramiko, io as _io
+    yield f"[push] remote_path = {remote}"
+    yield f"[push] Connecting to {srv['host']} as {srv['user']}..."
     c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
     sftp = c.open_sftp()
-    sftp.put(str(inter / "annotations.json"),
-             f"{remote}/{name}/annotations.json")
+    try:
+        dirs = [
+            f"{remote}/{name}/images",
+            f"{remote}/layout-model-training/configs/{name}",
+            f"{remote}/layout-model-training/tools",
+            f"{remote}/layout-model-training/scripts",
+        ]
+        for d in dirs:
+            yield f"[push] mkdir -p {d}"
+            ssh_ops._sftp_mkdir_p(sftp, d)
 
-    # Push config yaml
-    cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
-    ssh_ops._sftp_mkdir_p(sftp, f"{remote}/layout-model-training/configs/{name}")
-    sftp.put(str(cfg_local),
-             f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml")
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+        images = [p for p in (pdir / "annotations").iterdir()
+                  if p.suffix.lower() in IMAGE_EXTS]
+        total = len(images)
+        yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
+        for i, img in enumerate(images, 1):
+            dest = f"{remote}/{name}/images/{img.name}"
+            sftp.put(str(img), dest)
+            if i % 5 == 0 or i == total:
+                yield f"[push]   {i}/{total}  {img.name} → {dest}"
 
-    # Push infer_layout.py script
-    infer_script = Path(__file__).parent / "infer_layout.py"
-    sftp.put(str(infer_script),
-             f"{remote}/layout-model-training/tools/infer_layout.py")
+        dest = f"{remote}/{name}/annotations.json"
+        yield f"[push] {inter/'annotations.json'} → {dest}"
+        sftp.put(str(inter / "annotations.json"), dest)
 
-    # Push training script
-    ssh_ops._sftp_mkdir_p(sftp, f"{remote}/layout-model-training/scripts")
-    sftp.put(str(inter / "train.sh"),
-             f"{remote}/layout-model-training/scripts/{name}.sh")
-    sftp.put(str(inter / "infer.sh"),
-             f"{remote}/layout-model-training/scripts/{name}_infer.sh")
+        cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
+        dest = f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
+        yield f"[push] {cfg_local} → {dest}"
+        sftp.put(str(cfg_local), dest)
 
-    sftp.close()
-    c.close()
-    results["push_data"] = {"ok": True}
-    return results
+        dest = f"{remote}/layout-model-training/tools/infer_layout.py"
+        yield f"[push] infer_layout.py → {dest}"
+        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+
+        def sftp_put_lf(local: Path, remote_dest: str):
+            """Upload a text file with LF line endings (strip Windows CRLF)."""
+            content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            with sftp.open(remote_dest, "wb") as fh:
+                fh.write(content)
+
+        dest_train = f"{remote}/layout-model-training/scripts/{name}.sh"
+        dest_infer = f"{remote}/layout-model-training/scripts/{name}_infer.sh"
+        yield f"[push] train.sh → {dest_train}"
+        sftp_put_lf(inter / "train.sh", dest_train)
+        yield f"[push] infer.sh → {dest_infer}"
+        sftp_put_lf(inter / "infer.sh", dest_infer)
+
+        yield "[push] All files uploaded successfully."
+        yield f"[push] Verifying: ls {remote}/layout-model-training/scripts/"
+        _, stdout, _ = c.exec_command(f"ls -1 {remote}/layout-model-training/scripts/")
+        for ln in stdout.read().decode().splitlines():
+            yield f"[push]   {ln}"
+    finally:
+        sftp.close()
+        c.close()
 
 
 @app.post("/api/project/{name}/train")
@@ -672,13 +702,6 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             raise HTTPException(status_code=400,
                                 detail="Run 'Prepare training data' first")
 
-        # Push everything to server
-        push_results = _push_training_data(name, srv, passphrase)
-        for k, v in push_results.items():
-            if not v.get("ok"):
-                raise HTTPException(status_code=500,
-                                    detail=f"Push failed ({k}): {v.get('error')}")
-
         # Build docker command
         docker_cmd = (
             f"docker start detectron_training_container && "
@@ -686,9 +709,13 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             f"bash /workspace/layout-model-training/scripts/{name}.sh"
         )
 
-        gen = ssh_ops.stream_command(srv["host"], srv["user"],
-                                     srv["key_path"], docker_cmd, passphrase)
-        return await _sse_stream(gen)
+        def full_gen():
+            yield from _push_training_data_gen(name, srv, passphrase)
+            yield "[push] Starting Docker training..."
+            yield from ssh_ops.stream_command(srv["host"], srv["user"],
+                                              srv["key_path"], docker_cmd, passphrase)
+
+        return await _sse_stream(full_gen())
 
     except HTTPException:
         raise
@@ -711,9 +738,13 @@ async def api_infer(name: str, body: TrainRequest = TrainRequest()):
             f"bash /workspace/layout-model-training/scripts/{name}_infer.sh"
         )
 
-        gen = ssh_ops.stream_command(srv["host"], srv["user"],
-                                     srv["key_path"], docker_cmd, passphrase)
-        return await _sse_stream(gen)
+        def full_gen():
+            yield from _push_training_data_gen(name, srv, passphrase)
+            yield "[push] Starting Docker inference..."
+            yield from ssh_ops.stream_command(srv["host"], srv["user"],
+                                              srv["key_path"], docker_cmd, passphrase)
+
+        return await _sse_stream(full_gen())
 
     except HTTPException:
         raise
