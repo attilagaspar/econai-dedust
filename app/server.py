@@ -723,6 +723,83 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _push_infer_data_gen(name: str, srv: dict, passphrase: str):
+    """Generator: push images + scripts + config for inference (no annotations.json needed).
+
+    Uses predict_remote_path (if set) as the Docker-container root for placing
+    the infer script — necessary when the predict container mounts a parent
+    directory compared to the training container.
+    """
+    from app import ssh_ops
+    import posixpath as pp
+    pdir         = project_dir(name)
+    inter        = pdir / "intermediate"
+    remote       = srv["remote_path"].rstrip("/")        # where data lives (training ws root on host)
+    predict_root = srv.get("predict_remote_path", remote).rstrip("/")  # predict container ws root on host
+
+    # Derive the prefix that maps from predict /workspace to the data directory
+    # e.g. remote=/home/.../koren, predict_root=/home/.../econai → prefix=koren
+    if remote.startswith(predict_root + "/"):
+        ws_prefix = remote[len(predict_root) + 1:]  # e.g. "koren"
+    else:
+        ws_prefix = ""
+
+    yield f"[push] remote_path (data)    = {remote}"
+    yield f"[push] predict_remote_path   = {predict_root}"
+    yield f"[push] container ws prefix   = '{ws_prefix}'"
+    yield f"[push] Connecting to {srv['host']} as {srv['user']}..."
+    c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+    sftp = c.open_sftp()
+    try:
+        dirs = [
+            f"{remote}/{name}/images",
+            f"{remote}/layout-model-training/configs/{name}",
+            f"{remote}/layout-model-training/tools",
+            f"{predict_root}/layout-model-training/scripts",  # script lives in predict container ws
+        ]
+        for d in dirs:
+            yield f"[push] mkdir -p {d}"
+            ssh_ops._sftp_mkdir_p(sftp, d)
+
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+        images = [p for p in (pdir / "annotations").iterdir()
+                  if p.suffix.lower() in IMAGE_EXTS]
+        total = len(images)
+        yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
+        for i, img in enumerate(images, 1):
+            dest = f"{remote}/{name}/images/{img.name}"
+            sftp.put(str(img), dest)
+            if i % 10 == 0 or i == total:
+                yield f"[push]   {i}/{total}  {img.name}"
+
+        cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
+        dest = f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
+        yield f"[push] config YAML → {dest}"
+        sftp.put(str(cfg_local), dest)
+
+        dest = f"{remote}/layout-model-training/tools/infer_layout.py"
+        yield f"[push] infer_layout.py → {dest}"
+        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+
+        def sftp_put_lf(local: Path, remote_dest: str):
+            content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            with sftp.open(remote_dest, "wb") as fh:
+                fh.write(content)
+
+        dest_infer = f"{predict_root}/layout-model-training/scripts/{name}_infer.sh"
+        yield f"[push] infer.sh → {dest_infer}"
+        sftp_put_lf(inter / "infer.sh", dest_infer)
+
+        yield "[push] All files uploaded successfully."
+        yield f"[push] Verifying scripts dir ({predict_root}/layout-model-training/scripts/):"
+        _, stdout, _ = c.exec_command(f"ls -la {predict_root}/layout-model-training/scripts/")
+        for ln in stdout.read().decode().splitlines():
+            yield f"[push]   {ln}"
+    finally:
+        sftp.close()
+        c.close()
+
+
 @app.post("/api/project/{name}/infer")
 async def api_infer(name: str, body: TrainRequest = TrainRequest()):
     """Run inference on the server. Streams log via SSE."""
@@ -739,7 +816,7 @@ async def api_infer(name: str, body: TrainRequest = TrainRequest()):
         )
 
         def full_gen():
-            yield from _push_training_data_gen(name, srv, passphrase)
+            yield from _push_infer_data_gen(name, srv, passphrase)
             yield "[push] Starting Docker inference..."
             yield from ssh_ops.stream_command(srv["host"], srv["user"],
                                               srv["key_path"], docker_cmd, passphrase)
@@ -754,23 +831,50 @@ async def api_infer(name: str, body: TrainRequest = TrainRequest()):
 
 @app.post("/api/project/{name}/pull-predictions")
 def api_pull_predictions(name: str, body: TrainRequest = TrainRequest()):
-    """Pull predicted JSONs from server back to local annotations/ folder."""
+    """Pull predicted JSONs from server into local predictions/ folder (never touches annotations/)."""
     from app import ssh_ops
     try:
-        srv    = _server_cfg(name)
-        pdir   = project_dir(name)
-        remote = srv["remote_path"].rstrip("/")
+        srv       = _server_cfg(name)
+        pdir      = project_dir(name)
+        remote    = srv["remote_path"].rstrip("/")
+        pred_dir  = pdir / "predictions"
+        pred_dir.mkdir(parents=True, exist_ok=True)
         result = ssh_ops.pull_folder(
             srv["host"], srv["user"], srv["key_path"],
             f"{remote}/{name}/predictions",
-            pdir / "annotations",
+            pred_dir,
             body.passphrase,
         )
-        return result
+        return {**result, "local_path": str(pred_dir)}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/project/{name}/apply-predictions")
+def api_apply_predictions(name: str):
+    """Copy predicted shapes into annotation JSONs that have no shapes yet."""
+    import json as _json
+    pdir     = project_dir(name)
+    pred_dir = pdir / "predictions"
+    ann_dir  = pdir / "annotations"
+    if not pred_dir.exists():
+        raise HTTPException(status_code=400, detail="No predictions pulled yet")
+    applied = skipped = 0
+    for pred_file in pred_dir.glob("*.json"):
+        ann_file = ann_dir / pred_file.name
+        if not ann_file.exists():
+            continue
+        ann = _json.loads(ann_file.read_text(encoding="utf-8"))
+        if ann.get("shapes"):  # already has hand annotations — skip
+            skipped += 1
+            continue
+        pred = _json.loads(pred_file.read_text(encoding="utf-8"))
+        ann["shapes"] = pred.get("shapes", [])
+        ann_file.write_text(_json.dumps(ann, indent=2, ensure_ascii=False), encoding="utf-8")
+        applied += 1
+    return {"applied": applied, "skipped_had_annotations": skipped}
 
 
 # ---------------------------------------------------------------------------

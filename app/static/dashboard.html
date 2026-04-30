@@ -400,6 +400,7 @@ function renderDetail() {
         <button class="btn btn-warning" onclick="runTrain()">🚀 Train model</button>
         <button class="btn btn-success" onclick="runInfer()">🔍 Run inference</button>
         <button class="btn btn-secondary" onclick="pullPredictions()">⬇ Pull predictions</button>
+        <button class="btn btn-secondary" onclick="applyPredictions()">📋 Apply to empty pages</button>
       </div>
     </div>
 
@@ -673,7 +674,7 @@ async function runInfer() {
 async function pullPredictions() {
   if (!activeProj) return;
   await saveServerConfig();
-  if (!confirm('Pull predicted JSONs from server into local annotations/ folder?')) return;
+  if (!confirm('Pull predicted JSONs from server into local predictions/ folder?\n(Your existing annotations will NOT be touched.)')) return;
   showToast('Pulling predictions…', 0);
   const res  = await fetch(`/api/project/${activeProj.name}/pull-predictions`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -687,6 +688,17 @@ async function pullPredictions() {
   } else {
     showToast('Error: ' + errMsg(data), 4000, 'red');
   }
+}
+
+async function applyPredictions() {
+  if (!activeProj) return;
+  if (!confirm('Copy predicted shapes into all pages that have no hand annotations yet?\n(Pages you already annotated will not be touched.)')) return;
+  showToast('Applying predictions…', 0);
+  const res  = await fetch(`/api/project/${activeProj.name}/apply-predictions`, { method: 'POST' });
+  const data = await res.json();
+  clearToast();
+  if (res.ok) showToast(`✓ Applied to ${data.applied} pages, skipped ${data.skipped_had_annotations} already-annotated pages.`);
+  else showToast('Error: ' + errMsg(data), 4000, 'red');
 }
 
 // ============================================================

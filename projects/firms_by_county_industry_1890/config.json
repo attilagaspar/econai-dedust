@@ -11,7 +11,8 @@
     "host": "gpu.koren.work",
     "user": "gaspar",
     "key_path": "C:\\Users\\agaspar\\Documents\\korenwork_gaspar_private.pem",
-    "remote_path": "/home/gaspar/econai/koren"
+    "remote_path": "/home/gaspar/econai/koren",
+    "predict_remote_path": "/home/gaspar/econai"
   },
   "llm": {
     "model": "gpt-4o-mini",

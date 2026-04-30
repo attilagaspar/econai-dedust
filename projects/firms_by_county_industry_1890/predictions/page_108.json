@@ -1,0 +1,214 @@
+{
+  "version": "5.0.0",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          117.51831817626953,
+          378.9386291503906
+        ],
+        [
+          377.1612548828125,
+          408.5588073730469
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.786
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          116.83406829833984,
+          322.3753356933594
+        ],
+        [
+          382.12957763671875,
+          355.9429016113281
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.725
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          118.04877471923828,
+          392.0373229980469
+        ],
+        [
+          376.5685729980469,
+          421.3262939453125
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.7053
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          117.13265228271484,
+          267.6092224121094
+        ],
+        [
+          368.00408935546875,
+          306.43341064453125
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.7048
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          100.56684112548828,
+          656.3784790039062
+        ],
+        [
+          371.75506591796875,
+          689.2267456054688
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.604
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          118.98854064941406,
+          419.85162353515625
+        ],
+        [
+          381.07440185546875,
+          449.1745300292969
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.6027
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          111.94857788085938,
+          1020.5675048828125
+        ],
+        [
+          369.6397705078125,
+          1065.456298828125
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5945
+    },
+    {
+      "label": "numerical_cell",
+      "points": [
+        [
+          872.6245727539062,
+          1364.9141845703125
+        ],
+        [
+          920.22607421875,
+          1393.7353515625
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5785
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          104.25584411621094,
+          899.6664428710938
+        ],
+        [
+          393.656005859375,
+          972.1242065429688
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.535
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          105.57969665527344,
+          761.3343505859375
+        ],
+        [
+          367.569091796875,
+          794.7067260742188
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5263
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          112.82679748535156,
+          430.4859313964844
+        ],
+        [
+          375.5649108886719,
+          464.61126708984375
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5166
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          103.5852279663086,
+          874.149169921875
+        ],
+        [
+          396.7794189453125,
+          947.1152954101562
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.501
+    }
+  ],
+  "imagePath": "page_108.jpg",
+  "imageData": null,
+  "imageHeight": 1845,
+  "imageWidth": 1324
+}

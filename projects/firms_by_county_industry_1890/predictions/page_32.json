@@ -1,0 +1,112 @@
+{
+  "version": "5.0.0",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          118.43059539794922,
+          821.3285522460938
+        ],
+        [
+          367.8188171386719,
+          857.8580322265625
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.6037
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          118.33143615722656,
+          381.48590087890625
+        ],
+        [
+          368.6913146972656,
+          418.32122802734375
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5798
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          117.8951187133789,
+          460.798583984375
+        ],
+        [
+          368.46710205078125,
+          495.3036193847656
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5737
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          117.90612030029297,
+          715.7283935546875
+        ],
+        [
+          369.29486083984375,
+          752.0296020507812
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5224
+    },
+    {
+      "label": "text_cell",
+      "points": [
+        [
+          115.4267349243164,
+          289.21826171875
+        ],
+        [
+          364.6628112792969,
+          321.3883361816406
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5048
+    },
+    {
+      "label": "numerical_cell",
+      "points": [
+        [
+          488.41900634765625,
+          943.2432861328125
+        ],
+        [
+          543.2418212890625,
+          976.0479736328125
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "rectangle",
+      "flags": {},
+      "score": 0.5046
+    }
+  ],
+  "imagePath": "page_32.jpg",
+  "imageData": null,
+  "imageHeight": 1872,
+  "imageWidth": 1340
+}

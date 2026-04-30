@@ -7,10 +7,10 @@
     "numerical_cell"
   ],
   "server": {
-    "host": "",
-    "user": "",
-    "key_path": "",
-    "remote_path": ""
+    "host": "gpu.koren.work",
+    "user": "gaspar",
+    "key_path": "C:\\Users\\agaspar\\Documents\\korenwork_gaspar_private.pem",
+    "remote_path": "/home/gaspar/"
   },
   "llm": {
     "model": "gpt-4o-mini",
