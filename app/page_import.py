@@ -2,6 +2,10 @@
 Page import — read PDFs or images from a local path into a project's annotations/ folder.
 Reads files directly from disk; no browser upload or temp files.
 Requires: pymupdf (pip install pymupdf)
+
+Naming convention:
+  xyz.pdf  (N pages)  →  xyz_1.jpg, xyz_2.jpg, …, xyz_N.jpg
+  abc.png  (image)    →  abc.jpg  (stem preserved as-is)
 """
 
 from __future__ import annotations
@@ -20,19 +24,14 @@ EMPTY_LABELME = {
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
 
-def _next_page_index(ann_dir: Path) -> int:
-    nums = []
-    for p in ann_dir.glob("page_*.json"):
-        m = re.match(r"page_(\d+)", p.stem)
-        if m:
-            nums.append(int(m.group(1)))
-    return max(nums, default=0) + 1
+def _sanitize(name: str) -> str:
+    """Replace characters unsafe in filenames with underscores."""
+    return re.sub(r'[\\/:*?"<>|]', '_', name)
 
 
-def _save_page(img_path: Path, ann_dir: Path, page_num: int) -> dict:
-    """Copy/convert an image file into ann_dir as page_N.jpg + empty JSON."""
+def _save_image_file(img_path: Path, ann_dir: Path, stem: str) -> dict:
+    """Copy/convert an image file into ann_dir with the given stem."""
     from PIL import Image as PILImage
-    stem = f"page_{page_num}"
     dest = ann_dir / f"{stem}.jpg"
     img  = PILImage.open(str(img_path)).convert("RGB")
     w, h = img.size
@@ -45,13 +44,15 @@ def _save_page(img_path: Path, ann_dir: Path, page_num: int) -> dict:
     return {"stem": stem, "width": w, "height": h}
 
 
-def _import_pdf(pdf_path: Path, ann_dir: Path, start_idx: int) -> list[dict]:
+def _import_pdf(pdf_path: Path, ann_dir: Path) -> list[dict]:
     import fitz
+    base  = _sanitize(pdf_path.stem)
     pages = []
     doc   = fitz.open(str(pdf_path))
+    n_digits = len(str(len(doc)))   # zero-pad to keep natural sort
     for i, page in enumerate(doc):
         pix  = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-        stem = f"page_{start_idx + i}"
+        stem = f"{base}_{str(i + 1).zfill(n_digits)}"
         dest = ann_dir / f"{stem}.jpg"
         pix.save(str(dest))
         w, h = pix.width, pix.height
@@ -75,7 +76,6 @@ def import_from_path(source: Path, ann_dir: Path) -> list[dict]:
     if not source.exists():
         raise FileNotFoundError(f"Path not found: {source}")
 
-    # Collect files to import
     if source.is_dir():
         files = sorted(
             p for p in source.iterdir()
@@ -88,19 +88,16 @@ def import_from_path(source: Path, ann_dir: Path) -> list[dict]:
         return []
 
     results = []
-    idx     = _next_page_index(ann_dir)
-
     for f in files:
         ext = f.suffix.lower()
         try:
             if ext == ".pdf":
-                pages = _import_pdf(f, ann_dir, idx)
+                pages = _import_pdf(f, ann_dir)
                 results.extend(pages)
-                idx += len(pages)
             elif ext in IMAGE_EXTS:
-                info = _save_page(f, ann_dir, idx)
+                stem = _sanitize(f.stem)
+                info = _save_image_file(f, ann_dir, stem)
                 results.append(info)
-                idx += 1
         except Exception as e:
             results.append({"stem": f.name, "error": str(e)})
 
