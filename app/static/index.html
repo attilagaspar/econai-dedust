@@ -327,6 +327,8 @@
       <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>Next &#8594;</button>
       <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none"></select>
       <div style="flex:1"></div>
+      <button class="nav-btn" id="clear-ann-btn" onclick="clearAnnotations()" disabled
+              title="Clear annotations on specified pages" style="color:#fca5a5;">Clear pages</button>
       <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
               title="Copy annotations from first N pages to all remaining pages">Autofill</button>
       <button class="nav-btn" id="table-btn" onclick="startTableMode()" disabled
@@ -915,7 +917,10 @@ function onSvgBackground(e) {
   if (perspMode) return;
 
   if (tableMode && !tableRect && e.target===svgOverlay) {
-    if (!_inImageBounds(e.clientX, e.clientY)) return; // let OSD pan in black area
+    if (!_inImageBounds(e.clientX, e.clientY)) {
+      e.preventDefault(); e.stopPropagation();
+      dragState = { type: 'pan', startX: e.clientX, startY: e.clientY }; return;
+    }
     e.preventDefault(); e.stopPropagation();
     const p = screenToImg(e.clientX, e.clientY);
     dragState = { type:'draw-table', startX:e.clientX, startY:e.clientY, origPts:[[p.x,p.y],[p.x,p.y]] };
@@ -923,7 +928,10 @@ function onSvgBackground(e) {
     return;
   }
   if (!editMode || e.target!==svgOverlay) return;
-  if (!_inImageBounds(e.clientX, e.clientY)) return; // let OSD pan in black area
+  if (!_inImageBounds(e.clientX, e.clientY)) {
+    e.preventDefault(); e.stopPropagation();
+    dragState = { type: 'pan', startX: e.clientX, startY: e.clientY }; return;
+  }
   e.preventDefault(); e.stopPropagation();
   const p=screenToImg(e.clientX, e.clientY);
   if (e.ctrlKey||e.metaKey||e.button===2) {
@@ -1217,6 +1225,56 @@ async function autofill() {
   btn.disabled = false;
   showToast(`Autofilled ${filled} pages using ${n}-page template`);
   await loadPage(pageIdx);  // refresh current view
+}
+
+// ── Clear annotations ────────────────────────────────────────────────────────
+async function clearAnnotations() {
+  const raw = prompt(
+    'Clear annotations on which pages?\n' +
+    'Enter numbers/ranges separated by commas.\n' +
+    'Examples:  3   1-10   5-   -10   1-5, 8, 12-'
+  );
+  if (!raw) return;
+
+  // Parse page spec into a Set of 0-based indices
+  const n = pages.length;
+  const indices = new Set();
+  for (const part of raw.split(',')) {
+    const s = part.trim();
+    if (!s) continue;
+    const m = s.match(/^(\d*)-(\d*)$|^(\d+)$/);
+    if (!m) { alert(`Cannot parse: "${s}"`); return; }
+    if (m[3] !== undefined) {
+      // single number
+      const p = parseInt(m[3]) - 1;
+      if (p >= 0 && p < n) indices.add(p);
+    } else {
+      // range: from-to  (blank = open end)
+      const from = m[1] === '' ? 0       : parseInt(m[1]) - 1;
+      const to   = m[2] === '' ? n - 1   : parseInt(m[2]) - 1;
+      for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) indices.add(i);
+    }
+  }
+
+  if (!indices.size) { showToast('No valid pages in range'); return; }
+  if (!confirm(`Clear annotations on ${indices.size} page(s)? This cannot be undone.`)) return;
+
+  const btn = document.getElementById('clear-ann-btn');
+  btn.disabled = true;
+  let done = 0;
+  for (const idx of [...indices].sort((a,b)=>a-b)) {
+    const params = new URLSearchParams({folder, stem: pages[idx].stem});
+    await fetch(`${API}/api/page/shapes?${params}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({shapes: []}),
+    });
+    done++;
+    btn.textContent = `Clear pages (${done}/${indices.size})`;
+  }
+  btn.textContent = 'Clear pages';
+  btn.disabled = false;
+  showToast(`Cleared ${done} page(s)`);
+  await reloadPageData(); drawOverlay(); updatePanel();
 }
 
 // ── Table drawing ────────────────────────────────────────────────────────────
@@ -1556,6 +1614,7 @@ async function loadFolder() {
   document.getElementById('autofill-btn').disabled=false;
   document.getElementById('table-btn').disabled=false;
   document.getElementById('persp-btn').disabled=false;
+  document.getElementById('clear-ann-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);
 }
 
