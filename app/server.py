@@ -878,6 +878,104 @@ def api_apply_predictions(name: str):
 
 
 # ---------------------------------------------------------------------------
+# Routes — perspective correction
+# ---------------------------------------------------------------------------
+
+class PerspectiveRequest(BaseModel):
+    folder: str
+    stem:   str
+    points: list   # [[x,y], [x,y], [x,y], [x,y]] — four corners in any order
+    save:   bool = False
+
+
+@app.post("/api/page/perspective")
+def api_perspective(body: PerspectiveRequest):
+    """
+    Apply perspective (trapezoid→rectangle) correction to a page image.
+    save=False → return base64 JPEG preview.
+    save=True  → overwrite image on disk, clear shapes, update JSON dimensions.
+    """
+    import base64, io, math
+    import numpy as np
+    from PIL import Image
+
+    d        = _resolve_folder(body.folder)
+    img_path = _find_image(d, body.stem)
+    jf       = d / f"{body.stem}.json"
+
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if len(body.points) != 4:
+        raise HTTPException(status_code=400, detail="Exactly 4 points required")
+
+    pts = [tuple(float(v) for v in p) for p in body.points]
+
+    # Sort corners into TL, TR, BR, BL regardless of click order.
+    # Strategy: top 2 (smallest y) sorted by x → TL, TR;
+    #           bottom 2 (largest y) sorted by x → BL, BR.
+    by_y = sorted(pts, key=lambda p: p[1])
+    top    = sorted(by_y[:2], key=lambda p: p[0])
+    bottom = sorted(by_y[2:], key=lambda p: p[0])
+    tl, tr = top[0],    top[1]
+    bl, br = bottom[0], bottom[1]
+
+    # Output width = max of top & bottom edge; height = max of left & right edge
+    w_top  = math.dist(tl, tr)
+    w_bot  = math.dist(bl, br)
+    h_left = math.dist(tl, bl)
+    h_right= math.dist(tr, br)
+    dst_w  = int(max(w_top, w_bot))
+    dst_h  = int(max(h_left, h_right))
+
+    if dst_w < 2 or dst_h < 2:
+        raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
+
+    src = np.float32([tl, tr, br, bl])
+    dst = np.float32([[0, 0], [dst_w, 0], [dst_w, dst_h], [0, dst_h]])
+
+    # Solve perspective transform with numpy (no OpenCV needed)
+    def _perspective_coeffs(src_pts, dst_pts):
+        A = []
+        for (sx, sy), (dx, dy) in zip(src_pts, dst_pts):
+            A.append([sx, sy, 1, 0, 0, 0, -dx*sx, -dx*sy])
+            A.append([0, 0, 0, sx, sy, 1, -dy*sx, -dy*sy])
+        A = np.array(A, dtype=np.float64)
+        b = dst_pts.flatten().astype(np.float64)
+        coeffs, *_ = np.linalg.lstsq(A, b, rcond=None)
+        return coeffs.tolist() + [1.0]
+
+    # PIL PERSPECTIVE uses the inverse transform (dst→src)
+    coeffs = _perspective_coeffs(dst, src)
+
+    try:
+        img = Image.open(str(img_path)).convert("RGB")
+        out = img.transform((dst_w, dst_h), Image.PERSPECTIVE, coeffs, Image.BICUBIC)
+    except Exception as exc:
+        import traceback
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
+
+    if body.save:
+        fmt = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG",
+               "tif": "TIFF", "tiff": "TIFF"}.get(img_path.suffix.lstrip(".").lower(), "JPEG")
+        save_kw = {"quality": 92} if fmt == "JPEG" else {}
+        out.save(str(img_path), format=fmt, **save_kw)
+        data = json.loads(jf.read_text(encoding="utf-8"))
+        data["shapes"] = []
+        data["imageWidth"]  = dst_w
+        data["imageHeight"] = dst_h
+        jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return {"ok": True, "width": dst_w, "height": dst_h}
+    else:
+        buf = io.BytesIO()
+        out.save(buf, format="JPEG", quality=88)
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode()
+        return {"ok": True, "preview": b64, "width": dst_w, "height": dst_h}
+
+
+# ---------------------------------------------------------------------------
 # Root — redirect to dashboard
 # ---------------------------------------------------------------------------
 

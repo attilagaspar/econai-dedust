@@ -247,6 +247,62 @@
       color: #fff;
       font-weight: 700;
     }
+
+    /* ── Toast notification ── */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #333;
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      z-index: 9999;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ── Perspective preview modal ── */
+    #persp-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+    #persp-modal.show { display: flex; }
+    #persp-modal img {
+      max-width: 80vw;
+      max-height: 70vh;
+      border: 2px solid #e94560;
+      border-radius: 4px;
+    }
+    #persp-modal .modal-btns {
+      display: flex;
+      gap: 12px;
+    }
+    #persp-modal button {
+      padding: 8px 24px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #persp-accept { background: #4caf50; color: #fff; }
+    #persp-reject { background: #e94560; color: #fff; }
+    #persp-modal p { color: #ccc; font-size: 13px; margin: 0; }
   </style>
 </head>
 <body>
@@ -275,8 +331,20 @@
               title="Copy annotations from first N pages to all remaining pages">Autofill</button>
       <button class="nav-btn" id="table-btn" onclick="startTableMode()" disabled
               title="Draw a table and split it into cells">Draw table</button>
+      <button class="nav-btn" id="persp-btn" onclick="startPerspMode()" disabled
+              title="Perspective correction: click 4 corners to straighten a trapezoid">Perspective</button>
       <button class="nav-btn" id="mode-btn" onclick="toggleEditMode()" disabled
               title="Toggle between review and edit mode (E)">Review mode</button>
+    </div>
+
+    <!-- Perspective correction toolbar (shown only in persp mode) -->
+    <div id="persp-toolbar" style="display:none; padding:4px 8px; background:#2a1a3a; border-bottom:1px solid #633; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span style="color:#e94560; font-size:12px; font-weight:600;">Perspective:</span>
+      <span id="persp-corner-count" style="color:#ccc; font-size:12px;">0 / 4 corners</span>
+      <button class="nav-btn" onclick="perspPoints=[]; drawOverlay(); document.getElementById('persp-corner-count').textContent='0 / 4 corners';" title="Clear corners and start over">&#x21ba; Clear</button>
+      <span style="flex:1"></span>
+      <button class="nav-btn active" id="persp-apply-btn" onclick="applyPerspective()" title="Preview the perspective correction">&#x2713; Apply correction</button>
+      <button class="nav-btn" onclick="cancelPerspMode()" title="Cancel perspective mode">Cancel</button>
     </div>
 
     <!-- Table drawing toolbar (shown only in table mode) -->
@@ -339,6 +407,19 @@
 
 </div>
 
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<!-- Perspective preview modal -->
+<div id="persp-modal">
+  <p id="persp-modal-info">Perspective correction preview</p>
+  <img id="persp-preview" src="" alt="preview" />
+  <div class="modal-btns">
+    <button id="persp-accept" onclick="acceptPerspective()">✓ Accept & save</button>
+    <button id="persp-reject" onclick="rejectPerspective()">✗ Reject</button>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 const API = '';
@@ -355,6 +436,20 @@ let lastUsedLabel  = null;       // remembered label for new box drawing
 let projectLabels  = [];         // labels from project config (passed via URL)
 let clipboard      = null;       // copied shape for Ctrl+V
 const undoStack   = [];          // array of shapes-array snapshots
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg, ms=2500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// ── Perspective correction state ─────────────────────────────────────────────
+let perspMode   = false;
+let perspPoints = [];   // array of [x,y] in image coords (max 4)
 
 // ── Table drawing state ──────────────────────────────────────────────────────
 let tableMode    = false;
@@ -460,8 +555,22 @@ function initViewer() {
     showNavigationControl: true, showNavigator: true,
     navigatorPosition: 'BOTTOM_LEFT',
     zoomPerClick: 1,
-    gestureSettingsMouse: { clickToZoom: false },
+    gestureSettingsMouse: { clickToZoom: false, scrollToZoom: false },
   });
+
+  // Custom wheel-zoom handler on the container so it fires in all modes
+  // (OSD's internal listener is on its inner canvas and misses events when
+  // the SVG overlay has pointer-events:all)
+  const _osdEl = document.getElementById('osd-container');
+  _osdEl.addEventListener('wheel', e => {
+    if (!viewer?.viewport) return;
+    e.preventDefault();
+    const r = _osdEl.getBoundingClientRect();
+    const pt = viewer.viewport.viewerElementToViewportCoordinates(
+      new OpenSeadragon.Point(e.clientX - r.left, e.clientY - r.top)
+    );
+    viewer.viewport.zoomBy(e.deltaY < 0 ? 1.15 : 1/1.15, pt, true);
+  }, { passive: false });
 
   svgOverlay = document.createElementNS('http://www.w3.org/2000/svg','svg');
   svgOverlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible;';
@@ -694,12 +803,77 @@ function drawOverlay() {
       svgOverlay.appendChild(r);
     }
   }
+
+  // Perspective mode: transparent overlay captures all clicks before shapes do
+  if (perspMode) {
+    const cap = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    cap.setAttribute('x', '-999999'); cap.setAttribute('y', '-999999');
+    cap.setAttribute('width', '9999999'); cap.setAttribute('height', '9999999');
+    cap.setAttribute('fill', 'none');
+    cap.style.pointerEvents = 'all';
+    cap.style.cursor = 'crosshair';
+    cap.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      if (!_inImageBounds(e.clientX, e.clientY)) {
+        e.preventDefault(); e.stopPropagation();
+        dragState = { type: 'pan', startX: e.clientX, startY: e.clientY };
+        return;
+      }
+      e.preventDefault(); e.stopPropagation();
+      if (perspPoints.length >= 4) return;
+      const p = screenToImg(e.clientX, e.clientY);
+      perspPoints.push([p.x, p.y]);
+      document.getElementById('persp-corner-count').textContent = `${perspPoints.length} / 4 corners`;
+      drawOverlay();
+      showToast(perspPoints.length === 4
+        ? '4 corners set — click "Apply correction" to preview'
+        : `Corner ${perspPoints.length} of 4 placed`);
+    });
+    svgOverlay.appendChild(cap);
+  }
+
+  // Perspective corner points
+  if (perspMode && perspPoints.length > 0) {
+    const screenPts = perspPoints.map(([x,y]) => imgToScreen(x,y)).filter(Boolean);
+    if (screenPts.length >= 2) {
+      const poly = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+      const closed = screenPts.length === 4;
+      const tag = closed ? 'polygon' : 'polyline';
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      shape.setAttribute('points', screenPts.map(p=>`${p.x},${p.y}`).join(' '));
+      shape.setAttribute('fill', closed ? '#e9456020' : 'none');
+      shape.setAttribute('stroke','#e94560');
+      shape.setAttribute('stroke-width','2');
+      shape.setAttribute('stroke-dasharray','6 3');
+      svgOverlay.appendChild(shape);
+    }
+    screenPts.forEach((sp, i) => {
+      const c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+      c.setAttribute('cx', sp.x); c.setAttribute('cy', sp.y); c.setAttribute('r', 7);
+      c.setAttribute('fill','#e94560'); c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','1.5');
+      svgOverlay.appendChild(c);
+      const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+      t.setAttribute('x', sp.x); t.setAttribute('y', sp.y+4);
+      t.setAttribute('text-anchor','middle'); t.setAttribute('fill','#fff');
+      t.setAttribute('font-size','9'); t.setAttribute('font-weight','bold');
+      t.textContent = i+1;
+      svgOverlay.appendChild(t);
+    });
+  }
+}
+
+// ── Image bounds helper ──────────────────────────────────────────────────────
+function _inImageBounds(clientX, clientY) {
+  if (!viewer?.viewport || !pageData) return false;
+  const p = screenToImg(clientX, clientY);
+  const w = pageData.imageWidth  || 99999;
+  const h = pageData.imageHeight || 99999;
+  return p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h;
 }
 
 // ── Drag: move ──────────────────────────────────────────────────────────────
 function startMoveDrag(e, idx) {
   pushUndo();
-  viewer.setMouseNavEnabled(false);
   const movers = selSet.has(idx) ? [...selSet] : [idx];
   const origPtsMap = {};
   movers.forEach(i => origPtsMap[i] = pageData.shapes[i].points.map(p=>[...p]));
@@ -709,7 +883,6 @@ function startMoveDrag(e, idx) {
 
 // ── Drag: copy ───────────────────────────────────────────────
 function startCopyDrag(e, idx) {
-  viewer.setMouseNavEnabled(false);
   const movers = selSet.has(idx) ? [...selSet] : [idx];
   const origPtsMap = {};
   movers.forEach(i => origPtsMap[i] = pageData.shapes[i].points.map(p=>[...p]));
@@ -720,7 +893,6 @@ function startCopyDrag(e, idx) {
 // ── Drag: resize ─────────────────────────────────────────────────────────────
 function startResizeDrag(e, idx, handle) {
   pushUndo();
-  viewer.setMouseNavEnabled(false);
   dragState = { type:'resize', idx, handle, startX:e.clientX, startY:e.clientY,
                 origPts: pageData.shapes[idx].points.map(p=>[...p]) };
   dragCurrentPts = dragState.origPts.map(p=>[...p]);
@@ -739,21 +911,22 @@ function applyResize(origPts, handle, dxi, dyi) {
 
 // ── Drag: draw new box OR rubber-band select ─────────────────────────────────
 function onSvgBackground(e) {
+  // perspMode clicks are handled entirely by the capture rect in drawOverlay
+  if (perspMode) return;
+
   if (tableMode && !tableRect && e.target===svgOverlay) {
-    // Draw table outline rect
-    e.preventDefault();
-    viewer.setMouseNavEnabled(false);
+    if (!_inImageBounds(e.clientX, e.clientY)) return; // let OSD pan in black area
+    e.preventDefault(); e.stopPropagation();
     const p = screenToImg(e.clientX, e.clientY);
     dragState = { type:'draw-table', startX:e.clientX, startY:e.clientY, origPts:[[p.x,p.y],[p.x,p.y]] };
     dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
     return;
   }
   if (!editMode || e.target!==svgOverlay) return;
-  e.preventDefault();
-  viewer.setMouseNavEnabled(false);
+  if (!_inImageBounds(e.clientX, e.clientY)) return; // let OSD pan in black area
+  e.preventDefault(); e.stopPropagation();
   const p=screenToImg(e.clientX, e.clientY);
   if (e.ctrlKey||e.metaKey||e.button===2) {
-    // Rubber-band selection (Ctrl+drag OR right-drag on empty canvas)
     dragState = { type:'select-rect', startX:e.clientX, startY:e.clientY,
                   origPts:[[p.x,p.y],[p.x,p.y]] };
     dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
@@ -780,6 +953,13 @@ window.addEventListener('mousemove', e => {
   } else if (dragState.type==='resize') {
     const d=screenDeltaToImg(dx,dy);
     dragCurrentPts=applyResize(dragState.origPts,dragState.handle,d.dx,d.dy);
+  } else if (dragState.type==='pan') {
+    if (viewer?.viewport) {
+      const vd = viewer.viewport.deltaPointsFromPixels(new OpenSeadragon.Point(dx, dy));
+      viewer.viewport.panBy(new OpenSeadragon.Point(-vd.x, -vd.y), false);
+      dragState.startX = e.clientX; dragState.startY = e.clientY;
+    }
+    return;
   } else if (dragState.type==='draw'||dragState.type==='select-rect'||dragState.type==='draw-table') {
     const p=screenToImg(e.clientX,e.clientY);
     dragCurrentPts=[dragState.origPts[0],[p.x,p.y]];
@@ -790,7 +970,6 @@ window.addEventListener('mousemove', e => {
 window.addEventListener('mouseup', async e => {
   if (!dragState) return;
   const state=dragState; dragState=null;
-  viewer.setMouseNavEnabled(!editMode);  // keep nav disabled if still in edit mode
 
   if (state.type==='select-rect') {
     const pts=dragCurrentPts; dragCurrentPts=null;
@@ -844,7 +1023,6 @@ window.addEventListener('mouseup', async e => {
     tableRect = { x1:Math.min(...xs), y1:Math.min(...ys), x2:Math.max(...xs), y2:Math.max(...ys) };
     tableTool = 'col';
     updateTableToolButtons();
-    viewer.setMouseNavEnabled(false);
     drawOverlay();
     showToast('Click inside to add column or row separators');
     return;
@@ -1125,13 +1303,81 @@ async function finishTable() {
   showToast(`Created ${shapes.length} cells (${ys.length-1} rows × ${xs.length-1} cols)`);
 }
 
+// ── Perspective correction ────────────────────────────────────────────────────
+function startPerspMode() {
+  if (editMode) toggleEditMode();
+  if (tableMode) cancelTableMode();
+  perspMode = true; perspPoints = [];
+  svgOverlay.style.pointerEvents = 'all';
+  svgOverlay.style.cursor = 'crosshair';
+  document.getElementById('persp-btn').classList.add('active');
+  document.getElementById('persp-toolbar').style.display = 'flex';
+  document.getElementById('persp-corner-count').textContent = '0 / 4 corners';
+  showToast('Click 4 corners of the region to correct', 4000);
+}
+
+function cancelPerspMode() {
+  perspMode = false; perspPoints = [];
+  svgOverlay.style.cursor = '';
+  document.getElementById('persp-btn').classList.remove('active');
+  document.getElementById('persp-toolbar').style.display = 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
+  drawOverlay();
+}
+
+async function applyPerspective() {
+  if (perspPoints.length !== 4) { showToast('Place exactly 4 corners first'); return; }
+  const btn = document.getElementById('persp-apply-btn');
+  if (btn) btn.disabled = true;
+  showToast('Computing preview…', 5000);
+  const r = await fetch(`${API}/api/page/perspective`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      folder, stem: pages[pageIdx].stem,
+      points: perspPoints, save: false,
+    }),
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    showToast(`Error ${r.status}: ${txt.slice(0,120)}`, 6000);
+    if (btn) btn.disabled=false; return;
+  }
+  const data = await r.json();
+  document.getElementById('persp-preview').src = `data:image/jpeg;base64,${data.preview}`;
+  document.getElementById('persp-modal-info').textContent =
+    `Preview: ${data.width} × ${data.height} px — accept to overwrite image and clear shapes`;
+  document.getElementById('persp-modal').classList.add('show');
+}
+
+async function acceptPerspective() {
+  document.getElementById('persp-modal').classList.remove('show');
+  showToast('Saving…', 3000);
+  const r = await fetch(`${API}/api/page/perspective`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      folder, stem: pages[pageIdx].stem,
+      points: perspPoints, save: true,
+    }),
+  });
+  if (!r.ok) { showToast(`Save error: ${await r.text()}`); return; }
+  cancelPerspMode();
+  await loadPage(pageIdx);
+  showToast('Perspective correction saved. Shapes cleared.');
+}
+
+function rejectPerspective() {
+  document.getElementById('persp-modal').classList.remove('show');
+  const btn = document.getElementById('persp-apply-btn');
+  if (btn) btn.disabled = false;
+  showToast('Rejected — adjust corners and try again');
+}
+
 // ── Edit mode toggle ─────────────────────────────────────────────────────────
 function toggleEditMode() {
   editMode=!editMode;
   const btn=document.getElementById('mode-btn');
   btn.textContent=editMode?'Edit mode':'Review mode';
   btn.classList.toggle('active',editMode);
-  viewer.setMouseNavEnabled(!editMode);
   drawOverlay(); updatePanel();
 }
 
@@ -1267,6 +1513,11 @@ async function saveCorrection() {
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   const inField=e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT';
+  if (e.key==='Escape') {
+    if (document.getElementById('persp-modal').classList.contains('show')) { rejectPerspective(); return; }
+    if (perspMode) { cancelPerspMode(); return; }
+    if (tableMode) { cancelTableMode(); return; }
+  }
   if ((e.ctrlKey||e.metaKey)&&e.key==='s') { e.preventDefault(); saveCorrection(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key==='z') { e.preventDefault(); if(tableMode) tableUndo(); else undo(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key==='c') { e.preventDefault(); copyShape(); return; }
@@ -1304,6 +1555,7 @@ async function loadFolder() {
   document.getElementById('mode-btn').disabled=false;
   document.getElementById('autofill-btn').disabled=false;
   document.getElementById('table-btn').disabled=false;
+  document.getElementById('persp-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);
 }
 
