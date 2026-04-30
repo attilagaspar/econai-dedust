@@ -271,6 +271,8 @@
       <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>Next &#8594;</button>
       <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none"></select>
       <div style="flex:1"></div>
+      <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
+              title="Copy annotations from first N pages to all remaining pages">Autofill</button>
       <button class="nav-btn" id="mode-btn" onclick="toggleEditMode()" disabled
               title="Toggle between review and edit mode (E)">Review mode</button>
     </div>
@@ -625,8 +627,8 @@ function onSvgBackground(e) {
   e.preventDefault();
   viewer.setMouseNavEnabled(false);
   const p=screenToImg(e.clientX, e.clientY);
-  if (e.ctrlKey||e.metaKey) {
-    // Rubber-band selection — don't clear existing selection, add to it
+  if (e.ctrlKey||e.metaKey||e.button===2) {
+    // Rubber-band selection (Ctrl+drag OR right-drag on empty canvas)
     dragState = { type:'select-rect', startX:e.clientX, startY:e.clientY,
                   origPts:[[p.x,p.y],[p.x,p.y]] };
     dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
@@ -808,16 +810,24 @@ async function pasteShape() {
   drawOverlay(); updatePanel();
 }
 
+let _stampingInProgress = false;
 async function cloneSelectionToPage(delta) {
-  if (selSet.size === 0) return;
+  if (_stampingInProgress) return;
+  _stampingInProgress = true;
+  try { await _doCloneSelectionToPage(delta); } finally { _stampingInProgress = false; }
+}
+async function _doCloneSelectionToPage(delta) {
+  if (selSet.size === 0) { showToast('No selection to stamp'); return; }
   const targetIdx = pageIdx + delta;
-  if (targetIdx < 0 || targetIdx >= pages.length) return;
-  const shapesToClone = [...selSet].map(i => ({
-    label: pageData.shapes[i].label,
-    points: pageData.shapes[i].points.map(p => [...p]),
-  }));
+  if (targetIdx < 0 || targetIdx >= pages.length) { showToast('No page to stamp to'); return; }
+  const shapesToClone = [...selSet]
+    .map(i => pageData.shapes[i])
+    .filter(Boolean)
+    .map(s => ({ label: s.label, points: s.points.map(p => [...p]) }));
+  if (!shapesToClone.length) { showToast('Nothing to stamp'); return; }
+  const targetStem = pages[targetIdx].stem;
   await loadPage(targetIdx);
-  const params = new URLSearchParams({folder, stem: pages[targetIdx].stem});
+  const params = new URLSearchParams({folder, stem: targetStem});
   const newIdxs = [];
   for (const shape of shapesToClone) {
     const r = await fetch(`${API}/api/page/shape?${params}`, {
@@ -825,11 +835,13 @@ async function cloneSelectionToPage(delta) {
       body: JSON.stringify(shape),
     });
     if (r.ok) { const data = await r.json(); newIdxs.push(data.idx); }
+    else { showToast(`Stamp failed: ${r.status} ${await r.text()}`); }
   }
   await reloadPageData();
   selSet.clear(); selIdx = -1;
   newIdxs.forEach(i => { selSet.add(i); selIdx = i; });
   drawOverlay(); updatePanel();
+  showToast(`Stamped ${newIdxs.length}/${shapesToClone.length} shapes to page ${targetIdx+1}`);
 }
 
 async function deleteSelectedShape() {
@@ -854,6 +866,41 @@ async function changeLabel(newLabel) {
   selSet.forEach(i => { pageData.shapes[i].label = newLabel; });
   await replaceAllShapes();
   drawOverlay();
+}
+
+// ── Autofill ─────────────────────────────────────────────────────────────────
+async function autofill() {
+  const n = parseInt(prompt(`Copy annotations from first N pages to all remaining pages.\nEnter N:`));
+  if (!n || n < 1 || n >= pages.length) return;
+  if (!confirm(`This will overwrite annotations on pages ${n+1}–${pages.length} using pages 1–${n} as a repeating template. Continue?`)) return;
+
+  // Fetch shapes from the template pages
+  const templates = [];
+  for (let i = 0; i < n; i++) {
+    const params = new URLSearchParams({folder, stem: pages[i].stem});
+    const res = await fetch(`${API}/api/page?${params}`);
+    const data = await res.json();
+    templates.push((data.shapes || []).map(s => ({ label: s.label, points: s.points.map(p=>[...p]) })));
+  }
+
+  const btn = document.getElementById('autofill-btn');
+  btn.disabled = true;
+  let filled = 0;
+  for (let i = n; i < pages.length; i++) {
+    const shapes = templates[i % n];
+    const params = new URLSearchParams({folder, stem: pages[i].stem});
+    await fetch(`${API}/api/page/shapes?${params}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({shapes}),
+    });
+    filled++;
+    btn.textContent = `Autofill (${filled}/${pages.length - n})`;
+  }
+
+  btn.textContent = 'Autofill';
+  btn.disabled = false;
+  showToast(`Autofilled ${filled} pages using ${n}-page template`);
+  await loadPage(pageIdx);  // refresh current view
 }
 
 // ── Edit mode toggle ─────────────────────────────────────────────────────────
@@ -1006,8 +1053,11 @@ document.addEventListener('keydown', e => {
   if (inField) return;
   if (e.key==='Delete'||e.key==='Backspace') { deleteSelectedShape(); return; }
   if (e.key==='e'||e.key==='E') { if(pages.length) toggleEditMode(); return; }
+  if (e.key==='a'||e.key==='A') { pageData.shapes.forEach((_,i)=>selSet.add(i)); selIdx=selSet.size?[...selSet][0]:-1; updatePanel(); drawOverlay(); return; }
   if (e.key==='n'||e.key==='N') { cloneSelectionToPage(+1); return; }
   if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
+  if (e.key==='m'||e.key==='M') { cloneSelectionToPage(+2); return; }
+  if (e.key==='o'||e.key==='O') { cloneSelectionToPage(-2); return; }
   if (e.key==='ArrowRight'||e.key==='ArrowDown') goPage(+1);
   if (e.key==='ArrowLeft' ||e.key==='ArrowUp')   goPage(-1);
 });
@@ -1030,6 +1080,7 @@ async function loadFolder() {
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';
   document.getElementById('mode-btn').disabled=false;
+  document.getElementById('autofill-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);
 }
 
