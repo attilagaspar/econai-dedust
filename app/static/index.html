@@ -285,6 +285,8 @@
       <button class="nav-btn" id="tbl-col-btn"    onclick="setTableTool('col')"    title="Click inside table to add vertical separator">&#x2503; Col sep</button>
       <button class="nav-btn" id="tbl-row-btn"    onclick="setTableTool('row')"    title="Click inside table to add horizontal separator">&#x2501; Row sep</button>
       <button class="nav-btn" id="tbl-del-btn"    onclick="setTableTool('delete')" title="Click a separator line to delete it">&#x2715; Delete line</button>
+      <button class="nav-btn" onclick="equalSplit('col')" title="Split into N equal columns">&#x2630; Equal cols</button>
+      <button class="nav-btn" onclick="equalSplit('row')" title="Split into N equal rows">&#x2632; Equal rows</button>
       <button class="nav-btn" id="tbl-clear-btn"  onclick="resetTableRect()"       title="Redraw the table outline">&#x21ba; Redraw outline</button>
       <span style="flex:1"></span>
       <button class="nav-btn active" id="tbl-finish-btn" onclick="finishTable()"   title="Convert grid to cell annotations">&#x2713; Finish table</button>
@@ -360,6 +362,23 @@ let tableRect    = null;   // {x1,y1,x2,y2} in image coords, or null
 let tableColSeps = [];     // sorted x coords of vertical separators
 let tableRowSeps = [];     // sorted y coords of horizontal separators
 let tableTool    = null;   // 'col' | 'row' | 'delete' | null
+const tableUndoStack = []; // snapshots of {tableRect, tableColSeps, tableRowSeps}
+
+function pushTableUndo() {
+  tableUndoStack.push({
+    tableRect: tableRect ? {...tableRect} : null,
+    tableColSeps: [...tableColSeps],
+    tableRowSeps: [...tableRowSeps],
+  });
+  if (tableUndoStack.length > 50) tableUndoStack.shift();
+}
+
+function tableUndo() {
+  if (!tableUndoStack.length) return;
+  const s = tableUndoStack.pop();
+  tableRect = s.tableRect; tableColSeps = s.tableColSeps; tableRowSeps = s.tableRowSeps;
+  drawOverlay();
+}
 
 // ── Undo ────────────────────────────────────────────────────────────────────
 function pushUndo() {
@@ -610,7 +629,7 @@ function drawOverlay() {
         line.setAttribute('x2', ex.x); line.setAttribute('y2', br.y);
         line.setAttribute('stroke','#f0a500'); line.setAttribute('stroke-width','1.5');
         line.style.pointerEvents='all'; line.style.cursor = tableTool==='delete'?'pointer':'default';
-        line.addEventListener('mousedown', e => { e.stopPropagation(); if(tableTool==='delete'){tableColSeps.splice(ci,1);drawOverlay();} });
+        line.addEventListener('mousedown', e => { e.stopPropagation(); if(tableTool==='delete'){pushTableUndo();tableColSeps.splice(ci,1);drawOverlay();} });
         svgOverlay.appendChild(line);
       });
 
@@ -624,7 +643,7 @@ function drawOverlay() {
         line.setAttribute('x2', br.x); line.setAttribute('y2', ey.y);
         line.setAttribute('stroke','#f0a500'); line.setAttribute('stroke-width','1.5');
         line.style.pointerEvents='all'; line.style.cursor = tableTool==='delete'?'pointer':'default';
-        line.addEventListener('mousedown', e => { e.stopPropagation(); if(tableTool==='delete'){tableRowSeps.splice(ri,1);drawOverlay();} });
+        line.addEventListener('mousedown', e => { e.stopPropagation(); if(tableTool==='delete'){pushTableUndo();tableRowSeps.splice(ri,1);drawOverlay();} });
         svgOverlay.appendChild(line);
       });
 
@@ -1059,8 +1078,24 @@ function updateTableToolButtons() {
   });
 }
 
+function equalSplit(axis) {
+  if (!tableRect) { showToast('Draw the table outline first'); return; }
+  const n = parseInt(prompt(`Split into how many equal ${axis==='col'?'columns':'rows'}?`));
+  if (!n || n < 2) return;
+  pushTableUndo();
+  if (axis === 'col') {
+    const w = (tableRect.x2 - tableRect.x1) / n;
+    tableColSeps = Array.from({length: n-1}, (_,i) => tableRect.x1 + w*(i+1));
+  } else {
+    const h = (tableRect.y2 - tableRect.y1) / n;
+    tableRowSeps = Array.from({length: n-1}, (_,i) => tableRect.y1 + h*(i+1));
+  }
+  drawOverlay();
+}
+
 function handleTableClick(e) {
   if (!tableRect) return;
+  pushTableUndo();
   const p = screenToImg(e.clientX, e.clientY);
   if (tableTool === 'col') {
     const x = Math.max(tableRect.x1, Math.min(tableRect.x2, p.x));
@@ -1233,7 +1268,7 @@ async function saveCorrection() {
 document.addEventListener('keydown', e => {
   const inField=e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT';
   if ((e.ctrlKey||e.metaKey)&&e.key==='s') { e.preventDefault(); saveCorrection(); return; }
-  if ((e.ctrlKey||e.metaKey)&&e.key==='z') { e.preventDefault(); undo(); return; }
+  if ((e.ctrlKey||e.metaKey)&&e.key==='z') { e.preventDefault(); if(tableMode) tableUndo(); else undo(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key==='c') { e.preventDefault(); copyShape(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key==='v') { e.preventDefault(); pasteShape(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key.startsWith('Arrow')) { e.preventDefault(); cloneInDirection(e.key); return; }
