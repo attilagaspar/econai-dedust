@@ -117,6 +117,10 @@ python3 utils/cocosplit.py \\
     --split-ratio      0.8 \\
     --having-annotations
 
+echo "=== Cleaning previous checkpoints ==="
+rm -f {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/*.pth
+rm -f {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/last_checkpoint
+
 echo "=== Starting training ==="
 cd {remote_ws}/layout-model-training/tools
 python3 train_net.py \\
@@ -128,7 +132,8 @@ python3 train_net.py \\
     --resume \\
     --config-file           {remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml \\
     OUTPUT_DIR  {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/ \\
-    SOLVER.IMS_PER_BATCH 2
+    SOLVER.IMS_PER_BATCH 2 \\
+    SOLVER.BASE_LR 0.00125
 echo "=== Training complete ==="
 """
     sh_path = intermediate_dir / "train.sh"

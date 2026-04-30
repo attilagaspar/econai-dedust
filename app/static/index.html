@@ -273,8 +273,22 @@
       <div style="flex:1"></div>
       <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
               title="Copy annotations from first N pages to all remaining pages">Autofill</button>
+      <button class="nav-btn" id="table-btn" onclick="startTableMode()" disabled
+              title="Draw a table and split it into cells">Draw table</button>
       <button class="nav-btn" id="mode-btn" onclick="toggleEditMode()" disabled
               title="Toggle between review and edit mode (E)">Review mode</button>
+    </div>
+
+    <!-- Table drawing toolbar (shown only in table mode) -->
+    <div id="table-toolbar" style="display:none; padding:4px 8px; background:#1e2a3a; border-bottom:1px solid #334; align-items:center; gap:6px; flex-wrap:wrap;">
+      <span style="color:#aaa; font-size:12px;">Table:</span>
+      <button class="nav-btn" id="tbl-col-btn"    onclick="setTableTool('col')"    title="Click inside table to add vertical separator">&#x2503; Col sep</button>
+      <button class="nav-btn" id="tbl-row-btn"    onclick="setTableTool('row')"    title="Click inside table to add horizontal separator">&#x2501; Row sep</button>
+      <button class="nav-btn" id="tbl-del-btn"    onclick="setTableTool('delete')" title="Click a separator line to delete it">&#x2715; Delete line</button>
+      <button class="nav-btn" id="tbl-clear-btn"  onclick="resetTableRect()"       title="Redraw the table outline">&#x21ba; Redraw outline</button>
+      <span style="flex:1"></span>
+      <button class="nav-btn active" id="tbl-finish-btn" onclick="finishTable()"   title="Convert grid to cell annotations">&#x2713; Finish table</button>
+      <button class="nav-btn" onclick="cancelTableMode()"                           title="Cancel table drawing">Cancel</button>
     </div>
 
     <div id="legend"></div>
@@ -339,6 +353,13 @@ let lastUsedLabel  = null;       // remembered label for new box drawing
 let projectLabels  = [];         // labels from project config (passed via URL)
 let clipboard      = null;       // copied shape for Ctrl+V
 const undoStack   = [];          // array of shapes-array snapshots
+
+// ── Table drawing state ──────────────────────────────────────────────────────
+let tableMode    = false;
+let tableRect    = null;   // {x1,y1,x2,y2} in image coords, or null
+let tableColSeps = [];     // sorted x coords of vertical separators
+let tableRowSeps = [];     // sorted y coords of horizontal separators
+let tableTool    = null;   // 'col' | 'row' | 'delete' | null
 
 // ── Undo ────────────────────────────────────────────────────────────────────
 function pushUndo() {
@@ -458,7 +479,7 @@ function screenDeltaToImg(dx, dy) {
 function drawOverlay() {
   if (!svgOverlay || !pageData) return;
   while (svgOverlay.firstChild) svgOverlay.removeChild(svgOverlay.firstChild);
-  svgOverlay.style.pointerEvents = editMode ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
     const pts = (() => {
@@ -562,6 +583,82 @@ function drawOverlay() {
     }
   }
 
+  // Table drawing overlay
+  if (tableMode && tableRect) {
+    const tl = imgToScreen(tableRect.x1, tableRect.y1);
+    const br = imgToScreen(tableRect.x2, tableRect.y2);
+    if (tl && br) {
+      // Outline rect — click to redraw
+      const outline = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      outline.setAttribute('x', tl.x); outline.setAttribute('y', tl.y);
+      outline.setAttribute('width', Math.max(0, br.x-tl.x));
+      outline.setAttribute('height', Math.max(0, br.y-tl.y));
+      outline.setAttribute('fill', '#f0a500'); outline.setAttribute('fill-opacity','0.06');
+      outline.setAttribute('stroke','#f0a500'); outline.setAttribute('stroke-width','2');
+      outline.style.pointerEvents='all'; outline.style.cursor='crosshair';
+      outline.addEventListener('mousedown', e => { e.stopPropagation(); handleTableClick(e); });
+      outline.addEventListener('contextmenu', e => e.preventDefault());
+      svgOverlay.appendChild(outline);
+
+      // Column separators
+      tableColSeps.forEach((cx, ci) => {
+        const sx = imgToScreen(cx, tableRect.y1);
+        const ex = imgToScreen(cx, tableRect.y2);
+        if (!sx || !ex) return;
+        const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1', sx.x); line.setAttribute('y1', tl.y);
+        line.setAttribute('x2', ex.x); line.setAttribute('y2', br.y);
+        line.setAttribute('stroke','#f0a500'); line.setAttribute('stroke-width','1.5');
+        line.style.pointerEvents='all'; line.style.cursor = tableTool==='delete'?'pointer':'default';
+        line.addEventListener('mousedown', e => { e.stopPropagation(); if(tableTool==='delete'){tableColSeps.splice(ci,1);drawOverlay();} });
+        svgOverlay.appendChild(line);
+      });
+
+      // Row separators
+      tableRowSeps.forEach((ry, ri) => {
+        const sy = imgToScreen(tableRect.x1, ry);
+        const ey = imgToScreen(tableRect.x2, ry);
+        if (!sy || !ey) return;
+        const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1', tl.x); line.setAttribute('y1', sy.y);
+        line.setAttribute('x2', br.x); line.setAttribute('y2', ey.y);
+        line.setAttribute('stroke','#f0a500'); line.setAttribute('stroke-width','1.5');
+        line.style.pointerEvents='all'; line.style.cursor = tableTool==='delete'?'pointer':'default';
+        line.addEventListener('mousedown', e => { e.stopPropagation(); if(tableTool==='delete'){tableRowSeps.splice(ri,1);drawOverlay();} });
+        svgOverlay.appendChild(line);
+      });
+
+      // Transparent overlay over the whole table that sets cursor and routes clicks
+      const catcher = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      catcher.setAttribute('x', tl.x); catcher.setAttribute('y', tl.y);
+      catcher.setAttribute('width', Math.max(0, br.x-tl.x));
+      catcher.setAttribute('height', Math.max(0, br.y-tl.y));
+      catcher.setAttribute('fill','none'); catcher.setAttribute('stroke','none');
+      catcher.style.pointerEvents = (tableTool==='col'||tableTool==='row') ? 'all' : 'none';
+      catcher.style.cursor = tableTool==='col'?'col-resize': tableTool==='row'?'row-resize':'default';
+      catcher.addEventListener('mousedown', e => { e.stopPropagation(); e.preventDefault(); handleTableClick(e); });
+      catcher.addEventListener('contextmenu', e => e.preventDefault());
+      svgOverlay.appendChild(catcher);
+    }
+  }
+
+  // In-progress table outline
+  if (dragState?.type==='draw-table' && dragCurrentPts) {
+    const pts=dragCurrentPts;
+    const tl=imgToScreen(Math.min(pts[0][0],pts[1][0]),Math.min(pts[0][1],pts[1][1]));
+    const br=imgToScreen(Math.max(pts[0][0],pts[1][0]),Math.max(pts[0][1],pts[1][1]));
+    if (tl&&br) {
+      const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+      r.setAttribute('x',tl.x); r.setAttribute('y',tl.y);
+      r.setAttribute('width',Math.max(0,br.x-tl.x));
+      r.setAttribute('height',Math.max(0,br.y-tl.y));
+      r.setAttribute('fill','#f0a500'); r.setAttribute('fill-opacity','0.1');
+      r.setAttribute('stroke','#f0a500'); r.setAttribute('stroke-width','2');
+      r.setAttribute('stroke-dasharray','6 3');
+      svgOverlay.appendChild(r);
+    }
+  }
+
   // In-progress new-box outline
   if (dragState?.type==='draw' && dragCurrentPts) {
     const pts=dragCurrentPts;
@@ -623,6 +720,15 @@ function applyResize(origPts, handle, dxi, dyi) {
 
 // ── Drag: draw new box OR rubber-band select ─────────────────────────────────
 function onSvgBackground(e) {
+  if (tableMode && !tableRect && e.target===svgOverlay) {
+    // Draw table outline rect
+    e.preventDefault();
+    viewer.setMouseNavEnabled(false);
+    const p = screenToImg(e.clientX, e.clientY);
+    dragState = { type:'draw-table', startX:e.clientX, startY:e.clientY, origPts:[[p.x,p.y],[p.x,p.y]] };
+    dragCurrentPts = [[p.x,p.y],[p.x,p.y]];
+    return;
+  }
   if (!editMode || e.target!==svgOverlay) return;
   e.preventDefault();
   viewer.setMouseNavEnabled(false);
@@ -655,7 +761,7 @@ window.addEventListener('mousemove', e => {
   } else if (dragState.type==='resize') {
     const d=screenDeltaToImg(dx,dy);
     dragCurrentPts=applyResize(dragState.origPts,dragState.handle,d.dx,d.dy);
-  } else if (dragState.type==='draw'||dragState.type==='select-rect') {
+  } else if (dragState.type==='draw'||dragState.type==='select-rect'||dragState.type==='draw-table') {
     const p=screenToImg(e.clientX,e.clientY);
     dragCurrentPts=[dragState.origPts[0],[p.x,p.y]];
   }
@@ -710,6 +816,19 @@ window.addEventListener('mouseup', async e => {
     selSet.clear(); selIdx=-1;
     newIdxs.forEach(i => { selSet.add(i); selIdx=i; });
     drawOverlay(); updatePanel();
+
+  } else if (state.type==='draw-table') {
+    const pts=dragCurrentPts; dragCurrentPts=null;
+    if (!pts) { drawOverlay(); return; }
+    const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+    if (Math.abs(xs[1]-xs[0])<5||Math.abs(ys[1]-ys[0])<5) { drawOverlay(); return; }
+    tableRect = { x1:Math.min(...xs), y1:Math.min(...ys), x2:Math.max(...xs), y2:Math.max(...ys) };
+    tableTool = 'col';
+    updateTableToolButtons();
+    viewer.setMouseNavEnabled(false);
+    drawOverlay();
+    showToast('Click inside to add column or row separators');
+    return;
 
   } else if (state.type==='draw') {
     const pts=dragCurrentPts; dragCurrentPts=null;
@@ -903,6 +1022,74 @@ async function autofill() {
   await loadPage(pageIdx);  // refresh current view
 }
 
+// ── Table drawing ────────────────────────────────────────────────────────────
+function startTableMode() {
+  if (editMode) toggleEditMode();
+  tableMode = true; tableRect = null; tableColSeps = []; tableRowSeps = []; tableTool = null;
+  document.getElementById('table-toolbar').style.display = 'flex';
+  document.getElementById('table-btn').classList.add('active');
+  svgOverlay.style.pointerEvents = 'all';
+  showToast('Draw the table outline by dragging');
+}
+
+function cancelTableMode() {
+  tableMode = false; tableRect = null; tableColSeps = []; tableRowSeps = []; tableTool = null;
+  document.getElementById('table-toolbar').style.display = 'none';
+  document.getElementById('table-btn').classList.remove('active');
+  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
+  drawOverlay();
+}
+
+function resetTableRect() {
+  tableRect = null; tableColSeps = []; tableRowSeps = []; tableTool = null;
+  updateTableToolButtons();
+  drawOverlay();
+  showToast('Redraw the table outline');
+}
+
+function setTableTool(tool) {
+  tableTool = tableTool === tool ? null : tool;
+  updateTableToolButtons();
+  drawOverlay();
+}
+
+function updateTableToolButtons() {
+  ['col','row','delete'].forEach(t => {
+    document.getElementById(`tbl-${t}-btn`)?.classList.toggle('active', tableTool===t);
+  });
+}
+
+function handleTableClick(e) {
+  if (!tableRect) return;
+  const p = screenToImg(e.clientX, e.clientY);
+  if (tableTool === 'col') {
+    const x = Math.max(tableRect.x1, Math.min(tableRect.x2, p.x));
+    tableColSeps.push(x);
+    tableColSeps.sort((a,b) => a-b);
+  } else if (tableTool === 'row') {
+    const y = Math.max(tableRect.y1, Math.min(tableRect.y2, p.y));
+    tableRowSeps.push(y);
+    tableRowSeps.sort((a,b) => a-b);
+  }
+  drawOverlay();
+}
+
+async function finishTable() {
+  if (!tableRect) { showToast('Draw the table outline first'); return; }
+  const label = lastUsedLabel || projectLabels[0] || 'cell';
+  const xs = [tableRect.x1, ...tableColSeps, tableRect.x2];
+  const ys = [tableRect.y1, ...tableRowSeps, tableRect.y2];
+  const shapes = [];
+  for (let r = 0; r < ys.length-1; r++)
+    for (let c = 0; c < xs.length-1; c++)
+      shapes.push({ label, points: [[xs[c], ys[r]], [xs[c+1], ys[r+1]]], group_id:null, shape_type:'rectangle', flags:{} });
+  pushUndo();
+  pageData.shapes.push(...shapes);
+  await replaceAllShapes();
+  cancelTableMode();
+  showToast(`Created ${shapes.length} cells (${ys.length-1} rows × ${xs.length-1} cols)`);
+}
+
 // ── Edit mode toggle ─────────────────────────────────────────────────────────
 function toggleEditMode() {
   editMode=!editMode;
@@ -1081,6 +1268,7 @@ async function loadFolder() {
   sel.style.display='inline-block';
   document.getElementById('mode-btn').disabled=false;
   document.getElementById('autofill-btn').disabled=false;
+  document.getElementById('table-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);
 }
 
