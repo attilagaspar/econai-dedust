@@ -143,7 +143,6 @@ echo "=== Training complete ==="
     infer_sh = f"""#!/bin/bash
 set -e
 echo "=== EconAI: {project_name} inference ==="
-cd {remote_ws}/layout-model-training/tools
 python3 {remote_ws}/layout-model-training/tools/infer_layout.py \\
     --config  {remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml \\
     --weights {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/model_final.pth \\

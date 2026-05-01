@@ -360,20 +360,29 @@ function renderDetail() {
     <div class="card">
       <h3>Import Pages</h3>
       <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
-        Enter the path to a PDF, image file, or folder of files on your computer.<br>
-        PDFs are split into pages automatically.
+        Select PDF or image files to import. PDFs are split into pages automatically
+        and named <em>filename_1.jpg</em>, <em>filename_2.jpg</em>, etc.
       </p>
-      <div class="field-row">
-        <label>Folder path</label>
-        <input id="import-path" placeholder="C:/Users/you/Documents/scans" />
-        <input type="file" id="folder-picker" webkitdirectory multiple style="display:none"
-               onchange="fillPathFromPicker(this)">
-        <button class="btn btn-secondary" style="white-space:nowrap"
-                onclick="document.getElementById('folder-picker').click()">📁 Browse</button>
-      </div>
+      <!-- File upload (primary) -->
+      <input type="file" id="file-upload-input" multiple
+             accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" style="display:none"
+             onchange="uploadFiles(this)">
       <div class="btn-row">
-        <button class="btn btn-primary" onclick="importFromPath()">📥 Import</button>
+        <button class="btn btn-primary"
+                onclick="document.getElementById('file-upload-input').click()">
+          📁 Select &amp; Import files…
+        </button>
       </div>
+      <!-- Path import (secondary, for server-side paths) -->
+      <details style="margin-top:10px">
+        <summary style="font-size:0.8rem;color:#888;cursor:pointer">
+          Import from server-side path instead
+        </summary>
+        <div class="field-row" style="margin-top:8px">
+          <input id="import-path" placeholder="C:/Users/you/Documents/scans" />
+          <button class="btn btn-secondary" onclick="importFromPath()">📥 Import path</button>
+        </div>
+      </details>
       <div class="import-results" id="import-results"></div>
     </div>
 
@@ -399,6 +408,11 @@ function renderDetail() {
       <div class="btn-row">
         <button class="btn btn-warning" onclick="runTrain()">🚀 Train model</button>
         <button class="btn btn-success" onclick="runInfer()">🔍 Run inference</button>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;cursor:pointer">
+          <input type="checkbox" id="chk-reupload" checked
+                 style="accent-color:#e94560;width:14px;height:14px">
+          Re-upload images
+        </label>
         <button class="btn btn-secondary" onclick="pullPredictions()">⬇ Pull predictions</button>
         <button class="btn btn-secondary" onclick="applyPredictions()">📋 Apply to empty pages</button>
       </div>
@@ -517,21 +531,36 @@ async function testConnection() {
 // ============================================================
 // File import
 // ============================================================
-function fillPathFromPicker(input) {
-  if (!input.files.length) return;
-  // webkitRelativePath = "foldername/file.pdf" — extract the folder name
-  // but we need the full OS path, which the browser won't give us.
-  // Best we can do: fill the folder name so the user can correct it.
-  const rel  = input.files[0].webkitRelativePath;
-  const folder = rel.split('/')[0];
-  const el   = document.getElementById('import-path');
-  // If input already has a value that ends with this folder, leave it
-  if (!el.value.endsWith(folder)) {
-    el.value = folder;
-    el.focus();
-    el.setSelectionRange(0, el.value.length);
+async function uploadFiles(input) {
+  if (!activeProj || !input.files.length) return;
+  const results = document.getElementById('import-results');
+  const files   = Array.from(input.files);
+  results.innerHTML = `<div>Uploading ${files.length} file(s)…</div>`;
+
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+
+  try {
+    const res  = await fetch(`/api/project/${activeProj.name}/upload-pages`, {
+      method: 'POST',
+      body:   fd,
+    });
+    const data = await res.json();
+    if (data.ok) {
+      results.innerHTML = data.pages.map(p =>
+        p.error
+          ? `<div class="err">✗ ${p.stem}: ${p.error}</div>`
+          : `<div class="ok">✓ ${p.stem} (${p.width}×${p.height})</div>`
+      ).join('');
+      showToast(`Imported ${data.total} page(s).`);
+      await selectProject(activeProj.name);
+    } else {
+      results.innerHTML = `<div class="err">${errMsg(data)}</div>`;
+    }
+  } catch (e) {
+    results.innerHTML = `<div class="err">Upload error: ${e.message}</div>`;
   }
-  showToast(`Folder "${folder}" selected — verify the full path then click Import.`, 5000);
+  input.value = ''; // reset so same files can be re-selected if needed
 }
 
 async function importFromPath() {
@@ -668,7 +697,55 @@ async function runTrain() {
 async function runInfer() {
   if (!activeProj) return;
   await saveServerConfig();
-  startSSE(`/api/project/${activeProj.name}/infer`, '🔍 Inference — ' + activeProj.name, getPassphrase());
+  const reupload = document.getElementById('chk-reupload')?.checked ?? true;
+  const url   = `/api/project/${activeProj.name}/infer`;
+  const title = '🔍 Inference — ' + activeProj.name;
+  openLogModal(title);
+  const body   = document.getElementById('log-modal-body');
+  const info   = document.getElementById('log-modal-info');
+  const status = document.getElementById('log-modal-status');
+  const ctrl   = new AbortController();
+  activeSSE    = ctrl;
+  fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload }),
+    signal:  ctrl.signal,
+  }).then(async res => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      body.textContent += '\nError: ' + (err.detail || res.statusText);
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const match = part.match(/^data: (.+)$/m);
+        if (!match) continue;
+        try {
+          const msg = JSON.parse(match[1]);
+          if (msg.done) { status.innerHTML = '<span class="status-dot dot-green"></span>Done'; info.textContent = 'Completed.'; return; }
+          if (msg.error) { body.textContent += '\nError: ' + msg.error; status.innerHTML = '<span class="status-dot dot-red"></span>Error'; return; }
+          if (msg.line !== undefined) { body.textContent += msg.line + '\n'; body.scrollTop = body.scrollHeight; }
+        } catch {}
+      }
+    }
+    status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+    info.textContent = 'Stream ended.';
+  }).catch(err => {
+    if (err.name !== 'AbortError') {
+      body.textContent += '\nConnection error: ' + err.message;
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+    }
+  });
 }
 
 async function pullPredictions() {

@@ -17,11 +17,12 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import List
 
 from app.pipeline import (
     list_projects,
@@ -542,6 +543,54 @@ def api_import_pages(name: str, body: ImportRequest):
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
 
+@app.post("/api/project/{name}/upload-pages")
+async def api_upload_pages(name: str, files: List[UploadFile] = File(...)):
+    """Accept uploaded PDF/image files, convert them and add to the project's annotations/ folder."""
+    import tempfile
+    from app.page_import import _import_pdf, _save_image_file, _sanitize, IMAGE_EXTS
+
+    try:
+        pdir    = project_dir(name)
+        ann_dir = pdir / "annotations"
+        ann_dir.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        for uf in files:
+            filename  = uf.filename or "upload"
+            orig_stem = Path(filename).stem
+            ext       = Path(filename).suffix.lower()
+
+            # Read file content and write to a temp file
+            content = await uf.read()
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                    tmp.write(content)
+                    tmp_path = Path(tmp.name)
+
+                if ext == ".pdf":
+                    base  = _sanitize(orig_stem)
+                    pages = _import_pdf(tmp_path, ann_dir, base=base)
+                    results.extend(pages)
+                elif ext in IMAGE_EXTS:
+                    stem = _sanitize(orig_stem)
+                    info = _save_image_file(tmp_path, ann_dir, stem)
+                    results.append(info)
+                else:
+                    results.append({"stem": filename, "error": f"Unsupported extension: {ext}"})
+            except Exception as e:
+                import traceback
+                results.append({"stem": filename, "error": traceback.format_exc()})
+            finally:
+                if tmp_path and tmp_path.exists():
+                    tmp_path.unlink()
+
+        return {"ok": True, "pages": results, "total": len(results)}
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
+
+
 # ---------------------------------------------------------------------------
 # Routes — prepare training data (LabelMe → COCO)
 # ---------------------------------------------------------------------------
@@ -575,6 +624,10 @@ def api_prepare(name: str):
 
 class TrainRequest(BaseModel):
     passphrase: Optional[str] = None
+
+class InferRequest(BaseModel):
+    passphrase:          Optional[str] = None
+    skip_image_upload:   bool = False
 
 
 _SSE_DONE = object()
@@ -723,12 +776,13 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _push_infer_data_gen(name: str, srv: dict, passphrase: str):
+def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: bool = False):
     """Generator: push images + scripts + config for inference (no annotations.json needed).
 
     Uses predict_remote_path (if set) as the Docker-container root for placing
     the infer script — necessary when the predict container mounts a parent
     directory compared to the training container.
+    skip_images=True skips the (slow) image upload and only pushes config/scripts.
     """
     from app import ssh_ops
     import posixpath as pp
@@ -751,33 +805,40 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str):
     c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
     sftp = c.open_sftp()
     try:
+        # All paths that must be visible inside the predict container go under predict_root.
+        # Images live under remote (data workspace, mounted into both containers).
         dirs = [
             f"{remote}/{name}/images",
-            f"{remote}/layout-model-training/configs/{name}",
-            f"{remote}/layout-model-training/tools",
-            f"{predict_root}/layout-model-training/scripts",  # script lives in predict container ws
+            f"{predict_root}/layout-model-training/configs/{name}",
+            f"{predict_root}/layout-model-training/tools",
+            f"{predict_root}/layout-model-training/scripts",
         ]
         for d in dirs:
             yield f"[push] mkdir -p {d}"
             ssh_ops._sftp_mkdir_p(sftp, d)
 
         IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
-        images = [p for p in (pdir / "annotations").iterdir()
-                  if p.suffix.lower() in IMAGE_EXTS]
-        total = len(images)
-        yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
-        for i, img in enumerate(images, 1):
-            dest = f"{remote}/{name}/images/{img.name}"
-            sftp.put(str(img), dest)
-            if i % 10 == 0 or i == total:
-                yield f"[push]   {i}/{total}  {img.name}"
+        if skip_images:
+            images = [p for p in (pdir / "annotations").iterdir()
+                      if p.suffix.lower() in IMAGE_EXTS]
+            yield f"[push] Skipping image upload ({len(images)} images already on server)."
+        else:
+            images = [p for p in (pdir / "annotations").iterdir()
+                      if p.suffix.lower() in IMAGE_EXTS]
+            total = len(images)
+            yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
+            for i, img in enumerate(images, 1):
+                dest = f"{remote}/{name}/images/{img.name}"
+                sftp.put(str(img), dest)
+                if i % 10 == 0 or i == total:
+                    yield f"[push]   {i}/{total}  {img.name}"
 
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
-        dest = f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
+        dest = f"{predict_root}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
         yield f"[push] config YAML → {dest}"
         sftp.put(str(cfg_local), dest)
 
-        dest = f"{remote}/layout-model-training/tools/infer_layout.py"
+        dest = f"{predict_root}/layout-model-training/tools/infer_layout.py"
         yield f"[push] infer_layout.py → {dest}"
         sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
 
@@ -786,9 +847,28 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str):
             with sftp.open(remote_dest, "wb") as fh:
                 fh.write(content)
 
+        def sftp_put_infer_sh(local: Path, remote_dest: str):
+            """Upload infer.sh, patching data paths to include ws_prefix if needed.
+            The script is generated with /workspace as root, but the predict container
+            maps predict_root → /workspace.  Data (images, weights, predictions) lives
+            under remote = predict_root/ws_prefix, so those paths need the extra prefix.
+            Tool/config/script paths stay as-is (already uploaded under predict_root).
+            """
+            content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            if ws_prefix:
+                pfx = ws_prefix.encode()
+                # data paths: images, predictions, model weights
+                content = (content
+                    .replace(f"/workspace/{name}/".encode(),
+                             f"/workspace/{pfx.decode()}/{name}/".encode())
+                    .replace(b"/workspace/layout-model-training/outputs/",
+                             f"/workspace/{pfx.decode()}/layout-model-training/outputs/".encode()))
+            with sftp.open(remote_dest, "wb") as fh:
+                fh.write(content)
+
         dest_infer = f"{predict_root}/layout-model-training/scripts/{name}_infer.sh"
-        yield f"[push] infer.sh → {dest_infer}"
-        sftp_put_lf(inter / "infer.sh", dest_infer)
+        yield f"[push] infer.sh → {dest_infer}" + (f" (ws_prefix='{ws_prefix}')" if ws_prefix else "")
+        sftp_put_infer_sh(inter / "infer.sh", dest_infer)
 
         yield "[push] All files uploaded successfully."
         yield f"[push] Verifying scripts dir ({predict_root}/layout-model-training/scripts/):"
@@ -801,7 +881,7 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str):
 
 
 @app.post("/api/project/{name}/infer")
-async def api_infer(name: str, body: TrainRequest = TrainRequest()):
+async def api_infer(name: str, body: InferRequest = InferRequest()):
     """Run inference on the server. Streams log via SSE."""
     from app import ssh_ops
     try:
@@ -816,7 +896,8 @@ async def api_infer(name: str, body: TrainRequest = TrainRequest()):
         )
 
         def full_gen():
-            yield from _push_infer_data_gen(name, srv, passphrase)
+            yield from _push_infer_data_gen(name, srv, passphrase,
+                                            skip_images=body.skip_image_upload)
             yield "[push] Starting Docker inference..."
             yield from ssh_ops.stream_command(srv["host"], srv["user"],
                                               srv["key_path"], docker_cmd, passphrase)

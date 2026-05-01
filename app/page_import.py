@@ -44,9 +44,10 @@ def _save_image_file(img_path: Path, ann_dir: Path, stem: str) -> dict:
     return {"stem": stem, "width": w, "height": h}
 
 
-def _import_pdf(pdf_path: Path, ann_dir: Path) -> list[dict]:
+def _import_pdf(pdf_path: Path, ann_dir: Path, base: str | None = None) -> list[dict]:
     import fitz
-    base  = _sanitize(pdf_path.stem)
+    if base is None:
+        base = _sanitize(pdf_path.stem)
     pages = []
     doc   = fitz.open(str(pdf_path))
     n_digits = len(str(len(doc)))   # zero-pad to keep natural sort
