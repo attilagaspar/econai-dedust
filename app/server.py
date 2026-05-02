@@ -397,6 +397,62 @@ def api_ocr_cell(
 # Routes — LLM cleaner
 # ---------------------------------------------------------------------------
 
+def _detect_text_rows(crop_image, cell_height: int = 28) -> list[tuple[int, int]]:
+    """
+    Detect equally-spaced text rows using a regular-grid / comb-filter approach.
+
+    Instead of picking rows independently (which produces irregular spacing),
+    we treat the column as a uniform grid with a known pitch = cell_height and
+    find the vertical phase (starting offset) that maximises total ink coverage.
+    All returned rows are guaranteed to have exactly the same height and spacing.
+    """
+    import numpy as np
+
+    gray       = np.array(crop_image.convert("L"))
+    binary     = (gray < 180).astype(np.float32)   # 1 where ink, 0 where white
+    projection = binary.sum(axis=1)                 # ink pixels per row
+
+    roi_h = len(projection)
+    if roi_h < cell_height:
+        return [(0, roi_h)] if roi_h > 0 else []
+
+    # Build a cumulative-sum array for O(1) window queries
+    cum = np.concatenate(([0.0], np.cumsum(projection)))
+
+    def window_sum(t: int, b: int) -> float:
+        t = max(0, t); b = min(roi_h, b)
+        return float(cum[b] - cum[t]) if b > t else 0.0
+
+    # Try every possible starting offset (0 … cell_height-1).
+    # For each offset, score = total ink inside all cells of the regular grid.
+    best_score  = -1.0
+    best_start  = 0
+    for start in range(cell_height):
+        score = 0.0
+        top   = start
+        while top + cell_height <= roi_h:
+            score += window_sum(top, top + cell_height)
+            top   += cell_height
+        if score > best_score:
+            best_score = score
+            best_start = start
+
+    # Lay down the grid from the winning offset
+    rows: list[tuple[int, int]] = []
+    top = best_start
+    while top + cell_height <= roi_h:
+        rows.append((top, top + cell_height))
+        top += cell_height
+
+    # Include a partial last row if it covers ≥ 40 % of cell_height
+    if rows:
+        partial_top = rows[-1][1]
+        if roi_h - partial_top >= cell_height * 0.4:
+            rows.append((partial_top, roi_h))
+
+    return rows
+
+
 class LlmRequest(BaseModel):
     prompt: str
 
@@ -494,6 +550,144 @@ def api_llm_cell(
     jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return {"response": result, "model": model, "mode": mode, "timestamp": timestamp}
+
+
+@app.post("/api/page/shape/llm/linebyline")
+async def api_llm_linebyline(
+    folder:      str = Query(...),
+    stem:        str = Query(...),
+    idx:         int = Query(...),
+    model:       str = Query("gpt-4o-mini"),
+    cell_height: int = Query(28, description="Expected height of one text row in pixels"),
+    body:        LlmRequest = ...,
+):
+    """
+    Line-by-line LLM: slice the cell into rows using pixel projection, send each
+    row image to OpenAI individually, and stream results as SSE.
+
+    SSE message types:
+      {"type": "lines_detected", "count": N, "lines": [[top,bottom], ...]}
+      {"type": "row_result",     "row": i,  "text": "...", "top": t, "bottom": b}
+      {"type": "done",           "response": "...", "model": "...", "timestamp": "..."}
+    """
+    import os, asyncio, base64, io as _io, datetime, concurrent.futures
+    import json as _json
+    from openai import OpenAI
+    from PIL import Image as PILImage
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data_doc = json.loads(jf.read_text(encoding="utf-8"))
+    shapes   = data_doc.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    shape = shapes[idx]
+    pts   = shape["points"]
+    xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    full_img = PILImage.open(str(img_path)).convert("RGB")
+    iw, ih   = full_img.size
+    pad      = 4
+    crop     = full_img.crop((
+        max(0, int(x1) - pad), max(0, int(y1) - pad),
+        min(iw, int(x2) + pad), min(ih, int(y2) + pad),
+    ))
+
+    rows = _detect_text_rows(crop, cell_height)
+    prompt_text = body.prompt
+
+    def gen():
+        yield _json.dumps({"type": "lines_detected", "count": len(rows),
+                           "lines": [list(r) for r in rows]})
+
+        client = OpenAI(api_key=api_key)
+        line_responses: list[str] = []
+
+        for i, (top, bottom) in enumerate(rows):
+            # Add a few pixels of vertical breathing room so ascenders /
+            # descenders aren't clipped, then upscale very small rows so the
+            # LLM can read digits reliably.
+            row_pad = max(4, cell_height // 6)
+            rt = max(0, top    - row_pad)
+            rb = min(crop.height, bottom + row_pad)
+            row_img = crop.crop((0, rt, crop.width, rb))
+            # Upscale: aim for at least 48 px tall
+            if row_img.height < 48:
+                scale   = 48 / row_img.height
+                row_img = row_img.resize(
+                    (int(row_img.width * scale), 48), PILImage.LANCZOS
+                )
+            buf = _io.BytesIO()
+            row_img.save(buf, format="JPEG", quality=92)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "text",
+                     "text": prompt_text},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{b64}",
+                                   "detail": "high"}},
+                ],
+            }]
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=64,
+                )
+                text = resp.choices[0].message.content.strip()
+            except Exception as exc:
+                text = f"[error: {exc}]"
+
+            line_responses.append(text)
+            yield _json.dumps({"type": "row_result", "row": i, "text": text,
+                               "top": top, "bottom": bottom})
+
+        combined  = "\n".join(line_responses)
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+
+        shape["openai_output"] = {
+            "response":       combined,
+            "model":          model,
+            "mode":           "linebyline",
+            "timestamp":      timestamp,
+            "lines_detected": len(rows),
+        }
+        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
+                      encoding="utf-8")
+
+        yield _json.dumps({"type": "done", "response": combined,
+                           "model": model, "timestamp": timestamp})
+
+    # Stream the sync generator as SSE
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen())
+            while True:
+                item = await loop.run_in_executor(pool, _safe_next, it)
+                if item is _SSE_DONE:
+                    break
+                yield f"data: {item}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------

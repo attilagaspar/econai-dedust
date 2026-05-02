@@ -183,6 +183,7 @@
     #cell-crop-wrap {
       padding: 8px;
       text-align: center;
+      position: relative;
       background: #111;
       border-bottom: 1px solid #0f3460;
       flex-shrink: 0;
@@ -488,6 +489,7 @@
     </div>
     <div id="cell-crop-wrap">
       <img id="cell-crop" alt="cell crop" />
+      <canvas id="row-canvas" style="position:absolute;pointer-events:none;display:none;"></canvas>
       <div id="cell-crop-placeholder">Click a cell to inspect</div>
     </div>
     <div id="panel-fields">
@@ -521,17 +523,29 @@
           </div>
           <div class="llm-controls">
             <select id="llm-model" class="llm-select" title="Model">
+              <option value="gpt-4.1-mini">4.1-mini</option>
+              <option value="gpt-5-nano">5-nano</option>
+              <option value="gpt-4.1-nano">4.1-nano</option>
+              <option value="gpt-4.1">4.1</option>
               <option value="gpt-4o-mini">4o-mini</option>
               <option value="gpt-4o">4o</option>
               <option value="gpt-4-turbo">4-turbo</option>
-              <option value="gpt-3.5-turbo">3.5-turbo</option>
             </select>
             <select id="llm-mode" class="llm-select" title="Input mode" onchange="updateLlmPrompt()">
               <option value="image">Image</option>
               <option value="image+ocr">Image + OCR</option>
               <option value="ocr">OCR only</option>
-              <option value="linebyline" disabled>Line-by-line (soon)</option>
+              <option value="linebyline">Line-by-line</option>
             </select>
+          </div>
+          <div id="llm-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
+            <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
+            <input id="llm-cell-height" type="number" value="26" min="6" max="300"
+              style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
+            <button id="llm-stop-btn" onclick="stopLlmLineByLine()"
+              style="display:none;background:#7f1d1d;border:1px solid #e94560;border-radius:3px;color:#fca5a5;font-size:10px;font-weight:700;padding:1px 7px;cursor:pointer;line-height:16px;">
+              ■ Stop
+            </button>
           </div>
           <textarea id="llm-prompt" rows="4" placeholder="Prompt…"></textarea>
           <textarea id="f-llm-result" readonly rows="4">—</textarea>
@@ -595,6 +609,8 @@ let clipboard      = null;       // copied shape for Ctrl+V
 const undoStack   = [];          // array of shapes-array snapshots
 let flaggedOverlaps = new Set(); // indices of shapes with excessive overlap
 let latticeVisible  = false;     // whether to draw lattice grid overlay
+let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow}
+let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
 
 // ── Toast ────────────────────────────────────────────────────────────────────
 // ── Panel collapse ───────────────────────────────────────────────────────────
@@ -1456,6 +1472,28 @@ function drawOverlay() {
     svgOverlay.appendChild(cap);
   }
 
+  // LLM line-by-line progress: show all detected rows, highlight active one
+  if (llmProgress && llmProgress.lines.length) {
+    const { cropOriginX, cropOriginY, cropRight, lines, activeRow } = llmProgress;
+    lines.forEach(([top, bottom], i) => {
+      const isActive = i === activeRow;
+      const tl = imgToScreen(cropOriginX, cropOriginY + top);
+      const br = imgToScreen(cropRight,   cropOriginY + bottom);
+      if (!tl || !br) return;
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      r.setAttribute('x',      tl.x);
+      r.setAttribute('y',      tl.y);
+      r.setAttribute('width',  Math.max(0, br.x - tl.x));
+      r.setAttribute('height', Math.max(0, br.y - tl.y));
+      r.setAttribute('fill',         isActive ? 'rgba(255,100,0,0.18)' : 'none');
+      r.setAttribute('stroke',       isActive ? '#ff6400' : '#00a0ff');
+      r.setAttribute('stroke-width', isActive ? '2.5'    : '1');
+      r.setAttribute('stroke-opacity', isActive ? '1'    : '0.5');
+      r.style.pointerEvents = 'none';
+      svgOverlay.appendChild(r);
+    });
+  }
+
   // Perspective corner points
   if (perspMode && perspPoints.length > 0) {
     const screenPts = perspPoints.map(([x,y]) => imgToScreen(x,y)).filter(Boolean);
@@ -2235,15 +2273,47 @@ const LLM_PROMPTS = {
   'image':     'Transcribe the text in this image exactly as it appears. Preserve line breaks. Return only the transcribed text.',
   'image+ocr': 'Here is a cell image and its OCR output. Correct any OCR errors using the image as the reference. Preserve line breaks. Return only the corrected text.',
   'ocr':       'Clean up the following OCR text. Fix recognition errors and preserve line breaks. Return only the corrected text.',
-  'linebyline':'(Line-by-line visual analysis — coming soon)',
+  'linebyline':'Is this a number or a dash/missing value? Return only the number or a dash, no other text.',
 };
 
 function updateLlmPrompt() {
   const mode = document.getElementById('llm-mode').value;
   const el   = document.getElementById('llm-prompt');
-  // Only overwrite if empty or still a default prompt
   const isDefault = Object.values(LLM_PROMPTS).includes(el.value.trim()) || !el.value.trim();
   if (isDefault) el.value = LLM_PROMPTS[mode] || '';
+  document.getElementById('llm-cellheight-wrap').style.display = mode === 'linebyline' ? 'flex' : 'none';
+}
+
+// ── Row overlay on cell crop ──────────────────────────────────────────────────
+function drawRowOverlay(lines, activeRow) {
+  const canvas = document.getElementById('row-canvas');
+  const img    = document.getElementById('cell-crop');
+  if (!lines || !lines.length) { canvas.style.display = 'none'; return; }
+
+  // Position canvas exactly over the img element
+  canvas.style.display = 'block';
+  canvas.style.top     = img.offsetTop  + 'px';
+  canvas.style.left    = img.offsetLeft + 'px';
+  canvas.style.width   = img.clientWidth  + 'px';
+  canvas.style.height  = img.clientHeight + 'px';
+
+  // Draw at native resolution so coordinates match the crop pixel space
+  const natW = img.naturalWidth  || img.clientWidth;
+  const natH = img.naturalHeight || img.clientHeight;
+  canvas.width  = natW;
+  canvas.height = natH;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, natW, natH);
+
+  lines.forEach(([top, bottom], i) => {
+    const active = i === activeRow;
+    ctx.fillStyle   = active ? 'rgba(255,100,0,0.22)' : 'rgba(0,160,255,0.07)';
+    ctx.strokeStyle = active ? 'rgba(255,100,0,0.95)' : 'rgba(0,160,255,0.45)';
+    ctx.lineWidth   = active ? 2 : 1;
+    ctx.fillRect(0, top, natW, bottom - top);
+    ctx.strokeRect(0.5, top + 0.5, natW - 1, bottom - top - 1);
+  });
 }
 
 // Initialise prompt on first load
@@ -2253,7 +2323,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const savedMode  = localStorage.getItem('llm-mode');
   if (savedModel) document.getElementById('llm-model').value = savedModel;
   if (savedMode)  document.getElementById('llm-mode').value  = savedMode;
-  updateLlmPrompt();
+  updateLlmPrompt();   // sets prompt text AND shows/hides cell-height input
   // persist on change
   document.getElementById('llm-model').addEventListener('change', e => localStorage.setItem('llm-model', e.target.value));
   document.getElementById('llm-mode').addEventListener('change',  e => localStorage.setItem('llm-mode',  e.target.value));
@@ -2261,11 +2331,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function runLlm() {
   if (selIdx < 0 || !pages.length) return;
-  const btn   = document.getElementById('llm-btn');
+  const mode = document.getElementById('llm-mode').value;
+  if (mode === 'linebyline') { runLlmLineByLine(); return; }
+
+  const btn = document.getElementById('llm-btn');
   btn.disabled = true; btn.textContent = '…';
   try {
     const model  = document.getElementById('llm-model').value;
-    const mode   = document.getElementById('llm-mode').value;
     const prompt = document.getElementById('llm-prompt').value.trim();
     if (!prompt) { showToast('Prompt is empty'); return; }
     const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx, model, mode});
@@ -2277,15 +2349,125 @@ async function runLlm() {
     if (!r.ok) { showToast(`LLM error ${r.status}: ${(await r.text()).slice(0, 120)}`); return; }
     const data = await r.json();
     pageData.shapes[selIdx].openai_output = {
-      response:  data.response,
-      model:     data.model,
-      mode:      data.mode,
-      timestamp: data.timestamp,
+      response: data.response, model: data.model,
+      mode: data.mode, timestamp: data.timestamp,
     };
     updatePanel();
     showToast('LLM done');
   } finally {
     btn.disabled = false; btn.textContent = '▶ Send';
+  }
+}
+
+function stopLlmLineByLine() {
+  if (llmAbortCtrl) { llmAbortCtrl.abort(); llmAbortCtrl = null; }
+}
+
+async function runLlmLineByLine() {
+  if (selIdx < 0 || !pages.length) return;
+  const btn     = document.getElementById('llm-btn');
+  const stopBtn = document.getElementById('llm-stop-btn');
+  btn.disabled = true; btn.textContent = '…';
+  stopBtn.style.display = 'inline-block';
+  llmAbortCtrl = new AbortController();
+
+  const model      = document.getElementById('llm-model').value;
+  const prompt     = document.getElementById('llm-prompt').value.trim();
+  const cellHeight = parseInt(document.getElementById('llm-cell-height').value) || 28;
+  if (!prompt) { showToast('Prompt is empty'); btn.disabled = false; btn.textContent = '▶ Send'; return; }
+
+  const resultEl = document.getElementById('f-llm-result');
+  const metaEl   = document.getElementById('f-llm-meta');
+  resultEl.value = '';
+  metaEl.textContent = 'Detecting rows…';
+
+  // Pre-compute crop origin in full-image space so we can draw on the main overlay
+  const shape = pageData.shapes[selIdx];
+  const spts  = shape.points;
+  const sx1   = Math.min(spts[0][0], spts[1][0]);
+  const sy1   = Math.min(spts[0][1], spts[1][1]);
+  const sx2   = Math.max(spts[0][0], spts[1][0]);
+  const sy2   = Math.max(spts[0][1], spts[1][1]);  // eslint-disable-line no-unused-vars
+  const pad   = 4;
+  const imgW  = pageData.imageWidth  || 99999;
+  const cropOriginX = Math.max(0, sx1 - pad);
+  const cropOriginY = Math.max(0, sy1 - pad);
+  const cropRight   = Math.min(imgW, sx2 + pad);
+
+  const lineResults = [];
+
+  try {
+    const params = new URLSearchParams({
+      folder, stem: pages[pageIdx].stem, idx: selIdx,
+      model, cell_height: cellHeight,
+    });
+    const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt}),
+      signal: llmAbortCtrl.signal,
+    });
+    if (!r.ok) {
+      showToast(`LLM error ${r.status}: ${(await r.text()).slice(0, 120)}`);
+      return;
+    }
+
+    const reader  = r.body.getReader();
+    const decoder = new TextDecoder();
+    let   buffer  = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop();
+
+      for (const chunk of chunks) {
+        if (!chunk.startsWith('data: ')) continue;
+        let msg;
+        try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+
+        if (msg.type === 'lines_detected') {
+          // Initialise main-image progress overlay (all rows, none active)
+          llmProgress = { cropOriginX, cropOriginY, cropRight,
+                          lines: msg.lines, activeRow: -1 };
+          drawOverlay();
+          drawRowOverlay(msg.lines, -1);   // panel thumbnail too
+          metaEl.textContent = `Detected ${msg.count} rows — sending…`;
+
+        } else if (msg.type === 'row_result') {
+          lineResults[msg.row] = msg.text;
+          // Advance the orange highlight on the main image
+          llmProgress.activeRow = msg.row;
+          drawOverlay();
+          drawRowOverlay(llmProgress.lines, msg.row);
+          resultEl.value = lineResults.filter(t => t != null).join('\n');
+          metaEl.textContent = `Row ${msg.row + 1} / ${llmProgress.lines.length}`;
+
+        } else if (msg.type === 'done') {
+          pageData.shapes[selIdx].openai_output = {
+            response: msg.response, model: msg.model,
+            mode: 'linebyline', timestamp: msg.timestamp,
+          };
+          llmProgress = null;
+          updatePanel();   // redraws overlay via drawOverlay() inside updatePanel
+          drawRowOverlay(null, -1);
+          showToast(`Line-by-line done · ${lineResults.length} rows`);
+        }
+      }
+    }
+  } catch(err) {
+    if (err.name !== 'AbortError') showToast(`LLM error: ${err.message}`);
+    else showToast('Stopped');
+  } finally {
+    llmAbortCtrl = null;
+    llmProgress  = null;
+    drawOverlay();
+    drawRowOverlay(null, -1);
+    btn.disabled = false; btn.textContent = '▶ Send';
+    stopBtn.style.display = 'none';
   }
 }
 
