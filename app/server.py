@@ -400,10 +400,18 @@ _easyocr_reader = None
 
 def _get_easyocr_reader(langs: list[str]):
     global _easyocr_reader
-    import easyocr
+    import easyocr, io, sys
     key = tuple(sorted(langs))
     if _easyocr_reader is None or _easyocr_reader[0] != key:
-        _easyocr_reader = (key, easyocr.Reader(langs, gpu=False))
+        # Suppress stdout/stderr during init to avoid cp1250 UnicodeEncodeError
+        # from EasyOCR's progress-bar block characters on Windows
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = io.StringIO()
+        try:
+            reader = easyocr.Reader(langs, gpu=False)
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+        _easyocr_reader = (key, reader)
     return _easyocr_reader[1]
 
 
