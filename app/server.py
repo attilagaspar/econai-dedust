@@ -354,17 +354,34 @@ def api_ocr_cell(
 
     tess = pytesseract.image_to_data(
         crop_grey, lang=lang,
-        config="--psm 6",          # assume a uniform block of text
+        config="--psm 4",          # single column, preserves line breaks
         output_type=pytesseract.Output.DICT,
     )
 
-    words = [
-        (txt, int(conf))
-        for txt, conf in zip(tess["text"], tess["conf"])
-        if txt.strip() and int(conf) > 0
-    ]
-    ocr_text  = " ".join(t for t, _ in words).strip()
-    mean_conf = round(sum(c for _, c in words) / len(words), 1) if words else 0.0
+    # Group confident words by (block, paragraph, line) to preserve layout.
+    # Also track the minimum top-coordinate of each line so we can sort by
+    # actual pixel position (Tesseract block_num order ≠ visual top-to-bottom order).
+    from collections import defaultdict
+    line_words: dict = defaultdict(list)
+    line_top:   dict = defaultdict(lambda: float("inf"))
+    conf_values: list = []
+    for txt, conf, blk, par, ln, top in zip(
+        tess["text"], tess["conf"],
+        tess["block_num"], tess["par_num"], tess["line_num"],
+        tess["top"],
+    ):
+        c = int(conf)
+        if txt.strip() and c > 0:
+            key = (blk, par, ln)
+            line_words[key].append(txt)
+            line_top[key] = min(line_top[key], int(top))
+            conf_values.append(c)
+
+    # Sort lines by their top pixel coordinate (visual reading order)
+    sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
+    lines = [" ".join(line_words[k]) for k in sorted_keys]
+    ocr_text  = "\n".join(lines).strip()
+    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
 
     shapes[idx]["tesseract_output"] = {
         "ocr_text":  ocr_text,
