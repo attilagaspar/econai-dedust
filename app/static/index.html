@@ -547,6 +547,7 @@
               <select id="ocr-mode" class="llm-select" style="flex:none;" onchange="updateOcrMode()">
                 <option value="full">Tesseract</option>
                 <option value="easyocr">EasyOCR</option>
+                <option value="easyocr-linebyline">EasyOCR line×line</option>
                 <option value="linebyline">Tess line×line</option>
               </select>
               <button id="ocr-btn"      class="field-run-btn" onclick="runOcr()">▶ Run</button>
@@ -2338,14 +2339,16 @@ function updatePanel() {
 // ── OCR ───────────────────────────────────────────────────────────────────────
 function updateOcrMode() {
   const mode = document.getElementById('ocr-mode').value;
-  document.getElementById('ocr-cellheight-wrap').style.display = mode === 'linebyline' ? 'flex' : 'none';
+  const showHeight = mode === 'linebyline' || mode === 'easyocr-linebyline';
+  document.getElementById('ocr-cellheight-wrap').style.display = showHeight ? 'flex' : 'none';
 }
 
 async function runOcr() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('ocr-mode').value;
-  if (mode === 'linebyline') { runOcrLineByLine(); return; }
-  if (mode === 'easyocr')   { runOcrEasyOcr();    return; }
+  if (mode === 'linebyline')         { runOcrLineByLine('/api/page/shape/ocr/linebyline');                return; }
+  if (mode === 'easyocr-linebyline') { runOcrLineByLine('/api/page/shape/ocr/easyocr/linebyline');       return; }
+  if (mode === 'easyocr')            { runOcrEasyOcr();                                                  return; }
 
   const btn = document.getElementById('ocr-btn');
   btn.disabled = true; btn.textContent = '…';
@@ -2385,7 +2388,7 @@ async function runOcrEasyOcr() {
   }
 }
 
-async function runOcrLineByLine() {
+async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
   if (selIdx < 0 || !pages.length) return;
   const btn     = document.getElementById('ocr-btn');
   const stopBtn = document.getElementById('ocr-stop-btn');
@@ -2414,7 +2417,7 @@ async function runOcrLineByLine() {
   try {
     const params = new URLSearchParams({folder, stem: pages[pageIdx].stem,
                                         idx: selIdx, cell_height: cellHeight});
-    const r = await fetch(`${API}/api/page/shape/ocr/linebyline?${params}`, {
+    const r = await fetch(`${API}${apiPath}?${params}`, {
       method: 'POST', signal: llmAbortCtrl.signal,
     });
     if (!r.ok) { showToast(`OCR error ${r.status}: ${(await r.text()).slice(0, 120)}`); return; }
@@ -2472,7 +2475,7 @@ async function runOcrLineByLine() {
   }
 }
 
-async function _ocrLineByLineOne(shapeIdx, cellHeight) {
+async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shape/ocr/linebyline') {
   // Streaming line-by-line OCR for one shape; updates overlay
   const shape = pageData.shapes[shapeIdx];
   const spts  = shape.points;
@@ -2486,7 +2489,7 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight) {
 
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem,
                                       idx: shapeIdx, cell_height: cellHeight});
-  const r = await fetch(`${API}/api/page/shape/ocr/linebyline?${params}`, {method: 'POST'});
+  const r = await fetch(`${API}${apiPath}?${params}`, {method: 'POST'});
   if (!r.ok) throw new Error(r.status);
 
   const reader = r.body.getReader(), decoder = new TextDecoder();
@@ -2699,7 +2702,9 @@ async function runOcrAll() {
     drawOverlay();
     try {
       if (ocrMode === 'linebyline') {
-        await _ocrLineByLineOne(i, cellHeight);
+        await _ocrLineByLineOne(i, cellHeight, '/api/page/shape/ocr/linebyline');
+      } else if (ocrMode === 'easyocr-linebyline') {
+        await _ocrLineByLineOne(i, cellHeight, '/api/page/shape/ocr/easyocr/linebyline');
       } else if (ocrMode === 'easyocr') {
         const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
         const r = await fetch(`${API}/api/page/shape/ocr/easyocr?${params}`, {method: 'POST'});

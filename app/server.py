@@ -457,7 +457,13 @@ def api_ocr_easyocr(
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
 
-    results = reader.readtext(np.array(crop))
+    results = reader.readtext(
+        np.array(crop),
+        allowlist="0123456789-",
+        min_size=6,          # catch single-digit cells (default 20 misses them)
+        text_threshold=0.5,  # slightly more permissive for sparse content
+        low_text=0.3,
+    )
     # results: [([[x1,y1],[x2,y2],[x3,y3],[x4,y4]], text, confidence), ...]
     # Sort top-to-bottom by the minimum y of each bounding box
     results.sort(key=lambda r: min(pt[1] for pt in r[0]))
@@ -581,6 +587,125 @@ async def api_ocr_linebyline(
             "ocr_text":  combined,
             "mean_conf": mean_conf,
             "lang":      lang,
+            "mode":      "linebyline",
+        }
+        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
+                      encoding="utf-8")
+
+        yield _json.dumps({"type": "done", "ocr_text": combined, "mean_conf": mean_conf})
+
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen())
+            while True:
+                item = await loop.run_in_executor(pool, _safe_next, it)
+                if item is _SSE_DONE:
+                    break
+                yield f"data: {item}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/page/shape/ocr/easyocr/linebyline")
+async def api_ocr_easyocr_linebyline(
+    folder:      str = Query(...),
+    stem:        str = Query(...),
+    idx:         int = Query(...),
+    cell_height: int = Query(26),
+    langs:       str = Query("en,hu"),
+):
+    """Row-by-row EasyOCR using the comb-filter row detector. Streams SSE."""
+    import asyncio, concurrent.futures
+    import json as _json
+    import numpy as np
+    from PIL import Image as PILImage, ImageOps
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data_doc = json.loads(jf.read_text(encoding="utf-8"))
+    shapes   = data_doc.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    shape = shapes[idx]
+    pts   = shape["points"]
+    xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    full_img = PILImage.open(str(img_path)).convert("RGB")
+    iw, ih   = full_img.size
+    pad      = 4
+    crop     = full_img.crop((
+        max(0, int(x1) - pad), max(0, int(y1) - pad),
+        min(iw, int(x2) + pad), min(ih, int(y2) + pad),
+    ))
+
+    rows      = _detect_text_rows(crop, cell_height)
+    lang_list = [l.strip() for l in langs.split(",") if l.strip()]
+    reader    = _get_easyocr_reader(lang_list)
+
+    def gen():
+        yield _json.dumps({"type": "lines_detected", "count": len(rows),
+                           "lines": [list(r) for r in rows]})
+
+        line_texts:  list[str]   = []
+        conf_values: list[float] = []
+
+        for i, (top, bottom) in enumerate(rows):
+            row_pad = max(4, cell_height // 6)
+            rt = max(0, top - row_pad)
+            rb = min(crop.height, bottom + row_pad)
+            row_img = crop.crop((0, rt, crop.width, rb))
+
+            if row_img.height < 48:
+                scale   = 48 / row_img.height
+                row_img = row_img.resize(
+                    (int(row_img.width * scale), 48), PILImage.LANCZOS
+                )
+
+            row_img = ImageOps.autocontrast(row_img.convert("L")).convert("RGB")
+
+            try:
+                results = reader.readtext(
+                    np.array(row_img),
+                    allowlist="0123456789-",
+                    min_size=4,
+                    text_threshold=0.4,
+                    low_text=0.3,
+                )
+                results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+                texts = [t for _, t, _ in results]
+                confs = [c for _, _, c in results]
+                text  = " ".join(texts).strip() or "-"
+                conf  = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+            except Exception as exc:
+                text = f"[err: {exc}]"
+                conf = 0.0
+
+            line_texts.append(text)
+            conf_values.append(conf)
+            yield _json.dumps({"type": "row_result", "row": i, "text": text,
+                               "top": top, "bottom": bottom})
+
+        combined  = "\n".join(line_texts)
+        mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+
+        shape["tesseract_output"] = {
+            "ocr_text":  combined,
+            "mean_conf": mean_conf,
+            "engine":    "easyocr",
             "mode":      "linebyline",
         }
         jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
