@@ -307,6 +307,71 @@ def get_cell(
     return StreamingResponse(buf, media_type="image/jpeg")
 
 
+@app.post("/api/page/shape/ocr")
+def api_ocr_cell(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    idx:    int = Query(...),
+    lang:   str = Query("hun", description="Tesseract language code"),
+):
+    """Run Tesseract OCR on a single cell and store the result in the page JSON."""
+    import pytesseract
+    from PIL import Image, ImageOps
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    pts = shapes[idx]["points"]
+    xs  = [p[0] for p in pts]
+    ys  = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    img = Image.open(str(img_path)).convert("RGB")
+    w, h = img.size
+    pad  = 4
+    crop = img.crop((
+        max(0, int(x1) - pad), max(0, int(y1) - pad),
+        min(w, int(x2) + pad), min(h, int(y2) + pad),
+    ))
+
+    # Light preprocessing: greyscale + auto-contrast
+    crop_grey = ImageOps.autocontrast(crop.convert("L"))
+
+    tess = pytesseract.image_to_data(
+        crop_grey, lang=lang,
+        config="--psm 6",          # assume a uniform block of text
+        output_type=pytesseract.Output.DICT,
+    )
+
+    words = [
+        (txt, int(conf))
+        for txt, conf in zip(tess["text"], tess["conf"])
+        if txt.strip() and int(conf) > 0
+    ]
+    ocr_text  = " ".join(t for t, _ in words).strip()
+    mean_conf = round(sum(c for _, c in words) / len(words), 1) if words else 0.0
+
+    shapes[idx]["tesseract_output"] = {
+        "ocr_text":  ocr_text,
+        "mean_conf": mean_conf,
+        "lang":      lang,
+    }
+    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {"ocr_text": ocr_text, "mean_conf": mean_conf}
+
+
 # ---------------------------------------------------------------------------
 # Routes — project management
 # ---------------------------------------------------------------------------

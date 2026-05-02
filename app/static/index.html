@@ -226,6 +226,18 @@
       min-height: 28px;
       word-break: break-word;
     }
+    .field-label-row {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .field-run-btn {
+      background: #0f3460; border: 1px solid #e94560; border-radius: 3px;
+      color: #e94560; font-size: 10px; font-weight: 700; padding: 1px 7px;
+      cursor: pointer; line-height: 16px;
+    }
+    .field-run-btn:hover  { background: #e94560; color: #fff; }
+    .field-run-btn:disabled { opacity: 0.4; cursor: default; }
+    #f-ocr-conf { font-size: 10px; color: #666; margin-top: 1px; }
+
     #human-input {
       background: #0d2a4a;
       border: 1px solid #e94560;
@@ -477,8 +489,12 @@
           <div id="f-super" class="field-value">—</div>
         </div>
         <div class="field-group" id="fg-ocr" style="display:none">
-          <div class="field-label">OCR (Tesseract)</div>
-          <div id="f-ocr" class="field-value">—</div>
+          <div class="field-label-row">
+            <span class="field-label">OCR (Tesseract)</span>
+            <button id="ocr-btn" class="field-run-btn" onclick="runOcr()">▶ Run</button>
+          </div>
+          <div id="f-ocr" class="field-value" style="white-space:pre-wrap;min-height:32px">—</div>
+          <div id="f-ocr-conf"></div>
         </div>
         <div class="field-group" id="fg-llm" style="display:none">
           <div class="field-label">LLM output</div>
@@ -2122,10 +2138,16 @@ function updatePanel() {
     ? (fgSuper.style.display='flex', document.getElementById('f-super').textContent=`row ${shape.super_row}  col ${shape.super_column}`)
     : (fgSuper.style.display='none');
 
-  const ocr=shape.tesseract_output?.ocr_text;
   const fgOcr=document.getElementById('fg-ocr');
-  ocr ? (fgOcr.style.display='flex', document.getElementById('f-ocr').textContent=ocr)
-      : (fgOcr.style.display='none');
+  fgOcr.style.display='flex';
+  const ocrResult = shape.tesseract_output;
+  document.getElementById('f-ocr').textContent = ocrResult?.ocr_text || '—';
+  const confEl = document.getElementById('f-ocr-conf');
+  if (ocrResult?.mean_conf != null) {
+    confEl.textContent = `conf ${ocrResult.mean_conf}%  ·  lang: ${ocrResult.lang||'?'}`;
+  } else {
+    confEl.textContent = '';
+  }
 
   const llm=shape.openai_output?.response;
   const fgLlm=document.getElementById('fg-llm');
@@ -2139,6 +2161,27 @@ function updatePanel() {
     `Shape ${selIdx}  •  ${Math.round(Math.max(...xs)-Math.min(...xs))} × ${Math.round(Math.max(...ys)-Math.min(...ys))} px`;
   document.getElementById('save-btn').disabled=false;
   document.getElementById('save-status').textContent='';
+}
+
+// ── OCR ───────────────────────────────────────────────────────────────────────
+async function runOcr() {
+  if (selIdx < 0 || !pages.length) return;
+  const btn = document.getElementById('ocr-btn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx});
+    const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
+    if (!r.ok) { showToast(`OCR error ${r.status}: ${(await r.text()).slice(0,80)}`); return; }
+    const data = await r.json();
+    if (!pageData.shapes[selIdx].tesseract_output) pageData.shapes[selIdx].tesseract_output = {};
+    pageData.shapes[selIdx].tesseract_output.ocr_text  = data.ocr_text;
+    pageData.shapes[selIdx].tesseract_output.mean_conf = data.mean_conf;
+    updatePanel();
+    drawOverlay();   // refresh status border (OCR adds a coloured border)
+    showToast(`OCR done · conf ${data.mean_conf}%`);
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Run';
+  }
 }
 
 // ── Save correction text ─────────────────────────────────────────────────────
