@@ -237,6 +237,24 @@
     .field-run-btn:hover  { background: #e94560; color: #fff; }
     .field-run-btn:disabled { opacity: 0.4; cursor: default; }
     #f-ocr-conf { font-size: 10px; color: #666; margin-top: 1px; }
+    .llm-controls { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+    .llm-select {
+      background:#0f3460; border:1px solid #1a3a6e; border-radius:3px;
+      color:#ccc; font-size:11px; padding:2px 5px; cursor:pointer; flex:1; min-width:80px;
+    }
+    #llm-prompt {
+      background:#0d2a4a; border:1px solid #1a3a6e; border-radius:3px;
+      color:#ccc; font-size:11px; padding:5px 7px; resize:vertical;
+      width:100%; box-sizing:border-box; font-family:inherit; min-height:64px;
+    }
+    #llm-prompt:focus { outline:none; border-color:#e94560; }
+    #f-llm-result {
+      background:#0f3460; border:1px solid #1a3a6e; border-radius:3px;
+      color:#ccc; font-size:12px; padding:5px 7px; resize:vertical;
+      width:100%; box-sizing:border-box; font-family:inherit; min-height:48px;
+      white-space:pre-wrap; cursor:text;
+    }
+    #f-llm-meta { font-size:10px; color:#666; margin-top:1px; }
 
     #human-input {
       background: #0d2a4a;
@@ -493,12 +511,31 @@
             <span class="field-label">OCR (Tesseract)</span>
             <button id="ocr-btn" class="field-run-btn" onclick="runOcr()">▶ Run</button>
           </div>
-          <div id="f-ocr" class="field-value" style="white-space:pre-wrap;min-height:32px">—</div>
+          <textarea id="f-ocr" class="field-value" readonly rows="3" style="resize:vertical;width:100%;box-sizing:border-box;background:inherit;color:inherit;border:none;font:inherit;white-space:pre-wrap;cursor:text">—</textarea>
           <div id="f-ocr-conf"></div>
         </div>
-        <div class="field-group" id="fg-llm" style="display:none">
-          <div class="field-label">LLM output</div>
-          <div id="f-llm" class="field-value">—</div>
+        <div class="field-group" id="fg-llm">
+          <div class="field-label-row">
+            <span class="field-label">LLM Cleaner</span>
+            <button id="llm-btn" class="field-run-btn" onclick="runLlm()">▶ Send</button>
+          </div>
+          <div class="llm-controls">
+            <select id="llm-model" class="llm-select" title="Model">
+              <option value="gpt-4o-mini">4o-mini</option>
+              <option value="gpt-4o">4o</option>
+              <option value="gpt-4-turbo">4-turbo</option>
+              <option value="gpt-3.5-turbo">3.5-turbo</option>
+            </select>
+            <select id="llm-mode" class="llm-select" title="Input mode" onchange="updateLlmPrompt()">
+              <option value="image">Image</option>
+              <option value="image+ocr">Image + OCR</option>
+              <option value="ocr">OCR only</option>
+              <option value="linebyline" disabled>Line-by-line (soon)</option>
+            </select>
+          </div>
+          <textarea id="llm-prompt" rows="4" placeholder="Prompt…"></textarea>
+          <textarea id="f-llm-result" readonly rows="4">—</textarea>
+          <div id="f-llm-meta"></div>
         </div>
         <div class="field-group">
           <div class="field-label">Human correction</div>
@@ -2103,6 +2140,8 @@ function updatePanel() {
     document.getElementById('fg-super').style.display='none';
     document.getElementById('fg-ocr').style.display='none';
     document.getElementById('fg-llm').style.display='none';
+    document.getElementById('f-llm-result').value='—';
+    document.getElementById('f-llm-meta').textContent='';
     document.getElementById('cell-meta').textContent=`${selSet.size} shapes selected`;
     document.getElementById('save-btn').disabled=true;
     document.getElementById('save-status').textContent='';
@@ -2141,7 +2180,7 @@ function updatePanel() {
   const fgOcr=document.getElementById('fg-ocr');
   fgOcr.style.display='flex';
   const ocrResult = shape.tesseract_output;
-  document.getElementById('f-ocr').textContent = ocrResult?.ocr_text || '—';
+  document.getElementById('f-ocr').value = ocrResult?.ocr_text || '—';
   const confEl = document.getElementById('f-ocr-conf');
   if (ocrResult?.mean_conf != null) {
     confEl.textContent = `conf ${ocrResult.mean_conf}%  ·  lang: ${ocrResult.lang||'?'}`;
@@ -2149,10 +2188,17 @@ function updatePanel() {
     confEl.textContent = '';
   }
 
-  const llm=shape.openai_output?.response;
-  const fgLlm=document.getElementById('fg-llm');
-  llm ? (fgLlm.style.display='flex', document.getElementById('f-llm').textContent=llm)
-      : (fgLlm.style.display='none');
+  // LLM cleaner — always visible when a shape is selected
+  document.getElementById('fg-llm').style.display='flex';
+  const llmOut = shape.openai_output;
+  document.getElementById('f-llm-result').value = llmOut?.response || '—';
+  const llmMeta = document.getElementById('f-llm-meta');
+  if (llmOut?.model) {
+    const ts = llmOut.timestamp ? new Date(llmOut.timestamp).toLocaleString() : '';
+    llmMeta.textContent = `${llmOut.model}  ·  ${llmOut.mode||''}  ·  ${ts}`;
+  } else {
+    llmMeta.textContent = '';
+  }
 
   document.getElementById('human-input').value=shape.human_output?.human_corrected_text||'';
 
@@ -2181,6 +2227,65 @@ async function runOcr() {
     showToast(`OCR done · conf ${data.mean_conf}%`);
   } finally {
     btn.disabled = false; btn.textContent = '▶ Run';
+  }
+}
+
+// ── LLM Cleaner ───────────────────────────────────────────────────────────────
+const LLM_PROMPTS = {
+  'image':     'Transcribe the text in this image exactly as it appears. Preserve line breaks. Return only the transcribed text.',
+  'image+ocr': 'Here is a cell image and its OCR output. Correct any OCR errors using the image as the reference. Preserve line breaks. Return only the corrected text.',
+  'ocr':       'Clean up the following OCR text. Fix recognition errors and preserve line breaks. Return only the corrected text.',
+  'linebyline':'(Line-by-line visual analysis — coming soon)',
+};
+
+function updateLlmPrompt() {
+  const mode = document.getElementById('llm-mode').value;
+  const el   = document.getElementById('llm-prompt');
+  // Only overwrite if empty or still a default prompt
+  const isDefault = Object.values(LLM_PROMPTS).includes(el.value.trim()) || !el.value.trim();
+  if (isDefault) el.value = LLM_PROMPTS[mode] || '';
+}
+
+// Initialise prompt on first load
+document.addEventListener('DOMContentLoaded', () => {
+  // restore persisted model/mode
+  const savedModel = localStorage.getItem('llm-model');
+  const savedMode  = localStorage.getItem('llm-mode');
+  if (savedModel) document.getElementById('llm-model').value = savedModel;
+  if (savedMode)  document.getElementById('llm-mode').value  = savedMode;
+  updateLlmPrompt();
+  // persist on change
+  document.getElementById('llm-model').addEventListener('change', e => localStorage.setItem('llm-model', e.target.value));
+  document.getElementById('llm-mode').addEventListener('change',  e => localStorage.setItem('llm-mode',  e.target.value));
+});
+
+async function runLlm() {
+  if (selIdx < 0 || !pages.length) return;
+  const btn   = document.getElementById('llm-btn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const model  = document.getElementById('llm-model').value;
+    const mode   = document.getElementById('llm-mode').value;
+    const prompt = document.getElementById('llm-prompt').value.trim();
+    if (!prompt) { showToast('Prompt is empty'); return; }
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx, model, mode});
+    const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt}),
+    });
+    if (!r.ok) { showToast(`LLM error ${r.status}: ${(await r.text()).slice(0, 120)}`); return; }
+    const data = await r.json();
+    pageData.shapes[selIdx].openai_output = {
+      response:  data.response,
+      model:     data.model,
+      mode:      data.mode,
+      timestamp: data.timestamp,
+    };
+    updatePanel();
+    showToast('LLM done');
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Send';
   }
 }
 

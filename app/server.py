@@ -394,6 +394,109 @@ def api_ocr_cell(
 
 
 # ---------------------------------------------------------------------------
+# Routes — LLM cleaner
+# ---------------------------------------------------------------------------
+
+class LlmRequest(BaseModel):
+    prompt: str
+
+
+@app.post("/api/page/shape/llm")
+def api_llm_cell(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    idx:    int = Query(...),
+    model:  str = Query("gpt-4o-mini"),
+    mode:   str = Query("image", description="image | image+ocr | ocr | linebyline"),
+    body:   LlmRequest = ...,
+):
+    """Send a cell to OpenAI and store the result in the page JSON."""
+    import os, base64, io, datetime
+    from openai import OpenAI
+    from PIL import Image as PILImage
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable is not set")
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None and mode in ("image", "image+ocr"):
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    shape = shapes[idx]
+    pts   = shape["points"]
+    xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    # Build the message content
+    content: list = []
+
+    if mode in ("image", "image+ocr"):
+        img = PILImage.open(str(img_path)).convert("RGB")
+        w, h = img.size
+        pad  = 4
+        crop = img.crop((
+            max(0, int(x1) - pad), max(0, int(y1) - pad),
+            min(w, int(x2) + pad), min(h, int(y2) + pad),
+        ))
+        buf = io.BytesIO()
+        crop.save(buf, format="JPEG", quality=92)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        content.append({
+            "type":      "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
+        })
+
+    prompt_text = body.prompt
+    if mode == "image+ocr":
+        ocr_text = shape.get("tesseract_output", {}).get("ocr_text", "")
+        if ocr_text:
+            prompt_text = f"{body.prompt}\n\nOCR text:\n{ocr_text}"
+    elif mode == "ocr":
+        ocr_text = shape.get("tesseract_output", {}).get("ocr_text", "")
+        prompt_text = f"{body.prompt}\n\n{ocr_text}"
+
+    content.append({"type": "text", "text": prompt_text})
+
+    # For text-only mode, skip the content list and use a plain string
+    if mode == "ocr":
+        messages = [{"role": "user", "content": prompt_text}]
+    else:
+        messages = [{"role": "user", "content": content}]
+
+    try:
+        client   = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model, messages=messages, max_tokens=1024,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    result    = response.choices[0].message.content.strip()
+    timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+
+    shape["openai_output"] = {
+        "response":  result,
+        "model":     model,
+        "mode":      mode,
+        "timestamp": timestamp,
+    }
+    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {"response": result, "model": model, "mode": mode, "timestamp": timestamp}
+
+
+# ---------------------------------------------------------------------------
 # Routes — project management
 # ---------------------------------------------------------------------------
 
