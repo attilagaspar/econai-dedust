@@ -317,6 +317,10 @@ def api_ocr_cell(
     """Run Tesseract OCR on a single cell and store the result in the page JSON."""
     import pytesseract
     from PIL import Image, ImageOps
+    # Ensure Tesseract binary is found on Windows even if not on PATH
+    import shutil
+    if not shutil.which("tesseract"):
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
     d        = _resolve_folder(folder)
     jf       = d / f"{stem}.json"
