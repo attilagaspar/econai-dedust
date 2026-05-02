@@ -543,7 +543,11 @@
         <div class="field-group" id="fg-ocr" style="display:none">
           <div class="field-label-row">
             <span class="field-label">OCR (Tesseract)</span>
-            <button id="ocr-btn" class="field-run-btn" onclick="runOcr()">▶ Run</button>
+            <div style="display:flex;gap:3px;">
+              <button id="ocr-btn"      class="field-run-btn" onclick="runOcr()">▶ Run</button>
+              <button id="ocr-all-btn"  class="field-run-btn" onclick="runOcrAll()">▶ All</button>
+              <button id="ocr-stop-btn" class="field-run-btn" onclick="stopBatch()" style="display:none;color:#fca5a5;border-color:#e94560;">■</button>
+            </div>
           </div>
           <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
             <div class="line-nums" id="f-ocr-lines">1</div>
@@ -554,7 +558,11 @@
         <div class="field-group" id="fg-llm">
           <div class="field-label-row">
             <span class="field-label">LLM Cleaner</span>
-            <button id="llm-btn" class="field-run-btn" onclick="runLlm()">▶ Send</button>
+            <div style="display:flex;gap:3px;">
+              <button id="llm-btn"           class="field-run-btn" onclick="runLlm()">▶ Send</button>
+              <button id="llm-all-btn"       class="field-run-btn" onclick="runLlmAll()">▶ All</button>
+              <button id="llm-batch-stop-btn" class="field-run-btn" onclick="stopBatch()" style="display:none;color:#fca5a5;border-color:#e94560;">■</button>
+            </div>
           </div>
           <div class="llm-controls">
             <select id="llm-model" class="llm-select" title="Model">
@@ -652,6 +660,8 @@ let flaggedOverlaps = new Set(); // indices of shapes with excessive overlap
 let latticeVisible  = false;     // whether to draw lattice grid overlay
 let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow}
 let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
+let batchAbort      = false;     // flag to stop a running "All" batch
+let batchHighlight  = -1;        // shape index highlighted during batch processing
 
 // ── Toast ────────────────────────────────────────────────────────────────────
 // ── Panel collapse ───────────────────────────────────────────────────────────
@@ -1511,6 +1521,28 @@ function drawOverlay() {
         : `Corner ${perspPoints.length} of 4 placed`);
     });
     svgOverlay.appendChild(cap);
+  }
+
+  // Batch "All" — orange dashed frame around the shape currently being processed
+  if (batchHighlight >= 0 && batchHighlight !== selIdx) {
+    const bsh = pageData.shapes[batchHighlight];
+    if (bsh?.points?.length >= 2) {
+      const bpts = bsh.points;
+      const btl = imgToScreen(Math.min(bpts[0][0],bpts[1][0]), Math.min(bpts[0][1],bpts[1][1]));
+      const bbr = imgToScreen(Math.max(bpts[0][0],bpts[1][0]), Math.max(bpts[0][1],bpts[1][1]));
+      if (btl && bbr) {
+        const br = document.createElementNS('http://www.w3.org/2000/svg','rect');
+        br.setAttribute('x',      btl.x); br.setAttribute('y',      btl.y);
+        br.setAttribute('width',  Math.max(0, bbr.x - btl.x));
+        br.setAttribute('height', Math.max(0, bbr.y - btl.y));
+        br.setAttribute('fill',           'rgba(255,165,0,0.12)');
+        br.setAttribute('stroke',         '#ffa500');
+        br.setAttribute('stroke-width',   '2.5');
+        br.setAttribute('stroke-dasharray','6 3');
+        br.style.pointerEvents = 'none';
+        svgOverlay.appendChild(br);
+      }
+    }
   }
 
   // LLM line-by-line progress: show all detected rows, highlight active one
@@ -2437,6 +2469,162 @@ async function runLlm() {
 
 function stopLlmLineByLine() {
   if (llmAbortCtrl) { llmAbortCtrl.abort(); llmAbortCtrl = null; }
+}
+
+function stopBatch() {
+  batchAbort = true;
+}
+
+// ── Batch helpers (shared by runOcrAll / runLlmAll) ───────────────────────────
+
+function _batchTargets() {
+  // Returns indices of all shapes on the page with the same label as the selected shape
+  if (selIdx < 0 || !pageData?.shapes) return [];
+  const label = pageData.shapes[selIdx]?.label;
+  if (!label) return [];
+  return pageData.shapes.map((s, i) => i).filter(i => pageData.shapes[i].label === label);
+}
+
+function _batchStart(allBtn, stopBtn, ...disableBtns) {
+  batchAbort = false;
+  allBtn.disabled = true;
+  stopBtn.style.display = 'inline-block';
+  disableBtns.forEach(b => { if (b) b.disabled = true; });
+}
+
+function _batchEnd(allBtn, stopBtn, done, total, label, ...enableBtns) {
+  batchHighlight = -1; batchAbort = false; llmProgress = null;
+  drawOverlay();
+  allBtn.disabled = false; allBtn.textContent = '▶ All';
+  stopBtn.style.display = 'none';
+  enableBtns.forEach(b => { if (b) b.disabled = false; });
+  showToast(`Done: ${done}/${total} · ${label}`);
+}
+
+async function runOcrAll() {
+  if (selIdx < 0 || !pages.length) return;
+  const targets = _batchTargets();
+  if (!targets.length) return;
+  const label   = pageData.shapes[selIdx].label;
+  const allBtn  = document.getElementById('ocr-all-btn');
+  const stopBtn = document.getElementById('ocr-stop-btn');
+  const runBtn  = document.getElementById('ocr-btn');
+  _batchStart(allBtn, stopBtn, runBtn);
+
+  let done = 0;
+  for (const i of targets) {
+    if (batchAbort) break;
+    batchHighlight = i;
+    allBtn.textContent = `${done + 1}/${targets.length}`;
+    drawOverlay();
+    try {
+      const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
+      const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
+      if (r.ok) {
+        const data = await r.json();
+        pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf};
+        done++;
+        if (i === selIdx) updatePanel(); else drawOverlay();
+      }
+    } catch(e) { if (batchAbort) break; }
+  }
+  _batchEnd(allBtn, stopBtn, done, targets.length, label, runBtn);
+}
+
+async function _llmSingleShape(shapeIdx, model, mode, prompt) {
+  // Regular (non-streaming) LLM call for one shape
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: shapeIdx, model, mode});
+  const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt}),
+  });
+  if (!r.ok) throw new Error(r.status);
+  const data = await r.json();
+  pageData.shapes[shapeIdx].openai_output = {
+    response: data.response, model: data.model, mode: data.mode, timestamp: data.timestamp,
+  };
+}
+
+async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
+  // Streaming line-by-line LLM for one shape; updates llmProgress overlay
+  const shape = pageData.shapes[shapeIdx];
+  const spts  = shape.points;
+  const sx1   = Math.min(spts[0][0], spts[1][0]);
+  const sy1   = Math.min(spts[0][1], spts[1][1]);
+  const sx2   = Math.max(spts[0][0], spts[1][0]);
+  const pad   = 4, imgW = pageData.imageWidth || 99999;
+  const cropOriginX = Math.max(0, sx1 - pad);
+  const cropOriginY = Math.max(0, sy1 - pad);
+  const cropRight   = Math.min(imgW, sx2 + pad);
+
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem,
+                                      idx: shapeIdx, model, cell_height: cellHeight});
+  const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt}),
+  });
+  if (!r.ok) throw new Error(r.status);
+
+  const reader = r.body.getReader(), decoder = new TextDecoder();
+  let buffer = '';
+  outer: while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const chunks = buffer.split('\n\n'); buffer = chunks.pop();
+    for (const chunk of chunks) {
+      if (!chunk.startsWith('data: ')) continue;
+      let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'lines_detected') {
+        llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1};
+        drawOverlay();
+      } else if (msg.type === 'row_result') {
+        llmProgress.activeRow = msg.row; drawOverlay();
+        if (batchAbort) { reader.cancel(); break outer; }
+      } else if (msg.type === 'done') {
+        pageData.shapes[shapeIdx].openai_output = {
+          response: msg.response, model: msg.model, mode: 'linebyline', timestamp: msg.timestamp,
+        };
+      }
+    }
+    if (batchAbort) { reader.cancel(); break; }
+  }
+  llmProgress = null;
+}
+
+async function runLlmAll() {
+  if (selIdx < 0 || !pages.length) return;
+  const targets = _batchTargets();
+  if (!targets.length) return;
+  const label      = pageData.shapes[selIdx].label;
+  const model      = document.getElementById('llm-model').value;
+  const mode       = document.getElementById('llm-mode').value;
+  const prompt     = document.getElementById('llm-prompt').value.trim();
+  const cellHeight = parseInt(document.getElementById('llm-cell-height').value) || 26;
+  if (!prompt) { showToast('Prompt is empty'); return; }
+
+  const allBtn  = document.getElementById('llm-all-btn');
+  const stopBtn = document.getElementById('llm-batch-stop-btn');
+  const sendBtn = document.getElementById('llm-btn');
+  _batchStart(allBtn, stopBtn, sendBtn);
+
+  let done = 0;
+  for (const i of targets) {
+    if (batchAbort) break;
+    batchHighlight = i;
+    allBtn.textContent = `${done + 1}/${targets.length}`;
+    drawOverlay();
+    try {
+      if (mode === 'linebyline') {
+        await _llmLineByLineOne(i, model, prompt, cellHeight);
+      } else {
+        await _llmSingleShape(i, model, mode, prompt);
+      }
+      done++;
+      if (i === selIdx) updatePanel(); else drawOverlay();
+    } catch(e) { if (batchAbort) break; }
+  }
+  _batchEnd(allBtn, stopBtn, done, targets.length, label, sendBtn);
 }
 
 async function runLlmLineByLine() {
