@@ -393,6 +393,83 @@ def api_ocr_cell(
     return {"ocr_text": ocr_text, "mean_conf": mean_conf}
 
 
+# ---------------------------------------------------------------------------
+# EasyOCR — cached reader (initialisation takes a few seconds the first time)
+# ---------------------------------------------------------------------------
+_easyocr_reader = None
+
+def _get_easyocr_reader(langs: list[str]):
+    global _easyocr_reader
+    import easyocr
+    key = tuple(sorted(langs))
+    if _easyocr_reader is None or _easyocr_reader[0] != key:
+        _easyocr_reader = (key, easyocr.Reader(langs, gpu=False))
+    return _easyocr_reader[1]
+
+
+@app.post("/api/page/shape/ocr/easyocr")
+def api_ocr_easyocr(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    idx:    int = Query(...),
+    langs:  str = Query("en,hu", description="Comma-separated EasyOCR language codes"),
+):
+    """Run EasyOCR on a single cell and store the result in the page JSON."""
+    import numpy as np
+    from PIL import Image as PILImage, ImageOps
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data_doc = json.loads(jf.read_text(encoding="utf-8"))
+    shapes   = data_doc.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    pts = shapes[idx]["points"]
+    xs  = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    img = PILImage.open(str(img_path)).convert("RGB")
+    w, h = img.size
+    pad  = 4
+    crop = img.crop((
+        max(0, int(x1) - pad), max(0, int(y1) - pad),
+        min(w,  int(x2) + pad), min(h, int(y2) + pad),
+    ))
+    # Light preprocessing: autocontrast on greyscale, then back to RGB for EasyOCR
+    crop = ImageOps.autocontrast(crop.convert("L")).convert("RGB")
+
+    lang_list = [l.strip() for l in langs.split(",") if l.strip()]
+    reader    = _get_easyocr_reader(lang_list)
+
+    results = reader.readtext(np.array(crop))
+    # results: [([[x1,y1],[x2,y2],[x3,y3],[x4,y4]], text, confidence), ...]
+    # Sort top-to-bottom by the minimum y of each bounding box
+    results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+
+    lines      = [text for _, text, _ in results]
+    confs      = [conf for _, _, conf in results]
+    ocr_text   = "\n".join(lines).strip()
+    mean_conf  = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+
+    shapes[idx]["tesseract_output"] = {
+        "ocr_text":  ocr_text,
+        "mean_conf": mean_conf,
+        "engine":    "easyocr",
+        "langs":     lang_list,
+    }
+    jf.write_text(json.dumps(data_doc, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {"ocr_text": ocr_text, "mean_conf": mean_conf}
+
+
 @app.post("/api/page/shape/ocr/linebyline")
 async def api_ocr_linebyline(
     folder:      str = Query(...),

@@ -545,8 +545,9 @@
             <span class="field-label">OCR (Tesseract)</span>
             <div style="display:flex;gap:3px;align-items:center;">
               <select id="ocr-mode" class="llm-select" style="flex:none;" onchange="updateOcrMode()">
-                <option value="full">Full cell</option>
-                <option value="linebyline">Line×line</option>
+                <option value="full">Tesseract</option>
+                <option value="easyocr">EasyOCR</option>
+                <option value="linebyline">Tess line×line</option>
               </select>
               <button id="ocr-btn"      class="field-run-btn" onclick="runOcr()">▶ Run</button>
               <button id="ocr-all-btn"  class="field-run-btn" onclick="runOcrAll()">▶ All</button>
@@ -2344,6 +2345,7 @@ async function runOcr() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('ocr-mode').value;
   if (mode === 'linebyline') { runOcrLineByLine(); return; }
+  if (mode === 'easyocr')   { runOcrEasyOcr();    return; }
 
   const btn = document.getElementById('ocr-btn');
   btn.disabled = true; btn.textContent = '…';
@@ -2356,8 +2358,28 @@ async function runOcr() {
     pageData.shapes[selIdx].tesseract_output.ocr_text  = data.ocr_text;
     pageData.shapes[selIdx].tesseract_output.mean_conf = data.mean_conf;
     updatePanel();
-    drawOverlay();   // refresh status border (OCR adds a coloured border)
+    drawOverlay();
     showToast(`OCR done · conf ${data.mean_conf}%`);
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Run';
+  }
+}
+
+async function runOcrEasyOcr() {
+  if (selIdx < 0 || !pages.length) return;
+  const btn = document.getElementById('ocr-btn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx});
+    const r = await fetch(`${API}/api/page/shape/ocr/easyocr?${params}`, {method: 'POST'});
+    if (!r.ok) { showToast(`EasyOCR error ${r.status}: ${(await r.text()).slice(0,80)}`); return; }
+    const data = await r.json();
+    pageData.shapes[selIdx].tesseract_output = {
+      ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr',
+    };
+    updatePanel();
+    drawOverlay();
+    showToast(`EasyOCR done · conf ${data.mean_conf}%`);
   } finally {
     btn.disabled = false; btn.textContent = '▶ Run';
   }
@@ -2678,6 +2700,12 @@ async function runOcrAll() {
     try {
       if (ocrMode === 'linebyline') {
         await _ocrLineByLineOne(i, cellHeight);
+      } else if (ocrMode === 'easyocr') {
+        const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
+        const r = await fetch(`${API}/api/page/shape/ocr/easyocr?${params}`, {method: 'POST'});
+        if (!r.ok) throw new Error(r.status);
+        const data = await r.json();
+        pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr'};
       } else {
         const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
         const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
