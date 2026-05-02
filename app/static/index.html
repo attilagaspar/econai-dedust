@@ -1030,6 +1030,48 @@ function _latticeCompleteRegion(regionShapes) {
   if (added) showToast(`Lattice: predicted ${added} missing cell${added>1?'s':''}`, 3000);
 }
 
+// ── Lattice resize ────────────────────────────────────────────────────────────
+
+function startLatticeRowResize(e, rowAbove, rowBelow) {
+  pushUndo();
+  const adjustments = [], origPts = {};
+  pageData.shapes.forEach((s, idx) => {
+    if (s.super_row !== rowAbove && s.super_row !== rowBelow) return;
+    origPts[idx] = s.points.map(p=>[...p]);
+    // rowAbove shapes: drag moves their bottom (max-y) edge
+    // rowBelow shapes: drag moves their top (min-y) edge
+    adjustments.push({ idx, moveMax: s.super_row === rowAbove });
+  });
+  dragState = { type:'lattice-row', startX:e.clientX, startY:e.clientY, adjustments, origPts };
+}
+
+function startLatticeColResize(e, colLeft, colRight) {
+  pushUndo();
+  const adjustments = [], origPts = {};
+  pageData.shapes.forEach((s, idx) => {
+    if (s.super_column !== colLeft && s.super_column !== colRight) return;
+    origPts[idx] = s.points.map(p=>[...p]);
+    // colLeft shapes: drag moves their right (max-x) edge
+    // colRight shapes: drag moves their left (min-x) edge
+    adjustments.push({ idx, moveMax: s.super_column === colLeft });
+  });
+  dragState = { type:'lattice-col', startX:e.clientX, startY:e.clientY, adjustments, origPts };
+}
+
+function _applyLatticeDrag(adjustments, origPts, delta, axis) {
+  // axis 'y': moveMax shifts the larger-y point, else the smaller-y point
+  // axis 'x': moveMax shifts the larger-x point, else the smaller-x point
+  const ai = axis === 'y' ? 1 : 0;
+  adjustments.forEach(({idx, moveMax}) => {
+    const orig = origPts[idx];
+    const pts = orig.map(p=>[...p]);
+    const i0bigger = orig[0][ai] >= orig[1][ai];
+    const tgt = moveMax ? (i0bigger ? 0 : 1) : (i0bigger ? 1 : 0);
+    pts[tgt][ai] = orig[tgt][ai] + delta;
+    pageData.shapes[idx].points = pts;
+  });
+}
+
 // ── Overlay drawing ─────────────────────────────────────────────────────────
 function drawOverlay() {
   if (!svgOverlay || !pageData) return;
@@ -1161,18 +1203,46 @@ function drawOverlay() {
           t.style.pointerEvents='none';
           t.textContent=txt; svgOverlay.appendChild(t);
         };
-        // Horizontal lines + row labels
-        sRows.forEach(r => {
-          const b=rowBands[r]; mkLine(gxL,b.top,gxR,b.top);
-          mkLabel(gxL-4, (b.top+b.bot)/2, `${r}`, 'end');
+        // Invisible wide hit-area for horizontal boundary → row-resize cursor
+        const mkRowHandle=(yImg,rowAbove,rowBelow)=>{
+          const pL=imgToScreen(gxL,yImg),pR=imgToScreen(gxR,yImg); if(!pL||!pR) return;
+          const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
+          hit.setAttribute('x',pL.x); hit.setAttribute('y',pL.y-5);
+          hit.setAttribute('width',Math.max(0,pR.x-pL.x)); hit.setAttribute('height',10);
+          hit.setAttribute('fill','transparent');
+          hit.style.pointerEvents='all'; hit.style.cursor='row-resize';
+          hit.addEventListener('mousedown',e=>{e.stopPropagation();startLatticeRowResize(e,rowAbove,rowBelow);});
+          svgOverlay.appendChild(hit);
+        };
+        // Invisible tall hit-area for vertical boundary → col-resize cursor
+        const mkColHandle=(xImg,colLeft,colRight)=>{
+          const pT=imgToScreen(xImg,gyT),pB=imgToScreen(xImg,gyB); if(!pT||!pB) return;
+          const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
+          hit.setAttribute('x',pT.x-5); hit.setAttribute('y',pT.y);
+          hit.setAttribute('width',10); hit.setAttribute('height',Math.max(0,pB.y-pT.y));
+          hit.setAttribute('fill','transparent');
+          hit.style.pointerEvents='all'; hit.style.cursor='col-resize';
+          hit.addEventListener('mousedown',e=>{e.stopPropagation();startLatticeColResize(e,colLeft,colRight);});
+          svgOverlay.appendChild(hit);
+        };
+        // Horizontal lines + row labels + row resize handles
+        sRows.forEach((r,ri) => {
+          const b=rowBands[r];
+          mkLine(gxL,b.top,gxR,b.top);
+          mkLabel(gxL-4,(b.top+b.bot)/2,`${r}`,'end');
+          mkRowHandle(b.top, ri>0?sRows[ri-1]:null, r);
         });
-        mkLine(gxL,gyB,gxR,gyB); // final bottom
-        // Vertical lines + col labels
-        sCols.forEach(c => {
-          const b=colBands[c]; mkLine(b.left,gyT,b.left,gyB);
-          mkLabel(b.left+(colBands[c].right-b.left)/2, gyT-4, `${c}`, 'middle');
+        mkLine(gxL,gyB,gxR,gyB);
+        mkRowHandle(gyB, sRows[sRows.length-1], null);
+        // Vertical lines + col labels + col resize handles
+        sCols.forEach((c,ci) => {
+          const b=colBands[c];
+          mkLine(b.left,gyT,b.left,gyB);
+          mkLabel(b.left+(colBands[c].right-b.left)/2,gyT-4,`${c}`,'middle');
+          mkColHandle(b.left, ci>0?sCols[ci-1]:null, c);
         });
-        mkLine(gxR,gyT,gxR,gyB); // final right
+        mkLine(gxR,gyT,gxR,gyB);
+        mkColHandle(gxR, sCols[sCols.length-1], null);
       }
     }
   }
@@ -1467,6 +1537,12 @@ window.addEventListener('mousemove', e => {
       dragState.startX = e.clientX; dragState.startY = e.clientY;
     }
     return;
+  } else if (dragState.type==='lattice-row') {
+    const d=screenDeltaToImg(0, e.clientY-dragState.startY);
+    _applyLatticeDrag(dragState.adjustments, dragState.origPts, d.dy, 'y');
+  } else if (dragState.type==='lattice-col') {
+    const d=screenDeltaToImg(e.clientX-dragState.startX, 0);
+    _applyLatticeDrag(dragState.adjustments, dragState.origPts, d.dx, 'x');
   } else if (dragState.type==='draw'||dragState.type==='select-rect'||dragState.type==='draw-table') {
     const p=screenToImg(e.clientX,e.clientY);
     dragCurrentPts=[dragState.origPts[0],[p.x,p.y]];
@@ -1491,6 +1567,10 @@ window.addEventListener('mouseup', async e => {
       if (overlaps) { selSet.add(i); selIdx=i; }
     });
     drawOverlay(); updatePanel();
+
+  } else if (state.type==='lattice-row' || state.type==='lattice-col') {
+    drawOverlay();
+    await replaceAllShapes();
 
   } else if (state.type==='resize') {
     pageData.shapes[state.idx].points=dragCurrentPts;
