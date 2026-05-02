@@ -238,6 +238,38 @@
     .field-run-btn:hover  { background: #e94560; color: #fff; }
     .field-run-btn:disabled { opacity: 0.4; cursor: default; }
     #f-ocr-conf { font-size: 10px; color: #666; margin-top: 1px; }
+
+    /* Line-numbered textarea wrapper */
+    .lined-wrap {
+      display: flex;
+      background: #0f3460;
+      border: 1px solid #1a3a6e;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .lined-wrap .line-nums {
+      background: #0a2040;
+      color: #4a6a8a;
+      font-size: 10px;
+      font-family: monospace;
+      padding: 5px 4px;
+      text-align: right;
+      user-select: none;
+      min-width: 18px;
+      line-height: 1.6;
+      overflow: hidden;
+      border-right: 1px solid #1a3a6e;
+      flex-shrink: 0;
+    }
+    .lined-wrap textarea {
+      flex: 1;
+      background: transparent !important;
+      border: none !important;
+      border-radius: 0 !important;
+      margin: 0;
+      line-height: 1.6;
+      font-size: 12px;
+    }
     .llm-controls { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
     .llm-select {
       background:#0f3460; border:1px solid #1a3a6e; border-radius:3px;
@@ -513,7 +545,10 @@
             <span class="field-label">OCR (Tesseract)</span>
             <button id="ocr-btn" class="field-run-btn" onclick="runOcr()">▶ Run</button>
           </div>
-          <textarea id="f-ocr" class="field-value" readonly rows="3" style="resize:vertical;width:100%;box-sizing:border-box;background:inherit;color:inherit;border:none;font:inherit;white-space:pre-wrap;cursor:text">—</textarea>
+          <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
+            <div class="line-nums" id="f-ocr-lines">1</div>
+            <textarea id="f-ocr" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+          </div>
           <div id="f-ocr-conf"></div>
         </div>
         <div class="field-group" id="fg-llm">
@@ -548,12 +583,18 @@
             </button>
           </div>
           <textarea id="llm-prompt" rows="4" placeholder="Prompt…"></textarea>
-          <textarea id="f-llm-result" readonly rows="4">—</textarea>
+          <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:68px;">
+            <div class="line-nums" id="f-llm-result-lines">1</div>
+            <textarea id="f-llm-result" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+          </div>
           <div id="f-llm-meta"></div>
         </div>
         <div class="field-group">
           <div class="field-label">Human correction</div>
-          <textarea id="human-input" placeholder="Type correction here…"></textarea>
+          <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
+            <div class="line-nums" id="human-input-lines">1</div>
+            <textarea id="human-input" placeholder="Type correction here…" style="resize:none;width:100%;box-sizing:border-box;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;padding:5px 7px;"></textarea>
+          </div>
         </div>
         <button id="save-btn" onclick="saveCorrection()" disabled>Save (Ctrl+S)</button>
         <button id="delete-btn" onclick="deleteSelectedShape()" style="display:none;background:#7f1d1d;border:none;border-radius:4px;color:#fca5a5;padding:7px;cursor:pointer;font-size:13px;font-weight:600;width:100%;">Delete box (Del)</button>
@@ -2239,6 +2280,7 @@ function updatePanel() {
   }
 
   document.getElementById('human-input').value=shape.human_output?.human_corrected_text||'';
+  refreshAllLineNums();
 
   const pts=shape.points||[], xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
   document.getElementById('cell-meta').textContent=
@@ -2316,6 +2358,29 @@ function drawRowOverlay(lines, activeRow) {
   });
 }
 
+// ── Line-numbered textareas ───────────────────────────────────────────────────
+function updateLineNums(taId, numsId) {
+  const ta = document.getElementById(taId);
+  const ln = document.getElementById(numsId);
+  if (!ta || !ln) return;
+  const count = (ta.value.match(/\n/g) || []).length + 1;
+  if (parseInt(ln.dataset.count) === count) return;   // nothing changed
+  ln.dataset.count = count;
+  ln.innerHTML = Array.from({length: count}, (_, i) => i + 1).join('<br>');
+}
+
+function syncLineNumScroll(taId, numsId) {
+  const ta = document.getElementById(taId);
+  const ln = document.getElementById(numsId);
+  if (ta && ln) ln.scrollTop = ta.scrollTop;
+}
+
+function refreshAllLineNums() {
+  updateLineNums('f-ocr',        'f-ocr-lines');
+  updateLineNums('f-llm-result', 'f-llm-result-lines');
+  updateLineNums('human-input',  'human-input-lines');
+}
+
 // Initialise prompt on first load
 document.addEventListener('DOMContentLoaded', () => {
   // restore persisted model/mode
@@ -2327,6 +2392,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // persist on change
   document.getElementById('llm-model').addEventListener('change', e => localStorage.setItem('llm-model', e.target.value));
   document.getElementById('llm-mode').addEventListener('change',  e => localStorage.setItem('llm-mode',  e.target.value));
+
+  // Scroll sync for line numbers
+  [['f-ocr','f-ocr-lines'], ['f-llm-result','f-llm-result-lines'], ['human-input','human-input-lines']]
+    .forEach(([taId, lnId]) => {
+      const ta = document.getElementById(taId);
+      if (ta) ta.addEventListener('scroll', () => syncLineNumScroll(taId, lnId));
+    });
+
+  // Live line numbers while typing in the human correction box
+  const humanTa = document.getElementById('human-input');
+  if (humanTa) humanTa.addEventListener('input', () => updateLineNums('human-input', 'human-input-lines'));
 });
 
 async function runLlm() {
@@ -2444,6 +2520,7 @@ async function runLlmLineByLine() {
           drawOverlay();
           drawRowOverlay(llmProgress.lines, msg.row);
           resultEl.value = lineResults.filter(t => t != null).join('\n');
+          updateLineNums('f-llm-result', 'f-llm-result-lines');
           metaEl.textContent = `Row ${msg.row + 1} / ${llmProgress.lines.length}`;
 
         } else if (msg.type === 'done') {
