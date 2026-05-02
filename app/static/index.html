@@ -597,6 +597,10 @@
           </div>
           <div id="f-llm-meta"></div>
         </div>
+        <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="overwrite-cb" style="accent-color:#e94560;cursor:pointer;">
+          Overwrite existing OCR / LLM results
+        </label>
         <div class="field-group">
           <div class="field-label">Human correction</div>
           <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
@@ -2511,9 +2515,11 @@ async function runOcrAll() {
   const runBtn  = document.getElementById('ocr-btn');
   _batchStart(allBtn, stopBtn, runBtn);
 
+  const overwrite = document.getElementById('overwrite-cb').checked;
   let done = 0;
   for (const i of targets) {
     if (batchAbort) break;
+    if (!overwrite && pageData.shapes[i].tesseract_output?.ocr_text) continue;
     batchHighlight = i;
     allBtn.textContent = `${done + 1}/${targets.length}`;
     drawOverlay();
@@ -2608,9 +2614,11 @@ async function runLlmAll() {
   const sendBtn = document.getElementById('llm-btn');
   _batchStart(allBtn, stopBtn, sendBtn);
 
+  const overwrite = document.getElementById('overwrite-cb').checked;
   let done = 0;
   for (const i of targets) {
     if (batchAbort) break;
+    if (!overwrite && pageData.shapes[i].openai_output?.response) continue;
     batchHighlight = i;
     allBtn.textContent = `${done + 1}/${targets.length}`;
     drawOverlay();
