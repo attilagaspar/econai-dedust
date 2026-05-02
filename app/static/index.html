@@ -840,7 +840,7 @@ function _latticeDetect(selectedLabels) {
   if (!useful.length) return;
   let regions = _latticeIdentifyRegions(useful);
   regions = _latticeMergeRegions(regions);
-  regions.forEach(r => { _latticeAssignCoords(r); _latticeSmoothRegion(r); });
+  regions.forEach(r => { _latticeAssignCoords(r); _latticeSmoothRegion(r); _latticeCompleteRegion(r); });
 }
 
 function _latticeIdentifyRegions(useful) {
@@ -964,6 +964,70 @@ function _latticeSmoothRegion(regionShapes) {
       if (p1[0]<=p2[0]) { p1[0]=medL; p2[0]=medR; } else { p1[0]=medR; p2[0]=medL; }
     });
   });
+}
+
+function _latticeCompleteRegion(regionShapes) {
+  if (!regionShapes.length) return;
+
+  const rows = [...new Set(regionShapes.map(s => s.super_row))];
+  const cols = [...new Set(regionShapes.map(s => s.super_column))];
+  const minRow = Math.min(...rows), maxRow = Math.max(...rows);
+  const minCol = Math.min(...cols), maxCol = Math.max(...cols);
+
+  // Build lookup: "r,c" → shape
+  const posMap = new Map();
+  regionShapes.forEach(s => posMap.set(`${s.super_row},${s.super_column}`, s));
+
+  // Row bands (top/bot y) and col bands (left/right x) from post-smoothing shapes
+  const rowBands = {}, colBands = {};
+  rows.forEach(r => {
+    const rs = regionShapes.filter(s => s.super_row === r);
+    rowBands[r] = {
+      top: Math.round(_median(rs.map(s => Math.min(...s.points.map(p=>p[1]))))),
+      bot: Math.round(_median(rs.map(s => Math.max(...s.points.map(p=>p[1])))))
+    };
+  });
+  cols.forEach(c => {
+    const cs = regionShapes.filter(s => s.super_column === c);
+    colBands[c] = {
+      left:  Math.round(_median(cs.map(s => Math.min(...s.points.map(p=>p[0]))))),
+      right: Math.round(_median(cs.map(s => Math.max(...s.points.map(p=>p[0])))))
+    };
+  });
+
+  // Most frequent label across the whole region (fallback)
+  const labelCount = {};
+  regionShapes.forEach(s => { labelCount[s.label] = (labelCount[s.label]||0)+1; });
+  const mostFreqLabel = Object.entries(labelCount).sort((a,b)=>b[1]-a[1])[0][0];
+
+  let added = 0;
+  // Iterate top-to-bottom so "above" lookups can find just-created shapes
+  for (let r = minRow; r <= maxRow; r++) {
+    for (let c = minCol; c <= maxCol; c++) {
+      if (posMap.has(`${r},${c}`)) continue;
+      const rb = rowBands[r], cb = colBands[c];
+      if (!rb || !cb) continue;
+
+      // Type: cell directly above in the same column; fall back to most frequent
+      const above = posMap.get(`${r-1},${c}`);
+      const label = above ? above.label : mostFreqLabel;
+
+      const newShape = {
+        label,
+        points: [[cb.left, rb.top], [cb.right, rb.bot]],
+        group_id: null,
+        shape_type: 'rectangle',
+        flags: {},
+        super_row: r,
+        super_column: c,
+      };
+      pageData.shapes.push(newShape);
+      regionShapes.push(newShape);          // keep regionShapes in sync for future band updates
+      posMap.set(`${r},${c}`, newShape);    // available immediately for "above" on next rows
+      added++;
+    }
+  }
+  if (added) showToast(`Lattice: predicted ${added} missing cell${added>1?'s':''}`, 3000);
 }
 
 // ── Overlay drawing ─────────────────────────────────────────────────────────
