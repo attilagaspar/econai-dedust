@@ -877,6 +877,7 @@
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
         <option value="ocr_tesseract">OCR — Tesseract</option>
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
+        <option value="llm">LLM</option>
       </select>
     </div>
     <div>
@@ -915,6 +916,44 @@
         <input type="checkbox" id="batch-ocr-overwrite"
                style="accent-color:#e94560;width:13px;height:13px;">
         <span>Overwrite existing OCR results</span>
+      </label>
+    </div>
+
+    <!-- LLM options -->
+    <div id="batch-llm-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div style="display:flex;gap:8px;">
+        <select id="batch-llm-model" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="gpt-4.1-mini">4.1-mini</option>
+          <option value="gpt-5-nano">5-nano</option>
+          <option value="gpt-4.1-nano">4.1-nano</option>
+          <option value="gpt-4.1">4.1</option>
+          <option value="gpt-4o-mini">4o-mini</option>
+          <option value="gpt-4o">4o</option>
+        </select>
+        <select id="batch-llm-mode" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" onchange="onBatchLlmModeChange()">
+          <option value="image">Image</option>
+          <option value="image+ocr">Image + OCR</option>
+          <option value="ocr">OCR only</option>
+          <option value="linebyline">Line-by-line</option>
+        </select>
+      </div>
+      <div id="batch-llm-cellheight-wrap" style="display:none;">
+        <label class="row">
+          <span style="white-space:nowrap;">Target row height (px)</span>
+          <input type="number" id="batch-llm-cellheight" value="26" min="10" max="200"
+                 style="width:60px;flex:none;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" />
+        </label>
+      </div>
+      <textarea id="batch-llm-prompt" rows="3" placeholder="Prompt…"
+        style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Process these label types:</div>
+        <div id="batch-llm-label-checks"></div>
+      </div>
+      <label class="row">
+        <input type="checkbox" id="batch-llm-overwrite"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Overwrite existing LLM results</span>
       </label>
     </div>
 
@@ -2552,6 +2591,14 @@ function _batchPopulateLabels(containerId, storageKey) {
 function openBatchModal() {
   _batchPopulateLabels('batch-label-checks',     'latticeLabels');
   _batchPopulateLabels('batch-ocr-label-checks', 'batchOcrLabels');
+  _batchPopulateLabels('batch-llm-label-checks', 'batchLlmLabels');
+  // Sync model/mode from the main LLM panel if available
+  const savedModel = localStorage.getItem('llm-model');
+  const savedMode  = localStorage.getItem('llm-mode');
+  if (savedModel) document.getElementById('batch-llm-model').value = savedModel;
+  if (savedMode)  { document.getElementById('batch-llm-mode').value = savedMode; onBatchLlmModeChange(); }
+  const savedPrompt = document.getElementById('llm-prompt')?.value?.trim();
+  if (savedPrompt) document.getElementById('batch-llm-prompt').value = savedPrompt;
 
   _batchRunning = false;
   _batchStop    = false;
@@ -2579,6 +2626,12 @@ function onBatchOpChange() {
   const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
   document.getElementById('batch-ocr-opts').style.display = isOcr ? 'flex' : 'none';
   document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
+  document.getElementById('batch-llm-opts').style.display = op === 'llm' ? 'flex' : 'none';
+}
+
+function onBatchLlmModeChange() {
+  const mode = document.getElementById('batch-llm-mode').value;
+  document.getElementById('batch-llm-cellheight-wrap').style.display = mode === 'linebyline' ? '' : 'none';
 }
 
 function _computeOverlapsOnShapes(shapes, threshold) {
@@ -2615,6 +2668,9 @@ async function runBatch() {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
   } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
     if (!confirm(`Run OCR on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'llm') {
+    if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
+    if (!confirm(`Run LLM on ${sorted.length} page(s)?`)) return;
   }
 
   _batchRunning = true;
@@ -2671,6 +2727,35 @@ async function runBatch() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shapes }),
       });
+
+    } else if (op === 'llm') {
+      const checks = document.querySelectorAll('#batch-llm-label-checks input[type=checkbox]');
+      const remembered = {};
+      const selLabels  = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchLlmLabels', JSON.stringify(remembered));
+
+      const model      = document.getElementById('batch-llm-model').value;
+      const mode       = document.getElementById('batch-llm-mode').value;
+      const prompt     = document.getElementById('batch-llm-prompt').value.trim();
+      const cellHeight = parseInt(document.getElementById('batch-llm-cellheight').value) || 26;
+      const overwrite  = document.getElementById('batch-llm-overwrite').checked;
+      const labelSet   = new Set(selLabels);
+
+      const res    = await fetch(`${API}/api/page?${params}`);
+      const pdata  = await res.json();
+      const shapes = pdata.shapes || [];
+
+      for (let si = 0; si < shapes.length; si++) {
+        if (_batchStop) break;
+        const sh = shapes[si];
+        if (!labelSet.has(sh.label)) continue;
+        if (!overwrite && sh.openai_output?.response) continue;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})`;
+        try {
+          await _batchLlmShape(stem, si, model, mode, prompt, cellHeight);
+        } catch(e) { if (_batchStop) break; }
+      }
 
     } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
       const checks    = document.querySelectorAll('#batch-ocr-label-checks input[type=checkbox]');
@@ -2729,6 +2814,25 @@ async function _drainSSE(response) {
     if (done) break;
     buf += dec.decode(value, { stream: true });
     if (_batchStop) { reader.cancel(); break; }
+  }
+}
+
+async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight) {
+  const params = new URLSearchParams({ folder, stem, idx, model, mode });
+  if (mode === 'linebyline') {
+    params.set('cell_height', cellHeight);
+    const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    if (!r.ok) throw new Error(r.status);
+    await _drainSSE(r);
+  } else {
+    const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    if (!r.ok) throw new Error(r.status);
   }
 }
 
