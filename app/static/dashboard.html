@@ -222,23 +222,34 @@ header span { color: #888; font-size: 0.85rem; }
   <div class="modal">
     <h3>New Project</h3>
     <div class="field-row">
-      <label>Name</label>
-      <input id="np-name" placeholder="e.g. machines1935" />
-    </div>
-    <div class="field-row">
-      <label>Type</label>
-      <select id="np-type">
-        <option value="A">A — Tables (statistical yearbooks)</option>
-        <option value="B">B — Structured text (company registers)</option>
+      <label>Clone from</label>
+      <select id="np-clone-src" onchange="onCloneSrcChange()">
+        <option value="">— start from scratch —</option>
       </select>
     </div>
     <div class="field-row">
-      <label>Labels</label>
-      <input id="np-labels" placeholder="label1 label2 label3  (space-separated)" />
+      <label>Name</label>
+      <input id="np-name" placeholder="e.g. machines1935" />
+    </div>
+    <div id="np-scratch-fields">
+      <div class="field-row">
+        <label>Type</label>
+        <select id="np-type">
+          <option value="A">A — Tables (statistical yearbooks)</option>
+          <option value="B">B — Structured text (company registers)</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label>Labels</label>
+        <input id="np-labels" placeholder="label1 label2 label3  (space-separated)" />
+      </div>
+    </div>
+    <div id="np-clone-note" style="display:none;font-size:0.8rem;color:#888;margin:6px 0 4px;">
+      All pages, annotations, predictions and pipeline state will be copied.
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeNewProjectModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="submitNewProject()">Create</button>
+      <button class="btn btn-primary" id="np-submit-btn" onclick="submitNewProject()">Create</button>
     </div>
   </div>
 </div>
@@ -874,23 +885,53 @@ async function pollJobStatus() {
 // New-project modal
 // ============================================================
 function openNewProjectModal() {
+  // Populate clone-from dropdown with current projects
+  const sel = document.getElementById('np-clone-src');
+  sel.innerHTML = '<option value="">— start from scratch —</option>' +
+    projects.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+  sel.value = '';
+  document.getElementById('np-scratch-fields').style.display = '';
+  document.getElementById('np-clone-note').style.display = 'none';
+  document.getElementById('np-submit-btn').textContent = 'Create';
+  document.getElementById('np-name').value = '';
   document.getElementById('new-project-modal').classList.add('open');
   document.getElementById('np-name').focus();
 }
 function closeNewProjectModal() {
   document.getElementById('new-project-modal').classList.remove('open');
 }
+function onCloneSrcChange() {
+  const src = document.getElementById('np-clone-src').value;
+  const isClone = !!src;
+  document.getElementById('np-scratch-fields').style.display = isClone ? 'none' : '';
+  document.getElementById('np-clone-note').style.display = isClone ? '' : 'none';
+  document.getElementById('np-submit-btn').textContent = isClone ? 'Clone' : 'Create';
+  if (isClone) {
+    document.getElementById('np-name').value = src + '_copy';
+    document.getElementById('np-name').focus();
+    document.getElementById('np-name').select();
+  }
+}
 async function submitNewProject() {
-  const name   = document.getElementById('np-name').value.trim();
-  const type   = document.getElementById('np-type').value;
-  const labels = document.getElementById('np-labels').value.trim().split(/\s+/).filter(Boolean);
+  const name = document.getElementById('np-name').value.trim();
+  const src  = document.getElementById('np-clone-src').value;
   if (!name) { alert('Name is required.'); return; }
 
-  const res  = await fetch('/api/project/new', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ name, type, labels }),
-  });
-  const data = await res.json();
+  let res, data;
+  if (src) {
+    res  = await fetch(`/api/project/${encodeURIComponent(src)}/clone`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ new_name: name }),
+    });
+  } else {
+    const type   = document.getElementById('np-type').value;
+    const labels = document.getElementById('np-labels').value.trim().split(/\s+/).filter(Boolean);
+    res  = await fetch('/api/project/new', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, type, labels }),
+    });
+  }
+  data = await res.json();
   if (data.ok) {
     closeNewProjectModal();
     await loadProjects();

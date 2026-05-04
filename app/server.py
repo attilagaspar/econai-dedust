@@ -1307,6 +1307,19 @@ def api_new_project(body: NewProject):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class CloneProject(BaseModel):
+    new_name: str
+
+@app.post("/api/project/{name}/clone")
+def api_clone_project(name: str, body: CloneProject):
+    from app.pipeline import clone_project
+    try:
+        pdir = clone_project(name, body.new_name)
+        return {"ok": True, "path": str(pdir)}
+    except (FileNotFoundError, FileExistsError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/project/{name}/advance")
 def api_advance(name: str):
     try:

@@ -171,6 +171,25 @@ def set_stage(name: str, stage: str) -> None:
 # Project creation
 # ---------------------------------------------------------------------------
 
+def clone_project(source_name: str, new_name: str) -> Path:
+    """Deep-copy a project directory to a new name, updating config.json."""
+    import shutil
+    src = project_dir(source_name)
+    if not src.exists():
+        raise FileNotFoundError(f"Source project '{source_name}' not found")
+    dst = project_dir(new_name)
+    if dst.exists():
+        raise FileExistsError(f"Project '{new_name}' already exists")
+    shutil.copytree(src, dst)
+    # Patch the name field in config.json
+    cfg_path = dst / "config.json"
+    if cfg_path.exists():
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["name"] = new_name
+        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    return dst
+
+
 def create_project(name: str, project_type: str, labels: list[str]) -> Path:
     """Create project directory structure, config.json, and pipeline.json."""
     if project_type not in ("A", "B"):
