@@ -745,6 +745,14 @@ function toggleInspector() {
   const btn = document.getElementById('inspector-toggle');
   const collapsed = col.classList.toggle('inspector-collapsed');
   btn.textContent = collapsed ? '»' : '«';
+  if (collapsed) {
+    col.style.width = '28px';
+  } else {
+    const img = document.getElementById('cell-crop');
+    col.style.width = img.naturalWidth
+      ? Math.min(420, Math.max(80, img.naturalWidth + 20)) + 'px'
+      : '80px';
+  }
 }
 
 let _toastTimer = null;
