@@ -129,14 +129,14 @@
 
     /* ── Centre: cell crop inspector ── */
     #inspector {
-      width: 260px;
+      width: 80px;
       flex-shrink: 0;
       background: #e8e8e0;
       border-left: 1px solid #0f3460;
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      transition: width 0.2s ease;
+      transition: width 0.15s ease;
     }
     #inspector.inspector-collapsed {
       width: 28px;
@@ -2308,6 +2308,7 @@ function updatePanel() {
   if (selIdx<0||!pageData) {
     noSel.style.display='block'; content.style.display='none';
     cropImg.style.display='none'; cropPh.style.display='block';
+    document.getElementById('inspector').style.width = '80px';
     return;
   }
   noSel.style.display='none'; content.style.display='flex';
@@ -2337,6 +2338,12 @@ function updatePanel() {
 
   const shape=pageData.shapes[selIdx];
 
+  cropImg.onload = function() {
+    const inspector = document.getElementById('inspector');
+    if (!inspector.classList.contains('inspector-collapsed')) {
+      inspector.style.width = Math.min(420, Math.max(80, this.naturalWidth + 20)) + 'px';
+    }
+  };
   cropImg.src=`${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}&idx=${selIdx}`;
   cropImg.style.display='block'; cropPh.style.display='none';
 
