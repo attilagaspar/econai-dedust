@@ -127,6 +127,73 @@
       overflow: hidden;
     }
 
+    /* ── Centre: cell crop inspector ── */
+    #inspector {
+      width: 260px;
+      flex-shrink: 0;
+      background: #e8e8e0;
+      border-left: 1px solid #0f3460;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.2s ease;
+    }
+    #inspector.inspector-collapsed {
+      width: 28px;
+    }
+    #inspector.inspector-collapsed #cell-crop-wrap {
+      display: none;
+    }
+    #inspector-header {
+      padding: 8px 6px 8px 12px;
+      background: #0f3460;
+      font-size: 12px;
+      font-weight: 600;
+      color: #e94560;
+      border-bottom: 1px solid #e94560;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      white-space: nowrap;
+      overflow: hidden;
+      cursor: default;
+    }
+    #inspector.inspector-collapsed #inspector-header .panel-title {
+      display: none;
+    }
+    #inspector-toggle {
+      background: none;
+      border: none;
+      color: #e94560;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0 2px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    #cell-crop-wrap {
+      flex: 1;
+      padding: 8px;
+      position: relative;
+      background: #e8e8e0;
+      overflow: auto;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+    #cell-crop {
+      max-width: 100%;
+      object-fit: contain;
+      display: none;
+    }
+    #cell-crop-placeholder {
+      color: #888;
+      font-size: 11px;
+      align-self: center;
+    }
+
     /* ── Right: correction panel ── */
     #panel {
       width: 320px;
@@ -142,7 +209,6 @@
       width: 28px;
       border-left: 1px solid #0f3460;
     }
-    #panel.panel-collapsed #cell-crop-wrap,
     #panel.panel-collapsed #panel-fields {
       display: none;
     }
@@ -178,27 +244,6 @@
     }
     #panel.panel-collapsed #panel-header .panel-title {
       display: none;
-    }
-
-    #cell-crop-wrap {
-      padding: 8px;
-      text-align: center;
-      position: relative;
-      background: #111;
-      border-bottom: 1px solid #0f3460;
-      flex-shrink: 0;
-      min-height: 80px;
-    }
-    #cell-crop {
-      max-width: 100%;
-      max-height: 140px;
-      object-fit: contain;
-      display: none;
-    }
-    #cell-crop-placeholder {
-      color: #555;
-      font-size: 11px;
-      line-height: 80px;
     }
 
     #panel-fields {
@@ -513,16 +558,24 @@
     <div id="osd-container"></div>
   </div>
 
+  <!-- Centre: cell crop inspector -->
+  <div id="inspector">
+    <div id="inspector-header">
+      <span class="panel-title">Cell crop</span>
+      <button id="inspector-toggle" title="Collapse / expand" onclick="toggleInspector()">«</button>
+    </div>
+    <div id="cell-crop-wrap">
+      <img id="cell-crop" alt="cell crop" />
+      <canvas id="row-canvas" style="position:absolute;pointer-events:none;display:none;"></canvas>
+      <div id="cell-crop-placeholder">Click a cell</div>
+    </div>
+  </div>
+
   <!-- Right: correction panel -->
   <div id="panel">
     <div id="panel-header">
       <span class="panel-title">Cell inspector</span>
       <button id="panel-toggle" title="Collapse / expand panel" onclick="togglePanel()">«</button>
-    </div>
-    <div id="cell-crop-wrap">
-      <img id="cell-crop" alt="cell crop" />
-      <canvas id="row-canvas" style="position:absolute;pointer-events:none;display:none;"></canvas>
-      <div id="cell-crop-placeholder">Click a cell to inspect</div>
     </div>
     <div id="panel-fields">
       <div id="no-selection">← Click a box on the page</div>
@@ -684,6 +737,13 @@ function togglePanel() {
   const panel = document.getElementById('panel');
   const btn   = document.getElementById('panel-toggle');
   const collapsed = panel.classList.toggle('panel-collapsed');
+  btn.textContent = collapsed ? '»' : '«';
+}
+
+function toggleInspector() {
+  const col = document.getElementById('inspector');
+  const btn = document.getElementById('inspector-toggle');
+  const collapsed = col.classList.toggle('inspector-collapsed');
   btn.textContent = collapsed ? '»' : '«';
 }
 
