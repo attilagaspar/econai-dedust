@@ -496,6 +496,44 @@
     #persp-reject { background: #e94560; color: #fff; }
     #persp-modal p { color: #ccc; font-size: 13px; margin: 0; }
 
+    /* ── Batch modal ── */
+    #batch-modal {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.65); z-index: 1000;
+      align-items: center; justify-content: center;
+    }
+    #batch-modal.show { display: flex; }
+    #batch-modal-body {
+      background: #16213e; border: 2px solid #e94560; border-radius: 8px;
+      padding: 22px 26px; min-width: 320px; max-width: 440px; width: 100%;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    #batch-modal h3 { color: #e94560; font-size: 14px; font-weight: 700; margin: 0; }
+    #batch-modal label.row { display: flex; align-items: center; gap: 8px; color: #aaa; font-size: 12px; }
+    #batch-modal select, #batch-modal input[type=text], #batch-modal input[type=number] {
+      background: #0d1b35; border: 1px solid #0f3460; color: #e0e0e0;
+      border-radius: 4px; padding: 5px 8px; font-size: 12px; width: 100%;
+    }
+    #batch-label-checks { display: flex; flex-direction: column; gap: 6px; }
+    #batch-label-checks label { display: flex; align-items: center; gap: 8px; color: #ddd; font-size: 13px; cursor: pointer; }
+    #batch-label-checks input[type=checkbox] { accent-color: #e94560; width:13px; height:13px; }
+    #batch-progress {
+      font-size: 11px; color: #888; min-height: 16px; text-align: center;
+    }
+    #batch-progress-bar-wrap {
+      height: 4px; background: #0d1b35; border-radius: 2px; display: none;
+    }
+    #batch-progress-bar { height: 4px; background: #e94560; border-radius: 2px; width: 0%; transition: width 0.15s; }
+    #batch-modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+    #batch-run-btn {
+      background: #e94560; border: none; border-radius: 4px;
+      color: #fff; padding: 7px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    #batch-cancel-btn {
+      background: #0f3460; border: 1px solid #1a3a6e; border-radius: 4px;
+      color: #ccc; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    }
+
     /* ── Lattice modal ── */
     #lattice-modal {
       display: none;
@@ -569,8 +607,8 @@
               title="Detect lattice rows and columns from annotated cells">🔲 Lattice</button>
       <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
               title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
-      <button class="nav-btn" id="clear-ann-btn" onclick="clearAnnotations()" disabled
-              title="Clear annotations on specified pages" style="color:#fca5a5;">Clear pages</button>
+      <button class="nav-btn" id="clear-ann-btn" onclick="openBatchModal()" disabled
+              title="Batch operations across multiple pages">Batch</button>
       <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
               title="Copy annotations from first N pages to all remaining pages">Autofill</button>
       <button class="nav-btn" id="table-btn" onclick="startTableMode()" disabled
@@ -824,6 +862,47 @@
     <div id="lattice-modal-btns">
       <button id="lattice-cancel-btn" onclick="closeLatticeModal()">Cancel</button>
       <button id="lattice-run-btn" onclick="runLatticeDetect()">Run</button>
+    </div>
+  </div>
+</div>
+
+<!-- Batch process modal -->
+<div id="batch-modal">
+  <div id="batch-modal-body">
+    <h3>⚙ Batch Process</h3>
+    <div>
+      <label class="row" style="margin-bottom:4px;">Operation</label>
+      <select id="batch-op" onchange="onBatchOpChange()">
+        <option value="clear">Clear annotations</option>
+        <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
+        <option value="ocr_llm" disabled>OCR / LLM pipeline (coming soon)</option>
+      </select>
+    </div>
+    <div>
+      <label class="row" style="margin-bottom:4px;">Pages</label>
+      <input type="text" id="batch-pages" placeholder="e.g. 1-10, 3, 12-  (blank = all)" />
+      <div style="font-size:10px;color:#555;margin-top:3px;">Numbers / ranges separated by commas. Leave blank to process all pages.</div>
+    </div>
+
+    <!-- overlaps+lattice options -->
+    <div id="batch-ol-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row">
+        <span style="white-space:nowrap;">Overlap threshold</span>
+        <input type="number" id="batch-overlap-thresh" value="50" min="1" max="99" style="width:60px;flex:none;" />
+        <span>%</span>
+      </label>
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Lattice labels to include:</div>
+        <div id="batch-label-checks"></div>
+      </div>
+    </div>
+
+    <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
+    <div id="batch-progress"></div>
+
+    <div id="batch-modal-btns">
+      <button id="batch-cancel-btn" onclick="closeBatchModal()">Cancel</button>
+      <button id="batch-run-btn" onclick="runBatch()">Run</button>
     </div>
   </div>
 </div>
@@ -2411,53 +2490,174 @@ async function autofill() {
 }
 
 // ── Clear annotations ────────────────────────────────────────────────────────
-async function clearAnnotations() {
-  const raw = prompt(
-    'Clear annotations on which pages?\n' +
-    'Enter numbers/ranges separated by commas.\n' +
-    'Examples:  3   1-10   5-   -10   1-5, 8, 12-'
-  );
-  if (!raw) return;
+// ── Batch process modal ───────────────────────────────────────────────────────
+let _batchRunning = false;
+let _batchStop    = false;
 
-  // Parse page spec into a Set of 0-based indices
+function _parsePageRange(raw) {
   const n = pages.length;
   const indices = new Set();
-  for (const part of raw.split(',')) {
+  const parts = raw.trim() ? raw.split(',') : ['-'];
+  for (const part of parts) {
     const s = part.trim();
     if (!s) continue;
     const m = s.match(/^(\d*)-(\d*)$|^(\d+)$/);
-    if (!m) { alert(`Cannot parse: "${s}"`); return; }
+    if (!m) { alert(`Cannot parse: "${s}"`); return null; }
     if (m[3] !== undefined) {
-      // single number
       const p = parseInt(m[3]) - 1;
       if (p >= 0 && p < n) indices.add(p);
     } else {
-      // range: from-to  (blank = open end)
-      const from = m[1] === '' ? 0       : parseInt(m[1]) - 1;
-      const to   = m[2] === '' ? n - 1   : parseInt(m[2]) - 1;
+      const from = m[1] === '' ? 0     : parseInt(m[1]) - 1;
+      const to   = m[2] === '' ? n - 1 : parseInt(m[2]) - 1;
       for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) indices.add(i);
     }
   }
+  return indices;
+}
 
-  if (!indices.size) { showToast('No valid pages in range'); return; }
-  if (!confirm(`Clear annotations on ${indices.size} page(s)? This cannot be undone.`)) return;
+function openBatchModal() {
+  // Populate lattice label checkboxes from known project labels + current page
+  const labels = [...new Set([
+    ...projectLabels,
+    ...(pageData?.shapes || []).map(s => s.label),
+  ])].sort();
+  let remembered = {};
+  try { remembered = JSON.parse(localStorage.getItem('latticeLabels') || '{}'); } catch(e) {}
+  document.getElementById('batch-label-checks').innerHTML = labels.map(lbl => {
+    const checked = (lbl in remembered) ? remembered[lbl] : true;
+    return `<label><input type="checkbox" value="${lbl}" ${checked ? 'checked' : ''}> ${lbl}</label>`;
+  }).join('');
 
-  const btn = document.getElementById('clear-ann-btn');
-  btn.disabled = true;
-  let done = 0;
-  for (const idx of [...indices].sort((a,b)=>a-b)) {
-    const params = new URLSearchParams({folder, stem: pages[idx].stem});
-    await fetch(`${API}/api/page/shapes?${params}`, {
-      method: 'PUT', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({shapes: []}),
-    });
-    done++;
-    btn.textContent = `Clear pages (${done}/${indices.size})`;
+  _batchRunning = false;
+  _batchStop    = false;
+  document.getElementById('batch-pages').value = '';
+  document.getElementById('batch-op').value = 'overlaps_lattice';
+  onBatchOpChange();
+  document.getElementById('batch-progress').textContent = '';
+  document.getElementById('batch-progress-bar-wrap').style.display = 'none';
+  document.getElementById('batch-progress-bar').style.width = '0%';
+  document.getElementById('batch-run-btn').textContent = 'Run';
+  document.getElementById('batch-run-btn').disabled = false;
+  document.getElementById('batch-modal').classList.add('show');
+}
+
+function closeBatchModal() {
+  if (_batchRunning) { _batchStop = true; return; }
+  document.getElementById('batch-modal').classList.remove('show');
+}
+
+function onBatchOpChange() {
+  const op = document.getElementById('batch-op').value;
+  document.getElementById('batch-ol-opts').style.display = op === 'overlaps_lattice' ? 'flex' : 'none';
+}
+
+function _computeOverlapsOnShapes(shapes, threshold) {
+  const rects = shapes.map(_shapeRect);
+  const areas = rects.map(r => (r.x2 - r.x1) * (r.y2 - r.y1));
+  const toDelete = new Set();
+  for (let i = 0; i < shapes.length; i++) {
+    if (areas[i] <= 0) continue;
+    for (let j = i + 1; j < shapes.length; j++) {
+      if (areas[j] <= 0) continue;
+      const inter = _intersectionArea(rects[i], rects[j]);
+      if (inter <= 0) continue;
+      const minArea = Math.min(areas[i], areas[j]);
+      if (inter / minArea >= threshold) {
+        toDelete.add(areas[i] >= areas[j] ? i : j);
+      }
+    }
   }
-  btn.textContent = 'Clear pages';
-  btn.disabled = false;
-  showToast(`Cleared ${done} page(s)`);
+  return toDelete;
+}
+
+async function runBatch() {
+  const op       = document.getElementById('batch-op').value;
+  const rawPages = document.getElementById('batch-pages').value;
+  const indices  = _parsePageRange(rawPages);
+  if (!indices) return;
+  if (!indices.size) { showToast('No valid pages in range'); return; }
+
+  const sorted = [...indices].sort((a, b) => a - b);
+
+  if (op === 'clear') {
+    if (!confirm(`Clear annotations on ${sorted.length} page(s)? This cannot be undone.`)) return;
+  } else if (op === 'overlaps_lattice') {
+    if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
+  }
+
+  _batchRunning = true;
+  _batchStop    = false;
+  document.getElementById('batch-run-btn').textContent  = '■ Stop';
+  document.getElementById('batch-cancel-btn').textContent = 'Close';
+  document.getElementById('batch-progress-bar-wrap').style.display = '';
+  const progText = document.getElementById('batch-progress');
+  const progBar  = document.getElementById('batch-progress-bar');
+
+  let done = 0;
+  for (const idx of sorted) {
+    if (_batchStop) break;
+    const stem   = pages[idx].stem;
+    const params = new URLSearchParams({ folder, stem });
+    progText.textContent = `Page ${idx + 1} / ${pages.length} — ${stem}`;
+    progBar.style.width  = `${Math.round((done / sorted.length) * 100)}%`;
+
+    if (op === 'clear') {
+      await fetch(`${API}/api/page/shapes?${params}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shapes: [] }),
+      });
+
+    } else if (op === 'overlaps_lattice') {
+      // Load page
+      const res  = await fetch(`${API}/api/page?${params}`);
+      const data = await res.json();
+      let shapes = data.shapes || [];
+
+      // Step 1: remove overlaps
+      const threshold = parseFloat(document.getElementById('batch-overlap-thresh').value) / 100 || 0.5;
+      const toDelete  = _computeOverlapsOnShapes(shapes, threshold);
+      shapes = shapes.filter((_, i) => !toDelete.has(i));
+
+      // Step 2: lattice detection
+      const checks = document.querySelectorAll('#batch-label-checks input[type=checkbox]');
+      const remembered = {};
+      const selectedLabels = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selectedLabels.push(cb.value); });
+      localStorage.setItem('latticeLabels', JSON.stringify(remembered));
+
+      if (selectedLabels.length) {
+        // Temporarily swap pageData so _latticeDetect operates on loaded shapes
+        const savedPageData = pageData;
+        pageData = { shapes };
+        _latticeDetect(selectedLabels);
+        shapes = pageData.shapes;
+        pageData = savedPageData;
+      }
+
+      // Save
+      await fetch(`${API}/api/page/shapes?${params}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shapes }),
+      });
+    }
+
+    done++;
+  }
+
+  progBar.style.width  = '100%';
+  progText.style.color = _batchStop ? '#ff9800' : '#4caf50';
+  progText.textContent = _batchStop
+    ? `Stopped after ${done} page(s).`
+    : `Done — ${done} page(s) processed.`;
+
+  _batchRunning = false;
+  document.getElementById('batch-run-btn').textContent   = 'Run';
+  document.getElementById('batch-run-btn').disabled      = false;
+  document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+
+  // Refresh current page view
   await reloadPageData(); drawOverlay(); updatePanel();
+  flaggedOverlaps = new Set();
 }
 
 // ── Table drawing ────────────────────────────────────────────────────────────
