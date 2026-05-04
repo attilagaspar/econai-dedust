@@ -35,7 +35,24 @@ from app.pipeline import (
     set_stage,
 )
 
-app = FastAPI(title="EconAI", version="0.1.0")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    # Warm up EasyOCR on startup so the first user request is fast
+    import asyncio, concurrent.futures
+    def _warmup():
+        try:
+            _get_easyocr_reader(["en", "hu"])
+            print("EasyOCR warmed up (GPU)", flush=True)
+        except Exception as e:
+            print(f"EasyOCR warmup failed: {e}", flush=True)
+    asyncio.get_event_loop().run_in_executor(
+        concurrent.futures.ThreadPoolExecutor(max_workers=1), _warmup
+    )
+    yield
+
+app = FastAPI(title="EconAI", version="0.1.0", lifespan=lifespan)
 
 # Allow the browser (same host, any port) to call the API
 app.add_middleware(
@@ -408,7 +425,7 @@ def _get_easyocr_reader(langs: list[str]):
         old_out, old_err = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = io.StringIO()
         try:
-            reader = easyocr.Reader(langs, gpu=False)
+            reader = easyocr.Reader(langs, gpu=True)
         finally:
             sys.stdout, sys.stderr = old_out, old_err
         _easyocr_reader = (key, reader)
