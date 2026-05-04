@@ -686,13 +686,15 @@ async def api_ocr_easyocr_linebyline(
             rb = min(crop.height, bottom + row_pad)
             row_img = crop.crop((0, rt, crop.width, rb))
 
-            if row_img.height < 48:
-                scale   = 48 / row_img.height
-                row_img = row_img.resize(
-                    (int(row_img.width * scale), 48), PILImage.LANCZOS
-                )
+            # Aggressive upscale — single digits need large pixels to be detected
+            target_h = 128
+            scale    = target_h / row_img.height
+            row_img  = row_img.resize(
+                (int(row_img.width * scale), target_h), PILImage.LANCZOS
+            )
 
-            row_img = ImageOps.autocontrast(row_img.convert("L")).convert("RGB")
+            grey_img = ImageOps.autocontrast(row_img.convert("L"))
+            row_img  = grey_img.convert("RGB")
 
             try:
                 results = reader.readtext(
@@ -705,11 +707,36 @@ async def api_ocr_easyocr_linebyline(
                 results.sort(key=lambda r: min(pt[1] for pt in r[0]))
                 texts = [t for _, t, _ in results]
                 confs = [c for _, _, c in results]
-                text  = " ".join(texts).strip() or "-"
+                text  = " ".join(texts).strip()
                 conf  = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
             except Exception as exc:
-                text = f"[err: {exc}]"
+                text = ""
                 conf = 0.0
+
+            # EasyOCR missed the cell — fall back to Tesseract PSM 10
+            # (single-character mode + digit whitelist)
+            if False and not text:  # disabled: testing pure EasyOCR performance
+                try:
+                    import pytesseract, shutil
+                    if not shutil.which("tesseract"):
+                        pytesseract.pytesseract.tesseract_cmd = \
+                            r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+                    tess = pytesseract.image_to_data(
+                        grey_img,
+                        config="--psm 10 -c tessedit_char_whitelist=0123456789-",
+                        output_type=pytesseract.Output.DICT,
+                    )
+                    words = [
+                        (t, int(c))
+                        for t, c in zip(tess["text"], tess["conf"])
+                        if t.strip() and int(c) > 0
+                    ]
+                    text = " ".join(t for t, _ in words).strip()
+                    conf = round(sum(c for _, c in words) / len(words), 1) if words else 0.0
+                except Exception:
+                    pass
+
+            text = text or "-"
 
             line_texts.append(text)
             conf_values.append(conf)
