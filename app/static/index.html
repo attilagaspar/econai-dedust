@@ -194,6 +194,58 @@
       align-self: center;
     }
 
+    /* ── OCR input preview column ── */
+    #preproc {
+      width: 28px;
+      flex-shrink: 0;
+      background: #f0ede0;
+      border-left: 1px solid #0f3460;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.15s ease;
+    }
+    #preproc.preproc-collapsed { width: 28px; }
+    #preproc-header {
+      padding: 8px 6px 8px 12px;
+      background: #0f3460;
+      font-size: 12px;
+      font-weight: 600;
+      color: #e94560;
+      border-bottom: 1px solid #e94560;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      white-space: nowrap;
+      overflow: hidden;
+      cursor: default;
+    }
+    #preproc.preproc-collapsed #preproc-header .panel-title { display: none; }
+    #preproc.preproc-collapsed #preproc-wrap { display: none; }
+    #preproc-toggle {
+      background: none; border: none; color: #e94560;
+      cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; flex-shrink: 0;
+    }
+    #preproc-wrap {
+      flex: 1; padding: 8px; overflow: auto;
+      display: flex; align-items: flex-start; justify-content: center;
+      background: #f0ede0;
+    }
+    #preproc-rows {
+      display: flex; flex-direction: column; align-items: flex-start;
+    }
+    #preproc-rows img {
+      display: block; width: 100%; opacity: 0.25;
+      outline: 1px solid rgba(0,0,0,0.1);
+      transition: opacity 0.15s;
+    }
+    #preproc-rows img.active  { outline: 2px solid #e94560; }
+    #preproc-rows img.loaded  { opacity: 1; }
+    #preproc-placeholder {
+      color: #888; font-size: 11px; align-self: center;
+    }
+
     /* ── Right: correction panel ── */
     #panel {
       width: 320px;
@@ -571,6 +623,18 @@
     </div>
   </div>
 
+  <!-- OCR input preview -->
+  <div id="preproc" class="preproc-collapsed">
+    <div id="preproc-header">
+      <span class="panel-title">OCR input</span>
+      <button id="preproc-toggle" title="Collapse / expand" onclick="togglePreproc()">»</button>
+    </div>
+    <div id="preproc-wrap">
+      <div id="preproc-rows"></div>
+      <div id="preproc-placeholder">Run EasyOCR line×line</div>
+    </div>
+  </div>
+
   <!-- Right: correction panel -->
   <div id="panel">
     <div id="panel-header">
@@ -740,6 +804,21 @@ function togglePanel() {
   const btn   = document.getElementById('panel-toggle');
   const collapsed = panel.classList.toggle('panel-collapsed');
   btn.textContent = collapsed ? '»' : '«';
+}
+
+function togglePreproc() {
+  const col = document.getElementById('preproc');
+  const btn = document.getElementById('preproc-toggle');
+  const collapsed = col.classList.toggle('preproc-collapsed');
+  btn.textContent = collapsed ? '»' : '«';
+  if (!collapsed) {
+    const first = document.querySelector('#preproc-rows img');
+    col.style.width = (first?.naturalWidth)
+      ? Math.min(420, Math.max(80, first.naturalWidth + 20)) + 'px'
+      : '160px';
+  } else {
+    col.style.width = '28px';
+  }
 }
 
 function toggleInspector() {
@@ -2353,6 +2432,8 @@ function updatePanel() {
     _lastPanelIdx = selIdx;
     lastRowLines  = null;
     drawRowOverlay(null, -1);
+    document.getElementById('preproc-rows').innerHTML = '';
+    document.getElementById('preproc-placeholder').style.display = 'block';
   }
 
   cropImg.onload = function() {
@@ -2526,6 +2607,16 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
           llmProgress = { cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1 };
           drawOverlay();
           drawRowOverlay(msg.lines, -1);
+          // Pre-create one placeholder img per row
+          const rows = document.getElementById('preproc-rows');
+          const ph   = document.getElementById('preproc-placeholder');
+          rows.innerHTML = '';
+          for (let r = 0; r < msg.count; r++) {
+            const img = document.createElement('img');
+            img.alt = `row ${r + 1}`;
+            rows.appendChild(img);
+          }
+          ph.style.display = 'none';
 
         } else if (msg.type === 'row_result') {
           lineResults[msg.row] = msg.text;
@@ -2534,6 +2625,22 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
           drawRowOverlay(llmProgress.lines, msg.row);
           ocrEl.value = lineResults.filter(t => t != null).join('\n');
           updateLineNums('f-ocr', 'f-ocr-lines');
+          if (msg.img_b64) {
+            const rows      = document.getElementById('preproc-rows');
+            const preprocCol = document.getElementById('preproc');
+            const slot = rows.children[msg.row];
+            if (slot) {
+              slot.onload = function() {
+                this.classList.add('loaded');
+                // Set column width from first loaded image
+                if (!preprocCol.classList.contains('preproc-collapsed') && msg.row === 0)
+                  preprocCol.style.width = Math.min(420, Math.max(80, this.naturalWidth + 20)) + 'px';
+              };
+              slot.src = 'data:image/png;base64,' + msg.img_b64;
+              // Highlight active row, clear previous
+              [...rows.children].forEach((el, i) => el.classList.toggle('active', i === msg.row));
+            }
+          }
 
         } else if (msg.type === 'done') {
           pageData.shapes[selIdx].tesseract_output = {

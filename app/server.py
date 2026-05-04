@@ -696,6 +696,12 @@ async def api_ocr_easyocr_linebyline(
             grey_img = ImageOps.autocontrast(row_img.convert("L"))
             row_img  = grey_img.convert("RGB")
 
+            # Encode preprocessed image for the frontend preview panel
+            import io as _io2, base64 as _b64
+            _buf = _io2.BytesIO()
+            row_img.save(_buf, format="PNG")
+            img_b64 = _b64.b64encode(_buf.getvalue()).decode("ascii")
+
             try:
                 results = reader.readtext(
                     np.array(row_img),
@@ -718,6 +724,7 @@ async def api_ocr_easyocr_linebyline(
             line_texts.append(text)
             conf_values.append(conf)
             yield _json.dumps({"type": "row_result", "row": i, "text": text,
+                               "img_b64": img_b64,
                                "top": top, "bottom": bottom})
 
         combined  = "\n".join(line_texts)
