@@ -411,6 +411,57 @@ def api_ocr_cell(
 
 
 # ---------------------------------------------------------------------------
+# Shadow page cache — long table-line removal for cleaner OCR input
+# ---------------------------------------------------------------------------
+_shadow_page_cache: dict = {}
+
+
+def _build_shadow_page(pil_image):
+    """
+    Return a copy of pil_image with long horizontal/vertical lines painted white.
+    Lines are detected via morphological opening on the full page, so even a
+    500 px ruled line at 22 % of a 2 000 px page is unambiguously a table rule
+    rather than a digit stroke.  Original image is never modified.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image as _PIL
+
+    img = np.array(pil_image.convert("L"))
+    h, w = img.shape
+
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * 0.22)), 1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * 0.22))))
+
+    h_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
+    v_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
+
+    mask = cv2.dilate(
+        cv2.bitwise_or(h_lines, v_lines),
+        np.ones((3, 3), np.uint8),
+    )
+
+    result = img.copy()
+    result[mask > 0] = 255
+    return _PIL.fromarray(result).convert("RGB")
+
+
+def _get_shadow_page(folder: str, stem: str, img_path):
+    """Return (and cache) the shadow (line-erased) version of a page image."""
+    from PIL import Image as _PIL
+    key = (folder, stem)
+    if key not in _shadow_page_cache:
+        # Simple size cap — drop everything if cache grows too large
+        if len(_shadow_page_cache) >= 10:
+            _shadow_page_cache.clear()
+        full = _PIL.open(str(img_path)).convert("RGB")
+        _shadow_page_cache[key] = _build_shadow_page(full)
+    return _shadow_page_cache[key]
+
+
+# ---------------------------------------------------------------------------
 # EasyOCR — cached reader (initialisation takes a few seconds the first time)
 # ---------------------------------------------------------------------------
 _easyocr_reader = None
@@ -542,10 +593,10 @@ async def api_ocr_linebyline(
     xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
 
-    full_img = PILImage.open(str(img_path)).convert("RGB")
-    iw, ih   = full_img.size
+    shadow   = _get_shadow_page(folder, stem, img_path)
+    iw, ih   = shadow.size
     pad      = 4
-    crop     = full_img.crop((
+    crop     = shadow.crop((
         max(0, int(x1) - pad), max(0, int(y1) - pad),
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
@@ -661,10 +712,10 @@ async def api_ocr_easyocr_linebyline(
     xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
 
-    full_img = PILImage.open(str(img_path)).convert("RGB")
-    iw, ih   = full_img.size
+    shadow   = _get_shadow_page(folder, stem, img_path)
+    iw, ih   = shadow.size
     pad      = 4
-    crop     = full_img.crop((
+    crop     = shadow.crop((
         max(0, int(x1) - pad), max(0, int(y1) - pad),
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
