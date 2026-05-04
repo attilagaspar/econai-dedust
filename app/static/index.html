@@ -875,7 +875,8 @@
       <select id="batch-op" onchange="onBatchOpChange()">
         <option value="clear">Clear annotations</option>
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
-        <option value="ocr_llm" disabled>OCR / LLM pipeline (coming soon)</option>
+        <option value="ocr_tesseract">OCR — Tesseract</option>
+        <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
       </select>
     </div>
     <div>
@@ -895,6 +896,26 @@
         <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Lattice labels to include:</div>
         <div id="batch-label-checks"></div>
       </div>
+    </div>
+
+    <!-- OCR options -->
+    <div id="batch-ocr-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Process these label types:</div>
+        <div id="batch-ocr-label-checks"></div>
+      </div>
+      <div id="batch-ocr-cellheight-wrap" style="display:none;">
+        <label class="row">
+          <span style="white-space:nowrap;">Target row height (px)</span>
+          <input type="number" id="batch-ocr-cellheight" value="26" min="10" max="200"
+                 style="width:60px;flex:none;" />
+        </label>
+      </div>
+      <label class="row">
+        <input type="checkbox" id="batch-ocr-overwrite"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Overwrite existing OCR results</span>
+      </label>
     </div>
 
     <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
@@ -2515,18 +2536,22 @@ function _parsePageRange(raw) {
   return indices;
 }
 
-function openBatchModal() {
-  // Populate lattice label checkboxes from known project labels + current page
+function _batchPopulateLabels(containerId, storageKey) {
   const labels = [...new Set([
     ...projectLabels,
     ...(pageData?.shapes || []).map(s => s.label),
   ])].sort();
   let remembered = {};
-  try { remembered = JSON.parse(localStorage.getItem('latticeLabels') || '{}'); } catch(e) {}
-  document.getElementById('batch-label-checks').innerHTML = labels.map(lbl => {
+  try { remembered = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch(e) {}
+  document.getElementById(containerId).innerHTML = labels.map(lbl => {
     const checked = (lbl in remembered) ? remembered[lbl] : true;
     return `<label><input type="checkbox" value="${lbl}" ${checked ? 'checked' : ''}> ${lbl}</label>`;
   }).join('');
+}
+
+function openBatchModal() {
+  _batchPopulateLabels('batch-label-checks',     'latticeLabels');
+  _batchPopulateLabels('batch-ocr-label-checks', 'batchOcrLabels');
 
   _batchRunning = false;
   _batchStop    = false;
@@ -2534,10 +2559,12 @@ function openBatchModal() {
   document.getElementById('batch-op').value = 'overlaps_lattice';
   onBatchOpChange();
   document.getElementById('batch-progress').textContent = '';
+  document.getElementById('batch-progress').style.color = '';
   document.getElementById('batch-progress-bar-wrap').style.display = 'none';
   document.getElementById('batch-progress-bar').style.width = '0%';
   document.getElementById('batch-run-btn').textContent = 'Run';
   document.getElementById('batch-run-btn').disabled = false;
+  document.getElementById('batch-cancel-btn').textContent = 'Cancel';
   document.getElementById('batch-modal').classList.add('show');
 }
 
@@ -2548,7 +2575,10 @@ function closeBatchModal() {
 
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
-  document.getElementById('batch-ol-opts').style.display = op === 'overlaps_lattice' ? 'flex' : 'none';
+  document.getElementById('batch-ol-opts').style.display  = op === 'overlaps_lattice'  ? 'flex' : 'none';
+  const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
+  document.getElementById('batch-ocr-opts').style.display = isOcr ? 'flex' : 'none';
+  document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
 }
 
 function _computeOverlapsOnShapes(shapes, threshold) {
@@ -2583,6 +2613,8 @@ async function runBatch() {
     if (!confirm(`Clear annotations on ${sorted.length} page(s)? This cannot be undone.`)) return;
   } else if (op === 'overlaps_lattice') {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
+    if (!confirm(`Run OCR on ${sorted.length} page(s)?`)) return;
   }
 
   _batchRunning = true;
@@ -2639,6 +2671,34 @@ async function runBatch() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shapes }),
       });
+
+    } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
+      const checks    = document.querySelectorAll('#batch-ocr-label-checks input[type=checkbox]');
+      const remembered = {};
+      const selLabels  = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchOcrLabels', JSON.stringify(remembered));
+
+      const overwrite  = document.getElementById('batch-ocr-overwrite').checked;
+      const cellHeight = parseInt(document.getElementById('batch-ocr-cellheight').value) || 26;
+      const labelSet   = new Set(selLabels);
+
+      const res    = await fetch(`${API}/api/page?${params}`);
+      const pdata  = await res.json();
+      const shapes = pdata.shapes || [];
+      let shapeDone = 0;
+
+      for (let si = 0; si < shapes.length; si++) {
+        if (_batchStop) break;
+        const sh = shapes[si];
+        if (!labelSet.has(sh.label)) continue;
+        if (!overwrite && sh.tesseract_output?.ocr_text) continue;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})`;
+        try {
+          await _batchOcrShape(stem, si, op, cellHeight);
+          shapeDone++;
+        } catch(e) { if (_batchStop) break; }
+      }
     }
 
     done++;
@@ -2658,6 +2718,31 @@ async function runBatch() {
   // Refresh current page view
   await reloadPageData(); drawOverlay(); updatePanel();
   flaggedOverlaps = new Set();
+}
+
+async function _drainSSE(response) {
+  const reader = response.body.getReader();
+  const dec    = new TextDecoder();
+  let   buf    = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    if (_batchStop) { reader.cancel(); break; }
+  }
+}
+
+async function _batchOcrShape(stem, idx, op, cellHeight) {
+  const params = new URLSearchParams({ folder, stem, idx });
+  if (op === 'ocr_tesseract') {
+    const r = await fetch(`${API}/api/page/shape/ocr?${params}`, { method: 'POST' });
+    if (!r.ok) throw new Error(r.status);
+  } else if (op === 'ocr_easyocr_lbl') {
+    params.set('cell_height', cellHeight);
+    const r = await fetch(`${API}/api/page/shape/ocr/easyocr/linebyline?${params}`, { method: 'POST' });
+    if (!r.ok) throw new Error(r.status);
+    await _drainSSE(r);
+  }
 }
 
 // ── Table drawing ────────────────────────────────────────────────────────────
