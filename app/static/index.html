@@ -730,6 +730,8 @@ let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[
 let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
 let batchAbort      = false;     // flag to stop a running "All" batch
 let batchHighlight  = -1;        // shape index highlighted during batch processing
+let lastRowLines    = null;      // persists detected rows on the crop panel after a run
+let _lastPanelIdx   = -2;        // tracks when selection changes, to clear lastRowLines
 
 // ── Toast ────────────────────────────────────────────────────────────────────
 // ── Panel collapse ───────────────────────────────────────────────────────────
@@ -2346,11 +2348,19 @@ function updatePanel() {
 
   const shape=pageData.shapes[selIdx];
 
+  // Clear the row grid when the user moves to a different cell
+  if (selIdx !== _lastPanelIdx) {
+    _lastPanelIdx = selIdx;
+    lastRowLines  = null;
+    drawRowOverlay(null, -1);
+  }
+
   cropImg.onload = function() {
     const inspector = document.getElementById('inspector');
     if (!inspector.classList.contains('inspector-collapsed')) {
       inspector.style.width = Math.min(420, Math.max(80, this.naturalWidth + 20)) + 'px';
     }
+    if (lastRowLines) drawRowOverlay(lastRowLines, -1);
   };
   cropImg.src=`${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}&idx=${selIdx}`;
   cropImg.style.display='block'; cropPh.style.display='none';
@@ -2512,6 +2522,7 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
         let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
 
         if (msg.type === 'lines_detected') {
+          lastRowLines = msg.lines;
           llmProgress = { cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1 };
           drawOverlay();
           drawRowOverlay(msg.lines, -1);
@@ -2532,7 +2543,7 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
           };
           llmProgress = null;
           updatePanel();
-          drawRowOverlay(null, -1);
+          drawRowOverlay(lastRowLines, -1);
           showToast(`OCR line-by-line done · ${lineResults.length} rows`);
         }
       }
@@ -2544,7 +2555,7 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
     llmAbortCtrl = null;
     llmProgress  = null;
     drawOverlay();
-    drawRowOverlay(null, -1);
+    drawRowOverlay(lastRowLines, -1);
     btn.disabled = false; btn.textContent = '▶ Run';
     stopBtn.style.display = 'none';
   }
@@ -2634,6 +2645,9 @@ function drawRowOverlay(lines, activeRow) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, natW, natH);
 
+  const fontSize = Math.max(9, Math.min(16, Math.round((lines[0][1] - lines[0][0]) * 0.55)));
+  ctx.font = `bold ${fontSize}px sans-serif`;
+
   lines.forEach(([top, bottom], i) => {
     const active = i === activeRow;
     ctx.fillStyle   = active ? 'rgba(255,100,0,0.22)' : 'rgba(0,160,255,0.07)';
@@ -2641,6 +2655,14 @@ function drawRowOverlay(lines, activeRow) {
     ctx.lineWidth   = active ? 2 : 1;
     ctx.fillRect(0, top, natW, bottom - top);
     ctx.strokeRect(0.5, top + 0.5, natW - 1, bottom - top - 1);
+
+    // Row number label
+    const label = String(i + 1);
+    const mid   = top + (bottom - top) / 2;
+    ctx.fillStyle    = active ? 'rgba(255,100,0,0.9)' : 'rgba(0,100,200,0.75)';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign    = 'right';
+    ctx.fillText(label, natW - 3, mid);
   });
 }
 
@@ -2969,7 +2991,8 @@ async function runLlmLineByLine() {
           llmProgress = { cropOriginX, cropOriginY, cropRight,
                           lines: msg.lines, activeRow: -1 };
           drawOverlay();
-          drawRowOverlay(msg.lines, -1);   // panel thumbnail too
+          lastRowLines = msg.lines;
+          drawRowOverlay(msg.lines, -1);
           metaEl.textContent = `Detected ${msg.count} rows — sending…`;
 
         } else if (msg.type === 'row_result') {
@@ -2988,8 +3011,8 @@ async function runLlmLineByLine() {
             mode: 'linebyline', timestamp: msg.timestamp,
           };
           llmProgress = null;
-          updatePanel();   // redraws overlay via drawOverlay() inside updatePanel
-          drawRowOverlay(null, -1);
+          updatePanel();
+          drawRowOverlay(lastRowLines, -1);
           showToast(`Line-by-line done · ${lineResults.length} rows`);
         }
       }
@@ -3001,7 +3024,7 @@ async function runLlmLineByLine() {
     llmAbortCtrl = null;
     llmProgress  = null;
     drawOverlay();
-    drawRowOverlay(null, -1);
+    drawRowOverlay(lastRowLines, -1);
     btn.disabled = false; btn.textContent = '▶ Send';
     stopBtn.style.display = 'none';
   }

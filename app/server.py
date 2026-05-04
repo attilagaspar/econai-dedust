@@ -753,57 +753,67 @@ async def api_ocr_easyocr_linebyline(
 
 def _detect_text_rows(crop_image, cell_height: int = 28) -> list[tuple[int, int]]:
     """
-    Detect equally-spaced text rows using a regular-grid / comb-filter approach.
+    Comb-filter phase search + sequential gap snap.
 
-    Instead of picking rows independently (which produces irregular spacing),
-    we treat the column as a uniform grid with a known pitch = cell_height and
-    find the vertical phase (starting offset) that maximises total ink coverage.
-    All returned rows are guaranteed to have exactly the same height and spacing.
+    Pass 1 — comb filter finds the best global starting offset (phase).
+    Pass 2 — each subsequent boundary is placed at prev + cell_height, then
+    nudged ±snap_r pixels to the nearest local ink minimum (inter-row gap).
+    Because each snap is relative to the previous boundary (not the ideal
+    grid), corrections compound and any amount of cumulative drift is tracked,
+    while the small snap_r prevents jumping over sparse rows (dashes/blanks).
     """
     import numpy as np
 
     gray       = np.array(crop_image.convert("L"))
-    binary     = (gray < 180).astype(np.float32)   # 1 where ink, 0 where white
-    projection = binary.sum(axis=1)                 # ink pixels per row
+    binary     = (gray < 180).astype(np.float32)
+    projection = binary.sum(axis=1)
 
     roi_h = len(projection)
     if roi_h < cell_height:
         return [(0, roi_h)] if roi_h > 0 else []
 
-    # Build a cumulative-sum array for O(1) window queries
+    # Smooth projection — damps isolated ink blobs without washing out gaps
+    k        = max(3, cell_height // 6)
+    smoothed = np.convolve(projection, np.ones(k) / k, mode='same')
+
     cum = np.concatenate(([0.0], np.cumsum(projection)))
 
     def window_sum(t: int, b: int) -> float:
         t = max(0, t); b = min(roi_h, b)
         return float(cum[b] - cum[t]) if b > t else 0.0
 
-    # Try every possible starting offset (0 … cell_height-1).
-    # For each offset, score = total ink inside all cells of the regular grid.
-    best_score  = -1.0
-    best_start  = 0
+    # Pass 1: find best phase via comb filter
+    best_score, best_start = -1.0, 0
     for start in range(cell_height):
-        score = 0.0
-        top   = start
+        score = 0.0; top = start
         while top + cell_height <= roi_h:
-            score += window_sum(top, top + cell_height)
-            top   += cell_height
+            score += window_sum(top, top + cell_height); top += cell_height
         if score > best_score:
-            best_score = score
-            best_start = start
+            best_score = score; best_start = start
 
-    # Lay down the grid from the winning offset
-    rows: list[tuple[int, int]] = []
-    top = best_start
-    while top + cell_height <= roi_h:
-        rows.append((top, top + cell_height))
-        top += cell_height
+    # Pass 2: sequential snap — small radius, relative to previous boundary
+    snap_r   = max(2, cell_height // 6)   # ~4 px at default 26 px height
+    snapped  = [best_start]               # first boundary: trust comb filter
 
-    # Include a partial last row if it covers ≥ 40 % of cell_height
-    if rows:
-        partial_top = rows[-1][1]
-        if roi_h - partial_top >= cell_height * 0.4:
-            rows.append((partial_top, roi_h))
+    while True:
+        expected = snapped[-1] + cell_height
+        if expected > roi_h:
+            break
+        lo  = max(0,        expected - snap_r)
+        hi  = min(roi_h - 1, expected + snap_r)
+        new = (lo + int(np.argmin(smoothed[lo: hi + 1]))) if lo < hi else expected
+        new = max(new, snapped[-1] + 1)   # strict monotonicity
+        snapped.append(new)
 
+    # Partial last row only if ≥ 60 % of cell_height remains
+    if snapped and roi_h - snapped[-1] >= cell_height * 0.6:
+        snapped.append(roi_h)
+
+    rows = [
+        (snapped[i], min(snapped[i + 1], roi_h))
+        for i in range(len(snapped) - 1)
+        if snapped[i + 1] > snapped[i] and snapped[i] < roi_h
+    ]
     return rows
 
 
