@@ -713,29 +713,6 @@ async def api_ocr_easyocr_linebyline(
                 text = ""
                 conf = 0.0
 
-            # EasyOCR missed the cell — fall back to Tesseract PSM 10
-            # (single-character mode + digit whitelist)
-            if False and not text:  # disabled: testing pure EasyOCR performance
-                try:
-                    import pytesseract, shutil
-                    if not shutil.which("tesseract"):
-                        pytesseract.pytesseract.tesseract_cmd = \
-                            r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-                    tess = pytesseract.image_to_data(
-                        grey_img,
-                        config="--psm 10 -c tessedit_char_whitelist=0123456789-",
-                        output_type=pytesseract.Output.DICT,
-                    )
-                    words = [
-                        (t, int(c))
-                        for t, c in zip(tess["text"], tess["conf"])
-                        if t.strip() and int(c) > 0
-                    ]
-                    text = " ".join(t for t, _ in words).strip()
-                    conf = round(sum(c for _, c in words) / len(words), 1) if words else 0.0
-                except Exception:
-                    pass
-
             text = text or "-"
 
             line_texts.append(text)
