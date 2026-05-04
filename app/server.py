@@ -413,52 +413,166 @@ def api_ocr_cell(
 # ---------------------------------------------------------------------------
 # Shadow page cache — long table-line removal for cleaner OCR input
 # ---------------------------------------------------------------------------
+# OCR settings — tunable preprocessing parameters, persisted to disk
+# ---------------------------------------------------------------------------
+_OCR_SETTINGS_PATH = Path(__file__).parent / "ocr_settings.json"
+
+_OCR_SETTINGS_DEFAULTS: dict = {
+    "line_removal_fraction":  0.22,
+    "use_adaptive_threshold": True,
+    "adaptive_block_size":    15,
+    "adaptive_c":             10,
+    "morph_open_kernel":      2,
+}
+
+
+def _load_ocr_settings() -> dict:
+    if _OCR_SETTINGS_PATH.exists():
+        try:
+            return {**_OCR_SETTINGS_DEFAULTS,
+                    **json.loads(_OCR_SETTINGS_PATH.read_text(encoding="utf-8"))}
+        except Exception:
+            pass
+    return dict(_OCR_SETTINGS_DEFAULTS)
+
+
+_ocr_settings: dict = _load_ocr_settings()
+
+
+class OcrSettingsBody(BaseModel):
+    line_removal_fraction:  Optional[float] = None
+    use_adaptive_threshold: Optional[bool]  = None
+    adaptive_block_size:    Optional[int]   = None
+    adaptive_c:             Optional[int]   = None
+    morph_open_kernel:      Optional[int]   = None
+
+
+@app.get("/api/ocr-settings")
+def api_get_ocr_settings():
+    return _ocr_settings
+
+
+@app.post("/api/ocr-settings")
+def api_set_ocr_settings(body: OcrSettingsBody, save: bool = Query(False)):
+    global _ocr_settings
+    if body.line_removal_fraction is not None:
+        _ocr_settings["line_removal_fraction"] = max(0.01, min(0.9, body.line_removal_fraction))
+    if body.use_adaptive_threshold is not None:
+        _ocr_settings["use_adaptive_threshold"] = body.use_adaptive_threshold
+    if body.adaptive_block_size is not None:
+        bs = max(3, body.adaptive_block_size)
+        if bs % 2 == 0: bs += 1
+        _ocr_settings["adaptive_block_size"] = bs
+    if body.adaptive_c is not None:
+        _ocr_settings["adaptive_c"] = max(0, min(50, body.adaptive_c))
+    if body.morph_open_kernel is not None:
+        _ocr_settings["morph_open_kernel"] = max(0, min(10, body.morph_open_kernel))
+    _shadow_page_cache.clear()
+    if save:
+        _OCR_SETTINGS_PATH.write_text(
+            json.dumps(_ocr_settings, indent=2), encoding="utf-8"
+        )
+    return _ocr_settings
+
+
+# ---------------------------------------------------------------------------
+# Shadow page cache — table line removal for cleaner OCR input
+# ---------------------------------------------------------------------------
 _shadow_page_cache: dict = {}
 
 
-def _build_shadow_page(pil_image):
+def _build_shadow_page(pil_image, settings: dict):
     """
-    Return a copy of pil_image with long horizontal/vertical lines painted white.
-    Lines are detected via morphological opening on the full page, so even a
-    500 px ruled line at 22 % of a 2 000 px page is unambiguously a table rule
-    rather than a digit stroke.  Original image is never modified.
+    Line removal only — the original grayscale is preserved intact.
+
+    Binarisation (adaptive threshold or Otsu) is used solely to make line
+    detection reliable.  After the line mask is found, we revert to the
+    original grayscale and paint only the detected line pixels white.
+    EasyOCR therefore sees the natural scan, minus the table rules.
     """
     import cv2
     import numpy as np
     from PIL import Image as _PIL
 
-    img = np.array(pil_image.convert("L"))
+    img = np.array(pil_image.convert("L"))   # original grayscale — final output base
     h, w = img.shape
 
-    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # ── Step 1: binarise for line detection only ──────────────────────────────
+    if settings.get("use_adaptive_threshold", True):
+        block = settings.get("adaptive_block_size", 15)
+        if block % 2 == 0:
+            block += 1
+        binary = cv2.adaptiveThreshold(
+            img, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,
+            block, settings.get("adaptive_c", 10),
+        )
+        k_sz = settings.get("morph_open_kernel", 0)
+        if k_sz > 0:
+            _k     = cv2.getStructuringElement(cv2.MORPH_RECT, (k_sz, k_sz))
+            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, _k)
+        morph_in = cv2.bitwise_not(binary)   # text/lines = 255, bg = 0
+    else:
+        # Otsu for line detection only
+        _, morph_in = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * 0.22)), 1))
-    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * 0.22))))
-
-    h_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, h_kernel)
-    v_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, v_kernel)
+    # ── Step 2: detect long lines in the binarised image ─────────────────────
+    frac     = settings.get("line_removal_fraction", 0.22)
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * frac)), 1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * frac))))
 
     mask = cv2.dilate(
-        cv2.bitwise_or(h_lines, v_lines),
+        cv2.bitwise_or(
+            cv2.morphologyEx(morph_in, cv2.MORPH_OPEN, h_kernel),
+            cv2.morphologyEx(morph_in, cv2.MORPH_OPEN, v_kernel),
+        ),
         np.ones((3, 3), np.uint8),
     )
 
+    # ── Step 3: revert to original grayscale, paint line pixels white ─────────
     result = img.copy()
     result[mask > 0] = 255
     return _PIL.fromarray(result).convert("RGB")
 
 
 def _get_shadow_page(folder: str, stem: str, img_path):
-    """Return (and cache) the shadow (line-erased) version of a page image."""
+    """Return (and cache) the fully-preprocessed shadow page.
+    Cache key includes every setting that affects the output."""
     from PIL import Image as _PIL
-    key = (folder, stem)
+    s   = _ocr_settings
+    key = (
+        folder, stem,
+        s["line_removal_fraction"],
+        s["use_adaptive_threshold"],
+        s["adaptive_block_size"],
+        s["adaptive_c"],
+        s["morph_open_kernel"],
+    )
     if key not in _shadow_page_cache:
-        # Simple size cap — drop everything if cache grows too large
         if len(_shadow_page_cache) >= 10:
             _shadow_page_cache.clear()
         full = _PIL.open(str(img_path)).convert("RGB")
-        _shadow_page_cache[key] = _build_shadow_page(full)
+        _shadow_page_cache[key] = _build_shadow_page(full, dict(s))
     return _shadow_page_cache[key]
+
+
+@app.get("/api/shadow-preview")
+def api_shadow_preview(folder: str = Query(...), stem: str = Query(...)):
+    """Return the fully preprocessed shadow page as JPEG (OCR view preview)."""
+    import io as _io
+
+    d        = _resolve_folder(folder)
+    img_path = _find_image(d, stem)
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    shadow = _get_shadow_page(folder, stem, img_path)
+
+    buf = _io.BytesIO()
+    shadow.save(buf, format="JPEG", quality=85)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="image/jpeg",
+                             headers={"Cache-Control": "no-cache, no-store"})
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +838,9 @@ async def api_ocr_easyocr_linebyline(
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
 
+    # crop is already fully preprocessed (threshold + line removal) by _get_shadow_page
+    crop_bin = crop.convert("L")
+
     def gen():
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
                            "lines": [list(r) for r in rows]})
@@ -733,19 +850,24 @@ async def api_ocr_easyocr_linebyline(
 
         for i, (top, bottom) in enumerate(rows):
             row_pad = max(4, cell_height // 6)
-            rt = max(0, top - row_pad)
-            rb = min(crop.height, bottom + row_pad)
-            row_img = crop.crop((0, rt, crop.width, rb))
+            # Clamp padding to the midpoint between adjacent rows so we never
+            # bleed content from the row above or below into this slice
+            prev_bottom = rows[i - 1][1] if i > 0 else 0
+            next_top    = rows[i + 1][0] if i < len(rows) - 1 else crop_bin.height
+            rt = max(top    - row_pad, (prev_bottom + top)    // 2)
+            rb = min(bottom + row_pad, (bottom      + next_top) // 2)
+            rt = max(0, rt)
+            rb = min(crop_bin.height, rb)
+            row_img = crop_bin.crop((0, rt, crop_bin.width, rb))
 
-            # Aggressive upscale — single digits need large pixels to be detected
+            # Upscale with LANCZOS — soft edges match EasyOCR's training distribution
+            # better than blocky NEAREST, which can make digit strokes look like
+            # separate characters to the CRAFT detector
             target_h = 128
             scale    = target_h / row_img.height
             row_img  = row_img.resize(
                 (int(row_img.width * scale), target_h), PILImage.LANCZOS
-            )
-
-            grey_img = ImageOps.autocontrast(row_img.convert("L"))
-            row_img  = grey_img.convert("RGB")
+            ).convert("RGB")
 
             # Encode preprocessed image for the frontend preview panel
             import io as _io2, base64 as _b64

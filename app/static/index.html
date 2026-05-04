@@ -579,6 +579,8 @@
               title="Perspective correction: click 4 corners to straighten a trapezoid">Perspective</button>
       <button class="nav-btn" id="mode-btn" onclick="toggleEditMode()" disabled
               title="Toggle between review and edit mode (E)">Review mode</button>
+      <button class="nav-btn" id="ocr-view-btn" onclick="toggleOcrView()" disabled
+              title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
     </div>
 
     <!-- Perspective correction toolbar (shown only in persp mode) -->
@@ -607,7 +609,10 @@
 
     <div id="legend"></div>
 
-    <div id="osd-container"></div>
+    <div id="osd-container">
+      <img id="shadow-overlay" alt="shadow preview"
+           style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:10;background:#fff;" />
+    </div>
   </div>
 
   <!-- Centre: cell crop inspector -->
@@ -643,6 +648,67 @@
     </div>
     <div id="panel-fields">
       <div id="no-selection">← Click a box on the page</div>
+
+      <!-- OCR Options (visible only when OCR View is active) -->
+      <div id="ocr-opts" style="display:none;flex-direction:column;gap:10px;">
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;">Step 1 · erase table rules</div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Min rule length</span>
+            <span id="ocr-opt-line-frac-val" style="font-size:11px;color:#ccc;">22%</span>
+          </div>
+          <input type="range" id="ocr-opt-line-frac" min="1" max="90" value="22" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">A dark run spanning at least this % of the page is treated as a table rule and painted white. Lower = shorter rules also erased. Higher = only full-width/height rules removed.</div>
+        </div>
+
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;margin-top:4px;">Step 2 · binarise (paper → white, ink → black)</div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="ocr-opt-use-thresh" checked style="accent-color:#e94560;width:13px;height:13px;">
+          <span style="font-size:12px;color:#ccc;">Adaptive threshold</span>
+        </label>
+        <div style="font-size:10px;color:#555;margin-top:-4px;">Instead of one global cutoff, each pixel is compared to its local neighbourhood. Handles faded ink and uneven paper tone. Uncheck to skip binarisation entirely.</div>
+        <div id="ocr-thresh-params" style="display:flex;flex-direction:column;gap:8px;">
+          <div class="field-group">
+            <div class="field-label-row">
+              <span class="field-label">Neighbourhood size</span>
+              <span id="ocr-opt-block-val" style="font-size:11px;color:#ccc;">15</span>
+            </div>
+            <input type="range" id="ocr-opt-block" min="3" max="51" value="15" step="2"
+              style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+            <div style="font-size:10px;color:#555;">Pixel window used to compute the local mean (must be odd). Roughly match the height of one digit in pixels. Too small → noisy; too large → loses faint ink.</div>
+          </div>
+          <div class="field-group">
+            <div class="field-label-row">
+              <span class="field-label">Sensitivity (C)</span>
+              <span id="ocr-opt-c-val" style="font-size:11px;color:#ccc;">10</span>
+            </div>
+            <input type="range" id="ocr-opt-c" min="0" max="40" value="10" step="1"
+              style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+            <div style="font-size:10px;color:#555;">Subtracted from the local mean before thresholding. Higher = more pixels become white (aggressive background removal, may clip faint digits). Lower = more pixels kept black (preserves faint ink, but also more noise).</div>
+          </div>
+        </div>
+
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;margin-top:4px;">Step 3 · remove speckle noise</div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Noise removal radius</span>
+            <span id="ocr-opt-morph-val" style="font-size:11px;color:#ccc;">2</span>
+          </div>
+          <input type="range" id="ocr-opt-morph" min="0" max="7" value="2" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">Erases isolated black specks smaller than this radius (paper grain, dust). 0 = off. Too large = thin digit strokes disappear.</div>
+        </div>
+
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button onclick="applyOcrSettings()"
+            style="flex:1;background:#0f3460;border:1px solid #e94560;border-radius:4px;color:#e94560;padding:6px;cursor:pointer;font-size:12px;font-weight:600;">▶ Apply</button>
+          <button onclick="saveOcrSettings()"
+            style="flex:1;background:#0f3460;border:1px solid #4caf50;border-radius:4px;color:#4caf50;padding:6px;cursor:pointer;font-size:12px;font-weight:600;">Save default</button>
+        </div>
+        <div id="ocr-opts-status" style="font-size:10px;color:#666;text-align:center;min-height:14px;"></div>
+      </div>
+
       <div id="fields-content" style="display:none; display:flex; flex-direction:column; gap:10px;">
         <div class="field-group">
           <div class="field-label">Label</div>
@@ -776,6 +842,14 @@
 // ── State ──────────────────────────────────────────────────────────────────
 const API = '';
 let folder        = '';
+let ocrViewActive = false;
+let ocrSettings   = {
+  line_removal_fraction:  0.22,
+  use_adaptive_threshold: true,
+  adaptive_block_size:    15,
+  adaptive_c:             10,
+  morph_open_kernel:      2,
+};
 let pages         = [];
 let pageIdx       = 0;
 let pageData      = null;
@@ -833,6 +907,208 @@ function toggleInspector() {
     col.style.width = img.naturalWidth
       ? Math.min(420, Math.max(80, img.naturalWidth + 20)) + 'px'
       : '80px';
+  }
+}
+
+// ── OCR View ─────────────────────────────────────────────────────────────────
+async function loadOcrSettings() {
+  try {
+    const r = await fetch(`${API}/api/ocr-settings`);
+    if (r.ok) { ocrSettings = await r.json(); _ocrSettingsToUI(); }
+  } catch(e) {}
+}
+
+function _ocrSettingsToUI() {
+  const pct = Math.round(ocrSettings.line_removal_fraction * 100);
+  document.getElementById('ocr-opt-line-frac').value = pct;
+  document.getElementById('ocr-opt-line-frac-val').textContent = pct + '%';
+
+  const useThresh = ocrSettings.use_adaptive_threshold;
+  document.getElementById('ocr-opt-use-thresh').checked = useThresh;
+  document.getElementById('ocr-thresh-params').style.display = useThresh ? '' : 'none';
+
+  document.getElementById('ocr-opt-block').value = ocrSettings.adaptive_block_size;
+  document.getElementById('ocr-opt-block-val').textContent = ocrSettings.adaptive_block_size;
+
+  document.getElementById('ocr-opt-c').value = ocrSettings.adaptive_c;
+  document.getElementById('ocr-opt-c-val').textContent = ocrSettings.adaptive_c;
+
+  const m = ocrSettings.morph_open_kernel;
+  document.getElementById('ocr-opt-morph').value = m;
+  document.getElementById('ocr-opt-morph-val').textContent = m === 0 ? '0 (off)' : m;
+}
+
+function ocrOptLiveUpdate() {
+  const pct = parseInt(document.getElementById('ocr-opt-line-frac').value);
+  document.getElementById('ocr-opt-line-frac-val').textContent = pct + '%';
+
+  const block = parseInt(document.getElementById('ocr-opt-block').value);
+  document.getElementById('ocr-opt-block-val').textContent = block;
+
+  const c = parseInt(document.getElementById('ocr-opt-c').value);
+  document.getElementById('ocr-opt-c-val').textContent = c;
+
+  const m = parseInt(document.getElementById('ocr-opt-morph').value);
+  document.getElementById('ocr-opt-morph-val').textContent = m === 0 ? '0 (off)' : m;
+
+  const useThresh = document.getElementById('ocr-opt-use-thresh').checked;
+  document.getElementById('ocr-thresh-params').style.display = useThresh ? '' : 'none';
+}
+
+function _ocrSettingsFromUI() {
+  return {
+    line_removal_fraction:  parseInt(document.getElementById('ocr-opt-line-frac').value) / 100,
+    use_adaptive_threshold: document.getElementById('ocr-opt-use-thresh').checked,
+    adaptive_block_size:    parseInt(document.getElementById('ocr-opt-block').value),
+    adaptive_c:             parseInt(document.getElementById('ocr-opt-c').value),
+    morph_open_kernel:      parseInt(document.getElementById('ocr-opt-morph').value),
+  };
+}
+
+async function applyOcrSettings() {
+  const status = document.getElementById('ocr-opts-status');
+  status.style.color = '#888';
+  status.textContent = 'Applying…';
+  try {
+    const r = await fetch(`${API}/api/ocr-settings`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_ocrSettingsFromUI()),
+    });
+    if (r.ok) {
+      ocrSettings = await r.json();
+      status.textContent = 'Refreshing preview…';
+      await loadShadowPreview();
+      status.style.color = '#4caf50';
+      status.textContent = 'Preview updated.';
+    } else { status.style.color='#e94560'; status.textContent = 'Error ' + r.status; }
+  } catch(e) { status.style.color='#e94560'; status.textContent = e.message; }
+}
+
+async function saveOcrSettings() {
+  const status = document.getElementById('ocr-opts-status');
+  status.style.color = '#888';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch(`${API}/api/ocr-settings?save=true`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_ocrSettingsFromUI()),
+    });
+    if (r.ok) {
+      ocrSettings = await r.json();
+      await loadShadowPreview();
+      status.style.color = '#4caf50';
+      status.textContent = 'Saved as default.';
+    } else { status.style.color='#e94560'; status.textContent = 'Error ' + r.status; }
+  } catch(e) { status.style.color='#e94560'; status.textContent = e.message; }
+}
+
+async function loadShadowPreview() {
+  if (!folder || !pages.length) return;
+  const stem = pages[pageIdx].stem;
+  document.getElementById('shadow-overlay').src =
+    `${API}/api/shadow-preview?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(stem)}&t=${Date.now()}`;
+}
+
+// ── Shadow overlay zoom / pan ─────────────────────────────────────────────────
+let _sz = 1, _spx = 0, _spy = 0, _sdrag = null;
+
+function _shadowUpdateTransform() {
+  const img = document.getElementById('shadow-overlay');
+  img.style.transformOrigin = '0 0';
+  img.style.transform = `translate(${_spx}px,${_spy}px) scale(${_sz})`;
+}
+
+function _shadowResetTransform() {
+  _sz = 1; _spx = 0; _spy = 0; _sdrag = null;
+  const img = document.getElementById('shadow-overlay');
+  img.style.transform = '';
+  img.style.transformOrigin = '';
+  img.style.cursor = '';
+}
+
+function _shadowWheel(e) {
+  e.preventDefault();
+  const rect  = document.getElementById('osd-container').getBoundingClientRect();
+  const mx    = e.clientX - rect.left;
+  const my    = e.clientY - rect.top;
+  const delta = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+  const nz    = Math.max(0.25, Math.min(30, _sz * delta));
+  _spx = mx - (mx - _spx) * (nz / _sz);
+  _spy = my - (my - _spy) * (nz / _sz);
+  _sz  = nz;
+  _shadowUpdateTransform();
+}
+
+function _shadowMouseDown(e) {
+  if (e.button !== 0) return;
+  _sdrag = { x: e.clientX, y: e.clientY, px: _spx, py: _spy };
+  document.getElementById('shadow-overlay').style.cursor = 'grabbing';
+}
+
+function _shadowMouseMove(e) {
+  if (!_sdrag) return;
+  _spx = _sdrag.px + (e.clientX - _sdrag.x);
+  _spy = _sdrag.py + (e.clientY - _sdrag.y);
+  _shadowUpdateTransform();
+}
+
+function _shadowMouseUp() {
+  if (!_sdrag) return;
+  _sdrag = null;
+  if (ocrViewActive) document.getElementById('shadow-overlay').style.cursor = 'grab';
+}
+
+function _shadowAddHandlers() {
+  const c = document.getElementById('osd-container');
+  c.addEventListener('wheel',     _shadowWheel,     { passive: false });
+  c.addEventListener('mousedown', _shadowMouseDown);
+  window.addEventListener('mousemove', _shadowMouseMove);
+  window.addEventListener('mouseup',   _shadowMouseUp);
+  document.getElementById('shadow-overlay').style.cursor = 'grab';
+}
+
+function _shadowRemoveHandlers() {
+  const c = document.getElementById('osd-container');
+  c.removeEventListener('wheel',     _shadowWheel);
+  c.removeEventListener('mousedown', _shadowMouseDown);
+  window.removeEventListener('mousemove', _shadowMouseMove);
+  window.removeEventListener('mouseup',   _shadowMouseUp);
+}
+
+function toggleOcrView() {
+  ocrViewActive = !ocrViewActive;
+  const btn          = document.getElementById('ocr-view-btn');
+  const overlay      = document.getElementById('shadow-overlay');
+  const ocrOpts      = document.getElementById('ocr-opts');
+  const noSel        = document.getElementById('no-selection');
+  const fieldsContent= document.getElementById('fields-content');
+  const panelTitle   = document.querySelector('#panel-header .panel-title');
+
+  btn.classList.toggle('active', ocrViewActive);
+  btn.textContent = ocrViewActive ? 'OCR View ✓' : 'OCR View';
+
+  if (ocrViewActive) {
+    overlay.style.display = 'block';
+    ocrOpts.style.display = 'flex';
+    noSel.style.display = 'none';
+    fieldsContent.style.display = 'none';
+    panelTitle.textContent = 'OCR Options';
+    _ocrSettingsToUI();
+    _shadowAddHandlers();
+    loadShadowPreview();
+  } else {
+    _shadowRemoveHandlers();
+    _shadowResetTransform();
+    overlay.style.display = 'none';
+    ocrOpts.style.display = 'none';
+    panelTitle.textContent = 'Cell inspector';
+    if (selIdx === -1) {
+      noSel.style.display = '';
+      fieldsContent.style.display = 'none';
+    } else {
+      noSel.style.display = 'none';
+      fieldsContent.style.display = 'flex';
+    }
   }
 }
 
@@ -3199,6 +3475,7 @@ async function loadFolder() {
   document.getElementById('clear-ann-btn').disabled=false;
   document.getElementById('overlap-btn').disabled=false;
   document.getElementById('lattice-btn').disabled=false;
+  document.getElementById('ocr-view-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);
 }
 
@@ -3213,6 +3490,7 @@ async function loadPage(idx) {
   updatePanel();
   await reloadPageData();
   viewer.open({type:'image',url:`${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[idx].stem)}`});
+  if (ocrViewActive) { _shadowResetTransform(); loadShadowPreview(); }
   buildLegend();
   // Show grid button if this page already has lattice data
   const hasLattice = pageData?.shapes?.some(s => s.super_row != null);
@@ -3224,6 +3502,8 @@ async function loadPage(idx) {
 
 function goPage(delta) { const n=pageIdx+delta; if(n>=0&&n<pages.length) loadPage(n); }
 function goPageByIndex(val) { loadPage(parseInt(val)); }
+
+loadOcrSettings();
 
 const urlParams=new URLSearchParams(window.location.search);
 if (urlParams.get('labels')) {
