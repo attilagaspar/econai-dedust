@@ -619,6 +619,16 @@
               title="Toggle between review and edit mode (E)">Review mode</button>
       <button class="nav-btn" id="ocr-view-btn" onclick="toggleOcrView()" disabled
               title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
+      <span style="font-size:11px;color:#666;margin-left:6px;">Diagnose:</span>
+      <select id="diagnostic-select" onchange="onDiagnosticChange()"
+              style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 5px;font-size:11px;">
+        <option value="none">— none —</option>
+        <option value="ocr_rows">OCR row mismatch</option>
+        <option value="llm_rows">LLM row mismatch</option>
+        <option value="human_rows">Human row mismatch</option>
+        <option value="ocr_llm">OCR ≠ LLM line count</option>
+      </select>
+      <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
     </div>
 
     <!-- Perspective correction toolbar (shown only in persp mode) -->
@@ -1001,8 +1011,10 @@ let lastUsedLabel  = null;       // remembered label for new box drawing
 let projectLabels  = [];         // labels from project config (passed via URL)
 let clipboard      = null;       // copied shape for Ctrl+V
 const undoStack   = [];          // array of shapes-array snapshots
-let flaggedOverlaps = new Set(); // indices of shapes with excessive overlap
-let latticeVisible  = false;     // whether to draw lattice grid overlay
+let flaggedOverlaps    = new Set(); // indices of shapes with excessive overlap
+let latticeVisible     = false;     // whether to draw lattice grid overlay
+let diagnosticMode     = 'none';
+let diagnosticFlagged  = new Set();
 let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow}
 let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
 let batchAbort      = false;     // flag to stop a running "All" batch
@@ -1467,6 +1479,56 @@ function findOverlaps() {
     : 'No significant overlaps found');
 }
 
+// ── Diagnostic highlighting ───────────────────────────────────────────────────
+function _lineCount(text) {
+  return text ? text.split('\n').filter(l => l.trim()).length : 0;
+}
+
+function computeDiagnostics() {
+  diagnosticFlagged = new Set();
+  const countEl = document.getElementById('diagnostic-count');
+  if (diagnosticMode === 'none' || !pageData?.shapes) {
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  const shapes = pageData.shapes;
+
+  if (diagnosticMode === 'ocr_llm') {
+    // Flag shapes where both OCR and LLM exist but have different line counts
+    shapes.forEach((s, i) => {
+      const n1 = _lineCount(s.tesseract_output?.ocr_text);
+      const n2 = _lineCount(s.openai_output?.response);
+      if (n1 > 0 && n2 > 0 && n1 !== n2) diagnosticFlagged.add(i);
+    });
+  } else {
+    // Row-mismatch checks: group by super_row, compare line counts within each row
+    const getField = s => {
+      if (diagnosticMode === 'ocr_rows')   return s.tesseract_output?.ocr_text;
+      if (diagnosticMode === 'llm_rows')   return s.openai_output?.response;
+      if (diagnosticMode === 'human_rows') return s.human_output?.human_corrected_text;
+    };
+    const rowGroups = {};
+    shapes.forEach((s, i) => {
+      if (s.super_row == null) return;
+      (rowGroups[s.super_row] ??= []).push(i);
+    });
+    Object.values(rowGroups).forEach(idxs => {
+      const withData = idxs.filter(i => getField(shapes[i]));
+      if (withData.length < 2) return; // need ≥2 shapes with data to compare
+      const counts = withData.map(i => _lineCount(getField(shapes[i])));
+      if (!counts.every(n => n === counts[0])) idxs.forEach(i => diagnosticFlagged.add(i));
+    });
+  }
+
+  if (countEl) countEl.textContent = diagnosticFlagged.size ? `(${diagnosticFlagged.size})` : '';
+}
+
+function onDiagnosticChange() {
+  diagnosticMode = document.getElementById('diagnostic-select').value;
+  computeDiagnostics();
+  drawOverlay();
+}
+
 // ── Lattice detection ─────────────────────────────────────────────────────────
 
 function openLatticeModal() {
@@ -1860,6 +1922,26 @@ function drawOverlay() {
     r.setAttribute('stroke',        '#ff6b00');
     r.setAttribute('stroke-width',  '2.5');
     r.setAttribute('stroke-dasharray', '7 3');
+    r.style.pointerEvents = 'none';
+    svgOverlay.appendChild(r);
+  });
+
+  // Diagnostic mismatch highlight (hot-pink dashed outline)
+  diagnosticFlagged.forEach(i => {
+    const shape = pageData.shapes[i]; if (!shape?.points?.length) return;
+    const xs = shape.points.map(p => p[0]), ys = shape.points.map(p => p[1]);
+    const tl = imgToScreen(Math.min(...xs), Math.min(...ys));
+    const br = imgToScreen(Math.max(...xs), Math.max(...ys));
+    if (!tl || !br) return;
+    const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    r.setAttribute('x',      tl.x - 4);
+    r.setAttribute('y',      tl.y - 4);
+    r.setAttribute('width',  Math.max(0, br.x - tl.x + 8));
+    r.setAttribute('height', Math.max(0, br.y - tl.y + 8));
+    r.setAttribute('fill',           'rgba(255,0,100,0.10)');
+    r.setAttribute('stroke',         '#ff0064');
+    r.setAttribute('stroke-width',   '2.5');
+    r.setAttribute('stroke-dasharray','6 3');
     r.style.pointerEvents = 'none';
     svgOverlay.appendChild(r);
   });
@@ -3845,6 +3927,7 @@ async function reloadPageData() {
   const p=pages[pageIdx];
   const r=await fetch(`${API}/api/page?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(p.stem)}`);
   pageData=await r.json();
+  computeDiagnostics();
 }
 
 async function loadFolder() {
