@@ -888,6 +888,7 @@
         <option value="ocr_tesseract">OCR — Tesseract</option>
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
         <option value="llm">LLM</option>
+        <option value="score_delete">Delete shapes below score threshold</option>
       </select>
     </div>
     <div>
@@ -965,6 +966,20 @@
                style="accent-color:#e94560;width:13px;height:13px;">
         <span>Overwrite existing LLM results</span>
       </label>
+    </div>
+
+    <!-- Score threshold options -->
+    <div id="batch-score-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row">
+        <span style="white-space:nowrap;">Delete if score &lt;</span>
+        <input type="number" id="batch-score-thresh" value="0.70" min="0" max="1" step="0.01"
+               style="width:70px;flex:none;" />
+        <span style="font-size:10px;color:#666;">(0–1, detectron2 confidence)</span>
+      </label>
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Restrict to label types (leave all unchecked = any label):</div>
+        <div id="batch-score-label-checks"></div>
+      </div>
     </div>
 
     <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
@@ -2671,9 +2686,10 @@ function _batchPopulateLabels(containerId, storageKey) {
 }
 
 function openBatchModal() {
-  _batchPopulateLabels('batch-label-checks',     'latticeLabels');
-  _batchPopulateLabels('batch-ocr-label-checks', 'batchOcrLabels');
-  _batchPopulateLabels('batch-llm-label-checks', 'batchLlmLabels');
+  _batchPopulateLabels('batch-label-checks',       'latticeLabels');
+  _batchPopulateLabels('batch-ocr-label-checks',   'batchOcrLabels');
+  _batchPopulateLabels('batch-llm-label-checks',   'batchLlmLabels');
+  _batchPopulateLabels('batch-score-label-checks', 'batchScoreLabels');
   // Sync model/mode from the main LLM panel if available
   const savedModel = localStorage.getItem('llm-model');
   const savedMode  = localStorage.getItem('llm-mode');
@@ -2704,11 +2720,12 @@ function closeBatchModal() {
 
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
-  document.getElementById('batch-ol-opts').style.display  = op === 'overlaps_lattice'  ? 'flex' : 'none';
+  document.getElementById('batch-ol-opts').style.display    = op === 'overlaps_lattice' ? 'flex' : 'none';
   const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
-  document.getElementById('batch-ocr-opts').style.display = isOcr ? 'flex' : 'none';
+  document.getElementById('batch-ocr-opts').style.display   = isOcr ? 'flex' : 'none';
   document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
-  document.getElementById('batch-llm-opts').style.display = op === 'llm' ? 'flex' : 'none';
+  document.getElementById('batch-llm-opts').style.display   = op === 'llm'          ? 'flex' : 'none';
+  document.getElementById('batch-score-opts').style.display = op === 'score_delete' ? 'flex' : 'none';
 }
 
 function onBatchLlmModeChange() {
@@ -2753,6 +2770,9 @@ async function runBatch() {
   } else if (op === 'llm') {
     if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
     if (!confirm(`Run LLM on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'score_delete') {
+    const t = parseFloat(document.getElementById('batch-score-thresh').value);
+    if (!confirm(`Delete all shapes with score < ${t} across ${sorted.length} page(s)? This cannot be undone.`)) return;
   }
 
   _batchRunning = true;
@@ -2866,6 +2886,32 @@ async function runBatch() {
           shapeDone++;
         } catch(e) { if (_batchStop) break; }
       }
+
+    } else if (op === 'score_delete') {
+      const thresh = parseFloat(document.getElementById('batch-score-thresh').value);
+      const checks = document.querySelectorAll('#batch-score-label-checks input[type=checkbox]');
+      const remembered = {};
+      const selLabels  = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchScoreLabels', JSON.stringify(remembered));
+      const filterByLabel = selLabels.length > 0;
+      const labelSet = new Set(selLabels);
+
+      const res    = await fetch(`${API}/api/page?${params}`);
+      const pdata  = await res.json();
+      const before = pdata.shapes || [];
+      const after  = before.filter(s => {
+        if (filterByLabel && !labelSet.has(s.label)) return true; // keep if not in filter
+        return (s.score == null) || (s.score >= thresh);
+      });
+      const deleted = before.length - after.length;
+      if (deleted > 0) {
+        await fetch(`${API}/api/page/shapes?${params}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shapes: after }),
+        });
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — removed ${deleted} shape(s)`;
     }
 
     done++;
