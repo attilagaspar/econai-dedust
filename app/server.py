@@ -1101,6 +1101,9 @@ def api_llm_cell(
     else:
         messages = [{"role": "user", "content": content}]
 
+    print(f"[LLM] model={model} mode={mode} dry_run={dry_run} "
+          f"prompt={prompt_text!r}", flush=True)
+
     try:
         client   = _make_llm_client(model)
         response = client.chat.completions.create(
@@ -1121,7 +1124,8 @@ def api_llm_cell(
         }
         jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    return {"response": result, "model": model, "mode": mode, "timestamp": timestamp}
+    return {"response": result, "model": model, "mode": mode,
+            "timestamp": timestamp, "prompt_sent": prompt_text}
 
 
 @app.post("/api/page/shape/llm/linebyline")
@@ -1185,6 +1189,9 @@ async def api_llm_linebyline(
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
                            "lines": [list(r) for r in rows]})
 
+        print(f"[LLM/linebyline] model={model} rows={len(rows)} dry_run={dry_run} "
+              f"prompt={prompt_text!r}", flush=True)
+
         client = _make_llm_client(model)
         line_responses: list[str] = []
 
@@ -1243,7 +1250,8 @@ async def api_llm_linebyline(
                           encoding="utf-8")
 
         yield _json.dumps({"type": "done", "response": combined,
-                           "model": model, "timestamp": timestamp})
+                           "model": model, "timestamp": timestamp,
+                           "prompt_sent": prompt_text})
 
     # Stream the sync generator as SSE
     async def event_gen():

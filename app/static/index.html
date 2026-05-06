@@ -1023,6 +1023,10 @@
         style="background:none;border:1px solid #333;border-radius:4px;color:#888;font-size:12px;padding:4px 10px;cursor:pointer;">✕ Close</button>
     </div>
     <div id="llm-test-status" style="font-size:11px;color:#aaa;min-height:14px;"></div>
+    <details id="llm-test-prompt-details" style="font-size:11px;color:#888;">
+      <summary style="cursor:pointer;user-select:none;">Prompt sent to LLM</summary>
+      <pre id="llm-test-prompt-sent" style="margin:6px 0 0;padding:6px 8px;background:#060f20;border:1px solid #0f3460;border-radius:4px;white-space:pre-wrap;word-break:break-word;color:#ccc;font-size:11px;max-height:160px;overflow:auto;"></pre>
+    </details>
     <div style="overflow:auto;flex:1;">
       <table id="llm-test-table" style="border-collapse:collapse;font-size:11px;color:#ccc;width:max-content;">
         <thead id="llm-test-thead" style="position:sticky;top:0;background:#0d1b35;z-index:1;"></thead>
@@ -3663,6 +3667,8 @@ function openLlmTestModal() {
   document.getElementById('llm-test-thead').innerHTML = '';
   document.getElementById('llm-test-tbody').innerHTML = '';
   document.getElementById('llm-test-status').textContent = '';
+  document.getElementById('llm-test-prompt-sent').textContent = '';
+  document.getElementById('llm-test-prompt-details').open = false;
   document.getElementById('llm-test-modal').style.display = 'flex';
 }
 
@@ -3674,6 +3680,13 @@ function closeLlmTestModal() {
 function stopLlmTest() {
   _llmTestAbort = true;
   document.getElementById('llm-test-status').textContent = 'Stopped.';
+}
+
+function _showTestPromptSent(text) {
+  const el = document.getElementById('llm-test-prompt-sent');
+  if (el) el.textContent = text;
+  const det = document.getElementById('llm-test-prompt-details');
+  if (det) det.open = true;
 }
 
 function _llmTestEsc(s) {
@@ -3793,7 +3806,7 @@ async function runLlmTest() {
             try {
               const msg = JSON.parse(chunk.slice(6));
               if (msg.type === 'row_result') lineTexts.push(msg.text);
-              if (msg.type === 'done') resultText = msg.response;
+              if (msg.type === 'done') { resultText = msg.response; if (i === 0 && msg.prompt_sent) _showTestPromptSent(msg.prompt_sent); }
             } catch {}
           }
         }
@@ -3806,6 +3819,7 @@ async function runLlmTest() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
         resultText = data.response;
+        if (i === 0 && data.prompt_sent) _showTestPromptSent(data.prompt_sent);
       }
 
       td.innerHTML = _llmTestSubTable(resultText);
