@@ -3736,43 +3736,24 @@ async function runLlmTest() {
   row += '</tr>';
   tbody.innerHTML = row;
 
-  // Sync image height to the tallest non-image cell (skips index 0 to avoid feedback loop)
-  let _testImgEl = null;
-  const _syncTestImgHeight = () => {
-    if (!_testImgEl) return;
-    const tds = document.getElementById('llm-test-tbody')?.querySelectorAll('tr td');
-    if (!tds?.length) return;
-    let maxH = 0;
-    tds.forEach((td, i) => { if (i > 0) maxH = Math.max(maxH, td.clientHeight); });
-    if (maxH > 4) {
-      _testImgEl.style.height = maxH + 'px';
-      _testImgEl.style.width  = 'auto';
-      _testImgEl.style.maxWidth = '100%';
-    }
-  };
-
-  // Load full-page image and crop the cell
-  const imgUrl = `${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(stem)}`;
-  const fullImg = new Image();
-  fullImg.crossOrigin = 'anonymous';
-  fullImg.onload = () => {
-    const cx = Math.max(0, sx1 - pad);
-    const cy = Math.max(0, sy1 - pad);
-    const cw = Math.min(fullImg.width,  sx2 + pad) - cx;
-    const ch = Math.min(fullImg.height, sy2 + pad) - cy;
-    const cv = document.createElement('canvas');
-    cv.width = cw; cv.height = ch;
-    cv.getContext('2d').drawImage(fullImg, cx, cy, cw, ch, 0, 0, cw, ch);
-    const im = document.createElement('img');
-    im.src = cv.toDataURL('image/jpeg', 0.92);
-    im.style.cssText = 'display:block;height:auto;width:auto;';
-    _testImgEl = im;
-    const td = document.getElementById('llt-img-cell');
-    if (td) { td.innerHTML = ''; td.appendChild(im); }
-    // Initial sync after OCR column is already in the DOM
-    setTimeout(_syncTestImgHeight, 50);
-  };
-  fullImg.src = imgUrl;
+  // Start loading the full page image in the background; we'll crop + insert AFTER all runs finish
+  const _imgDataUrlPromise = new Promise(resolve => {
+    const imgUrl = `${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(stem)}`;
+    const fullImg = new Image();
+    fullImg.crossOrigin = 'anonymous';
+    fullImg.onload = () => {
+      const cx = Math.max(0, sx1 - pad);
+      const cy = Math.max(0, sy1 - pad);
+      const cw = Math.min(fullImg.width,  sx2 + pad) - cx;
+      const ch = Math.min(fullImg.height, sy2 + pad) - cy;
+      const cv = document.createElement('canvas');
+      cv.width = cw; cv.height = ch;
+      cv.getContext('2d').drawImage(fullImg, cx, cy, cw, ch, 0, 0, cw, ch);
+      resolve(cv.toDataURL('image/jpeg', 0.92));
+    };
+    fullImg.onerror = () => resolve(null);
+    fullImg.src = imgUrl;
+  });
 
   // Run N LLM calls sequentially, dry_run=true so stored result is untouched
   for (let i = 0; i < N; i++) {
@@ -3828,14 +3809,30 @@ async function runLlmTest() {
       }
 
       td.innerHTML = _llmTestSubTable(resultText);
-      _syncTestImgHeight();
     } catch(e) {
       if (td) td.innerHTML = `<em style="color:#e94560;">${_llmTestEsc(String(e))}</em>`;
-      _syncTestImgHeight();
     }
   }
 
   statusEl.textContent = _llmTestAbort ? 'Stopped.' : `Done — ${N} run${N>1?'s':''} completed.`;
+
+  // All columns are now in the DOM — measure the final row height and insert the image
+  const dataUrl = await _imgDataUrlPromise;
+  const imgTd   = document.getElementById('llt-img-cell');
+  if (dataUrl && imgTd) {
+    const tds  = imgTd.closest('tr')?.querySelectorAll('td');
+    let maxH = 0;
+    tds?.forEach((td, i) => { if (i > 0) maxH = Math.max(maxH, td.clientHeight); });
+    const im = document.createElement('img');
+    im.src = dataUrl;
+    if (maxH > 4) {
+      im.style.cssText = `display:block;height:${maxH}px;width:auto;max-width:100%;`;
+    } else {
+      im.style.cssText = 'display:block;width:100%;height:auto;';
+    }
+    imgTd.innerHTML = '';
+    imgTd.appendChild(im);
+  }
 }
 
 // ── LLM send / line-by-line ───────────────────────────────────────────────────
