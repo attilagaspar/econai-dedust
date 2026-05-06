@@ -1024,12 +1024,13 @@ def _make_llm_client(model: str):
 
 @app.post("/api/page/shape/llm")
 def api_llm_cell(
-    folder: str = Query(...),
-    stem:   str = Query(...),
-    idx:    int = Query(...),
-    model:  str = Query("gpt-4o-mini"),
-    mode:   str = Query("image", description="image | image+ocr | ocr | linebyline"),
-    body:   LlmRequest = ...,
+    folder:     str  = Query(...),
+    stem:       str  = Query(...),
+    idx:        int  = Query(...),
+    model:      str  = Query("gpt-4o-mini"),
+    mode:       str  = Query("image", description="image | image+ocr | ocr | linebyline"),
+    use_shadow: bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
+    body:       LlmRequest = ...,
 ):
     """Send a cell to an LLM and store the result in the page JSON."""
     import os, base64, io, datetime
@@ -1058,7 +1059,10 @@ def api_llm_cell(
     content: list = []
 
     if mode in ("image", "image+ocr"):
-        img = PILImage.open(str(img_path)).convert("RGB")
+        if use_shadow:
+            img = _get_shadow_page(folder, stem, img_path).convert("RGB")
+        else:
+            img = PILImage.open(str(img_path)).convert("RGB")
         w, h = img.size
         pad  = 4
         crop = img.crop((
@@ -1114,11 +1118,12 @@ def api_llm_cell(
 
 @app.post("/api/page/shape/llm/linebyline")
 async def api_llm_linebyline(
-    folder:      str = Query(...),
-    stem:        str = Query(...),
-    idx:         int = Query(...),
-    model:       str = Query("gpt-4o-mini"),
-    cell_height: int = Query(28, description="Expected height of one text row in pixels"),
+    folder:      str  = Query(...),
+    stem:        str  = Query(...),
+    idx:         int  = Query(...),
+    model:       str  = Query("gpt-4o-mini"),
+    cell_height: int  = Query(28, description="Expected height of one text row in pixels"),
+    use_shadow:  bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
     body:        LlmRequest = ...,
 ):
     """
@@ -1153,7 +1158,10 @@ async def api_llm_linebyline(
     xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
 
-    full_img = PILImage.open(str(img_path)).convert("RGB")
+    if use_shadow:
+        full_img = _get_shadow_page(folder, stem, img_path).convert("RGB")
+    else:
+        full_img = PILImage.open(str(img_path)).convert("RGB")
     iw, ih   = full_img.size
     pad      = 4
     crop     = full_img.crop((

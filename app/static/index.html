@@ -824,6 +824,10 @@
               <option value="linebyline">Line-by-line</option>
             </select>
           </div>
+          <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;margin-top:2px;">
+            <input type="checkbox" id="llm-use-shadow" style="accent-color:#e94560;cursor:pointer;">
+            Use shadow (line-erased) image
+          </label>
           <div id="llm-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
             <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
             <input id="llm-cell-height" type="number" value="26" min="6" max="300"
@@ -963,6 +967,11 @@
         <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Process these label types:</div>
         <div id="batch-llm-label-checks"></div>
       </div>
+      <label class="row">
+        <input type="checkbox" id="batch-llm-use-shadow"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Use shadow (line-erased) image</span>
+      </label>
       <label class="row">
         <input type="checkbox" id="batch-llm-overwrite"
                style="accent-color:#e94560;width:13px;height:13px;">
@@ -2843,6 +2852,7 @@ async function runBatch() {
       const mode       = document.getElementById('batch-llm-mode').value;
       const prompt     = document.getElementById('batch-llm-prompt').value.trim();
       const cellHeight = parseInt(document.getElementById('batch-llm-cellheight').value) || 26;
+      const useShadow  = document.getElementById('batch-llm-use-shadow').checked;
       const overwrite  = document.getElementById('batch-llm-overwrite').checked;
       const labelSet   = new Set(selLabels);
 
@@ -2857,7 +2867,7 @@ async function runBatch() {
         if (!overwrite && sh.openai_output?.response) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})`;
         try {
-          await _batchLlmShape(stem, si, model, mode, prompt, cellHeight);
+          await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow);
         } catch(e) { if (_batchStop) break; }
       }
 
@@ -2947,8 +2957,8 @@ async function _drainSSE(response) {
   }
 }
 
-async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight) {
-  const params = new URLSearchParams({ folder, stem, idx, model, mode });
+async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useShadow) {
+  const params = new URLSearchParams({ folder, stem, idx, model, mode, use_shadow: !!useShadow });
   if (mode === 'linebyline') {
     params.set('cell_height', cellHeight);
     const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
@@ -3623,10 +3633,11 @@ async function runLlm() {
   const btn = document.getElementById('llm-btn');
   btn.disabled = true; btn.textContent = '…';
   try {
-    const model  = document.getElementById('llm-model').value;
-    const prompt = document.getElementById('llm-prompt').value.trim();
+    const model     = document.getElementById('llm-model').value;
+    const prompt    = document.getElementById('llm-prompt').value.trim();
+    const useShadow = document.getElementById('llm-use-shadow').checked;
     if (!prompt) { showToast('Prompt is empty'); return; }
-    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx, model, mode});
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx, model, mode, use_shadow: useShadow});
     const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -3833,6 +3844,7 @@ async function runLlmLineByLine() {
   const model      = document.getElementById('llm-model').value;
   const prompt     = document.getElementById('llm-prompt').value.trim();
   const cellHeight = parseInt(document.getElementById('llm-cell-height').value) || 28;
+  const useShadow  = document.getElementById('llm-use-shadow').checked;
   if (!prompt) { showToast('Prompt is empty'); btn.disabled = false; btn.textContent = '▶ Send'; return; }
 
   const resultEl = document.getElementById('f-llm-result');
@@ -3858,7 +3870,7 @@ async function runLlmLineByLine() {
   try {
     const params = new URLSearchParams({
       folder, stem: pages[pageIdx].stem, idx: selIdx,
-      model, cell_height: cellHeight,
+      model, cell_height: cellHeight, use_shadow: useShadow,
     });
     const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
       method: 'POST',
