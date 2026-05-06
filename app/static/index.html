@@ -3668,7 +3668,6 @@ function openLlmTestModal() {
 
 function closeLlmTestModal() {
   _llmTestAbort = true;
-  if (window._llmTestRORef) { window._llmTestRORef.disconnect(); window._llmTestRORef = null; }
   document.getElementById('llm-test-modal').style.display = 'none';
 }
 
@@ -3737,24 +3736,22 @@ async function runLlmTest() {
   row += '</tr>';
   tbody.innerHTML = row;
 
-  // Load full-page image, crop cell, render into canvas
-  // Image crop: render at native resolution, then a ResizeObserver on the row
-  // keeps the displayed image height in sync with the row as columns fill in.
+  // Sync image height to the tallest non-image cell (skips index 0 to avoid feedback loop)
   let _testImgEl = null;
-  if (window._llmTestRORef) { window._llmTestRORef.disconnect(); window._llmTestRORef = null; }
-
   const _syncTestImgHeight = () => {
     if (!_testImgEl) return;
-    const row = document.getElementById('llm-test-tbody')?.querySelector('tr');
-    if (!row) return;
-    const h = row.clientHeight;
-    if (h > 4) {
-      _testImgEl.style.height = h + 'px';
+    const tds = document.getElementById('llm-test-tbody')?.querySelectorAll('tr td');
+    if (!tds?.length) return;
+    let maxH = 0;
+    tds.forEach((td, i) => { if (i > 0) maxH = Math.max(maxH, td.clientHeight); });
+    if (maxH > 4) {
+      _testImgEl.style.height = maxH + 'px';
       _testImgEl.style.width  = 'auto';
       _testImgEl.style.maxWidth = '100%';
     }
   };
 
+  // Load full-page image and crop the cell
   const imgUrl = `${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(stem)}`;
   const fullImg = new Image();
   fullImg.crossOrigin = 'anonymous';
@@ -3768,20 +3765,12 @@ async function runLlmTest() {
     cv.getContext('2d').drawImage(fullImg, cx, cy, cw, ch, 0, 0, cw, ch);
     const im = document.createElement('img');
     im.src = cv.toDataURL('image/jpeg', 0.92);
-    im.style.cssText = 'display:block;';
+    im.style.cssText = 'display:block;height:auto;width:auto;';
     _testImgEl = im;
     const td = document.getElementById('llt-img-cell');
-    if (td) {
-      td.innerHTML = '';
-      td.appendChild(im);
-      // Observe the row so the image resizes whenever a new column populates
-      const row = document.getElementById('llm-test-tbody')?.querySelector('tr');
-      if (row && window.ResizeObserver) {
-        window._llmTestRORef = new ResizeObserver(_syncTestImgHeight);
-        window._llmTestRORef.observe(row);
-      }
-      _syncTestImgHeight();
-    }
+    if (td) { td.innerHTML = ''; td.appendChild(im); }
+    // Initial sync after OCR column is already in the DOM
+    setTimeout(_syncTestImgHeight, 50);
   };
   fullImg.src = imgUrl;
 
@@ -3839,8 +3828,10 @@ async function runLlmTest() {
       }
 
       td.innerHTML = _llmTestSubTable(resultText);
+      _syncTestImgHeight();
     } catch(e) {
       if (td) td.innerHTML = `<em style="color:#e94560;">${_llmTestEsc(String(e))}</em>`;
+      _syncTestImgHeight();
     }
   }
 
