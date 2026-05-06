@@ -1072,8 +1072,9 @@ let clipboard      = null;       // copied shape for Ctrl+V
 const undoStack   = [];          // array of shapes-array snapshots
 let flaggedOverlaps    = new Set(); // indices of shapes with excessive overlap
 let latticeVisible     = false;     // whether to draw lattice grid overlay
-let diagnosticMode     = 'none';
-let diagnosticFlagged  = new Set();
+let diagnosticMode      = 'none';
+let diagnosticFlagged   = new Set();
+let diagnosticRowCounts = {}; // shape index → line count (for row-mismatch modes)
 let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow}
 let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
 let batchAbort      = false;     // flag to stop a running "All" batch
@@ -1544,7 +1545,8 @@ function _lineCount(text) {
 }
 
 function computeDiagnostics() {
-  diagnosticFlagged = new Set();
+  diagnosticFlagged   = new Set();
+  diagnosticRowCounts = {};
   const countEl = document.getElementById('diagnostic-count');
   if (diagnosticMode === 'none' || !pageData?.shapes) {
     if (countEl) countEl.textContent = '';
@@ -1560,7 +1562,7 @@ function computeDiagnostics() {
       if (n1 > 0 && n2 > 0 && n1 !== n2) diagnosticFlagged.add(i);
     });
   } else {
-    // Row-mismatch checks: group by super_row, compare line counts within each row
+    // Row-mismatch checks: group by super_row
     const getField = s => {
       if (diagnosticMode === 'ocr_rows')   return s.tesseract_output?.ocr_text;
       if (diagnosticMode === 'llm_rows')   return s.openai_output?.response;
@@ -1573,9 +1575,23 @@ function computeDiagnostics() {
     });
     Object.values(rowGroups).forEach(idxs => {
       const withData = idxs.filter(i => getField(shapes[i]));
-      if (withData.length < 2) return; // need ≥2 shapes with data to compare
-      const counts = withData.map(i => _lineCount(getField(shapes[i])));
-      if (!counts.every(n => n === counts[0])) idxs.forEach(i => diagnosticFlagged.add(i));
+      if (withData.length < 1) return;
+      // Store per-shape counts for label rendering
+      withData.forEach(i => {
+        diagnosticRowCounts[i] = _lineCount(getField(shapes[i]));
+      });
+      if (withData.length < 2) return; // need ≥2 to compare
+      // Find the mode (most frequent line count in this super_row)
+      const freq = {};
+      withData.forEach(i => {
+        const n = diagnosticRowCounts[i];
+        freq[n] = (freq[n] || 0) + 1;
+      });
+      const modeCount = parseInt(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
+      // Flag only cells that differ from the mode
+      withData.forEach(i => {
+        if (diagnosticRowCounts[i] !== modeCount) diagnosticFlagged.add(i);
+      });
     });
   }
 
@@ -1985,25 +2001,63 @@ function drawOverlay() {
     svgOverlay.appendChild(r);
   });
 
-  // Diagnostic mismatch highlight (hot-pink dashed outline)
-  diagnosticFlagged.forEach(i => {
-    const shape = pageData.shapes[i]; if (!shape?.points?.length) return;
-    const xs = shape.points.map(p => p[0]), ys = shape.points.map(p => p[1]);
-    const tl = imgToScreen(Math.min(...xs), Math.min(...ys));
-    const br = imgToScreen(Math.max(...xs), Math.max(...ys));
-    if (!tl || !br) return;
-    const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    r.setAttribute('x',      tl.x - 4);
-    r.setAttribute('y',      tl.y - 4);
-    r.setAttribute('width',  Math.max(0, br.x - tl.x + 8));
-    r.setAttribute('height', Math.max(0, br.y - tl.y + 8));
-    r.setAttribute('fill',           'rgba(255,0,100,0.10)');
-    r.setAttribute('stroke',         '#ff0064');
-    r.setAttribute('stroke-width',   '2.5');
-    r.setAttribute('stroke-dasharray','6 3');
-    r.style.pointerEvents = 'none';
-    svgOverlay.appendChild(r);
-  });
+  // Diagnostic: row-count labels on all cells + dashed outline only on deviants
+  if (diagnosticMode !== 'none' && diagnosticMode !== 'ocr_llm' && Object.keys(diagnosticRowCounts).length) {
+    Object.entries(diagnosticRowCounts).forEach(([idxStr, count]) => {
+      const i = parseInt(idxStr);
+      const shape = pageData.shapes[i]; if (!shape?.points?.length) return;
+      const xs = shape.points.map(p => p[0]), ys = shape.points.map(p => p[1]);
+      const tl = imgToScreen(Math.min(...xs), Math.min(...ys));
+      const br = imgToScreen(Math.max(...xs), Math.max(...ys));
+      if (!tl || !br) return;
+      const flagged = diagnosticFlagged.has(i);
+      // Dashed outline only on deviants
+      if (flagged) {
+        const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        r.setAttribute('x',               tl.x);
+        r.setAttribute('y',               tl.y);
+        r.setAttribute('width',           Math.max(0, br.x - tl.x));
+        r.setAttribute('height',          Math.max(0, br.y - tl.y));
+        r.setAttribute('fill',            'rgba(255,0,100,0.07)');
+        r.setAttribute('stroke',          '#ff0064');
+        r.setAttribute('stroke-width',    '1.5');
+        r.setAttribute('stroke-dasharray','5 3');
+        r.style.pointerEvents = 'none';
+        svgOverlay.appendChild(r);
+      }
+      // Row-count label in top-left of every cell with data
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x',           tl.x + 3);
+      t.setAttribute('y',           tl.y + 11);
+      t.setAttribute('fill',        flagged ? '#ff0064' : '#00cc88');
+      t.setAttribute('font-size',   '10');
+      t.setAttribute('font-weight', 'bold');
+      t.setAttribute('font-family', 'monospace');
+      t.style.pointerEvents = 'none';
+      t.textContent = String(count);
+      svgOverlay.appendChild(t);
+    });
+  } else {
+    // ocr_llm mode: plain dashed outline (no counts)
+    diagnosticFlagged.forEach(i => {
+      const shape = pageData.shapes[i]; if (!shape?.points?.length) return;
+      const xs = shape.points.map(p => p[0]), ys = shape.points.map(p => p[1]);
+      const tl = imgToScreen(Math.min(...xs), Math.min(...ys));
+      const br = imgToScreen(Math.max(...xs), Math.max(...ys));
+      if (!tl || !br) return;
+      const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      r.setAttribute('x',               tl.x - 4);
+      r.setAttribute('y',               tl.y - 4);
+      r.setAttribute('width',           Math.max(0, br.x - tl.x + 8));
+      r.setAttribute('height',          Math.max(0, br.y - tl.y + 8));
+      r.setAttribute('fill',            'rgba(255,0,100,0.10)');
+      r.setAttribute('stroke',          '#ff0064');
+      r.setAttribute('stroke-width',    '2.5');
+      r.setAttribute('stroke-dasharray','6 3');
+      r.style.pointerEvents = 'none';
+      svgOverlay.appendChild(r);
+    });
+  }
 
   // Lattice grid overlay
   if (latticeVisible && pageData?.shapes) {
