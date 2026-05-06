@@ -1008,6 +1008,12 @@ class LlmRequest(BaseModel):
 # Models served locally via ollama (OpenAI-compatible endpoint)
 _LOCAL_MODELS: set[str] = {"qwen2.5vl:7b"}
 
+# Always appended to every LLM prompt to suppress hallucinations on empty/dash cells
+_EMPTY_CELL_GUARD = (
+    "\nIf the cell is empty, contains only a dash, or the image shows no readable content, "
+    "return exactly -."
+)
+
 def _make_llm_client(model: str):
     """Return an OpenAI-compatible client for the given model.
     Local models are routed to the ollama server; all others go to OpenAI."""
@@ -1078,7 +1084,7 @@ def api_llm_cell(
             "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
         })
 
-    prompt_text = body.prompt
+    prompt_text = body.prompt + _EMPTY_CELL_GUARD
     if mode == "image+ocr":
         ocr_text = shape.get("tesseract_output", {}).get("ocr_text", "")
         if ocr_text:
@@ -1173,7 +1179,7 @@ async def api_llm_linebyline(
     ))
 
     rows = _detect_text_rows(crop, cell_height)
-    prompt_text = body.prompt
+    prompt_text = body.prompt + _EMPTY_CELL_GUARD
 
     def gen():
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
