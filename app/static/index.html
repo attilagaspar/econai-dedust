@@ -3729,7 +3729,7 @@ async function runLlmTest() {
 
   // Build row with placeholders
   let row = `<tr>`;
-  row += `<td style="vertical-align:top;border:1px solid #1a3a6e;padding:0;min-width:110px;max-width:260px;height:1px;" id="llt-img-cell"><em style="color:#666;padding:6px;display:block;">loading…</em></td>`;
+  row += `<td ${_LLT_TD} id="llt-img-cell"><em style="color:#666;">loading…</em></td>`;
   row += `<td ${_LLT_TD}>${_llmTestSubTable(ocrText)}</td>`;
   for (let i = 0; i < N; i++)
     row += `<td ${_LLT_TD} id="llt-run-${i}"><em style="color:#555;">waiting…</em></td>`;
@@ -3745,19 +3745,18 @@ async function runLlmTest() {
     const cy = Math.max(0, sy1 - pad);
     const cw = Math.min(fullImg.width,  sx2 + pad) - cx;
     const ch = Math.min(fullImg.height, sy2 + pad) - cy;
+    // Upscale so the image fills ~200 px wide regardless of original crop size
+    const targetW = 200;
+    const scale   = targetW / cw;
     const cv = document.createElement('canvas');
-    cv.width = cw; cv.height = ch;
-    cv.getContext('2d').drawImage(fullImg, cx, cy, cw, ch, 0, 0, cw, ch);
-    // Convert to img so CSS can stretch it to fill the row height set by sibling cells
+    cv.width  = targetW;
+    cv.height = Math.round(ch * scale);
+    cv.getContext('2d').drawImage(fullImg, cx, cy, cw, ch, 0, 0, cv.width, cv.height);
     const im = document.createElement('img');
     im.src = cv.toDataURL('image/jpeg', 0.92);
-    im.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
+    im.style.cssText = 'width:100%;height:auto;display:block;';
     const td = document.getElementById('llt-img-cell');
-    if (td) {
-      td.style.cssText += ';padding:0;';   // remove padding so img fills edge-to-edge
-      td.innerHTML = '';
-      td.appendChild(im);
-    }
+    if (td) { td.innerHTML = ''; td.appendChild(im); }
   };
   fullImg.src = imgUrl;
 
