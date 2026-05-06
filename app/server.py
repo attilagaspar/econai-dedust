@@ -1104,7 +1104,7 @@ def api_llm_cell(
     try:
         client   = _make_llm_client(model)
         response = client.chat.completions.create(
-            model=model, messages=messages, max_tokens=1024,
+            model=model, messages=messages, max_tokens=1024, temperature=0,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -1218,7 +1218,7 @@ async def api_llm_linebyline(
             }]
             try:
                 resp = client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=64,
+                    model=model, messages=messages, max_tokens=64, temperature=0,
                 )
                 text = resp.choices[0].message.content.strip()
             except Exception as exc:
