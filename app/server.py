@@ -1005,6 +1005,23 @@ class LlmRequest(BaseModel):
     prompt: str
 
 
+# Models served locally via ollama (OpenAI-compatible endpoint)
+_LOCAL_MODELS: set[str] = {"qwen2.5vl:7b"}
+
+def _make_llm_client(model: str):
+    """Return an OpenAI-compatible client for the given model.
+    Local models are routed to the ollama server; all others go to OpenAI."""
+    import os
+    from openai import OpenAI
+    if model in _LOCAL_MODELS:
+        host = os.environ.get("OLLAMA_HOST", "http://gpu.koren.work:11434")
+        return OpenAI(api_key="ollama", base_url=f"{host}/v1")
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable is not set")
+    return OpenAI(api_key=api_key)
+
+
 @app.post("/api/page/shape/llm")
 def api_llm_cell(
     folder: str = Query(...),
@@ -1014,14 +1031,9 @@ def api_llm_cell(
     mode:   str = Query("image", description="image | image+ocr | ocr | linebyline"),
     body:   LlmRequest = ...,
 ):
-    """Send a cell to OpenAI and store the result in the page JSON."""
+    """Send a cell to an LLM and store the result in the page JSON."""
     import os, base64, io, datetime
-    from openai import OpenAI
     from PIL import Image as PILImage
-
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable is not set")
 
     d        = _resolve_folder(folder)
     jf       = d / f"{stem}.json"
@@ -1079,7 +1091,7 @@ def api_llm_cell(
         messages = [{"role": "user", "content": content}]
 
     try:
-        client   = OpenAI(api_key=api_key)
+        client   = _make_llm_client(model)
         response = client.chat.completions.create(
             model=model, messages=messages, max_tokens=1024,
         )
@@ -1120,12 +1132,7 @@ async def api_llm_linebyline(
     """
     import os, asyncio, base64, io as _io, datetime, concurrent.futures
     import json as _json
-    from openai import OpenAI
     from PIL import Image as PILImage
-
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
 
     d        = _resolve_folder(folder)
     jf       = d / f"{stem}.json"
@@ -1161,7 +1168,7 @@ async def api_llm_linebyline(
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
                            "lines": [list(r) for r in rows]})
 
-        client = OpenAI(api_key=api_key)
+        client = _make_llm_client(model)
         line_responses: list[str] = []
 
         for i, (top, bottom) in enumerate(rows):
