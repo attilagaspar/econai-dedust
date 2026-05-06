@@ -1030,6 +1030,7 @@ def api_llm_cell(
     model:      str  = Query("gpt-4o-mini"),
     mode:       str  = Query("image", description="image | image+ocr | ocr | linebyline"),
     use_shadow: bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
+    dry_run:    bool = Query(False, description="Return result without writing to JSON (for testing)"),
     body:       LlmRequest = ...,
 ):
     """Send a cell to an LLM and store the result in the page JSON."""
@@ -1105,13 +1106,14 @@ def api_llm_cell(
     result    = response.choices[0].message.content.strip()
     timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
-    shape["openai_output"] = {
-        "response":  result,
-        "model":     model,
-        "mode":      mode,
-        "timestamp": timestamp,
-    }
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    if not dry_run:
+        shape["openai_output"] = {
+            "response":  result,
+            "model":     model,
+            "mode":      mode,
+            "timestamp": timestamp,
+        }
+        jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return {"response": result, "model": model, "mode": mode, "timestamp": timestamp}
 
@@ -1124,6 +1126,7 @@ async def api_llm_linebyline(
     model:       str  = Query("gpt-4o-mini"),
     cell_height: int  = Query(28, description="Expected height of one text row in pixels"),
     use_shadow:  bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
+    dry_run:     bool = Query(False, description="Return result without writing to JSON (for testing)"),
     body:        LlmRequest = ...,
 ):
     """
@@ -1222,15 +1225,16 @@ async def api_llm_linebyline(
         combined  = "\n".join(line_responses)
         timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
-        shape["openai_output"] = {
-            "response":       combined,
-            "model":          model,
-            "mode":           "linebyline",
-            "timestamp":      timestamp,
-            "lines_detected": len(rows),
-        }
-        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
-                      encoding="utf-8")
+        if not dry_run:
+            shape["openai_output"] = {
+                "response":       combined,
+                "model":          model,
+                "mode":           "linebyline",
+                "timestamp":      timestamp,
+                "lines_detected": len(rows),
+            }
+            jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
+                          encoding="utf-8")
 
         yield _json.dumps({"type": "done", "response": combined,
                            "model": model, "timestamp": timestamp})

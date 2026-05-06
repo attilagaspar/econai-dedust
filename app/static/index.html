@@ -804,6 +804,7 @@
               <button id="llm-btn"           class="field-run-btn" onclick="runLlm()">▶ Send</button>
               <button id="llm-all-btn"       class="field-run-btn" onclick="runLlmAll()">▶ All</button>
               <button id="llm-batch-stop-btn" class="field-run-btn" onclick="stopBatch()" style="display:none;color:#fca5a5;border-color:#e94560;">■</button>
+              <button class="field-run-btn" onclick="openLlmTestModal()" title="Run N times and compare results side-by-side">⚗ Test</button>
             </div>
           </div>
           <div class="llm-controls">
@@ -999,6 +1000,34 @@
     <div id="batch-modal-btns">
       <button id="batch-cancel-btn" onclick="closeBatchModal()">Cancel</button>
       <button id="batch-run-btn" onclick="runBatch()">Run</button>
+    </div>
+  </div>
+</div>
+
+<!-- LLM Test modal -->
+<div id="llm-test-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:2000;align-items:center;justify-content:center;">
+  <div style="background:#0d1b35;border:1px solid #0f3460;border-radius:8px;width:92vw;max-height:90vh;display:flex;flex-direction:column;padding:18px;gap:12px;box-shadow:0 8px 40px #000a;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:14px;font-weight:700;color:#e0e0e0;flex:1;">⚗ LLM Consistency Test</span>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;">
+        Repeat
+        <input type="number" id="llm-test-n" value="5" min="1" max="30"
+          style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#e0e0e0;font-size:12px;padding:3px 6px;">
+        times
+      </label>
+      <button onclick="runLlmTest()"
+        style="background:#1a3a6e;border:1px solid #0f3460;border-radius:4px;color:#e0e0e0;font-size:12px;padding:4px 12px;cursor:pointer;">▶ Run</button>
+      <button id="llm-test-stop-btn" onclick="stopLlmTest()"
+        style="background:#7f1d1d;border:1px solid #e94560;border-radius:4px;color:#fca5a5;font-size:12px;padding:4px 12px;cursor:pointer;">■ Stop</button>
+      <button onclick="closeLlmTestModal()"
+        style="background:none;border:1px solid #333;border-radius:4px;color:#888;font-size:12px;padding:4px 10px;cursor:pointer;">✕ Close</button>
+    </div>
+    <div id="llm-test-status" style="font-size:11px;color:#aaa;min-height:14px;"></div>
+    <div style="overflow:auto;flex:1;">
+      <table id="llm-test-table" style="border-collapse:collapse;font-size:11px;color:#ccc;width:max-content;">
+        <thead id="llm-test-thead" style="position:sticky;top:0;background:#0d1b35;z-index:1;"></thead>
+        <tbody id="llm-test-tbody"></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -3625,6 +3654,171 @@ document.addEventListener('DOMContentLoaded', () => {
   if (humanTa) humanTa.addEventListener('input', () => updateLineNums('human-input', 'human-input-lines'));
 });
 
+// ── LLM Test modal ───────────────────────────────────────────────────────────
+let _llmTestAbort = false;
+
+function openLlmTestModal() {
+  if (selIdx < 0 || !pages.length) { showToast('Select a shape first'); return; }
+  _llmTestAbort = false;
+  document.getElementById('llm-test-thead').innerHTML = '';
+  document.getElementById('llm-test-tbody').innerHTML = '';
+  document.getElementById('llm-test-status').textContent = '';
+  document.getElementById('llm-test-modal').style.display = 'flex';
+}
+
+function closeLlmTestModal() {
+  _llmTestAbort = true;
+  document.getElementById('llm-test-modal').style.display = 'none';
+}
+
+function stopLlmTest() {
+  _llmTestAbort = true;
+  document.getElementById('llm-test-status').textContent = 'Stopped.';
+}
+
+function _llmTestEsc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _llmTestSubTable(text) {
+  if (!text) return '<span style="color:#555;">—</span>';
+  const lines = String(text).split('\n');
+  const rows = lines.map(l =>
+    `<tr><td style="padding:1px 6px;border-bottom:1px solid #1a3a6e;white-space:pre;font-family:monospace;">${_llmTestEsc(l)}</td></tr>`
+  ).join('');
+  return `<table style="border-collapse:collapse;width:100%;">${rows}</table>`;
+}
+
+const _LLT_TD = 'style="vertical-align:top;border:1px solid #1a3a6e;padding:6px;min-width:110px;max-width:260px;"';
+const _LLT_TH = 'style="border:1px solid #1a3a6e;padding:5px 8px;background:#0f1e3a;color:#aaa;font-weight:600;white-space:nowrap;text-align:left;"';
+
+async function runLlmTest() {
+  if (selIdx < 0 || !pages.length) return;
+  _llmTestAbort = false;
+
+  const N          = Math.max(1, Math.min(30, parseInt(document.getElementById('llm-test-n').value) || 5));
+  const model      = document.getElementById('llm-model').value;
+  const mode       = document.getElementById('llm-mode').value;
+  const prompt     = document.getElementById('llm-prompt').value.trim();
+  const cellHeight = parseInt(document.getElementById('llm-cell-height').value) || 28;
+  const useShadow  = document.getElementById('llm-use-shadow').checked;
+  const stem       = pages[pageIdx].stem;
+  const statusEl   = document.getElementById('llm-test-status');
+
+  if (!prompt) { showToast('Prompt is empty'); return; }
+
+  const shape = pageData.shapes[selIdx];
+  if (!shape?.points?.length) return;
+  const pts = shape.points;
+  const sx1 = Math.min(pts[0][0], pts[1][0]);
+  const sy1 = Math.min(pts[0][1], pts[1][1]);
+  const sx2 = Math.max(pts[0][0], pts[1][0]);
+  const sy2 = Math.max(pts[0][1], pts[1][1]);
+  const pad = 6;
+
+  // Build header
+  const thead = document.getElementById('llm-test-thead');
+  const tbody = document.getElementById('llm-test-tbody');
+  let hdr = `<tr><th ${_LLT_TH}>Image</th><th ${_LLT_TH}>OCR</th>`;
+  for (let i = 0; i < N; i++) hdr += `<th ${_LLT_TH}>Run ${i+1}</th>`;
+  hdr += '</tr>';
+  thead.innerHTML = hdr;
+
+  // OCR text — prefer easyocr_output (line-by-line aware), fall back to tesseract
+  const ocrText = shape.easyocr_output?.ocr_text || shape.tesseract_output?.ocr_text || '';
+
+  // Build row with placeholders
+  let row = `<tr>`;
+  row += `<td ${_LLT_TD} id="llt-img-cell"><em style="color:#666;">loading…</em></td>`;
+  row += `<td ${_LLT_TD}>${_llmTestSubTable(ocrText)}</td>`;
+  for (let i = 0; i < N; i++)
+    row += `<td ${_LLT_TD} id="llt-run-${i}"><em style="color:#555;">waiting…</em></td>`;
+  row += '</tr>';
+  tbody.innerHTML = row;
+
+  // Load full-page image, crop cell, render into canvas
+  const imgUrl = `${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(stem)}`;
+  const fullImg = new Image();
+  fullImg.crossOrigin = 'anonymous';
+  fullImg.onload = () => {
+    const cx = Math.max(0, sx1 - pad);
+    const cy = Math.max(0, sy1 - pad);
+    const cw = Math.min(fullImg.width,  sx2 + pad) - cx;
+    const ch = Math.min(fullImg.height, sy2 + pad) - cy;
+    const cv = document.createElement('canvas');
+    cv.width = cw; cv.height = ch;
+    cv.style.maxWidth  = '180px';
+    cv.style.maxHeight = '260px';
+    cv.style.display   = 'block';
+    cv.getContext('2d').drawImage(fullImg, cx, cy, cw, ch, 0, 0, cw, ch);
+    const td = document.getElementById('llt-img-cell');
+    if (td) { td.innerHTML = ''; td.appendChild(cv); }
+  };
+  fullImg.src = imgUrl;
+
+  // Run N LLM calls sequentially, dry_run=true so stored result is untouched
+  for (let i = 0; i < N; i++) {
+    if (_llmTestAbort) break;
+    const td = document.getElementById(`llt-run-${i}`);
+    if (!td) break;
+    statusEl.textContent = `Running ${i+1} / ${N}…`;
+    td.innerHTML = '<em style="color:#aaa;">⏳</em>';
+
+    try {
+      const params = new URLSearchParams({
+        folder, stem, idx: selIdx, model, mode,
+        use_shadow: useShadow, dry_run: true,
+      });
+      let resultText = '';
+
+      if (mode === 'linebyline') {
+        params.set('cell_height', cellHeight);
+        const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({prompt}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Drain SSE and collect per-row text
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        const lineTexts = [];
+        outer: while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, {stream: true});
+          const chunks = buf.split('\n\n'); buf = chunks.pop();
+          for (const chunk of chunks) {
+            if (_llmTestAbort) { reader.cancel(); break outer; }
+            if (!chunk.startsWith('data: ')) continue;
+            try {
+              const msg = JSON.parse(chunk.slice(6));
+              if (msg.type === 'row_result') lineTexts.push(msg.text);
+              if (msg.type === 'done') resultText = msg.response;
+            } catch {}
+          }
+        }
+        if (!resultText) resultText = lineTexts.join('\n');
+      } else {
+        const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({prompt}),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        resultText = data.response;
+      }
+
+      td.innerHTML = _llmTestSubTable(resultText);
+    } catch(e) {
+      if (td) td.innerHTML = `<em style="color:#e94560;">${_llmTestEsc(String(e))}</em>`;
+    }
+  }
+
+  statusEl.textContent = _llmTestAbort ? 'Stopped.' : `Done — ${N} run${N>1?'s':''} completed.`;
+}
+
+// ── LLM send / line-by-line ───────────────────────────────────────────────────
 async function runLlm() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('llm-mode').value;
