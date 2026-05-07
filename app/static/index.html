@@ -2427,8 +2427,8 @@ function drawOverlay() {
         mkLine(gxR,gyT,gxR,gyB);
         mkColHandle(gxR, sCols[sCols.length-1], null);
 
-        // Lattice sep mode: transparent catcher over entire grid
-        if (latticeSepMode) {
+        // Lattice sep mode: transparent catcher over entire grid (col/row only — delete uses the line handles)
+        if (latticeSepMode === 'col' || latticeSepMode === 'row') {
           const ptl=imgToScreen(gxL,gyT), pbr=imgToScreen(gxR,gyB);
           if (ptl && pbr) {
             const catcher=document.createElementNS('http://www.w3.org/2000/svg','rect');
