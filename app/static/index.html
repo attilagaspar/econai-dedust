@@ -593,7 +593,14 @@
 
     <div id="page-nav">
       <button class="nav-btn" id="prev-btn" onclick="goPage(-1)" disabled>&#8592; Prev</button>
-      <span id="page-label">— / —</span>
+      <span id="page-label" style="display:flex;align-items:center;gap:3px;">
+        <input id="page-num-input" type="number" min="1" value=""
+          title="Type a page number and press Enter or click away to navigate"
+          style="width:46px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:1px 4px;text-align:right;-moz-appearance:textfield;"
+          onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault();}"
+          onblur="goPageByInput()">
+        <span id="page-total" style="color:#aaa;font-size:12px;white-space:nowrap;">/ —</span>
+      </span>
       <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>Next &#8594;</button>
       <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none"></select>
       <div style="flex:1"></div>
@@ -607,9 +614,9 @@
               title="Detect lattice rows and columns from annotated cells">🔲 Lattice</button>
       <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
               title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
-      <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled style="display:none"
+      <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled
               title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
-      <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled style="display:none"
+      <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
               title="Fill inner gaps in each lattice column with one shape, then re-detect">↕ Col fill</button>
       <button class="nav-btn" id="clear-ann-btn" onclick="openBatchModal()" disabled
               title="Batch operations across multiple pages">Batch</button>
@@ -1650,10 +1657,6 @@ async function runLatticeDetect() {
     latticeVisible = true;
     gridBtn.textContent = '📐 Hide Grid';
   }
-  ['row-fill-btn','col-fill-btn'].forEach(id => {
-    const b = document.getElementById(id);
-    b.style.display = ''; b.disabled = false;
-  });
   drawOverlay(); updatePanel();
   showToast(`Lattice assigned to ${n} shapes`);
 }
@@ -4418,7 +4421,8 @@ async function loadPage(idx) {
   pageIdx=idx; selIdx=-1; selSet.clear(); editMode=false; dragState=null; flaggedOverlaps=new Set();
   document.getElementById('prev-btn').disabled=idx===0;
   document.getElementById('next-btn').disabled=idx===pages.length-1;
-  document.getElementById('page-label').textContent=`${idx+1} / ${pages.length}`;
+  document.getElementById('page-num-input').value = idx + 1;
+  document.getElementById('page-total').textContent = `/ ${pages.length}`;
   document.getElementById('page-select').value=idx;
   document.getElementById('mode-btn').textContent='Review mode';
   document.getElementById('mode-btn').classList.remove('active');
@@ -4432,11 +4436,21 @@ async function loadPage(idx) {
   const gridBtn = document.getElementById('lattice-grid-btn');
   if (hasLattice) { gridBtn.style.display=''; gridBtn.disabled=false; }
   else            { gridBtn.style.display='none'; latticeVisible=false; }
+  document.getElementById('row-fill-btn').disabled = false;
+  document.getElementById('col-fill-btn').disabled = false;
   if (gridBtn.style.display!=='none') gridBtn.textContent = latticeVisible ? '📐 Hide Grid' : '📐 Show Grid';
 }
 
 function goPage(delta) { const n=pageIdx+delta; if(n>=0&&n<pages.length) loadPage(n); }
 function goPageByIndex(val) { loadPage(parseInt(val)); }
+function goPageByInput() {
+  const v = parseInt(document.getElementById('page-num-input').value);
+  if (!isNaN(v) && v >= 1 && v <= pages.length) {
+    loadPage(v - 1);
+  } else {
+    document.getElementById('page-num-input').value = pageIdx + 1; // reset to current
+  }
+}
 
 loadOcrSettings();
 
