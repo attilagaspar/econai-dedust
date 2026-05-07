@@ -23,34 +23,14 @@
     #topbar {
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 6px 12px;
+      gap: 8px;
+      padding: 4px 12px;
       background: #16213e;
       border-bottom: 1px solid #0f3460;
       flex-shrink: 0;
     }
-    #topbar h1 { font-size: 15px; font-weight: 600; color: #e94560; margin-right: 8px; }
-    #topbar label { color: #aaa; font-size: 12px; }
-    #folder-input {
-      flex: 1;
-      background: #0f3460;
-      border: 1px solid #e94560;
-      border-radius: 4px;
-      color: #fff;
-      padding: 3px 8px;
-      font-size: 12px;
-    }
-    #load-btn {
-      background: #e94560;
-      border: none;
-      border-radius: 4px;
-      color: #fff;
-      padding: 4px 14px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    #load-btn:hover { background: #c73652; }
+    #topbar h1 { font-size: 15px; font-weight: 600; color: #e94560; margin-right: 4px; }
+    #load-btn:hover { background: #1a3a6e; border-color: #e94560; }
 
     /* ── Main area ── */
     #main {
@@ -577,12 +557,27 @@
 </head>
 <body>
 
-<!-- Top bar -->
+<!-- Top bar: title + page navigation + compact load -->
 <div id="topbar">
   <h1>EconAI</h1>
-  <label for="folder-input">Folder:</label>
-  <input id="folder-input" type="text" placeholder="e.g. samples/kozponti_ertesito" />
-  <button id="load-btn" onclick="loadFolder()">Load</button>
+  <div style="width:1px;height:18px;background:#0f3460;margin:0 4px;"></div>
+  <button class="nav-btn" id="prev-btn" onclick="goPage(-1)" disabled>&#8592;</button>
+  <span id="page-label" style="display:flex;align-items:center;gap:3px;">
+    <input id="page-num-input" type="number" min="1" value=""
+      title="Type a page number and press Enter or click away to navigate"
+      style="width:46px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:1px 4px;text-align:right;-moz-appearance:textfield;"
+      onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault();}"
+      onblur="goPageByInput()">
+    <span id="page-total" style="color:#aaa;font-size:12px;white-space:nowrap;">/ —</span>
+  </span>
+  <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>&#8594;</button>
+  <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none;background:#0f3460;border:1px solid #444;border-radius:3px;color:#fff;padding:2px 6px;font-size:12px;"></select>
+  <div style="flex:1"></div>
+  <label for="folder-input" style="color:#666;font-size:11px;">Folder:</label>
+  <input id="folder-input" type="text" placeholder="e.g. samples/kozponti_ertesito"
+         style="width:220px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#aaa;padding:2px 6px;font-size:11px;" />
+  <button id="load-btn" onclick="loadFolder()"
+          style="background:#0f3460;border:1px solid #e94560;border-radius:3px;color:#e94560;padding:2px 10px;cursor:pointer;font-size:11px;font-weight:600;">Load</button>
 </div>
 
 <!-- Main -->
@@ -591,19 +586,8 @@
   <!-- Left: image viewer -->
   <div id="viewer-col">
 
+    <!-- Tool bar: all action buttons -->
     <div id="page-nav">
-      <button class="nav-btn" id="prev-btn" onclick="goPage(-1)" disabled>&#8592; Prev</button>
-      <span id="page-label" style="display:flex;align-items:center;gap:3px;">
-        <input id="page-num-input" type="number" min="1" value=""
-          title="Type a page number and press Enter or click away to navigate"
-          style="width:46px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:1px 4px;text-align:right;-moz-appearance:textfield;"
-          onkeydown="if(event.key==='Enter'){this.blur();event.preventDefault();}"
-          onblur="goPageByInput()">
-        <span id="page-total" style="color:#aaa;font-size:12px;white-space:nowrap;">/ —</span>
-      </span>
-      <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>Next &#8594;</button>
-      <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none"></select>
-      <div style="flex:1"></div>
       <button class="nav-btn" id="overlap-btn" onclick="findOverlaps()" disabled
               title="Flag shapes whose area is mostly covered by other shapes">🔍 Overlaps</button>
       <input id="overlap-threshold" type="number" value="50" min="1" max="99"
@@ -632,7 +616,8 @@
               title="Toggle between review and edit mode (E)">Review mode</button>
       <button class="nav-btn" id="ocr-view-btn" onclick="toggleOcrView()" disabled
               title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
-      <span style="font-size:11px;color:#666;margin-left:6px;">Diagnose:</span>
+      <div style="flex:1"></div>
+      <span style="font-size:11px;color:#666;">Diagnose:</span>
       <select id="diagnostic-select" onchange="onDiagnosticChange()"
               style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 5px;font-size:11px;">
         <option value="none">— none —</option>
