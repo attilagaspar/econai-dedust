@@ -1759,16 +1759,16 @@ async function runSnapToGrid() {
   const sShapes = pageData.shapes.filter(s => s.super_row != null && s.super_column != null && s.points?.length >= 2);
   if (!sShapes.length) { showToast('No lattice shapes on this page'); return; }
   pushUndo();
-  // Compute band medians — identical to what the overlay draws
+
+  // Compute band medians — same as overlay
   const rowData = {}, colData = {};
   sShapes.forEach(s => {
     const xs = s.points.map(p => p[0]), ys = s.points.map(p => p[1]);
-    const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
     const r = s.super_row, c = s.super_column;
     if (!rowData[r]) rowData[r] = { tops: [], bots: [] };
-    rowData[r].tops.push(y1); rowData[r].bots.push(y2);
+    rowData[r].tops.push(Math.min(...ys)); rowData[r].bots.push(Math.max(...ys));
     if (!colData[c]) colData[c] = { lefts: [], rights: [] };
-    colData[c].lefts.push(x1); colData[c].rights.push(x2);
+    colData[c].lefts.push(Math.min(...xs)); colData[c].rights.push(Math.max(...xs));
   });
   const rowBands = {}, colBands = {};
   Object.entries(rowData).forEach(([r, d]) => rowBands[+r] = {
@@ -1777,7 +1777,19 @@ async function runSnapToGrid() {
   Object.entries(colData).forEach(([c, d]) => colBands[+c] = {
     left: Math.round(_median(d.lefts)), right: Math.round(_median(d.rights))
   });
-  // Snap every shape's points to its row/col band
+
+  // The overlay draws the RIGHT boundary of column C as the LEFT line of column C+1.
+  // So set each column's right edge = next column's left edge, matching the blue lines exactly.
+  const sortedCols = Object.keys(colBands).map(Number).sort((a, b) => colBands[a].left - colBands[b].left);
+  for (let i = 0; i < sortedCols.length - 1; i++)
+    colBands[sortedCols[i]].right = colBands[sortedCols[i + 1]].left;
+
+  // Same for rows: bottom of row R = top of row R+1.
+  const sortedRows = Object.keys(rowBands).map(Number).sort((a, b) => rowBands[a].top - rowBands[b].top);
+  for (let i = 0; i < sortedRows.length - 1; i++)
+    rowBands[sortedRows[i]].bot = rowBands[sortedRows[i + 1]].top;
+
+  // Snap every shape to its cell in the grid
   sShapes.forEach(s => {
     const rb = rowBands[s.super_row], cb = colBands[s.super_column];
     if (!rb || !cb) return;
@@ -1787,6 +1799,7 @@ async function runSnapToGrid() {
     if (p1[1] <= p2[1]) { p1[1] = rb.top;   p2[1] = rb.bot;   }
     else                 { p1[1] = rb.bot;   p2[1] = rb.top;   }
   });
+
   await replaceAllShapes();
   drawOverlay(); updatePanel();
   showToast('Snapped all lattice shapes to grid');
