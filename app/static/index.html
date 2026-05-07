@@ -618,6 +618,8 @@
               title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
       <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
               title="Fill inner gaps in each lattice column with one shape, then re-detect">↕ Col fill</button>
+      <button class="nav-btn" id="snap-btn" onclick="runSnapToGrid()" disabled
+              title="Snap every lattice shape's edges to the median band position of its row and column">⊞ Snap</button>
       <button class="nav-btn" id="clear-ann-btn" onclick="openBatchModal()" disabled
               title="Batch operations across multiple pages">Batch</button>
       <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
@@ -1752,6 +1754,43 @@ async function _runFill(direction) {
 
 async function runRowFill() { await _runFill('row'); }
 async function runColFill() { await _runFill('col'); }
+
+async function runSnapToGrid() {
+  const sShapes = pageData.shapes.filter(s => s.super_row != null && s.super_column != null && s.points?.length >= 2);
+  if (!sShapes.length) { showToast('No lattice shapes on this page'); return; }
+  pushUndo();
+  // Compute band medians — identical to what the overlay draws
+  const rowData = {}, colData = {};
+  sShapes.forEach(s => {
+    const xs = s.points.map(p => p[0]), ys = s.points.map(p => p[1]);
+    const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
+    const r = s.super_row, c = s.super_column;
+    if (!rowData[r]) rowData[r] = { tops: [], bots: [] };
+    rowData[r].tops.push(y1); rowData[r].bots.push(y2);
+    if (!colData[c]) colData[c] = { lefts: [], rights: [] };
+    colData[c].lefts.push(x1); colData[c].rights.push(x2);
+  });
+  const rowBands = {}, colBands = {};
+  Object.entries(rowData).forEach(([r, d]) => rowBands[+r] = {
+    top: Math.round(_median(d.tops)), bot: Math.round(_median(d.bots))
+  });
+  Object.entries(colData).forEach(([c, d]) => colBands[+c] = {
+    left: Math.round(_median(d.lefts)), right: Math.round(_median(d.rights))
+  });
+  // Snap every shape's points to its row/col band
+  sShapes.forEach(s => {
+    const rb = rowBands[s.super_row], cb = colBands[s.super_column];
+    if (!rb || !cb) return;
+    const [p1, p2] = s.points;
+    if (p1[0] <= p2[0]) { p1[0] = cb.left;  p2[0] = cb.right; }
+    else                 { p1[0] = cb.right; p2[0] = cb.left;  }
+    if (p1[1] <= p2[1]) { p1[1] = rb.top;   p2[1] = rb.bot;   }
+    else                 { p1[1] = rb.bot;   p2[1] = rb.top;   }
+  });
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast('Snapped all lattice shapes to grid');
+}
 
 // ── Core lattice algorithm (port of layout_superstructure_detect.py) ──────────
 
@@ -4411,6 +4450,7 @@ async function loadPage(idx) {
   else            { gridBtn.style.display='none'; latticeVisible=false; }
   document.getElementById('row-fill-btn').disabled = false;
   document.getElementById('col-fill-btn').disabled = false;
+  document.getElementById('snap-btn').disabled = false;
   if (gridBtn.style.display!=='none') gridBtn.textContent = latticeVisible ? '📐 Hide Grid' : '📐 Show Grid';
 }
 
