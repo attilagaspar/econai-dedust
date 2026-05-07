@@ -598,6 +598,10 @@
               title="Detect lattice rows and columns from annotated cells">🔲 Lattice</button>
       <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
               title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
+      <button class="nav-btn" id="lattice-col-sep-btn" onclick="toggleLatticeSepMode('col')" disabled style="display:none"
+              title="Click inside a lattice column to split it with a vertical separator">┃ Col sep</button>
+      <button class="nav-btn" id="lattice-row-sep-btn" onclick="toggleLatticeSepMode('row')" disabled style="display:none"
+              title="Click inside a lattice row to split it with a horizontal separator">━ Row sep</button>
       <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled
               title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
       <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
@@ -1070,6 +1074,7 @@ let clipboard      = null;       // copied shape for Ctrl+V
 const undoStack   = [];          // array of shapes-array snapshots
 let flaggedOverlaps    = new Set(); // indices of shapes with excessive overlap
 let latticeVisible     = false;     // whether to draw lattice grid overlay
+let latticeSepMode     = null;      // 'col' | 'row' | null — lattice separator insertion mode
 let diagnosticMode      = 'none';
 let diagnosticFlagged   = new Set();
 let diagnosticRowCounts = {}; // shape index → line count (for row-mismatch modes)
@@ -1638,8 +1643,11 @@ async function runLatticeDetect() {
   const n = pageData.shapes.filter(s => s.super_row != null).length;
   // Show grid automatically after first run
   const gridBtn = document.getElementById('lattice-grid-btn');
-  gridBtn.style.display = '';
-  gridBtn.disabled = false;
+  gridBtn.style.display = ''; gridBtn.disabled = false;
+  const colSepBtn2 = document.getElementById('lattice-col-sep-btn');
+  const rowSepBtn2 = document.getElementById('lattice-row-sep-btn');
+  colSepBtn2.style.display = ''; colSepBtn2.disabled = false;
+  rowSepBtn2.style.display = ''; rowSepBtn2.disabled = false;
   if (!latticeVisible) {
     latticeVisible = true;
     gridBtn.textContent = '📐 Hide Grid';
@@ -1651,7 +1659,72 @@ async function runLatticeDetect() {
 function toggleLatticeGrid() {
   latticeVisible = !latticeVisible;
   document.getElementById('lattice-grid-btn').textContent = latticeVisible ? '📐 Hide Grid' : '📐 Show Grid';
+  if (!latticeVisible) { latticeSepMode = null; _updateLatticeSepBtns(); }
   drawOverlay();
+}
+
+function toggleLatticeSepMode(type) {
+  latticeSepMode = latticeSepMode === type ? null : type;
+  if (latticeSepMode && !latticeVisible) { latticeVisible = true; document.getElementById('lattice-grid-btn').textContent = '📐 Hide Grid'; }
+  _updateLatticeSepBtns();
+  drawOverlay();
+}
+
+function _updateLatticeSepBtns() {
+  document.getElementById('lattice-col-sep-btn').classList.toggle('active', latticeSepMode === 'col');
+  document.getElementById('lattice-row-sep-btn').classList.toggle('active', latticeSepMode === 'row');
+}
+
+async function handleLatticeSepClick(e, rowBands, colBands) {
+  if (!latticeSepMode) return;
+  const p = screenToImg(e.clientX, e.clientY);
+  const latticeShapes = pageData.shapes.filter(s => s.super_row != null && s.super_column != null && s.points?.length >= 2);
+  if (!latticeShapes.length) return;
+  pushUndo();
+  const toAdd = [];
+
+  if (latticeSepMode === 'col') {
+    // Find which column band contains the click x
+    const sortedCols = Object.keys(colBands).map(Number).sort((a,b) => colBands[a].left - colBands[b].left);
+    const targetCol = sortedCols.find(c => p.x >= colBands[c].left && p.x <= colBands[c].right);
+    if (targetCol == null) { undoStack.pop(); return; }
+    const x = Math.round(p.x);
+    latticeShapes.forEach(s => {
+      if (s.super_column !== targetCol) return;
+      const xs = s.points.map(q => q[0]), ys = s.points.map(q => q[1]);
+      const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
+      if (x <= x1 || x >= x2) return;
+      // Clip original shape to left part
+      const [p1, p2] = s.points;
+      if (p1[0] <= p2[0]) p2[0] = x; else p1[0] = x;
+      // New right part
+      toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null, points: [[x, y1], [x2, y2]] });
+    });
+
+  } else { // 'row'
+    const sortedRows = Object.keys(rowBands).map(Number).sort((a,b) => rowBands[a].top - rowBands[b].top);
+    const targetRow = sortedRows.find(r => p.y >= rowBands[r].top && p.y <= rowBands[r].bot);
+    if (targetRow == null) { undoStack.pop(); return; }
+    const y = Math.round(p.y);
+    latticeShapes.forEach(s => {
+      if (s.super_row !== targetRow) return;
+      const xs = s.points.map(q => q[0]), ys = s.points.map(q => q[1]);
+      const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
+      if (y <= y1 || y >= y2) return;
+      // Clip original shape to top part
+      const [p1, p2] = s.points;
+      if (p1[1] <= p2[1]) p2[1] = y; else p1[1] = y;
+      // New bottom part
+      toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null, points: [[x1, y], [x2, y2]] });
+    });
+  }
+
+  toAdd.forEach(s => pageData.shapes.push(s));
+  const prevLabels = [...new Set(latticeShapes.map(s => s.label))];
+  _latticeDetect(prevLabels);
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast(`${latticeSepMode === 'col' ? 'Column' : 'Row'} separator added`);
 }
 
 // ── Row / Column fill ─────────────────────────────────────────────────────────
@@ -2271,6 +2344,22 @@ function drawOverlay() {
         });
         mkLine(gxR,gyT,gxR,gyB);
         mkColHandle(gxR, sCols[sCols.length-1], null);
+
+        // Lattice sep mode: transparent catcher over entire grid
+        if (latticeSepMode) {
+          const ptl=imgToScreen(gxL,gyT), pbr=imgToScreen(gxR,gyB);
+          if (ptl && pbr) {
+            const catcher=document.createElementNS('http://www.w3.org/2000/svg','rect');
+            catcher.setAttribute('x',ptl.x); catcher.setAttribute('y',ptl.y);
+            catcher.setAttribute('width',Math.max(0,pbr.x-ptl.x));
+            catcher.setAttribute('height',Math.max(0,pbr.y-ptl.y));
+            catcher.setAttribute('fill','none'); catcher.setAttribute('stroke','none');
+            catcher.style.pointerEvents='all';
+            catcher.style.cursor=latticeSepMode==='col'?'col-resize':'row-resize';
+            catcher.addEventListener('mousedown',e=>{e.stopPropagation();e.preventDefault();handleLatticeSepClick(e,rowBands,colBands);});
+            svgOverlay.appendChild(catcher);
+          }
+        }
       }
     }
   }
@@ -4380,6 +4469,7 @@ document.addEventListener('keydown', e => {
     if (document.getElementById('persp-modal').classList.contains('show')) { rejectPerspective(); return; }
     if (perspMode) { cancelPerspMode(); return; }
     if (tableMode) { cancelTableMode(); return; }
+    if (latticeSepMode) { latticeSepMode = null; _updateLatticeSepBtns(); drawOverlay(); return; }
   }
   if ((e.ctrlKey||e.metaKey)&&e.key==='s') { e.preventDefault(); saveCorrection(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key==='z') { e.preventDefault(); if(tableMode) tableUndo(); else undo(); return; }
@@ -4444,8 +4534,17 @@ async function loadPage(idx) {
   // Show grid button if this page already has lattice data
   const hasLattice = pageData?.shapes?.some(s => s.super_row != null);
   const gridBtn = document.getElementById('lattice-grid-btn');
-  if (hasLattice) { gridBtn.style.display=''; gridBtn.disabled=false; }
-  else            { gridBtn.style.display='none'; latticeVisible=false; }
+  const colSepBtn = document.getElementById('lattice-col-sep-btn');
+  const rowSepBtn = document.getElementById('lattice-row-sep-btn');
+  if (hasLattice) {
+    gridBtn.style.display=''; gridBtn.disabled=false;
+    colSepBtn.style.display=''; colSepBtn.disabled=false;
+    rowSepBtn.style.display=''; rowSepBtn.disabled=false;
+  } else {
+    gridBtn.style.display='none'; latticeVisible=false;
+    colSepBtn.style.display='none'; rowSepBtn.style.display='none';
+    latticeSepMode=null;
+  }
   document.getElementById('row-fill-btn').disabled = false;
   document.getElementById('col-fill-btn').disabled = false;
   document.getElementById('snap-btn').disabled = false;
