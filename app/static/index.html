@@ -607,6 +607,10 @@
               title="Detect lattice rows and columns from annotated cells">🔲 Lattice</button>
       <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
               title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
+      <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled style="display:none"
+              title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
+      <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled style="display:none"
+              title="Fill inner gaps in each lattice column with one shape, then re-detect">↕ Col fill</button>
       <button class="nav-btn" id="clear-ann-btn" onclick="openBatchModal()" disabled
               title="Batch operations across multiple pages">Batch</button>
       <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
@@ -1646,6 +1650,10 @@ async function runLatticeDetect() {
     latticeVisible = true;
     gridBtn.textContent = '📐 Hide Grid';
   }
+  ['row-fill-btn','col-fill-btn'].forEach(id => {
+    const b = document.getElementById(id);
+    b.style.display = ''; b.disabled = false;
+  });
   drawOverlay(); updatePanel();
   showToast(`Lattice assigned to ${n} shapes`);
 }
@@ -1655,6 +1663,119 @@ function toggleLatticeGrid() {
   document.getElementById('lattice-grid-btn').textContent = latticeVisible ? '📐 Hide Grid' : '📐 Show Grid';
   drawOverlay();
 }
+
+// ── Row / Column fill ─────────────────────────────────────────────────────────
+async function _runFill(direction) {
+  const latticeShapes = pageData.shapes.filter(s => s.super_row != null && s.super_column != null);
+  if (!latticeShapes.length) { showToast('No lattice detected'); return; }
+  pushUndo();
+
+  // Labels used in the lattice — needed to re-detect after adding shapes
+  const prevLabels = [...new Set(latticeShapes.map(s => s.label))];
+
+  // Band geometry from existing lattice shapes (post-smooth medians)
+  const rowBands = {}, colBands = {};
+  [...new Set(latticeShapes.map(s => s.super_row))].forEach(r => {
+    const rs = latticeShapes.filter(s => s.super_row === r);
+    rowBands[r] = {
+      top: Math.round(_median(rs.map(s => Math.min(...s.points.map(p => p[1]))))),
+      bot: Math.round(_median(rs.map(s => Math.max(...s.points.map(p => p[1])))))
+    };
+  });
+  [...new Set(latticeShapes.map(s => s.super_column))].forEach(c => {
+    const cs = latticeShapes.filter(s => s.super_column === c);
+    colBands[c] = {
+      left:  Math.round(_median(cs.map(s => Math.min(...s.points.map(p => p[0]))))),
+      right: Math.round(_median(cs.map(s => Math.max(...s.points.map(p => p[0])))))
+    };
+  });
+
+  const posMap = new Map();
+  latticeShapes.forEach(s => posMap.set(`${s.super_row},${s.super_column}`, s));
+
+  const labelCount = {};
+  latticeShapes.forEach(s => { labelCount[s.label] = (labelCount[s.label]||0)+1; });
+  const fallbackLabel = Object.entries(labelCount).sort((a,b)=>b[1]-a[1])[0][0];
+
+  let added = 0;
+
+  if (direction === 'row') {
+    // For each super_row: find inner column gaps, merge each contiguous gap into one shape
+    [...new Set(latticeShapes.map(s => s.super_row))].forEach(r => {
+      const presentCols = latticeShapes.filter(s => s.super_row === r)
+        .map(s => s.super_column).sort((a,b)=>a-b);
+      if (presentCols.length < 2) return;
+      const minC = presentCols[0], maxC = presentCols[presentCols.length-1];
+      const presentSet = new Set(presentCols);
+      let gapStart = null;
+      for (let c = minC + 1; c <= maxC + 1; c++) {
+        const missing = c <= maxC && !presentSet.has(c) && colBands[c];
+        if (missing && gapStart === null) {
+          gapStart = c;
+        } else if (!missing && gapStart !== null) {
+          const gapEnd = c - 1;
+          const rb = rowBands[r];
+          const cbS = colBands[gapStart], cbE = colBands[gapEnd];
+          if (rb && cbS && cbE) {
+            // Label: shape above gap start, fallback to most frequent
+            const above = posMap.get(`${r-1},${gapStart}`);
+            const label = above ? above.label : fallbackLabel;
+            pageData.shapes.push({
+              label, shape_type:'rectangle', flags:{}, group_id:null,
+              points: [[cbS.left, rb.top], [cbE.right, rb.bot]],
+            });
+            added++;
+          }
+          gapStart = null;
+        }
+      }
+    });
+  } else {
+    // For each super_column: find inner row gaps, merge each contiguous gap into one shape
+    [...new Set(latticeShapes.map(s => s.super_column))].forEach(c => {
+      const presentRows = latticeShapes.filter(s => s.super_column === c)
+        .map(s => s.super_row).sort((a,b)=>a-b);
+      if (presentRows.length < 2) return;
+      const minR = presentRows[0], maxR = presentRows[presentRows.length-1];
+      const presentSet = new Set(presentRows);
+      let gapStart = null;
+      for (let r = minR + 1; r <= maxR + 1; r++) {
+        const missing = r <= maxR && !presentSet.has(r) && rowBands[r];
+        if (missing && gapStart === null) {
+          gapStart = r;
+        } else if (!missing && gapStart !== null) {
+          const gapEnd = r - 1;
+          const cb = colBands[c];
+          const rbS = rowBands[gapStart], rbE = rowBands[gapEnd];
+          if (cb && rbS && rbE) {
+            // Label: first shape to the right in the starting row
+            const rightNeighbour = latticeShapes
+              .filter(s => s.super_row === gapStart && s.super_column > c)
+              .sort((a,b) => a.super_column - b.super_column)[0];
+            const label = rightNeighbour ? rightNeighbour.label : fallbackLabel;
+            pageData.shapes.push({
+              label, shape_type:'rectangle', flags:{}, group_id:null,
+              points: [[cb.left, rbS.top], [cb.right, rbE.bot]],
+            });
+            added++;
+          }
+          gapStart = null;
+        }
+      }
+    });
+  }
+
+  if (!added) { showToast('No inner gaps found'); return; }
+
+  // Re-detect lattice with same labels so new shapes get proper super_row/column
+  _latticeDetect(prevLabels);
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast(`Filled ${added} gap${added>1?'s':''}, lattice re-detected`);
+}
+
+async function runRowFill() { await _runFill('row'); }
+async function runColFill() { await _runFill('col'); }
 
 // ── Core lattice algorithm (port of layout_superstructure_detect.py) ──────────
 
