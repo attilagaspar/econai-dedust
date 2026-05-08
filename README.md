@@ -1,6 +1,30 @@
 # EconAI — Historical Document Digitization Pipeline
 
-A browser-based tool for digitizing historical economic documents at scale using layout detection, OCR, and LLM cleaning.
+A browser-based tool for digitizing historical economic documents at scale using layout detection, OCR, and LLM cleaning. Built for researchers who need to turn large collections of scanned statistical tables and registers into structured data — without sending everything to a commercial API.
+
+The pipeline takes you from raw scanned pages all the way to Excel/CSV, with human-in-the-loop correction at every stage.
+
+---
+
+## Screenshots
+
+### Project dashboard
+
+![Dashboard — project list and pipeline](illustrations/1.png)
+
+All projects are listed in the sidebar with their type, page count, and current pipeline stage. Selecting a project shows the full pipeline as a progress indicator, with one-click actions to open the editor, import pages, or advance to the next stage.
+
+![Dashboard — GPU training and server settings](illustrations/2.png)
+
+The dashboard also handles the GPU training workflow: prepare training data (LabelMe → COCO conversion), push to a remote GPU server, run Detectron2 training or inference inside Docker, and pull predictions back — all with a live streaming log. SSH connection settings are configured here.
+
+### Annotation editor
+
+![Annotation editor](illustrations/3.png)
+
+The editor is a full-featured browser-based annotation tool built on OpenSeadragon. It shows the scanned page at full resolution with zoomable pan, and overlays bounding box annotations with label colors. The right panel shows the selected cell's OCR, LLM-cleaned, and human-validated text side by side. The toolbar provides tools for layout detection, lattice grid editing, row/column fill, and diagnostics.
+
+---
 
 ## What it does
 
@@ -86,6 +110,14 @@ Single-page app with OpenSeadragon viewer and SVG overlay.
 
 ### Undo
 - **Ctrl+Z** — undo up to 50 steps (snapshots full shapes array per step)
+
+### Lattice grid tools
+- **Lattice** — auto-detect the table superstructure (row/column grid) from existing annotations
+- **Show Grid** — toggle the blue lattice overlay showing detected grid lines
+- **Col sep / Row sep** — click inside the grid to insert a new column or row separator, splitting existing cells
+- **Del sep** — click a separator line to merge the two adjacent rows or columns
+- **Snap** — snap all lattice cell annotations to the exact detected grid boundaries
+- **Row fill / Col fill** — propagate cell labels across an entire row or column
 
 ---
 
