@@ -2199,8 +2199,9 @@ def api_export_excel(
     selected_types = {t.strip() for t in types.split(",") if t.strip()} if types else set()
 
     # ── Styles ───────────────────────────────────────────────────────────────
-    _align    = Alignment(wrap_text=True, vertical="top", horizontal="left")
-    _red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+    _align     = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    _red_fill  = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+    _blue_fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
 
     def natural_key(p):
         return [int(c) if c.isdigit() else c.lower()
@@ -2295,37 +2296,87 @@ def api_export_excel(
                               w_px=c["w"]))   # pixel width of bounding box
         return cells
 
-    def write_cells(ws, cells, col_offset=0):
+    # ── Helpers for stacking / dual-page alignment ───────────────────────────
+
+    def lattice_start_row(cells):
+        """First lattice row_idx where column density >= 60% of the page maximum.
+        Returns 0 if the page is sparse or empty."""
+        if not cells:
+            return 0
+        rmap: dict = defaultdict(set)
+        for c in cells:
+            rmap[c["row_idx"]].add(c["col_idx"])
+        max_cols  = max(len(s) for s in rmap.values())
+        threshold = max(2, max_cols * 0.6)
+        for ridx in sorted(rmap):
+            if len(rmap[ridx]) >= threshold:
+                return ridx
+        return min(rmap)
+
+    def excel_row_for_lattice(cells):
+        """1-based Excel row (within-page, no external offset) where lattice begins."""
+        if not cells:
+            return 1
+        target = lattice_start_row(cells)
+        rmap: dict = defaultdict(list)
+        for c in cells:
+            rmap[c["row_idx"]].append(c)
+        row = 1
+        for ridx in sorted(rmap):
+            if ridx >= target:
+                return row
+            row += max(len(c["lines"]) for c in rmap[ridx])
+        return row
+
+    def page_excel_height(cells, extra=0):
+        """Total Excel rows a page occupies (expansion + optional alignment pad)."""
+        if not cells:
+            return extra
+        rmap: dict = defaultdict(list)
+        for c in cells:
+            rmap[c["row_idx"]].append(c)
+        return extra + sum(max(len(c["lines"]) for c in row)
+                           for row in rmap.values())
+
+    def write_cells(ws, cells, col_offset=0, base_row=1, align_pad=0):
         """
-        Write cells to worksheet.
-        Each lattice row is expanded so every cell occupies max_lines Excel rows.
-        Cells shorter than max_lines get blank red-filled padding at the bottom.
+        Write cells to ws starting at base_row.
+        align_pad blank rows (light-blue) are prepended before content — used to
+        align the lattice with a paired page in dual-page mode.
+        Within each lattice row, cells shorter than max_lines are padded with
+        blank light-red cells to flag line-count mismatches.
         """
         if not cells:
             return
 
-        rows_map: dict = defaultdict(list)
+        # ── Alignment padding (blue) ─────────────────────────────────────
+        if align_pad > 0:
+            min_ci = min(c["col_idx"] for c in cells)
+            max_ci = max(c["col_idx"] for c in cells)
+            for pad_r in range(base_row, base_row + align_pad):
+                for ci in range(min_ci, max_ci + 1):
+                    ws.cell(row=pad_r,
+                            column=ci + 1 + col_offset).fill = _blue_fill
+
+        # ── Cell content ─────────────────────────────────────────────────
+        rmap: dict = defaultdict(list)
         for c in cells:
-            rows_map[c["row_idx"]].append(c)
+            rmap[c["row_idx"]].append(c)
 
-        excel_row = 1
-        for row_idx in sorted(rows_map.keys()):
-            row_cells  = rows_map[row_idx]
-            max_lines  = max(len(c["lines"]) for c in row_cells)
-
+        excel_row = base_row + align_pad
+        for row_idx in sorted(rmap):
+            row_cells = rmap[row_idx]
+            max_lines = max(len(c["lines"]) for c in row_cells)
             for line_i in range(max_lines):
                 for c in row_cells:
-                    col   = c["col_idx"] + 1 + col_offset
-                    lines = c["lines"]
-                    xcel  = ws.cell(row=excel_row + line_i, column=col)
+                    col  = c["col_idx"] + 1 + col_offset
+                    xcel = ws.cell(row=excel_row + line_i, column=col)
                     xcel.alignment = _align
-                    if line_i < len(lines):
-                        xcel.value = lines[line_i]
+                    if line_i < len(c["lines"]):
+                        xcel.value = c["lines"][line_i]
                     else:
-                        # Pad with blank + red flag
                         xcel.value = ""
                         xcel.fill  = _red_fill
-
             excel_row += max_lines
 
         # ── Column widths proportional to avg annotation pixel width ─────
@@ -2333,14 +2384,11 @@ def api_export_excel(
         for c in cells:
             col_px[c["col_idx"]].append(c.get("w_px", 50))
         if col_px:
-            avg_px  = {col: sum(pxs)/len(pxs) for col, pxs in col_px.items()}
+            avg_px   = {col: sum(pxs)/len(pxs) for col, pxs in col_px.items()}
             total_px = sum(avg_px.values())
-            # Scale so all columns together fill ~120 character units (one normal page)
             for col_idx, px in avg_px.items():
                 width  = max(4.0, min(60.0, px / total_px * 120))
                 letter = get_column_letter(col_idx + 1 + col_offset)
-                # Only widen, never narrow — safe for dual-page where both
-                # pages write to the same worksheet
                 if ws.column_dimensions[letter].width < width:
                     ws.column_dimensions[letter].width = round(width, 1)
 
@@ -2361,16 +2409,31 @@ def api_export_excel(
     else:
         jfiles = sorted(d.glob("*.json"), key=lambda f: natural_key(f.stem))
 
-    wb = openpyxl.Workbook()
+    wb  = openpyxl.Workbook()
     wb.remove(wb.active)
+    SEP = 1   # blank separator rows between pages when stacking
 
-    if not dual or scope == "page":
-        # ── Single-page sheets ────────────────────────────────────────────
+    if scope == "page":
+        # ── Single page: one sheet ────────────────────────────────────────
+        ws = wb.create_sheet(title=stem[:31])
+        write_cells(ws, shapes_to_cells(load_shapes(jfiles[0])))
+
+    elif not dual:
+        # ── Whole document, single layout: all pages on one sheet ────────
+        ws       = wb.create_sheet(title="Export")
+        cur_row  = 1
         for jf in jfiles:
-            ws = wb.create_sheet(title=jf.stem[:31])
-            write_cells(ws, shapes_to_cells(load_shapes(jf)))
+            cells = shapes_to_cells(load_shapes(jf))
+            if not cells:
+                continue
+            write_cells(ws, cells, col_offset=0, base_row=cur_row)
+            cur_row += page_excel_height(cells) + SEP
+
     else:
-        # ── Dual-page sheets: odd page (left) + even page (right) ────────
+        # ── Whole document, dual layout: paired pages side-by-side ───────
+        # All pairs stacked vertically on one sheet.
+        ws      = wb.create_sheet(title="Export")
+        cur_row = 1
         i = 0
         while i < len(jfiles):
             left_jf  = jfiles[i]
@@ -2378,18 +2441,26 @@ def api_export_excel(
             i += 2
 
             left_cells  = shapes_to_cells(load_shapes(left_jf))
-            title_parts = [left_jf.stem]
+            right_cells = shapes_to_cells(load_shapes(right_jf)) if right_jf else []
 
-            ws = wb.create_sheet(title="tmp")
-            write_cells(ws, left_cells, col_offset=0)
+            # Align lattice rows between left and right pages
+            left_latt  = excel_row_for_lattice(left_cells)   # within-page row
+            right_latt = excel_row_for_lattice(right_cells)
+            left_pad   = max(0, right_latt - left_latt)
+            right_pad  = max(0, left_latt  - right_latt)
 
-            if right_jf:
-                title_parts.append(right_jf.stem)
-                right_cells = shapes_to_cells(load_shapes(right_jf))
-                offset      = max_col_of(left_cells) + 2   # 1-column gap
-                write_cells(ws, right_cells, col_offset=offset)
+            right_col  = max_col_of(left_cells) + 2          # 1-column gap
 
-            ws.title = ("-".join(title_parts))[:31]
+            write_cells(ws, left_cells,  col_offset=0,
+                        base_row=cur_row, align_pad=left_pad)
+            write_cells(ws, right_cells, col_offset=right_col,
+                        base_row=cur_row, align_pad=right_pad)
+
+            pair_height = max(
+                page_excel_height(left_cells,  extra=left_pad),
+                page_excel_height(right_cells, extra=right_pad),
+            )
+            cur_row += pair_height + SEP
 
     if not wb.worksheets:
         wb.create_sheet("Empty")
