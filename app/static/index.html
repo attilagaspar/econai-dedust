@@ -3693,7 +3693,7 @@ async function doExcelExport() {
     dual: dual ? 'true' : 'false',
   });
   if (scope === 'page') {
-    const stem = pages[pageIdx];
+    const stem = pages[pageIdx]?.stem;
     if (!stem) { alert('No page loaded'); return; }
     params.set('stem', stem);
   }

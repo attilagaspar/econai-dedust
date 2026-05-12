@@ -2178,18 +2178,28 @@ def api_export_excel(
     layer:  str = Query("best_llm"),   # "ocr"|"llm"|"human"|"best_ocr"|"best_llm"
     types:  str = Query(""),           # comma-sep label types; empty = all
 ):
-    """Generate an .xlsx file preserving the spatial layout of annotations."""
+    """
+    Generate an .xlsx preserving spatial layout.
+    Each text line inside a lattice cell becomes its own Excel row.
+    When cells in the same lattice row have different line counts, the
+    shorter ones are padded with blank cells coloured light-red.
+    """
     try:
         import openpyxl
-        from openpyxl.styles import Alignment
+        from openpyxl.styles import Alignment, PatternFill
     except ImportError:
         raise HTTPException(status_code=500,
             detail="openpyxl not installed — run: pip install openpyxl")
 
     import io as _io, re
+    from collections import defaultdict
 
     d = _resolve_folder(folder)
     selected_types = {t.strip() for t in types.split(",") if t.strip()} if types else set()
+
+    # ── Styles ───────────────────────────────────────────────────────────────
+    _align    = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    _red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
 
     def natural_key(p):
         return [int(c) if c.isdigit() else c.lower()
@@ -2200,15 +2210,25 @@ def api_export_excel(
         ocr   = ((shape.get("tesseract_output") or {}).get("ocr_text") or
                  (shape.get("easyocr_output")   or {}).get("ocr_text") or "")
         llm   = (shape.get("openai_output") or {}).get("response") or ""
-        if layer == "human":   return human.strip()
-        if layer == "ocr":     return ocr.strip()
-        if layer == "llm":     return llm.strip()
+        if layer == "human":    return human.strip()
+        if layer == "ocr":      return ocr.strip()
+        if layer == "llm":      return llm.strip()
         if layer == "best_ocr": return (human or ocr or llm).strip()
-        return (human or llm or ocr).strip()  # best_llm (default)
+        return (human or llm or ocr).strip()   # best_llm (default)
 
-    def shapes_to_grid(shapes):
-        """Map qualifying shapes to {(row_idx, col_idx): text}."""
-        cells = []
+    def text_to_lines(text):
+        """Split text into lines, stripping trailing blank lines."""
+        lines = text.split("\n")
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return lines or [""]
+
+    def shapes_to_cells(shapes):
+        """
+        Return list of dicts: {row_idx, col_idx, lines[]}
+        Lattice rows/cols are detected by spatial clustering.
+        """
+        raw = []
         for sh in shapes:
             if selected_types and sh.get("label", "") not in selected_types:
                 continue
@@ -2220,18 +2240,18 @@ def api_export_excel(
                 continue
             xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
-            cells.append(dict(text=text,
-                              cx=(x1+x2)/2, cy=(y1+y2)/2,
-                              h=max(1, y2-y1), w=max(1, x2-x1)))
-        if not cells:
-            return {}
+            raw.append(dict(text=text,
+                            cx=(x1+x2)/2, cy=(y1+y2)/2,
+                            h=max(1, y2-y1), w=max(1, x2-x1)))
+        if not raw:
+            return []
 
-        # ── Row clustering ────────────────────────────────────────────────
-        med_h   = sorted(c["h"] for c in cells)[len(cells)//2]
+        # ── Row clustering ───────────────────────────────────────────────
+        med_h    = sorted(c["h"] for c in raw)[len(raw)//2]
         thresh_y = max(3, med_h * 0.55)
-        cells.sort(key=lambda c: c["cy"])
-        rows = [[cells[0]]]
-        for c in cells[1:]:
+        raw.sort(key=lambda c: c["cy"])
+        rows = [[raw[0]]]
+        for c in raw[1:]:
             mean_cy = sum(x["cy"] for x in rows[-1]) / len(rows[-1])
             if abs(c["cy"] - mean_cy) <= thresh_y:
                 rows[-1].append(c)
@@ -2242,11 +2262,11 @@ def api_export_excel(
                 c["row_idx"] = row_idx
             row.sort(key=lambda c: c["cx"])
 
-        # ── Column clustering (global) ────────────────────────────────────
-        med_w   = sorted(c["w"] for c in cells)[len(cells)//2]
+        # ── Column clustering (global) ───────────────────────────────────
+        med_w    = sorted(c["w"] for c in raw)[len(raw)//2]
         thresh_x = max(3, med_w * 0.45)
-        all_cx = sorted({c["cx"] for c in cells})
-        col_centers = []
+        all_cx   = sorted({c["cx"] for c in raw})
+        col_centers: list = []
         if all_cx:
             grp = [all_cx[0]]
             for cx in all_cx[1:]:
@@ -2256,25 +2276,58 @@ def api_export_excel(
                     col_centers.append(sum(grp)/len(grp))
                     grp = [cx]
             col_centers.append(sum(grp)/len(grp))
-        for c in cells:
+        for c in raw:
             c["col_idx"] = min(range(len(col_centers)),
                                key=lambda i: abs(col_centers[i] - c["cx"]))
 
-        grid = {}
-        for c in cells:
+        # ── Build final cell list (first-in wins on collision) ───────────
+        seen: set = set()
+        cells = []
+        for c in raw:
             k = (c["row_idx"], c["col_idx"])
-            if k not in grid:       # first-in wins on collision
-                grid[k] = c["text"]
-        return grid
+            if k in seen:
+                continue
+            seen.add(k)
+            cells.append(dict(row_idx=c["row_idx"],
+                              col_idx=c["col_idx"],
+                              lines=text_to_lines(c["text"])))
+        return cells
 
-    def write_grid(ws, grid, col_offset=0):
-        align = Alignment(wrap_text=True, vertical="top", horizontal="left")
-        for (r, c), text in grid.items():
-            cell = ws.cell(row=r+1, column=c+1+col_offset, value=text)
-            cell.alignment = align
+    def write_cells(ws, cells, col_offset=0):
+        """
+        Write cells to worksheet.
+        Each lattice row is expanded so every cell occupies max_lines Excel rows.
+        Cells shorter than max_lines get blank red-filled padding at the bottom.
+        """
+        if not cells:
+            return
 
-    def max_col_idx(grid):
-        return max((c for (_, c) in grid), default=-1)
+        rows_map: dict = defaultdict(list)
+        for c in cells:
+            rows_map[c["row_idx"]].append(c)
+
+        excel_row = 1
+        for row_idx in sorted(rows_map.keys()):
+            row_cells  = rows_map[row_idx]
+            max_lines  = max(len(c["lines"]) for c in row_cells)
+
+            for line_i in range(max_lines):
+                for c in row_cells:
+                    col   = c["col_idx"] + 1 + col_offset
+                    lines = c["lines"]
+                    xcel  = ws.cell(row=excel_row + line_i, column=col)
+                    xcel.alignment = _align
+                    if line_i < len(lines):
+                        xcel.value = lines[line_i]
+                    else:
+                        # Pad with blank + red flag
+                        xcel.value = ""
+                        xcel.fill  = _red_fill
+
+            excel_row += max_lines
+
+    def max_col_of(cells):
+        return max((c["col_idx"] for c in cells), default=-1)
 
     def load_shapes(jf):
         try:
@@ -2291,33 +2344,32 @@ def api_export_excel(
         jfiles = sorted(d.glob("*.json"), key=lambda f: natural_key(f.stem))
 
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)            # remove auto-created empty sheet
+    wb.remove(wb.active)
 
     if not dual or scope == "page":
         # ── Single-page sheets ────────────────────────────────────────────
         for jf in jfiles:
             ws = wb.create_sheet(title=jf.stem[:31])
-            write_grid(ws, shapes_to_grid(load_shapes(jf)))
+            write_cells(ws, shapes_to_cells(load_shapes(jf)))
     else:
-        # ── Dual-page sheets: odd page (left) + even page (right) ─────────
-        # "odd numbered" = 1-based position 1,3,5,… in sorted order
+        # ── Dual-page sheets: odd page (left) + even page (right) ────────
         i = 0
         while i < len(jfiles):
             left_jf  = jfiles[i]
             right_jf = jfiles[i+1] if i+1 < len(jfiles) else None
             i += 2
 
-            left_grid  = shapes_to_grid(load_shapes(left_jf))
+            left_cells  = shapes_to_cells(load_shapes(left_jf))
             title_parts = [left_jf.stem]
 
-            ws = wb.create_sheet(title="")   # set title after building
-            write_grid(ws, left_grid, col_offset=0)
+            ws = wb.create_sheet(title="tmp")
+            write_cells(ws, left_cells, col_offset=0)
 
             if right_jf:
                 title_parts.append(right_jf.stem)
-                right_grid = shapes_to_grid(load_shapes(right_jf))
-                offset = max_col_idx(left_grid) + 2   # +1 gap column
-                write_grid(ws, right_grid, col_offset=offset)
+                right_cells = shapes_to_cells(load_shapes(right_jf))
+                offset      = max_col_of(left_cells) + 2   # 1-column gap
+                write_cells(ws, right_cells, col_offset=offset)
 
             ws.title = ("-".join(title_parts))[:31]
 
@@ -2328,11 +2380,7 @@ def api_export_excel(
     wb.save(buf)
     buf.seek(0)
 
-    if scope == "page" and stem:
-        fname = f"{stem}.xlsx"
-    else:
-        fname = "export.xlsx"
-
+    fname = f"{stem}.xlsx" if (scope == "page" and stem) else "export.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
