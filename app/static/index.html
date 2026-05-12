@@ -633,6 +633,8 @@
         <option value="ocr_llm">OCR ≠ LLM line count</option>
       </select>
       <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
+      <button class="nav-btn" onclick="openExcelExportModal()"
+              title="Export annotations to Excel">↓ Excel</button>
     </div>
 
     <!-- Perspective correction toolbar (shown only in persp mode) -->
@@ -1049,6 +1051,63 @@
         <thead id="llm-test-thead" style="position:sticky;top:0;background:#0d1b35;z-index:1;"></thead>
         <tbody id="llm-test-tbody"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- Excel export modal -->
+<div id="excel-export-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:3000;align-items:center;justify-content:center;">
+  <div style="background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:24px;min-width:360px;max-width:500px;display:flex;flex-direction:column;gap:16px;box-shadow:0 8px 40px #000a;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="color:#e94560;font-size:1rem;margin:0;">↓ Export to Excel</h3>
+      <button onclick="closeExcelExportModal()" style="background:none;border:none;color:#888;font-size:1.2rem;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <!-- Scope -->
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Scope</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="radio" name="xls-scope" value="page" checked style="accent-color:#e94560;"> Current page only
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="radio" name="xls-scope" value="document" style="accent-color:#e94560;"> Whole document
+      </label>
+    </div>
+
+    <!-- Layout (only relevant for whole-document) -->
+    <div id="xls-layout-section" style="display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Page layout</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="radio" name="xls-dual" value="single" checked style="accent-color:#e94560;"> Single page per sheet
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="radio" name="xls-dual" value="dual" style="accent-color:#e94560;"> Dual page — odd (left) + even (right) on same sheet
+      </label>
+    </div>
+
+    <!-- Content layer -->
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Content layer</div>
+      <select id="xls-layer" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;">
+        <option value="best_llm">Best — human › LLM › OCR</option>
+        <option value="best_ocr">Best — human › OCR › LLM</option>
+        <option value="human">Human correction only</option>
+        <option value="llm">LLM only</option>
+        <option value="ocr">OCR only</option>
+      </select>
+    </div>
+
+    <!-- Annotation types -->
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Annotation types to include</div>
+      <div id="xls-types-wrap" style="display:flex;flex-wrap:wrap;gap:6px 14px;max-height:140px;overflow-y:auto;padding:2px 0;">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <button onclick="closeExcelExportModal()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
+      <button onclick="doExcelExport()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">↓ Export</button>
     </div>
   </div>
 </div>
@@ -3580,6 +3639,89 @@ function rejectPerspective() {
   const btn = document.getElementById('persp-apply-btn');
   if (btn) btn.disabled = false;
   showToast('Rejected — adjust corners and try again');
+}
+
+// ── Excel export ─────────────────────────────────────────────────────────────
+function openExcelExportModal() {
+  // Populate annotation type checkboxes
+  const wrap = document.getElementById('xls-types-wrap');
+  wrap.innerHTML = '';
+  const labels = projectLabels.length ? projectLabels
+    : [...new Set((shapes || []).map(s => s.label).filter(Boolean))];
+  if (!labels.length) {
+    wrap.innerHTML = '<span style="color:#666;font-size:0.8rem;">No labels defined</span>';
+  } else {
+    labels.forEach(lbl => {
+      const id = 'xls-type-' + lbl.replace(/\W/g,'_');
+      const label = document.createElement('label');
+      label.style.cssText = 'display:flex;align-items:center;gap:5px;cursor:pointer;font-size:0.82rem;';
+      label.innerHTML = `<input type="checkbox" id="${id}" value="${lbl}" checked
+        style="accent-color:#e94560;"> ${lbl}`;
+      wrap.appendChild(label);
+    });
+  }
+  // Show/hide dual layout option based on scope
+  const updateLayout = () => {
+    const scope = document.querySelector('input[name="xls-scope"]:checked')?.value;
+    document.getElementById('xls-layout-section').style.display =
+      scope === 'document' ? '' : 'none';
+  };
+  document.querySelectorAll('input[name="xls-scope"]').forEach(r =>
+    r.addEventListener('change', updateLayout));
+  updateLayout();
+  document.getElementById('excel-export-modal').style.display = 'flex';
+}
+
+function closeExcelExportModal() {
+  document.getElementById('excel-export-modal').style.display = 'none';
+}
+
+async function doExcelExport() {
+  const scope  = document.querySelector('input[name="xls-scope"]:checked')?.value || 'page';
+  const dual   = (document.querySelector('input[name="xls-dual"]:checked')?.value === 'dual')
+                  && scope === 'document';
+  const layer  = document.getElementById('xls-layer').value;
+  const checked = [...document.querySelectorAll('#xls-types-wrap input[type=checkbox]:checked')]
+                    .map(cb => cb.value);
+  const types  = checked.join(',');
+
+  const params = new URLSearchParams({
+    folder: folder,
+    scope,
+    layer,
+    types,
+    dual: dual ? 'true' : 'false',
+  });
+  if (scope === 'page') {
+    const stem = pages[pageIdx];
+    if (!stem) { alert('No page loaded'); return; }
+    params.set('stem', stem);
+  }
+
+  closeExcelExportModal();
+  showToast('Building Excel…');
+  try {
+    const resp = await fetch(`${API}/api/export/excel?${params}`);
+    if (!resp.ok) {
+      const msg = await resp.json().catch(() => ({detail: resp.statusText}));
+      alert('Export failed: ' + (msg.detail || resp.statusText));
+      return;
+    }
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    const cd   = resp.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="([^"]+)"/);
+    a.download = match ? match[1] : 'export.xlsx';
+    a.href = url;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Excel exported ✓');
+  } catch(e) {
+    alert('Export error: ' + e.message);
+  }
 }
 
 // ── Edit mode toggle ─────────────────────────────────────────────────────────

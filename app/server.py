@@ -2166,6 +2166,181 @@ async def api_audit_update_stats(folder: str = Query(...), request: Request = No
 
 
 # ---------------------------------------------------------------------------
+# Excel export
+# ---------------------------------------------------------------------------
+
+@app.get("/api/export/excel")
+def api_export_excel(
+    folder: str = Query(...),
+    scope:  str = Query("page"),       # "page" | "document"
+    stem:   str = Query(None),         # required when scope="page"
+    dual:   bool = Query(False),       # dual-page layout (odd left, even right)
+    layer:  str = Query("best_llm"),   # "ocr"|"llm"|"human"|"best_ocr"|"best_llm"
+    types:  str = Query(""),           # comma-sep label types; empty = all
+):
+    """Generate an .xlsx file preserving the spatial layout of annotations."""
+    try:
+        import openpyxl
+        from openpyxl.styles import Alignment
+    except ImportError:
+        raise HTTPException(status_code=500,
+            detail="openpyxl not installed — run: pip install openpyxl")
+
+    import io as _io, re
+
+    d = _resolve_folder(folder)
+    selected_types = {t.strip() for t in types.split(",") if t.strip()} if types else set()
+
+    def natural_key(p):
+        return [int(c) if c.isdigit() else c.lower()
+                for c in re.split(r'(\d+)', str(p))]
+
+    def get_text(shape):
+        human = (shape.get("human_output") or {}).get("human_corrected_text") or ""
+        ocr   = ((shape.get("tesseract_output") or {}).get("ocr_text") or
+                 (shape.get("easyocr_output")   or {}).get("ocr_text") or "")
+        llm   = (shape.get("openai_output") or {}).get("response") or ""
+        if layer == "human":   return human.strip()
+        if layer == "ocr":     return ocr.strip()
+        if layer == "llm":     return llm.strip()
+        if layer == "best_ocr": return (human or ocr or llm).strip()
+        return (human or llm or ocr).strip()  # best_llm (default)
+
+    def shapes_to_grid(shapes):
+        """Map qualifying shapes to {(row_idx, col_idx): text}."""
+        cells = []
+        for sh in shapes:
+            if selected_types and sh.get("label", "") not in selected_types:
+                continue
+            text = get_text(sh)
+            if not text:
+                continue
+            pts = sh.get("points", [])
+            if not pts:
+                continue
+            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+            x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+            cells.append(dict(text=text,
+                              cx=(x1+x2)/2, cy=(y1+y2)/2,
+                              h=max(1, y2-y1), w=max(1, x2-x1)))
+        if not cells:
+            return {}
+
+        # ── Row clustering ────────────────────────────────────────────────
+        med_h   = sorted(c["h"] for c in cells)[len(cells)//2]
+        thresh_y = max(3, med_h * 0.55)
+        cells.sort(key=lambda c: c["cy"])
+        rows = [[cells[0]]]
+        for c in cells[1:]:
+            mean_cy = sum(x["cy"] for x in rows[-1]) / len(rows[-1])
+            if abs(c["cy"] - mean_cy) <= thresh_y:
+                rows[-1].append(c)
+            else:
+                rows.append([c])
+        for row_idx, row in enumerate(rows):
+            for c in row:
+                c["row_idx"] = row_idx
+            row.sort(key=lambda c: c["cx"])
+
+        # ── Column clustering (global) ────────────────────────────────────
+        med_w   = sorted(c["w"] for c in cells)[len(cells)//2]
+        thresh_x = max(3, med_w * 0.45)
+        all_cx = sorted({c["cx"] for c in cells})
+        col_centers = []
+        if all_cx:
+            grp = [all_cx[0]]
+            for cx in all_cx[1:]:
+                if cx - grp[-1] <= thresh_x:
+                    grp.append(cx)
+                else:
+                    col_centers.append(sum(grp)/len(grp))
+                    grp = [cx]
+            col_centers.append(sum(grp)/len(grp))
+        for c in cells:
+            c["col_idx"] = min(range(len(col_centers)),
+                               key=lambda i: abs(col_centers[i] - c["cx"]))
+
+        grid = {}
+        for c in cells:
+            k = (c["row_idx"], c["col_idx"])
+            if k not in grid:       # first-in wins on collision
+                grid[k] = c["text"]
+        return grid
+
+    def write_grid(ws, grid, col_offset=0):
+        align = Alignment(wrap_text=True, vertical="top", horizontal="left")
+        for (r, c), text in grid.items():
+            cell = ws.cell(row=r+1, column=c+1+col_offset, value=text)
+            cell.alignment = align
+
+    def max_col_idx(grid):
+        return max((c for (_, c) in grid), default=-1)
+
+    def load_shapes(jf):
+        try:
+            return json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            return []
+
+    # ── Collect page files ────────────────────────────────────────────────────
+    if scope == "page":
+        if not stem:
+            raise HTTPException(status_code=400, detail="stem required for scope=page")
+        jfiles = [d / f"{stem}.json"]
+    else:
+        jfiles = sorted(d.glob("*.json"), key=lambda f: natural_key(f.stem))
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)            # remove auto-created empty sheet
+
+    if not dual or scope == "page":
+        # ── Single-page sheets ────────────────────────────────────────────
+        for jf in jfiles:
+            ws = wb.create_sheet(title=jf.stem[:31])
+            write_grid(ws, shapes_to_grid(load_shapes(jf)))
+    else:
+        # ── Dual-page sheets: odd page (left) + even page (right) ─────────
+        # "odd numbered" = 1-based position 1,3,5,… in sorted order
+        i = 0
+        while i < len(jfiles):
+            left_jf  = jfiles[i]
+            right_jf = jfiles[i+1] if i+1 < len(jfiles) else None
+            i += 2
+
+            left_grid  = shapes_to_grid(load_shapes(left_jf))
+            title_parts = [left_jf.stem]
+
+            ws = wb.create_sheet(title="")   # set title after building
+            write_grid(ws, left_grid, col_offset=0)
+
+            if right_jf:
+                title_parts.append(right_jf.stem)
+                right_grid = shapes_to_grid(load_shapes(right_jf))
+                offset = max_col_idx(left_grid) + 2   # +1 gap column
+                write_grid(ws, right_grid, col_offset=offset)
+
+            ws.title = ("-".join(title_parts))[:31]
+
+    if not wb.worksheets:
+        wb.create_sheet("Empty")
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    if scope == "page" and stem:
+        fname = f"{stem}.xlsx"
+    else:
+        fname = "export.xlsx"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Root — redirect to dashboard
 # ---------------------------------------------------------------------------
 

@@ -8,5 +8,7 @@ psutil
 # SSH / SFTP for GPU server operations
 paramiko
 
+openpyxl
+
 # Already in your environment from econai-llmocr:
-# openai pandas openpyxl pytesseract opencv-python pillow PyQt5
+# openai pandas pytesseract opencv-python pillow PyQt5
