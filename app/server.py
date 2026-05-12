@@ -2187,6 +2187,7 @@ def api_export_excel(
     try:
         import openpyxl
         from openpyxl.styles import Alignment, PatternFill
+        from openpyxl.utils import get_column_letter
     except ImportError:
         raise HTTPException(status_code=500,
             detail="openpyxl not installed — run: pip install openpyxl")
@@ -2290,7 +2291,8 @@ def api_export_excel(
             seen.add(k)
             cells.append(dict(row_idx=c["row_idx"],
                               col_idx=c["col_idx"],
-                              lines=text_to_lines(c["text"])))
+                              lines=text_to_lines(c["text"]),
+                              w_px=c["w"]))   # pixel width of bounding box
         return cells
 
     def write_cells(ws, cells, col_offset=0):
@@ -2325,6 +2327,22 @@ def api_export_excel(
                         xcel.fill  = _red_fill
 
             excel_row += max_lines
+
+        # ── Column widths proportional to avg annotation pixel width ─────
+        col_px: dict = defaultdict(list)
+        for c in cells:
+            col_px[c["col_idx"]].append(c.get("w_px", 50))
+        if col_px:
+            avg_px  = {col: sum(pxs)/len(pxs) for col, pxs in col_px.items()}
+            total_px = sum(avg_px.values())
+            # Scale so all columns together fill ~120 character units (one normal page)
+            for col_idx, px in avg_px.items():
+                width  = max(4.0, min(60.0, px / total_px * 120))
+                letter = get_column_letter(col_idx + 1 + col_offset)
+                # Only widen, never narrow — safe for dual-page where both
+                # pages write to the same worksheet
+                if ws.column_dimensions[letter].width < width:
+                    ws.column_dimensions[letter].width = round(width, 1)
 
     def max_col_of(cells):
         return max((c["col_idx"] for c in cells), default=-1)
