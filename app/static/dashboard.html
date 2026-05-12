@@ -1012,6 +1012,16 @@ function openAuditModal() {
   // Reset session stats
   _auditSession = { ocr: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, llm: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, layouts:0, rows:0 };
   document.getElementById('audit-modal').style.display = 'flex';
+  _auditInitZoom();
+  const hta = document.getElementById('audit-human-text');
+  if (hta && !hta._auditLnReady) {
+    hta._auditLnReady = true;
+    hta.addEventListener('input', _auditUpdateHumanLineNums);
+    hta.addEventListener('scroll', () => {
+      const ln = document.getElementById('audit-human-lines');
+      if (ln) ln.scrollTop = hta.scrollTop;
+    });
+  }
   _auditLoadProjectStats().then(() => auditReload());
 }
 
@@ -1061,6 +1071,9 @@ async function auditReload() {
   document.getElementById('audit-img-placeholder').textContent = 'loading…';
   document.getElementById('audit-ocr-text').textContent = '';
   document.getElementById('audit-llm-text').textContent = '';
+  _auditUpdateLineNums('audit-ocr-text', 'audit-ocr-lines');
+  _auditUpdateLineNums('audit-llm-text', 'audit-llm-lines');
+  _auditUpdateHumanLineNums();
   document.getElementById('audit-human-text').value = '';
   document.getElementById('audit-eval-results').innerHTML = '';
   document.getElementById('audit-page-label').textContent = '';
@@ -1080,6 +1093,10 @@ async function auditReload() {
     document.getElementById('audit-page-label').textContent = `${data.stem}  #${data.idx}  [${data.label}]`;
     document.getElementById('audit-ocr-text').textContent = data.ocr_text || '';
     document.getElementById('audit-llm-text').textContent = data.llm_text || '';
+    _auditUpdateLineNums('audit-ocr-text', 'audit-ocr-lines');
+    _auditUpdateLineNums('audit-llm-text', 'audit-llm-lines');
+    _auditUpdateHumanLineNums();
+    auditDrawLineBoxes();
     if (data.image_b64) {
       const img = document.getElementById('audit-img');
       img.src = `data:image/jpeg;base64,${data.image_b64}`;
@@ -1100,23 +1117,155 @@ function auditCopyToHuman(source) {
     : document.getElementById('audit-llm-text').textContent;
   if (!text) return;
   document.getElementById('audit-human-text').value = text;
+  _auditUpdateHumanLineNums();
   document.getElementById('audit-human-text').focus();
 }
 
 function auditFitImage(img) {
-  // Fill vertical space; cap at 30% of viewport width
-  const maxH = window.innerHeight - 200; // subtract header+stats+footer overhead
-  const maxW = window.innerWidth * 0.30;
-  const aspect = img.naturalWidth / img.naturalHeight;
-  let h = maxH, w = h * aspect;
-  if (w > maxW) { w = maxW; h = w / aspect; }
-  img.style.width  = Math.round(w) + 'px';
-  img.style.height = Math.round(h) + 'px';
-  img.style.maxWidth  = 'none';
-  img.style.maxHeight = 'none';
-  // Size the container column to match
-  const col = img.closest('div[style*="flex:0 0 auto"]');
-  if (col) col.style.width = (Math.round(w) + 14) + 'px'; // +14 for padding+border
+  // Always fit to the column width — viewport scrolls vertically for tall images
+  const col = document.getElementById('audit-img-col');
+  const vp  = document.getElementById('audit-img-viewport');
+  const w = col ? Math.max(60, col.clientWidth - 4) : Math.round(window.innerWidth * 0.085);
+  const h = Math.round(w * img.naturalHeight / img.naturalWidth);
+  _auditBaseW = w; _auditBaseH = h;
+  _auditImgW  = w; _auditImgH  = h;
+  img.style.width = w + 'px'; img.style.height = h + 'px';
+  if (vp) { vp.scrollLeft = 0; vp.scrollTop = 0; }
+  const svg = document.getElementById('audit-img-svg');
+  if (svg) { svg.setAttribute('width', w); svg.setAttribute('height', h); }
+  _auditZoom = {scale: 1};
+  auditDrawLineBoxes();
+}
+
+// ── Zoom (scroll-based resize, no CSS transform) ──────────────
+let _auditZoom  = {scale: 1};
+let _auditBaseW = 0, _auditBaseH = 0;
+let _auditImgW  = 0, _auditImgH  = 0;
+
+function _auditApplyZoom() {
+  const w = Math.round(_auditBaseW * _auditZoom.scale);
+  const h = Math.round(_auditBaseH * _auditZoom.scale);
+  _auditImgW = w; _auditImgH = h;
+  const img = document.getElementById('audit-img');
+  const svg = document.getElementById('audit-img-svg');
+  if (img) { img.style.width = w + 'px'; img.style.height = h + 'px'; }
+  if (svg) { svg.setAttribute('width', w); svg.setAttribute('height', h); }
+  auditDrawLineBoxes();
+}
+
+function _auditInitZoom() {
+  const vp = document.getElementById('audit-img-viewport');
+  if (!vp || vp._auditZoomReady) return;
+  vp._auditZoomReady = true;
+  vp.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = vp.getBoundingClientRect();
+    // cursor position within the scrollable content
+    const cx = e.clientX - rect.left + vp.scrollLeft;
+    const cy = e.clientY - rect.top  + vp.scrollTop;
+    const oldScale = _auditZoom.scale;
+    const factor   = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const newScale = Math.max(0.3, Math.min(16, oldScale * factor));
+    _auditZoom.scale = newScale;
+    _auditApplyZoom();
+    // Reposition scroll so the point under the cursor stays fixed
+    const ratio = newScale / oldScale;
+    vp.scrollLeft = cx * ratio - (e.clientX - rect.left);
+    vp.scrollTop  = cy * ratio - (e.clientY - rect.top);
+  }, {passive: false});
+  vp.addEventListener('dblclick', () => {
+    _auditZoom = {scale: 1};
+    _auditApplyZoom();
+    vp.scrollLeft = 0; vp.scrollTop = 0;
+  });
+}
+
+// ── Line boxes on image ───────────────────────────────────────
+function auditDrawLineBoxes() {
+  const svg = document.getElementById('audit-img-svg');
+  if (!svg || !_auditImgW || !_auditImgH) return;
+  svg.innerHTML = '';
+
+  const img = document.getElementById('audit-img');
+  const natH = img && img.naturalHeight ? img.naturalHeight : _auditImgH;
+  const natW = img && img.naturalWidth  ? img.naturalWidth  : _auditImgW;
+  const scaleY = _auditImgH / natH;
+  const scaleX = _auditImgW / natW;
+  const W = _auditImgW;
+  const ns = 'http://www.w3.org/2000/svg';
+
+  // Build strip list: prefer real detected rows from server; fall back to equal strips
+  let strips = [];  // [{y, yEnd}]
+  const lineRows = _auditCurrent && _auditCurrent.line_rows;
+  if (lineRows && lineRows.length >= 2) {
+    strips = lineRows.map(([top, bottom]) => ({
+      y:    Math.round(top    * scaleY),
+      yEnd: Math.round(bottom * scaleY),
+    }));
+  } else {
+    // Fallback: equal strips based on line count
+    const ocrText = document.getElementById('audit-ocr-text').textContent;
+    const llmText = document.getElementById('audit-llm-text').textContent;
+    const ocrN = ocrText.trim() ? ocrText.split('\n').length : 0;
+    const llmN = llmText.trim() ? llmText.split('\n').length : 0;
+    const n = Math.max(ocrN, llmN);
+    if (n < 2) return;
+    const stripH = _auditImgH / n;
+    for (let i = 0; i < n; i++) {
+      strips.push({ y: Math.round(i * stripH), yEnd: Math.round((i + 1) * stripH) });
+    }
+  }
+
+  strips.forEach(({y, yEnd}, i) => {
+    const h = yEnd - y;
+    if (i % 2 === 0) {
+      const bg = document.createElementNS(ns, 'rect');
+      bg.setAttribute('x', 0); bg.setAttribute('y', y);
+      bg.setAttribute('width', W); bg.setAttribute('height', h);
+      bg.setAttribute('fill', 'rgba(0,160,255,0.07)');
+      svg.appendChild(bg);
+    }
+    if (i > 0) {
+      const line = document.createElementNS(ns, 'line');
+      line.setAttribute('x1', 0); line.setAttribute('y1', y);
+      line.setAttribute('x2', W); line.setAttribute('y2', y);
+      line.setAttribute('stroke', '#00a0ff'); line.setAttribute('stroke-width', '1');
+      line.setAttribute('opacity', '0.45');
+      svg.appendChild(line);
+    }
+    // Row number badge
+    const labelH = Math.min(h - 1, 13);
+    const mid = y + h / 2;
+    const fontSize = Math.max(7, Math.min(12, Math.round(h * 0.55)));
+    const bg2 = document.createElementNS(ns, 'rect');
+    bg2.setAttribute('x', 0); bg2.setAttribute('y', y);
+    bg2.setAttribute('width', 14); bg2.setAttribute('height', Math.max(1, labelH));
+    bg2.setAttribute('fill', 'rgba(0,20,40,0.65)');
+    svg.appendChild(bg2);
+    const txt = document.createElementNS(ns, 'text');
+    txt.setAttribute('x', 2); txt.setAttribute('y', y + Math.min(labelH - 1, fontSize + 1));
+    txt.setAttribute('fill', '#00a0ff'); txt.setAttribute('font-size', String(fontSize));
+    txt.setAttribute('font-family', 'monospace');
+    txt.textContent = String(i + 1);
+    svg.appendChild(txt);
+  });
+}
+
+// ── Line number helpers ───────────────────────────────────────
+function _auditUpdateLineNums(preId, lnId) {
+  const pre = document.getElementById(preId);
+  const ln  = document.getElementById(lnId);
+  if (!pre || !ln) return;
+  const n = pre.textContent.split('\n').length;
+  ln.textContent = Array.from({length: n}, (_, i) => i + 1).join('\n');
+}
+
+function _auditUpdateHumanLineNums() {
+  const ta = document.getElementById('audit-human-text');
+  const ln = document.getElementById('audit-human-lines');
+  if (!ta || !ln) return;
+  const n = ta.value.split('\n').length;
+  ln.textContent = Array.from({length: n}, (_, i) => i + 1).join('\n');
 }
 
 // ── Metrics ──────────────────────────────────────────────────
@@ -1319,12 +1468,18 @@ async function auditNext() {
     <!-- Main content: 4 columns -->
     <div style="display:flex;gap:8px;flex:1;min-height:0;overflow:hidden;">
 
-      <!-- Col 1: Image -->
-      <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:4px;min-width:40px;max-width:30vw;">
-        <span style="font-size:0.75rem;color:#888;font-weight:600;white-space:nowrap;">Original</span>
-        <div style="flex:1;overflow:auto;background:#060f20;border:1px solid #0f3460;border-radius:6px;padding:6px;display:flex;align-items:flex-start;justify-content:center;">
-          <img id="audit-img" src="" alt="cell" style="display:none;object-fit:fill;" onload="auditFitImage(this)" />
-          <span id="audit-img-placeholder" style="color:#444;font-size:0.85rem;align-self:center;">loading…</span>
+      <!-- Col 1: Image (zoomable) -->
+      <div id="audit-img-col" style="flex:0 0 9vw;max-width:9vw;display:flex;flex-direction:column;gap:4px;min-width:60px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:0.75rem;color:#888;font-weight:600;white-space:nowrap;">Original</span>
+          <span style="font-size:0.65rem;color:#555;">scroll=zoom · dbl=reset</span>
+        </div>
+        <div id="audit-img-viewport" style="background:#060f20;border:1px solid #0f3460;border-radius:6px;overflow:auto;position:relative;flex:1;min-height:0;">
+          <div id="audit-img-inner" style="position:relative;display:inline-block;line-height:0;">
+            <img id="audit-img" src="" alt="cell" style="display:block;" onload="auditFitImage(this)" />
+            <svg id="audit-img-svg" style="position:absolute;top:0;left:0;pointer-events:none;overflow:visible;"></svg>
+          </div>
+          <span id="audit-img-placeholder" style="color:#444;font-size:0.85rem;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);white-space:nowrap;">loading…</span>
         </div>
       </div>
 
@@ -1334,8 +1489,9 @@ async function auditNext() {
           <span style="font-size:0.75rem;color:#888;font-weight:600;">OCR</span>
           <button onclick="auditCopyToHuman('ocr')" style="font-size:0.7rem;padding:1px 6px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;">← copy</button>
         </div>
-        <div style="flex:1;overflow:auto;background:#060f20;border:1px solid #1a3a6e;border-radius:4px;padding:6px 8px;">
-          <pre id="audit-ocr-text" style="margin:0;font-size:0.8rem;color:#ccc;font-family:monospace;white-space:pre;width:max-content;min-width:2ch;"></pre>
+        <div style="flex:1;display:flex;overflow:auto;background:#060f20;border:1px solid #1a3a6e;border-radius:4px;">
+          <div id="audit-ocr-lines" style="user-select:none;color:#555;font-size:0.8rem;font-family:monospace;line-height:1.5;padding:6px 4px 6px 6px;text-align:right;white-space:pre;flex-shrink:0;border-right:1px solid #1a2a4e;">1</div>
+          <pre id="audit-ocr-text" style="margin:0;font-size:0.8rem;color:#ccc;font-family:monospace;white-space:pre;line-height:1.5;width:max-content;min-width:2ch;padding:6px 8px 6px 6px;"></pre>
         </div>
       </div>
 
@@ -1345,16 +1501,20 @@ async function auditNext() {
           <span style="font-size:0.75rem;color:#888;font-weight:600;">LLM</span>
           <button onclick="auditCopyToHuman('llm')" style="font-size:0.7rem;padding:1px 6px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;">← copy</button>
         </div>
-        <div style="flex:1;overflow:auto;background:#060f20;border:1px solid #1a3a6e;border-radius:4px;padding:6px 8px;">
-          <pre id="audit-llm-text" style="margin:0;font-size:0.8rem;color:#ccc;font-family:monospace;white-space:pre;width:max-content;min-width:2ch;"></pre>
+        <div style="flex:1;display:flex;overflow:auto;background:#060f20;border:1px solid #1a3a6e;border-radius:4px;">
+          <div id="audit-llm-lines" style="user-select:none;color:#555;font-size:0.8rem;font-family:monospace;line-height:1.5;padding:6px 4px 6px 6px;text-align:right;white-space:pre;flex-shrink:0;border-right:1px solid #1a2a4e;">1</div>
+          <pre id="audit-llm-text" style="margin:0;font-size:0.8rem;color:#ccc;font-family:monospace;white-space:pre;line-height:1.5;width:max-content;min-width:2ch;padding:6px 8px 6px 6px;"></pre>
         </div>
       </div>
 
       <!-- Col 4: Human correction (fills remaining space) -->
       <div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:100px;">
         <span style="font-size:0.75rem;color:#888;font-weight:600;white-space:nowrap;">Human correction</span>
-        <textarea id="audit-human-text" placeholder="Type correction here…"
-          style="flex:1;background:#0d1b35;border:1px solid #e94560;border-radius:4px;color:#e0e0e0;font-size:0.8rem;padding:6px 8px;resize:none;font-family:monospace;white-space:pre;overflow-x:auto;"></textarea>
+        <div style="flex:1;display:flex;overflow:auto;background:#0d1b35;border:1px solid #e94560;border-radius:4px;">
+          <div id="audit-human-lines" style="user-select:none;color:#555;font-size:0.8rem;font-family:monospace;line-height:1.5;padding:6px 4px 6px 6px;text-align:right;white-space:pre;flex-shrink:0;border-right:1px solid #2a1a2e;overflow:hidden;">1</div>
+          <textarea id="audit-human-text" placeholder="Type correction here…"
+            style="flex:1;background:transparent;border:none;outline:none;color:#e0e0e0;font-size:0.8rem;font-family:monospace;line-height:1.5;white-space:pre;padding:6px 8px 6px 6px;resize:none;min-width:60px;"></textarea>
+        </div>
       </div>
 
     </div>

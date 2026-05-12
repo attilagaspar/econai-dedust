@@ -243,10 +243,13 @@ def cmd_serve(args):
     try:
         import psutil
         for proc in psutil.process_iter(['pid', 'connections']):
-            for conn in proc.info.get('connections') or []:
-                if conn.laddr.port == port:
-                    proc.kill()
-                    time.sleep(0.5)
+            try:
+                for conn in proc.info.get('connections') or []:
+                    if conn.laddr.port == port:
+                        proc.kill()
+                        time.sleep(0.5)
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                pass
     except ImportError:
         pass  # psutil not installed — user may need to kill manually
 

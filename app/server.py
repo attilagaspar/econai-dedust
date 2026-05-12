@@ -2095,8 +2095,9 @@ def api_audit_random(folder: str = Query(...), mode: str = Query("both")):
     llm_text = shape.get("openai_output", {}).get("response") or ""
     label    = shape.get("label", "")
 
-    # Crop cell image
+    # Crop cell image and detect row boundaries
     image_b64 = None
+    line_rows  = []          # [[top, bottom], ...] in crop-pixel space
     img_path  = _find_image(d, stem)
     if img_path is not None:
         try:
@@ -2115,6 +2116,14 @@ def api_audit_random(folder: str = Query(...), mode: str = Query("both")):
                 crop.save(buf, format="JPEG", quality=90)
                 buf.seek(0)
                 image_b64 = base64.b64encode(buf.read()).decode()
+                # Detect row boundaries using the shadow page (same as OCR line-by-line)
+                try:
+                    shadow = _get_shadow_page(folder, stem, img_path)
+                    shadow_crop = shadow.crop((x1, y1, x2, y2))
+                    rows = _detect_text_rows(shadow_crop, cell_height=26)
+                    line_rows = [list(r) for r in rows]
+                except Exception:
+                    line_rows = []
         except Exception:
             image_b64 = None
 
@@ -2125,6 +2134,7 @@ def api_audit_random(folder: str = Query(...), mode: str = Query("both")):
         "ocr_text":   ocr_text,
         "llm_text":   llm_text,
         "image_b64":  image_b64,
+        "line_rows":  line_rows,
     }
 
 
