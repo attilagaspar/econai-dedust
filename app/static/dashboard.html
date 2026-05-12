@@ -457,6 +457,25 @@ function renderDetail() {
         <button class="btn btn-secondary" onclick="testConnection()">🔌 Test connection</button>
       </div>
     </div>
+
+    <!-- Quality Audit -->
+    <div class="card">
+      <h3>🔍 Quality Audit</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px;">
+        Randomly sample annotations and validate OCR / LLM results against human corrections. Tracks MSD and CER across the project.
+      </p>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <label style="font-size:0.85rem;color:#aaa;">Mode:</label>
+        <select id="audit-mode" style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 8px;font-size:0.85rem;">
+          <option value="both">Both OCR &amp; LLM</option>
+          <option value="ocr">OCR only</option>
+          <option value="llm">LLM only</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="openAuditModal()">🔍 Open Validator</button>
+      </div>
+    </div>
   `;
 
   // If there's a running job, start polling
@@ -970,13 +989,384 @@ function clearToast() { if (toastEl) toastEl.style.opacity = '0'; }
 
 // Keyboard shortcut: Escape closes modals
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeNewProjectModal(); closeLogModal(); }
+  if (e.key === 'Escape') { closeNewProjectModal(); closeLogModal(); closeAuditModal(); }
 });
 
 // Prevent browser from opening dropped files anywhere on the page
 document.addEventListener('dragover',  e => e.preventDefault());
 document.addEventListener('drop', e => { e.preventDefault(); });
+
+// ============================================================
+// Quality Audit
+// ============================================================
+let _auditCurrent = null; // {stem, idx, ocr_text, llm_text}
+let _auditSession = { ocr: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, llm: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, layouts:0, rows:0 };
+let _auditProjStats = null;
+
+function openAuditModal() {
+  if (!activeProj) { alert('Select a project first'); return; }
+  // Sync mode from dashboard select
+  const dashMode = document.getElementById('audit-mode');
+  const modalMode = document.getElementById('audit-modal-mode');
+  if (dashMode && modalMode) modalMode.value = dashMode.value;
+  // Reset session stats
+  _auditSession = { ocr: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, llm: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, layouts:0, rows:0 };
+  document.getElementById('audit-modal').style.display = 'flex';
+  _auditLoadProjectStats().then(() => auditReload());
+}
+
+function closeAuditModal() {
+  document.getElementById('audit-modal').style.display = 'none';
+  _auditCurrent = null;
+}
+
+async function _auditLoadProjectStats() {
+  const folder = encodeURIComponent(activeProj.annotations_path.replaceAll('\\','/'));
+  try {
+    const r = await fetch(`/api/audit/stats?folder=${folder}`);
+    _auditProjStats = await r.json();
+  } catch(e) {
+    _auditProjStats = { ocr: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, llm: {msd_sum:0,msd_count:0,cer_sum:0,cer_count:0}, layouts:0, rows:0 };
+  }
+  _auditUpdateStatsDisplay();
+}
+
+function _auditUpdateStatsDisplay() {
+  const fmt = (sum, count) => count > 0 ? (sum/count).toFixed(4) : '—';
+  const fmtCer = (sum, count) => count > 0 ? (sum/count*100).toFixed(1)+'%' : '—';
+  const s = _auditSession;
+  document.getElementById('as-ocr-msd').textContent = fmt(s.ocr.msd_sum, s.ocr.msd_count);
+  document.getElementById('as-ocr-cer').textContent = fmtCer(s.ocr.cer_sum, s.ocr.cer_count);
+  document.getElementById('as-llm-msd').textContent = fmt(s.llm.msd_sum, s.llm.msd_count);
+  document.getElementById('as-llm-cer').textContent = fmtCer(s.llm.cer_sum, s.llm.cer_count);
+  document.getElementById('as-layouts').textContent = s.layouts;
+  document.getElementById('as-rows').textContent = s.rows;
+  if (_auditProjStats) {
+    const p = _auditProjStats;
+    document.getElementById('ap-ocr-msd').textContent = fmt(p.ocr.msd_sum, p.ocr.msd_count);
+    document.getElementById('ap-ocr-cer').textContent = fmtCer(p.ocr.cer_sum, p.ocr.cer_count);
+    document.getElementById('ap-llm-msd').textContent = fmt(p.llm.msd_sum, p.llm.msd_count);
+    document.getElementById('ap-llm-cer').textContent = fmtCer(p.llm.cer_sum, p.llm.cer_count);
+    document.getElementById('ap-layouts').textContent = p.layouts || 0;
+    document.getElementById('ap-rows').textContent = p.rows || 0;
+  }
+}
+
+async function auditReload() {
+  const mode = document.getElementById('audit-modal-mode').value;
+  const folder = encodeURIComponent(activeProj.annotations_path.replaceAll('\\','/'));
+  // Reset UI
+  document.getElementById('audit-img').style.display = 'none';
+  document.getElementById('audit-img-placeholder').style.display = '';
+  document.getElementById('audit-img-placeholder').textContent = 'loading…';
+  document.getElementById('audit-ocr-text').textContent = '';
+  document.getElementById('audit-llm-text').textContent = '';
+  document.getElementById('audit-human-text').value = '';
+  document.getElementById('audit-eval-results').innerHTML = '';
+  document.getElementById('audit-page-label').textContent = '';
+  // Show/hide OCR and LLM panels
+  document.getElementById('audit-ocr-panel').style.display = mode === 'llm' ? 'none' : 'flex';
+  document.getElementById('audit-llm-panel').style.display = mode === 'ocr' ? 'none' : 'flex';
+  try {
+    const r = await fetch(`/api/audit/random?folder=${folder}&mode=${mode}`);
+    if (!r.ok) {
+      const msg = await r.json().catch(() => ({detail: r.statusText}));
+      document.getElementById('audit-img-placeholder').textContent = msg.detail || 'No qualifying shapes found';
+      _auditCurrent = null;
+      return;
+    }
+    const data = await r.json();
+    _auditCurrent = data;
+    document.getElementById('audit-page-label').textContent = `${data.stem}  #${data.idx}  [${data.label}]`;
+    document.getElementById('audit-ocr-text').textContent = data.ocr_text || '';
+    document.getElementById('audit-llm-text').textContent = data.llm_text || '';
+    if (data.image_b64) {
+      const img = document.getElementById('audit-img');
+      img.src = `data:image/jpeg;base64,${data.image_b64}`;
+      img.style.display = 'block';
+      document.getElementById('audit-img-placeholder').style.display = 'none';
+    } else {
+      document.getElementById('audit-img-placeholder').textContent = '(no image)';
+    }
+  } catch(e) {
+    document.getElementById('audit-img-placeholder').textContent = 'Error: ' + e.message;
+    _auditCurrent = null;
+  }
+}
+
+function auditCopyToHuman(source) {
+  const text = source === 'ocr'
+    ? document.getElementById('audit-ocr-text').textContent
+    : document.getElementById('audit-llm-text').textContent;
+  if (!text) return;
+  document.getElementById('audit-human-text').value = text;
+  document.getElementById('audit-human-text').focus();
+}
+
+function auditFitImage(img) {
+  // Fill vertical space; cap at 30% of viewport width
+  const maxH = window.innerHeight - 200; // subtract header+stats+footer overhead
+  const maxW = window.innerWidth * 0.30;
+  const aspect = img.naturalWidth / img.naturalHeight;
+  let h = maxH, w = h * aspect;
+  if (w > maxW) { w = maxW; h = w / aspect; }
+  img.style.width  = Math.round(w) + 'px';
+  img.style.height = Math.round(h) + 'px';
+  img.style.maxWidth  = 'none';
+  img.style.maxHeight = 'none';
+  // Size the container column to match
+  const col = img.closest('div[style*="flex:0 0 auto"]');
+  if (col) col.style.width = (Math.round(w) + 14) + 'px'; // +14 for padding+border
+}
+
+// ── Metrics ──────────────────────────────────────────────────
+function _auditLevenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, (_, i) => { const r = new Array(n+1).fill(0); r[0]=i; return r; });
+  for (let j=0;j<=n;j++) dp[0][j]=j;
+  for (let i=1;i<=m;i++) for (let j=1;j<=n;j++)
+    dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+function _auditNormLine(s) {
+  s = s.trim();
+  if (/^[-–—]+$/.test(s)) return '0';
+  return s;
+}
+
+function _auditLineDist(a, b) {
+  a = _auditNormLine(a); b = _auditNormLine(b);
+  const fa = parseFloat(a.replace(',','.').replace(/\s/g,''));
+  const fb = parseFloat(b.replace(',','.').replace(/\s/g,''));
+  if (isFinite(fa) && isFinite(fb)) return (fa-fb)**2;
+  if (a===b) return 0;
+  return (_auditLevenshtein(a,b)/Math.max(a.length,b.length,1))**2;
+}
+
+function _auditCer(ref, hyp) {
+  // Character Error Rate = total edit distance / total ref chars
+  const refLines = ref.split('\n');
+  const hypLines = hyp.split('\n');
+  let edits = 0, total = 0;
+  const len = Math.max(refLines.length, hypLines.length);
+  for (let i=0;i<len;i++) {
+    const r = (refLines[i]??'').trim();
+    const h = (hypLines[i]??'').trim();
+    edits += _auditLevenshtein(r,h);
+    total += Math.max(r.length, 1);
+  }
+  return total > 0 ? edits/total : 0;
+}
+
+function _auditMsd(humanText, otherText) {
+  if (!humanText || !otherText) return null;
+  const hLines = humanText.split('\n');
+  const oLines = otherText.split('\n');
+  const len = Math.max(hLines.length, oLines.length);
+  let sum = 0;
+  for (let i=0;i<len;i++) {
+    sum += _auditLineDist((hLines[i]??'').trim(), (oLines[i]??'').trim());
+  }
+  return len > 0 ? sum/len : 0;
+}
+
+function _auditComputeMetrics(humanText) {
+  const results = {};
+  const ocrText = document.getElementById('audit-ocr-text').textContent;
+  const llmText = document.getElementById('audit-llm-text').textContent;
+  const mode = document.getElementById('audit-modal-mode').value;
+
+  if (ocrText && mode !== 'llm') {
+    results.ocr_msd = _auditMsd(humanText, ocrText);
+    results.ocr_cer = _auditCer(humanText, ocrText);
+  }
+  if (llmText && mode !== 'ocr') {
+    results.llm_msd = _auditMsd(humanText, llmText);
+    results.llm_cer = _auditCer(humanText, llmText);
+  }
+  return results;
+}
+
+function _auditAccumulate(metrics, humanText) {
+  const rowCount = humanText ? humanText.split('\n').length : 0;
+  const s = _auditSession;
+  s.layouts++;
+  s.rows += rowCount;
+  if (metrics.ocr_msd != null) {
+    s.ocr.msd_sum += metrics.ocr_msd; s.ocr.msd_count++;
+    s.ocr.cer_sum += metrics.ocr_cer; s.ocr.cer_count++;
+  }
+  if (metrics.llm_msd != null) {
+    s.llm.msd_sum += metrics.llm_msd; s.llm.msd_count++;
+    s.llm.cer_sum += metrics.llm_cer; s.llm.cer_count++;
+  }
+  if (_auditProjStats) {
+    const p = _auditProjStats;
+    p.layouts = (p.layouts || 0) + 1;
+    p.rows = (p.rows || 0) + rowCount;
+    if (metrics.ocr_msd != null) {
+      p.ocr.msd_sum += metrics.ocr_msd; p.ocr.msd_count++;
+      p.ocr.cer_sum += metrics.ocr_cer; p.ocr.cer_count++;
+    }
+    if (metrics.llm_msd != null) {
+      p.llm.msd_sum += metrics.llm_msd; p.llm.msd_count++;
+      p.llm.cer_sum += metrics.llm_cer; p.llm.cer_count++;
+    }
+    _auditSaveProjStats();
+  }
+  _auditUpdateStatsDisplay();
+}
+
+async function _auditSaveProjStats() {
+  if (!_auditProjStats || !activeProj) return;
+  const folder = encodeURIComponent(activeProj.annotations_path.replaceAll('\\','/'));
+  await fetch(`/api/audit/stats?folder=${folder}`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(_auditProjStats),
+  });
+}
+
+async function _auditSaveHumanCorrection(humanText) {
+  if (!_auditCurrent || !activeProj) return;
+  const folder = encodeURIComponent(activeProj.annotations_path.replaceAll('\\','/'));
+  const params = new URLSearchParams({
+    folder: activeProj.annotations_path.replaceAll('\\','/'),
+    stem: _auditCurrent.stem,
+    idx: _auditCurrent.idx,
+  });
+  await fetch(`/api/page/shape?${params}`, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({human_corrected_text: humanText}),
+  });
+}
+
+function _auditShowEvalResults(metrics) {
+  const el = document.getElementById('audit-eval-results');
+  const fmt4 = v => v != null ? v.toFixed(4) : '—';
+  const fmtP = v => v != null ? (v*100).toFixed(1)+'%' : '—';
+  const col = (v, thLow, thHigh) => v == null ? '#888' : v < thLow ? '#6f6' : v < thHigh ? '#fa0' : '#f64';
+  let html = '';
+  if (metrics.ocr_msd != null) {
+    html += `<span>OCR — MSD: <b style="color:${col(metrics.ocr_msd,0.05,0.5)}">${fmt4(metrics.ocr_msd)}</b>  CER: <b style="color:${col(metrics.ocr_cer,0.02,0.1)}">${fmtP(metrics.ocr_cer)}</b></span>`;
+  }
+  if (metrics.llm_msd != null) {
+    html += `<span style="margin-left:12px;">LLM — MSD: <b style="color:${col(metrics.llm_msd,0.05,0.5)}">${fmt4(metrics.llm_msd)}</b>  CER: <b style="color:${col(metrics.llm_cer,0.02,0.1)}">${fmtP(metrics.llm_cer)}</b></span>`;
+  }
+  el.innerHTML = html;
+}
+
+function auditEvaluate() {
+  // Accept empty/space as valid "no content" correction
+  const humanText = document.getElementById('audit-human-text').value;
+  if (humanText === null) { alert('Enter a human correction first'); return; }
+  const metrics = _auditComputeMetrics(humanText);
+  _auditShowEvalResults(metrics);
+}
+
+async function auditNext() {
+  // Use raw value — empty string and space are valid "no content" corrections
+  const humanText = document.getElementById('audit-human-text').value;
+  if (_auditCurrent) {
+    const metrics = _auditComputeMetrics(humanText);
+    _auditAccumulate(metrics, humanText);
+    _auditShowEvalResults(metrics);
+    await _auditSaveHumanCorrection(humanText);
+  }
+  await auditReload();
+}
 </script>
+
+<!-- Quality Audit Modal -->
+<div id="audit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:3000;flex-direction:column;">
+  <div style="display:flex;flex-direction:column;height:100vh;padding:16px;gap:12px;box-sizing:border-box;">
+    <!-- Header -->
+    <div style="display:flex;align-items:center;gap:16px;flex-shrink:0;">
+      <span style="font-size:1.1rem;font-weight:700;color:#e0e0e0;">🔍 Quality Audit</span>
+      <span id="audit-page-label" style="font-size:0.8rem;color:#666;"></span>
+      <div style="flex:1;"></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span style="font-size:0.8rem;color:#aaa;">Mode:</span>
+        <select id="audit-modal-mode" style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:3px 8px;font-size:0.8rem;"
+                onchange="auditReload()">
+          <option value="both">Both</option>
+          <option value="ocr">OCR only</option>
+          <option value="llm">LLM only</option>
+        </select>
+        <button onclick="closeAuditModal()" style="background:none;border:1px solid #444;border-radius:4px;color:#888;padding:4px 12px;cursor:pointer;font-size:0.85rem;">✕ Close</button>
+      </div>
+    </div>
+
+    <!-- Stats bar -->
+    <div style="display:flex;gap:20px;flex-shrink:0;font-size:0.75rem;color:#888;background:#0a1628;border-radius:6px;padding:8px 14px;flex-wrap:wrap;align-items:center;">
+      <span style="color:#aaa;font-weight:600;">Session:</span>
+      <span>layouts: <b id="as-layouts">0</b></span>
+      <span>rows: <b id="as-rows">0</b></span>
+      <span style="color:#333;">|</span>
+      <span>OCR MSD: <b id="as-ocr-msd">—</b> &nbsp;CER: <b id="as-ocr-cer">—</b></span>
+      <span>LLM MSD: <b id="as-llm-msd">—</b> &nbsp;CER: <b id="as-llm-cer">—</b></span>
+      <span style="color:#333;margin-left:8px;">|</span>
+      <span style="color:#aaa;font-weight:600;">Project:</span>
+      <span>layouts: <b id="ap-layouts">0</b></span>
+      <span>rows: <b id="ap-rows">0</b></span>
+      <span style="color:#333;">|</span>
+      <span>OCR MSD: <b id="ap-ocr-msd">—</b> &nbsp;CER: <b id="ap-ocr-cer">—</b></span>
+      <span>LLM MSD: <b id="ap-llm-msd">—</b> &nbsp;CER: <b id="ap-llm-cer">—</b></span>
+    </div>
+
+    <!-- Main content: 4 columns -->
+    <div style="display:flex;gap:8px;flex:1;min-height:0;overflow:hidden;">
+
+      <!-- Col 1: Image -->
+      <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:4px;min-width:40px;max-width:30vw;">
+        <span style="font-size:0.75rem;color:#888;font-weight:600;white-space:nowrap;">Original</span>
+        <div style="flex:1;overflow:auto;background:#060f20;border:1px solid #0f3460;border-radius:6px;padding:6px;display:flex;align-items:flex-start;justify-content:center;">
+          <img id="audit-img" src="" alt="cell" style="display:none;object-fit:fill;" onload="auditFitImage(this)" />
+          <span id="audit-img-placeholder" style="color:#444;font-size:0.85rem;align-self:center;">loading…</span>
+        </div>
+      </div>
+
+      <!-- Col 2: OCR -->
+      <div id="audit-ocr-panel" style="flex:0 0 auto;display:flex;flex-direction:column;gap:4px;min-width:40px;max-width:30vw;">
+        <div style="display:flex;align-items:center;gap:6px;white-space:nowrap;">
+          <span style="font-size:0.75rem;color:#888;font-weight:600;">OCR</span>
+          <button onclick="auditCopyToHuman('ocr')" style="font-size:0.7rem;padding:1px 6px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;">← copy</button>
+        </div>
+        <div style="flex:1;overflow:auto;background:#060f20;border:1px solid #1a3a6e;border-radius:4px;padding:6px 8px;">
+          <pre id="audit-ocr-text" style="margin:0;font-size:0.8rem;color:#ccc;font-family:monospace;white-space:pre;width:max-content;min-width:2ch;"></pre>
+        </div>
+      </div>
+
+      <!-- Col 3: LLM -->
+      <div id="audit-llm-panel" style="flex:0 0 auto;display:flex;flex-direction:column;gap:4px;min-width:40px;max-width:30vw;">
+        <div style="display:flex;align-items:center;gap:6px;white-space:nowrap;">
+          <span style="font-size:0.75rem;color:#888;font-weight:600;">LLM</span>
+          <button onclick="auditCopyToHuman('llm')" style="font-size:0.7rem;padding:1px 6px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;">← copy</button>
+        </div>
+        <div style="flex:1;overflow:auto;background:#060f20;border:1px solid #1a3a6e;border-radius:4px;padding:6px 8px;">
+          <pre id="audit-llm-text" style="margin:0;font-size:0.8rem;color:#ccc;font-family:monospace;white-space:pre;width:max-content;min-width:2ch;"></pre>
+        </div>
+      </div>
+
+      <!-- Col 4: Human correction (fills remaining space) -->
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px;min-width:100px;">
+        <span style="font-size:0.75rem;color:#888;font-weight:600;white-space:nowrap;">Human correction</span>
+        <textarea id="audit-human-text" placeholder="Type correction here…"
+          style="flex:1;background:#0d1b35;border:1px solid #e94560;border-radius:4px;color:#e0e0e0;font-size:0.8rem;padding:6px 8px;resize:none;font-family:monospace;white-space:pre;overflow-x:auto;"></textarea>
+      </div>
+
+    </div>
+
+    <!-- Bottom bar -->
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:wrap;">
+      <button onclick="auditEvaluate()" style="background:#1a3a6e;border:1px solid #0f3460;border-radius:4px;color:#e0e0e0;padding:6px 16px;cursor:pointer;font-size:0.85rem;">📊 Evaluate</button>
+      <button onclick="auditNext()" style="background:#e94560;border:none;border-radius:4px;color:#fff;padding:6px 16px;cursor:pointer;font-size:0.85rem;font-weight:600;">Next → </button>
+      <div id="audit-eval-results" style="font-size:0.78rem;color:#aaa;display:flex;gap:16px;flex-wrap:wrap;"></div>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>

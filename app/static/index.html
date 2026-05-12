@@ -854,7 +854,13 @@
           Overwrite existing OCR / LLM results
         </label>
         <div class="field-group">
-          <div class="field-label">Human correction</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+            <div class="field-label" style="margin-bottom:0;">Human correction</div>
+            <div style="display:flex;gap:4px;">
+              <button onclick="copyToHuman('ocr')" style="font-size:10px;padding:2px 7px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;" title="Copy OCR text here">← OCR</button>
+              <button onclick="copyToHuman('llm')" style="font-size:10px;padding:2px 7px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;" title="Copy LLM text here">← LLM</button>
+            </div>
+          </div>
           <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
             <div class="line-nums" id="human-input-lines">1</div>
             <textarea id="human-input" placeholder="Type correction here…" style="resize:none;width:100%;box-sizing:border-box;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;padding:5px 7px;"></textarea>
@@ -899,6 +905,13 @@
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
         <option value="llm">LLM</option>
         <option value="score_delete">Delete shapes below score threshold</option>
+      </select>
+    </div>
+    <div>
+      <label class="row" style="margin-bottom:4px;">Condition <span style="font-size:10px;color:#555;font-weight:400;">(which shapes to process)</span></label>
+      <select id="batch-condition" style="width:100%;">
+        <option value="none">— all shapes —</option>
+        <option value="ocr_row_minority">OCR row mismatch — minority only (red in diagnostic)</option>
       </select>
     </div>
     <div>
@@ -3155,6 +3168,37 @@ function _computeOverlapsOnShapes(shapes, threshold) {
   return toDelete;
 }
 
+// Returns a Set of shape indices that pass the condition, or null meaning "all shapes".
+function _computeConditionFilter(shapes) {
+  const cond = document.getElementById('batch-condition').value;
+  if (cond === 'none') return null;
+
+  if (cond === 'ocr_row_minority') {
+    const flagged = new Set();
+    const rowGroups = {};
+    shapes.forEach((s, i) => {
+      if (s.super_row == null) return;
+      (rowGroups[s.super_row] ??= []).push(i);
+    });
+    Object.values(rowGroups).forEach(idxs => {
+      const withData = idxs.filter(i => shapes[i].tesseract_output?.ocr_text);
+      if (withData.length < 2) return;
+      const freq = {};
+      withData.forEach(i => {
+        const n = _lineCount(shapes[i].tesseract_output.ocr_text);
+        freq[n] = (freq[n] || 0) + 1;
+      });
+      const modeCount = parseInt(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
+      withData.forEach(i => {
+        if (_lineCount(shapes[i].tesseract_output.ocr_text) !== modeCount) flagged.add(i);
+      });
+    });
+    return flagged;
+  }
+
+  return null;
+}
+
 async function runBatch() {
   const op       = document.getElementById('batch-op').value;
   const rawPages = document.getElementById('batch-pages').value;
@@ -3251,13 +3295,15 @@ async function runBatch() {
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
       const shapes = pdata.shapes || [];
+      const condFilter = _computeConditionFilter(shapes);
 
       for (let si = 0; si < shapes.length; si++) {
         if (_batchStop) break;
         const sh = shapes[si];
         if (!labelSet.has(sh.label)) continue;
+        if (condFilter !== null && !condFilter.has(si)) continue;
         if (!overwrite && sh.openai_output?.response) continue;
-        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})`;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}`;
         try {
           await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow);
         } catch(e) { if (_batchStop) break; }
@@ -3277,14 +3323,16 @@ async function runBatch() {
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
       const shapes = pdata.shapes || [];
+      const condFilter = _computeConditionFilter(shapes);
       let shapeDone = 0;
 
       for (let si = 0; si < shapes.length; si++) {
         if (_batchStop) break;
         const sh = shapes[si];
         if (!labelSet.has(sh.label)) continue;
+        if (condFilter !== null && !condFilter.has(si)) continue;
         if (!overwrite && sh.tesseract_output?.ocr_text) continue;
-        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})`;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}`;
         try {
           await _batchOcrShape(stem, si, op, cellHeight);
           shapeDone++;
@@ -4061,6 +4109,53 @@ function _llmTestSubTable(text) {
   return `<table style="border-collapse:collapse;width:100%;">${rows}</table>`;
 }
 
+function _levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m + 1}, (_, i) => {
+    const row = new Array(n + 1).fill(0);
+    row[0] = i;
+    return row;
+  });
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+function _lltLineDist(a, b) {
+  // Treat dashes (empty cell markers) as zero
+  const norm = s => /^[-–—]+$/.test(s.trim()) ? '0' : s;
+  a = norm(a); b = norm(b);
+  // Numeric comparison (handle European decimal comma)
+  const fa = parseFloat(a.replace(',', '.').replace(/\s/g, ''));
+  const fb = parseFloat(b.replace(',', '.').replace(/\s/g, ''));
+  if (isFinite(fa) && isFinite(fb)) return (fa - fb) ** 2;
+  // Text: normalized edit distance squared
+  if (a === b) return 0;
+  const maxLen = Math.max(a.length, b.length, 1);
+  return (_levenshtein(a, b) / maxLen) ** 2;
+}
+
+function _lltExtractText(td) {
+  const rows = td.querySelectorAll('tr');
+  if (!rows.length) return td.textContent.trim();
+  return Array.from(rows).map(r => r.textContent).join('\n');
+}
+
+function _lltMsd(humanLines, runText) {
+  const runLines = runText.split('\n');
+  const len = Math.max(humanLines.length, runLines.length);
+  let sum = 0;
+  for (let i = 0; i < len; i++) {
+    const h = (humanLines[i] ?? '').trim();
+    const r = (runLines[i] ?? '').trim();
+    sum += _lltLineDist(h, r);
+  }
+  return len > 0 ? sum / len : 0;
+}
+
 const _LLT_TD = 'style="vertical-align:top;border:1px solid #1a3a6e;padding:6px;min-width:110px;max-width:260px;"';
 const _LLT_TH = 'style="border:1px solid #1a3a6e;padding:5px 8px;background:#0f1e3a;color:#aaa;font-weight:600;white-space:nowrap;text-align:left;"';
 
@@ -4092,10 +4187,15 @@ async function runLlmTest() {
   const sy2 = Math.max(pts[0][1], pts[1][1]);
   const pad = 6;
 
+  const humanText = shape.human_output?.human_corrected_text || null;
+  const _LLT_TH_HUMAN = `style="border:1px solid #1a3a6e;padding:5px 8px;background:#0a2010;color:#6f6;font-weight:600;white-space:nowrap;text-align:left;"`;
+
   // Build header
   const thead = document.getElementById('llm-test-thead');
   const tbody = document.getElementById('llm-test-tbody');
-  let hdr = `<tr><th ${_LLT_TH}>Image</th><th ${_LLT_TH}>OCR</th>`;
+  let hdr = `<tr><th ${_LLT_TH}>Image</th>`;
+  if (humanText) hdr += `<th ${_LLT_TH_HUMAN}>Human</th>`;
+  hdr += `<th ${_LLT_TH}>OCR</th>`;
   for (let i = 0; i < N; i++) hdr += `<th ${_LLT_TH}>Run ${i+1}</th>`;
   hdr += '</tr>';
   thead.innerHTML = hdr;
@@ -4106,6 +4206,7 @@ async function runLlmTest() {
   // Build row with placeholders
   let row = `<tr>`;
   row += `<td ${_LLT_TD} id="llt-img-cell"><em style="color:#666;">loading…</em></td>`;
+  if (humanText) row += `<td ${_LLT_TD} style="background:#050f05;">${_llmTestSubTable(humanText)}</td>`;
   row += `<td ${_LLT_TD}>${_llmTestSubTable(ocrText)}</td>`;
   for (let i = 0; i < N; i++)
     row += `<td ${_LLT_TD} id="llt-run-${i}"><em style="color:#555;">waiting…</em></td>`;
@@ -4208,6 +4309,40 @@ async function runLlmTest() {
     }
     imgTd.innerHTML = '';
     imgTd.appendChild(im);
+  }
+
+  // MSD vs. human correction
+  if (humanText && !_llmTestAbort) {
+    const humanLines = humanText.split('\n');
+    // Fixed columns before run columns: Image + (Human?) + OCR = 2 or 3
+    const fixedCols = humanText ? 3 : 2;
+    const table = document.getElementById('llm-test-table');
+    const tfoot = table.tFoot || table.createTFoot();
+    tfoot.innerHTML = '';
+
+    const msds = [];
+    const labelCols = humanText ? 2 : 1; // Image + (Human?)
+    let footRow = `<tr>`;
+    footRow += `<td colspan="${labelCols}" style="padding:5px 8px;color:#888;font-style:italic;border:1px solid #1a3a6e;text-align:right;">MSD vs. human:</td>`;
+    // OCR MSD
+    const ocrMsd = _lltMsd(humanLines, ocrText);
+    const ocrCol = ocrMsd < 0.05 ? '#6f6' : ocrMsd < 0.5 ? '#fa0' : '#f64';
+    footRow += `<td style="padding:5px 8px;border:1px solid #1a3a6e;text-align:center;font-weight:700;font-family:monospace;color:${ocrCol};">${ocrMsd.toFixed(4)}</td>`;
+    // Run MSDs
+    for (let i = 0; i < N; i++) {
+      const td = document.getElementById(`llt-run-${i}`);
+      const runText = td ? _lltExtractText(td) : '';
+      const msd = _lltMsd(humanLines, runText);
+      msds.push(msd);
+      const col = msd < 0.05 ? '#6f6' : msd < 0.5 ? '#fa0' : '#f64';
+      footRow += `<td style="padding:5px 8px;border:1px solid #1a3a6e;text-align:center;font-weight:700;font-family:monospace;color:${col};">${msd.toFixed(4)}</td>`;
+    }
+    footRow += '</tr>';
+    tfoot.innerHTML = footRow;
+
+    const meanMsd = msds.reduce((a, b) => a + b, 0) / msds.length;
+    const bestRun = msds.indexOf(Math.min(...msds)) + 1;
+    statusEl.textContent += `  ·  Mean MSD: ${meanMsd.toFixed(4)}  ·  Best: Run ${bestRun}`;
   }
 }
 
@@ -4532,6 +4667,17 @@ async function runLlmLineByLine() {
 }
 
 // ── Save correction text ─────────────────────────────────────────────────────
+function copyToHuman(source) {
+  const text = source === 'ocr'
+    ? document.getElementById('f-ocr').value
+    : document.getElementById('f-llm-result').value;
+  if (!text || text === '—') return;
+  const ta = document.getElementById('human-input');
+  ta.value = text;
+  updateLineNums('human-input', 'human-input-lines');
+  ta.focus();
+}
+
 async function saveCorrection() {
   if (selIdx<0) return;
   const text=document.getElementById('human-input').value;

@@ -2034,6 +2034,128 @@ def api_perspective(body: PerspectiveRequest):
 
 
 # ---------------------------------------------------------------------------
+# Routes — Quality Audit
+# ---------------------------------------------------------------------------
+
+@app.get("/api/audit/random")
+def api_audit_random(folder: str = Query(...), mode: str = Query("both")):
+    """Return a randomly chosen shape that has OCR/LLM output but no human correction."""
+    import random, base64, io
+    from PIL import Image
+
+    d = _resolve_folder(folder)
+    json_files = list(d.glob("*.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="No pages found")
+    random.shuffle(json_files)
+
+    def _scan_page(jf):
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        hits = []
+        for idx, shape in enumerate(data.get("shapes", [])):
+            has_ocr   = bool(
+                shape.get("easyocr_output", {}).get("ocr_text") or
+                shape.get("tesseract_output", {}).get("ocr_text")
+            )
+            has_llm   = bool(shape.get("openai_output", {}).get("response"))
+            has_human = bool(shape.get("human_output", {}).get("human_corrected_text"))
+            if has_human:
+                continue
+            if mode == "ocr" and not has_ocr:
+                continue
+            if mode == "llm" and not has_llm:
+                continue
+            if mode == "both" and not (has_ocr and has_llm):
+                continue
+            hits.append((jf.stem, idx))
+        return hits
+
+    # Fast path: try random pages one by one; stop as soon as we have candidates
+    candidates = []
+    for jf in json_files:
+        candidates = _scan_page(jf)
+        if candidates:
+            break
+
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No qualifying shapes found")
+
+    stem, idx = random.choice(candidates)
+    jf   = d / f"{stem}.json"
+    data = json.loads(jf.read_text(encoding="utf-8"))
+    shape = data["shapes"][idx]
+
+    ocr_text = (
+        shape.get("easyocr_output", {}).get("ocr_text") or
+        shape.get("tesseract_output", {}).get("ocr_text") or ""
+    )
+    llm_text = shape.get("openai_output", {}).get("response") or ""
+    label    = shape.get("label", "")
+
+    # Crop cell image
+    image_b64 = None
+    img_path  = _find_image(d, stem)
+    if img_path is not None:
+        try:
+            pts = shape.get("points", [])
+            if pts:
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                pad  = 4
+                x1   = max(0, int(min(xs)) - pad)
+                y1   = max(0, int(min(ys)) - pad)
+                x2   = int(max(xs)) + pad
+                y2   = int(max(ys)) + pad
+                img  = Image.open(str(img_path)).convert("RGB")
+                crop = img.crop((x1, y1, x2, y2))
+                buf  = io.BytesIO()
+                crop.save(buf, format="JPEG", quality=90)
+                buf.seek(0)
+                image_b64 = base64.b64encode(buf.read()).decode()
+        except Exception:
+            image_b64 = None
+
+    return {
+        "stem":       stem,
+        "idx":        idx,
+        "label":      label,
+        "ocr_text":   ocr_text,
+        "llm_text":   llm_text,
+        "image_b64":  image_b64,
+    }
+
+
+_AUDIT_STATS_DEFAULT = {
+    "ocr": {"msd_sum": 0, "msd_count": 0, "cer_sum": 0, "cer_count": 0},
+    "llm": {"msd_sum": 0, "msd_count": 0, "cer_sum": 0, "cer_count": 0},
+}
+
+
+@app.get("/api/audit/stats")
+def api_audit_get_stats(folder: str = Query(...)):
+    """Return accumulated audit stats for the project."""
+    stats_file = _resolve_folder(folder).parent / "audit_stats.json"
+    if not stats_file.exists():
+        return _AUDIT_STATS_DEFAULT.copy()
+    try:
+        return json.loads(stats_file.read_text(encoding="utf-8"))
+    except Exception:
+        return _AUDIT_STATS_DEFAULT.copy()
+
+
+@app.post("/api/audit/stats")
+async def api_audit_update_stats(folder: str = Query(...), request: Request = None):
+    """Save audit stats for the project."""
+    body = await request.json()
+    stats_file = _resolve_folder(folder).parent / "audit_stats.json"
+    stats_file.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Root — redirect to dashboard
 # ---------------------------------------------------------------------------
 
