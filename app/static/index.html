@@ -3870,11 +3870,16 @@ function updatePanel() {
   // LLM cleaner — always visible when a shape is selected
   document.getElementById('fg-llm').style.display='flex';
   const llmOut = shape.openai_output;
-  document.getElementById('f-llm-result').value = llmOut?.response || '—';
+  // Show '—' if no result yet; '(empty)' if the LLM ran but returned nothing
+  document.getElementById('f-llm-result').value = llmOut
+    ? (llmOut.response || '(empty)')
+    : '—';
   const llmMeta = document.getElementById('f-llm-meta');
   if (llmOut?.model) {
-    const ts = llmOut.timestamp ? new Date(llmOut.timestamp).toLocaleString() : '';
-    llmMeta.textContent = `${llmOut.model}  ·  ${llmOut.mode||''}  ·  ${ts}`;
+    const ts  = llmOut.timestamp ? new Date(llmOut.timestamp).toLocaleString() : '';
+    const tok = (llmOut.tokens_in != null)
+      ? `  ·  ${llmOut.tokens_in}→${llmOut.tokens_out} tok` : '';
+    llmMeta.textContent = `${llmOut.model}  ·  ${llmOut.mode||''}  ·  ${ts}${tok}`;
   } else {
     llmMeta.textContent = '';
   }
@@ -4494,6 +4499,7 @@ async function runLlm() {
   const mode = document.getElementById('llm-mode').value;
   if (mode === 'linebyline') { runLlmLineByLine(); return; }
 
+  const myIdx = selIdx;  // capture now — user may click away during await
   const btn = document.getElementById('llm-btn');
   btn.disabled = true; btn.textContent = '…';
   try {
@@ -4501,7 +4507,7 @@ async function runLlm() {
     const prompt    = document.getElementById('llm-prompt').value.trim();
     const useShadow = document.getElementById('llm-use-shadow').checked;
     if (!prompt) { showToast('Prompt is empty'); return; }
-    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx, model, mode, use_shadow: useShadow});
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: myIdx, model, mode, use_shadow: useShadow});
     const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -4509,12 +4515,24 @@ async function runLlm() {
     });
     if (!r.ok) { showToast(`LLM error ${r.status}: ${(await r.text()).slice(0, 120)}`); return; }
     const data = await r.json();
-    pageData.shapes[selIdx].openai_output = {
+    console.log('[LLM] response:', JSON.stringify(data.response)?.slice(0, 120),
+                '| tokens:', data.tokens_in, '→', data.tokens_out,
+                '| myIdx:', myIdx, '| selIdx now:', selIdx,
+                '| label:', pageData.shapes[myIdx]?.label);
+    if (!pageData.shapes[myIdx]) { showToast('LLM done (shape gone)'); return; }
+    pageData.shapes[myIdx].openai_output = {
       response: data.response, model: data.model,
       mode: data.mode, timestamp: data.timestamp,
+      tokens_in: data.tokens_in, tokens_out: data.tokens_out,
     };
-    updatePanel();
-    showToast('LLM done');
+    if (myIdx === selIdx) {
+      // Still on the same shape — refresh panel
+      const el = document.getElementById('f-llm-result');
+      console.log('[LLM] textarea before updatePanel:', JSON.stringify(el?.value)?.slice(0, 80));
+      updatePanel();
+      console.log('[LLM] textarea after  updatePanel:', JSON.stringify(el?.value)?.slice(0, 80));
+    }
+    showToast('LLM done' + (myIdx !== selIdx ? ' (navigated away — result saved)' : ''));
   } finally {
     btn.disabled = false; btn.textContent = '▶ Send';
   }
@@ -4699,6 +4717,7 @@ async function runLlmAll() {
 
 async function runLlmLineByLine() {
   if (selIdx < 0 || !pages.length) return;
+  const myIdx   = selIdx;  // capture now — user may click away during streaming
   const btn     = document.getElementById('llm-btn');
   const stopBtn = document.getElementById('llm-stop-btn');
   btn.disabled = true; btn.textContent = '…';
@@ -4717,7 +4736,7 @@ async function runLlmLineByLine() {
   metaEl.textContent = 'Detecting rows…';
 
   // Pre-compute crop origin in full-image space so we can draw on the main overlay
-  const shape = pageData.shapes[selIdx];
+  const shape = pageData.shapes[myIdx];
   const spts  = shape.points;
   const sx1   = Math.min(spts[0][0], spts[1][0]);
   const sy1   = Math.min(spts[0][1], spts[1][1]);
@@ -4733,7 +4752,7 @@ async function runLlmLineByLine() {
 
   try {
     const params = new URLSearchParams({
-      folder, stem: pages[pageIdx].stem, idx: selIdx,
+      folder, stem: pages[pageIdx].stem, idx: myIdx,
       model, cell_height: cellHeight, use_shadow: useShadow,
     });
     const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
@@ -4784,12 +4803,14 @@ async function runLlmLineByLine() {
           metaEl.textContent = `Row ${msg.row + 1} / ${llmProgress.lines.length}`;
 
         } else if (msg.type === 'done') {
-          pageData.shapes[selIdx].openai_output = {
-            response: msg.response, model: msg.model,
-            mode: 'linebyline', timestamp: msg.timestamp,
-          };
+          if (pageData.shapes[myIdx]) {
+            pageData.shapes[myIdx].openai_output = {
+              response: msg.response, model: msg.model,
+              mode: 'linebyline', timestamp: msg.timestamp,
+            };
+          }
           llmProgress = null;
-          updatePanel();
+          if (myIdx === selIdx) updatePanel();
           drawRowOverlay(lastRowLines, -1);
           showToast(`Line-by-line done · ${lineResults.length} rows`);
         }

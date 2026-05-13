@@ -54,6 +54,31 @@ async def lifespan(app):
 
 app = FastAPI(title="EconAI", version="0.1.0", lifespan=lifespan)
 
+# Module-level probe — fires when server.py is imported
+import os as _os
+try:
+    _probe_msg = f"server.py loaded OK  PID={_os.getpid()}\n"
+    open(r"C:\Users\agaspar\Downloads\server_loaded.txt", "a").write(_probe_msg)
+except Exception:
+    pass
+
+# Request probe middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as _Req
+
+class _ProbeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: _Req, call_next):
+        try:
+            with open(r"C:\Users\agaspar\Downloads\requests.log", "a") as _f:
+                _f.write(f"PID={_os.getpid()} {request.method} {request.url.path}?{request.url.query}\n")
+        except Exception:
+            pass
+        response = await call_next(request)
+        response.headers["X-EconAI-Worker"] = str(_os.getpid())
+        return response
+
+app.add_middleware(_ProbeMiddleware)
+
 # Allow the browser (same host, any port) to call the API
 app.add_middleware(
     CORSMiddleware,
@@ -1107,12 +1132,21 @@ def api_llm_cell(
     try:
         client   = _make_llm_client(model)
         response = client.chat.completions.create(
-            model=model, messages=messages, max_tokens=1024, temperature=0,
+            model=model, messages=messages, max_tokens=1024,
+            # temperature=0 → fully deterministic; re-running the same cell always
+            # yields the same output.  Use a small positive value so that:
+            #   (a) repeated calls can differ, proving the API is actually invoked,
+            #   (b) the model has a tiny bit of freedom to self-correct.
+            temperature=0.2,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
-    result    = response.choices[0].message.content.strip()
+    raw_content = response.choices[0].message.content
+    result      = (raw_content or "").strip()
+    tokens_in   = response.usage.prompt_tokens     if response.usage else 0
+    tokens_out  = response.usage.completion_tokens if response.usage else 0
+    print(f"[LLM] result={result!r}  tokens={tokens_in}→{tokens_out}", flush=True)
     timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
     if not dry_run:
@@ -1125,7 +1159,8 @@ def api_llm_cell(
         jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return {"response": result, "model": model, "mode": mode,
-            "timestamp": timestamp, "prompt_sent": prompt_text}
+            "timestamp": timestamp, "prompt_sent": prompt_text,
+            "tokens_in": tokens_in, "tokens_out": tokens_out}
 
 
 @app.post("/api/page/shape/llm/linebyline")
@@ -1227,7 +1262,7 @@ async def api_llm_linebyline(
                 resp = client.chat.completions.create(
                     model=model, messages=messages, max_tokens=64, temperature=0,
                 )
-                text = resp.choices[0].message.content.strip()
+                text = (resp.choices[0].message.content or "").strip()
             except Exception as exc:
                 text = f"[error: {exc}]"
 
@@ -2184,6 +2219,19 @@ def api_export_excel(
     When cells in the same lattice row have different line counts, the
     shorter ones are padded with blank cells coloured light-red.
     """
+    # ── Probe: confirm this code version is running ──────────────────────────
+    _PROBE = r"C:\Users\agaspar\Downloads\excel_debug.log"
+    try:
+        with open(_PROBE, "a", encoding="utf-8") as _pf:
+            _pf.write(f"ENDPOINT HIT: folder={folder!r} scope={scope!r} stem={stem!r}\n")
+    except Exception as _pe:
+        try:
+            with open(_PROBE + ".err", "w") as _ef:
+                _ef.write(repr(_pe))
+        except Exception:
+            pass
+    # ── End probe ─────────────────────────────────────────────────────────────
+
     try:
         import openpyxl
         from openpyxl.styles import Alignment, PatternFill
@@ -2199,9 +2247,12 @@ def api_export_excel(
     selected_types = {t.strip() for t in types.split(",") if t.strip()} if types else set()
 
     # ── Styles ───────────────────────────────────────────────────────────────
-    _align     = Alignment(wrap_text=True, vertical="top", horizontal="left")
-    _red_fill  = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
-    _blue_fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+    from openpyxl.styles import Font
+    _align      = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    _red_fill   = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+    _blue_fill  = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+    _src_fill   = PatternFill(start_color="D0D0D0", end_color="D0D0D0", fill_type="solid")
+    _src_font   = Font(italic=True, bold=True, color="444444")
 
     def natural_key(p):
         return [int(c) if c.isdigit() else c.lower()
@@ -2244,11 +2295,13 @@ def api_export_excel(
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
             raw.append(dict(text=text,
                             cx=(x1+x2)/2, cy=(y1+y2)/2,
-                            h=max(1, y2-y1), w=max(1, x2-x1)))
+                            h=max(1, y2-y1), w=max(1, x2-x1),
+                            label=sh.get("label", "?")))
+        print(f"[EXCEL] shapes_to_cells: {len(shapes)} shapes in, {len(raw)} with text", flush=True)
         if not raw:
             return []
 
-        # ── Row clustering ───────────────────────────────────────────────
+        # ── Row clustering by CENTER Y ────────────────────────────────────
         med_h    = sorted(c["h"] for c in raw)[len(raw)//2]
         thresh_y = max(3, med_h * 0.55)
         raw.sort(key=lambda c: c["cy"])
@@ -2282,18 +2335,42 @@ def api_export_excel(
             c["col_idx"] = min(range(len(col_centers)),
                                key=lambda i: abs(col_centers[i] - c["cx"]))
 
-        # ── Build final cell list (first-in wins on collision) ───────────
-        seen: set = set()
-        cells = []
+        # ── Build final cell list (taller cell wins on collision) ───────
+        # When two cells land on the same (row_idx, col_idx) — e.g. a short
+        # county-name header and the tall full-table text_cell both mapping to
+        # the same column — keep the one with the larger bounding box (more
+        # actual content).  The short header would otherwise shadow the tall
+        # cell because it has a lower cy and sorts first.
+        winner: dict = {}   # (row_idx, col_idx) → raw cell dict
+        _dbg: list = []
         for c in raw:
             k = (c["row_idx"], c["col_idx"])
-            if k in seen:
-                continue
-            seen.add(k)
-            cells.append(dict(row_idx=c["row_idx"],
-                              col_idx=c["col_idx"],
-                              lines=text_to_lines(c["text"]),
-                              w_px=c["w"]))   # pixel width of bounding box
+            if k in winner:
+                prev = winner[k]
+                if c["h"] > prev["h"]:
+                    _dbg.append(f"COLLISION {k}: {prev['label']}(h={prev['h']:.0f}) -> {c['label']}(h={c['h']:.0f}) REPLACED")
+                    winner[k] = c
+                else:
+                    _dbg.append(f"COLLISION {k}: {prev['label']}(h={prev['h']:.0f}) KEEPS over {c['label']}(h={c['h']:.0f})")
+            else:
+                winner[k] = c
+        cells = [dict(row_idx=c["row_idx"],
+                      col_idx=c["col_idx"],
+                      lines=text_to_lines(c["text"]),
+                      w_px=c["w"])
+                 for c in winner.values()]
+        # Write debug log to a file (stdout unreachable from uvicorn worker)
+        _LOG_PATH = r"C:\Users\agaspar\Downloads\excel_debug.log"
+        try:
+            with open(_LOG_PATH, "a", encoding="utf-8") as _f:
+                _f.write(f"--- shapes_to_cells: {len(raw)} raw -> {len(cells)} cells ---\n")
+                for line in _dbg:
+                    _f.write(line + "\n")
+                for c in cells:
+                    _f.write(f"  cell row={c['row_idx']} col={c['col_idx']} lines={len(c['lines'])} first={c['lines'][0][:30]!r}\n")
+        except Exception as _e:
+            with open(_LOG_PATH + ".err", "w") as _ef:
+                _ef.write(str(_e))
         return cells
 
     # ── Helpers for stacking / dual-page alignment ───────────────────────────
@@ -2392,6 +2469,28 @@ def api_export_excel(
                 if ws.column_dimensions[letter].width < width:
                     ws.column_dimensions[letter].width = round(width, 1)
 
+    def write_source_row(ws, row, names: list, col_offset=0,
+                         total_left_cols=0, total_right_cols=0):
+        """
+        Write a grey banner row with source file name(s).
+        - Single-layout: name fills from col_offset+1 across total_left_cols.
+        - Dual-layout:   left name fills left block, right name fills right block.
+        """
+        if total_left_cols > 0:
+            # Left (or single) block
+            for ci in range(col_offset + 1, col_offset + total_left_cols + 1):
+                cell = ws.cell(row=row, column=ci)
+                cell.fill = _src_fill
+                cell.font = _src_font
+            ws.cell(row=row, column=col_offset + 1).value = names[0] if names else ""
+        if total_right_cols > 0 and len(names) > 1:
+            right_start = col_offset + total_left_cols + 2   # +2 = gap column
+            for ci in range(right_start, right_start + total_right_cols):
+                cell = ws.cell(row=row, column=ci)
+                cell.fill = _src_fill
+                cell.font = _src_font
+            ws.cell(row=row, column=right_start).value = names[1]
+
     def max_col_of(cells):
         return max((c["col_idx"] for c in cells), default=-1)
 
@@ -2411,27 +2510,32 @@ def api_export_excel(
 
     wb  = openpyxl.Workbook()
     wb.remove(wb.active)
-    SEP = 1   # blank separator rows between pages when stacking
 
     if scope == "page":
-        # ── Single page: one sheet ────────────────────────────────────────
+        # ── Single page: one sheet (no source row needed) ─────────────────
+        print(f"[EXCEL] processing page {jfiles[0].name}", flush=True)
         ws = wb.create_sheet(title=stem[:31])
         write_cells(ws, shapes_to_cells(load_shapes(jfiles[0])))
 
     elif not dual:
-        # ── Whole document, single layout: all pages on one sheet ────────
-        ws       = wb.create_sheet(title="Export")
-        cur_row  = 1
+        # ── Whole document, single layout: all pages on one sheet ─────────
+        ws      = wb.create_sheet(title="Export")
+        cur_row = 1
         for jf in jfiles:
+            print(f"[EXCEL] processing {jf.name}", flush=True)
             cells = shapes_to_cells(load_shapes(jf))
             if not cells:
                 continue
             write_cells(ws, cells, col_offset=0, base_row=cur_row)
-            cur_row += page_excel_height(cells) + SEP
+            page_h = page_excel_height(cells)
+            # source-name banner row immediately after the page's data
+            n_cols = max_col_of(cells) + 1
+            write_source_row(ws, cur_row + page_h, [jf.stem],
+                             col_offset=0, total_left_cols=n_cols)
+            cur_row += page_h + 1   # +1 for the source row (replaces blank sep)
 
     else:
-        # ── Whole document, dual layout: paired pages side-by-side ───────
-        # All pairs stacked vertically on one sheet.
+        # ── Whole document, dual layout: paired pages side-by-side ────────
         ws      = wb.create_sheet(title="Export")
         cur_row = 1
         i = 0
@@ -2460,7 +2564,15 @@ def api_export_excel(
                 page_excel_height(left_cells,  extra=left_pad),
                 page_excel_height(right_cells, extra=right_pad),
             )
-            cur_row += pair_height + SEP
+            # source-name banner row after the pair
+            left_n_cols  = max_col_of(left_cells)  + 1
+            right_n_cols = max_col_of(right_cells) + 1
+            names = [left_jf.stem] + ([right_jf.stem] if right_jf else [])
+            write_source_row(ws, cur_row + pair_height, names,
+                             col_offset=0,
+                             total_left_cols=left_n_cols,
+                             total_right_cols=right_n_cols)
+            cur_row += pair_height + 1   # +1 for source row
 
     if not wb.worksheets:
         wb.create_sheet("Empty")
@@ -2470,10 +2582,16 @@ def api_export_excel(
     buf.seek(0)
 
     fname = f"{stem}.xlsx" if (scope == "page" and stem) else "export.xlsx"
+    import datetime as _dt
+    headers = {
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "X-EconAI-Version": "taller-wins-probe",
+        "X-EconAI-Time": _dt.datetime.utcnow().isoformat(),
+    }
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers=headers,
     )
 
 
