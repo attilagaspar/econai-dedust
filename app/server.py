@@ -2335,12 +2335,12 @@ def api_export_excel(
             c["col_idx"] = min(range(len(col_centers)),
                                key=lambda i: abs(col_centers[i] - c["cx"]))
 
-        # ── Build final cell list (taller cell wins on collision) ───────
+        # ── Build final cell list (taller cell wins; loser is rescued) ─────
         # When two cells land on the same (row_idx, col_idx) — e.g. a short
-        # county-name header and the tall full-table text_cell both mapping to
-        # the same column — keep the one with the larger bounding box (more
-        # actual content).  The short header would otherwise shadow the tall
-        # cell because it has a lower cy and sorts first.
+        # county-name header and the tall craft-list text_cell both mapping to
+        # the same column — keep the taller one in the slot AND relocate the
+        # shorter one to row_idx-1 (one row above) so it is not lost.
+        # After all cells are placed, row indices are normalised to start at 0.
         winner: dict = {}   # (row_idx, col_idx) → raw cell dict
         _dbg: list = []
         for c in raw:
@@ -2348,12 +2348,35 @@ def api_export_excel(
             if k in winner:
                 prev = winner[k]
                 if c["h"] > prev["h"]:
-                    _dbg.append(f"COLLISION {k}: {prev['label']}(h={prev['h']:.0f}) -> {c['label']}(h={c['h']:.0f}) REPLACED")
-                    winner[k] = c
+                    winner[k] = c          # taller takes the slot
+                    loser = dict(prev)
                 else:
-                    _dbg.append(f"COLLISION {k}: {prev['label']}(h={prev['h']:.0f}) KEEPS over {c['label']}(h={c['h']:.0f})")
+                    loser = dict(c)        # prev stays, newcomer is the loser
+                # Try to rescue the loser one row above
+                rescue_k = (loser["row_idx"] - 1, loser["col_idx"])
+                if rescue_k not in winner:
+                    loser["row_idx"] -= 1
+                    winner[rescue_k] = loser
+                    _dbg.append(
+                        f"COLLISION {k}: taller kept, "
+                        f"rescued {loser['label']!r}(h={loser['h']:.0f}) "
+                        f"-> row {loser['row_idx']}"
+                    )
+                else:
+                    _dbg.append(
+                        f"COLLISION {k}: taller kept, "
+                        f"discarded {loser['label']!r}(h={loser['h']:.0f}) "
+                        f"(rescue slot occupied)"
+                    )
             else:
                 winner[k] = c
+
+        # Normalise row_idx so the minimum is 0 (relocated cells may be < 0)
+        if winner:
+            min_row = min(c["row_idx"] for c in winner.values())
+            if min_row < 0:
+                for c in winner.values():
+                    c["row_idx"] -= min_row
         cells = [dict(row_idx=c["row_idx"],
                       col_idx=c["col_idx"],
                       lines=text_to_lines(c["text"]),
