@@ -2295,27 +2295,38 @@ def api_export_excel(
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
             raw.append(dict(text=text,
                             cx=(x1+x2)/2, cy=(y1+y2)/2,
+                            top_y=y1, bot_y=y2,
                             h=max(1, y2-y1), w=max(1, x2-x1),
                             label=sh.get("label", "?")))
         print(f"[EXCEL] shapes_to_cells: {len(shapes)} shapes in, {len(raw)} with text", flush=True)
         if not raw:
             return []
 
-        # ── Row clustering by CENTER Y ────────────────────────────────────
-        med_h    = sorted(c["h"] for c in raw)[len(raw)//2]
-        thresh_y = max(3, med_h * 0.55)
-        raw.sort(key=lambda c: c["cy"])
-        rows = [[raw[0]]]
-        for c in raw[1:]:
-            mean_cy = sum(x["cy"] for x in rows[-1]) / len(rows[-1])
-            if abs(c["cy"] - mean_cy) <= thresh_y:
-                rows[-1].append(c)
-            else:
-                rows.append([c])
-        for row_idx, row in enumerate(rows):
-            for c in row:
+        # ── Row clustering — mirror the JS lattice detector logic ─────────
+        # Sort by top edge.  For each shape check whether its centre-y falls
+        # within [avgTop − TOL, avgBottom + TOL] of an existing row, where
+        # avgTop/avgBottom are the mean top/bottom edges of shapes already in
+        # that row.  This is identical to _latticeAssignCoords in index.html
+        # and correctly separates pre-lattice headers (small, near the top of
+        # the page) from tall cells whose centre-y happens to be far below.
+        ROW_TOL = 10
+        raw.sort(key=lambda c: c["top_y"])
+        row_groups: list = []   # list of lists of raw-cell dicts
+        for c in raw:
+            placed = False
+            for grp in row_groups:
+                avg_top = sum(r["top_y"] for r in grp) / len(grp)
+                avg_bot = sum(r["bot_y"] for r in grp) / len(grp)
+                if avg_top - ROW_TOL <= c["cy"] <= avg_bot + ROW_TOL:
+                    grp.append(c)
+                    placed = True
+                    break
+            if not placed:
+                row_groups.append([c])
+        for row_idx, grp in enumerate(row_groups):
+            for c in grp:
                 c["row_idx"] = row_idx
-            row.sort(key=lambda c: c["cx"])
+            grp.sort(key=lambda c: c["cx"])
 
         # ── Column clustering (global) ───────────────────────────────────
         med_w    = sorted(c["w"] for c in raw)[len(raw)//2]
