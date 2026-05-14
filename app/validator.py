@@ -306,6 +306,17 @@ def _load_shapes(jf: Path):
         return []
 
 
+# ── Text helpers ─────────────────────────────────────────────────────────────
+
+def _text_lines(text: str) -> list:
+    """Split cell text into lines, stripping trailing blanks.
+    Mirrors text_to_lines() in the Excel export."""
+    lines = [l.strip() for l in str(text).split("\n")]
+    while lines and not lines[-1]:
+        lines.pop()
+    return lines or [""]
+
+
 # ── Import ────────────────────────────────────────────────────────────────────
 
 class ImportRequest(BaseModel):
@@ -410,15 +421,27 @@ def api_import(req: ImportRequest):
                 page_row_maps.append((stem, rm, row_map))
                 group_logical_rows.update(row_map.values())
 
-            # Create DB rows for each logical position
-            logical_to_db: dict = {}
+            # ── Max lines per logical row (mirrors Excel expand logic) ─────────
+            # Each cell's text may contain \n-separated lines.  The logical row
+            # expands to max(line_count) across all cells in that row, exactly
+            # as the Excel export does.
+            max_lines: dict = {}   # logical_r → int
+            for stem, rm, row_map in page_row_maps:
+                for ridx, row_cells in rm.items():
+                    logical_r = row_map[ridx]
+                    ml = max(
+                        (len(_text_lines(c["text"])) for c in row_cells),
+                        default=1,
+                    )
+                    if ml > max_lines.get(logical_r, 1):
+                        max_lines[logical_r] = ml
+
+            # ── Create DB rows: one per (logical_r, line_i) ──────────────────
+            logical_to_db: dict = {}   # (logical_r, line_i) → db_row_id
             for logical_r in sorted(group_logical_rows):
-                global_pos += 1.0
-                db_row_id   = row_counter
-                row_counter += 1
-                # Determine source page for this logical row
-                stem_src    = ""
-                ridx_src    = logical_r
+                n_lines  = max_lines.get(logical_r, 1)
+                stem_src = ""
+                ridx_src = logical_r
                 for stem, rm, row_map in page_row_maps:
                     for ridx, lr in row_map.items():
                         if lr == logical_r:
@@ -427,32 +450,39 @@ def api_import(req: ImportRequest):
                             break
                     if stem_src:
                         break
-                conn.execute(
-                    "INSERT INTO rows(row_id,position,page_stem,page_row_idx)"
-                    " VALUES(?,?,?,?)",
-                    (db_row_id, global_pos, stem_src, ridx_src),
-                )
-                logical_to_db[logical_r] = db_row_id
+                for line_i in range(n_lines):
+                    global_pos += 1.0
+                    db_row_id   = row_counter
+                    row_counter += 1
+                    conn.execute(
+                        "INSERT INTO rows(row_id,position,page_stem,page_row_idx)"
+                        " VALUES(?,?,?,?)",
+                        (db_row_id, global_pos, stem_src, ridx_src),
+                    )
+                    logical_to_db[(logical_r, line_i)] = db_row_id
 
-            # Insert cells
+            # ── Insert cells line by line ─────────────────────────────────────
             for pi, (stem, rm, row_map) in enumerate(page_row_maps):
                 col_off = page_col_offsets[pi] if pi < len(page_col_offsets) else 0
                 for ridx, row_cells in rm.items():
                     logical_r = row_map[ridx]
-                    db_row_id = logical_to_db.get(logical_r)
-                    if db_row_id is None:
-                        continue
                     for c in row_cells:
                         db_col = col_off + c["col_idx"]
                         if db_col >= total_cols:
                             continue
-                        text = c["text"].strip()
-                        conn.execute(
-                            "INSERT OR REPLACE INTO cells"
-                            "(row_id,col_id,value,original_value,source)"
-                            " VALUES(?,?,?,?,?)",
-                            (db_row_id, db_col, text, text, c.get("source", "ocr")),
-                        )
+                        lines  = _text_lines(c["text"])
+                        src    = c.get("source", "ocr")
+                        for line_i, line_text in enumerate(lines):
+                            db_row_id = logical_to_db.get((logical_r, line_i))
+                            if db_row_id is None:
+                                continue
+                            conn.execute(
+                                "INSERT OR REPLACE INTO cells"
+                                "(row_id,col_id,value,original_value,source)"
+                                " VALUES(?,?,?,?,?)",
+                                (db_row_id, db_col, line_text,
+                                 line_text, src),
+                            )
 
     return {
         "ok": True,
