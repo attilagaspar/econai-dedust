@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>EconAI — Table Validator</title>
+<title>EconAI — Data Lab</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -312,10 +312,9 @@ td.row-actions {
 
 <!-- Top bar -->
 <div id="topbar">
-  <h1>📊 EconAI Table Validator</h1>
-  <select id="project-sel" onchange="onProjectChange()">
-    <option value="">— select project —</option>
-  </select>
+  <a href="/static/dashboard.html" style="color:#e94560;text-decoration:none;font-size:18px;line-height:1;" title="Back to dashboard">←</a>
+  <h1>🧪 Data Lab</h1>
+  <span id="project-label" style="font-size:13px;color:#80b4ff;font-weight:600;"></span>
   <button class="btn btn-blue" onclick="openImportModal()">⬇ Import</button>
   <label style="display:flex;align-items:center;gap:5px;font-size:12px;">
     <input type="checkbox" id="show-deleted" onchange="renderTable()"> Show deleted rows
@@ -434,33 +433,24 @@ let violColorMap = {};         // constraint_id → css class index
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
-  const resp = await fetch(`${API}/api/projects`).catch(() => null);
-  if (resp && resp.ok) {
-    const projects = await resp.json();
-    const sel = document.getElementById('project-sel');
-    projects.forEach(p => {
-      const o = document.createElement('option');
-      o.value = p.name; o.textContent = p.name;
-      sel.appendChild(o);
-    });
-  }
-  // Restore last folder from localStorage
-  const saved = localStorage.getItem('validator_folder');
-  if (saved) {
-    document.getElementById('project-sel').value = saved;
-    document.getElementById('imp-folder').value  = saved;
-    folder = saved;
-    await loadAll();
-  }
-}
+  // Prefer URL params (coming from dashboard), fall back to localStorage
+  const params  = new URLSearchParams(location.search);
+  const urlFolder  = params.get('folder');
+  const urlProject = params.get('project');
 
-async function onProjectChange() {
-  folder = document.getElementById('project-sel').value;
-  document.getElementById('imp-folder').value = folder;
-  if (folder) {
+  if (urlFolder) {
+    folder = urlFolder;
     localStorage.setItem('validator_folder', folder);
-    await loadAll();
+  } else {
+    folder = localStorage.getItem('validator_folder') || '';
   }
+
+  const label = urlProject || folder.split(/[\\/]/).pop();
+  document.getElementById('project-label').textContent = label;
+  document.getElementById('imp-folder').value = folder;
+
+  if (folder) await loadAll();
+  else setStatus('No project — use ⬇ Import to load one');
 }
 
 async function loadAll() {
@@ -653,8 +643,8 @@ async function doImport() {
   if (!r.ok) { const e = await r.json(); toast('Error: ' + e.detail); return; }
   const d = await r.json();
   folder = f;
-  document.getElementById('project-sel').value = f;
   localStorage.setItem('validator_folder', f);
+  document.getElementById('project-label').textContent = f.split(/[\\/]/).pop();
   toast(`Imported: ${d.pages} pages → ${d.rows} rows, ${d.columns} columns`);
   violations = []; violColMap = {}; violColorMap = {};
   await loadAll();

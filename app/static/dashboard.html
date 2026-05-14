@@ -458,6 +458,19 @@ function renderDetail() {
       </div>
     </div>
 
+    <!-- Data Lab -->
+    <div class="card">
+      <h3>🧪 Data Lab</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px;">
+        Import the OCR/LLM output into a structured table, name columns, define
+        algebraic constraints (e.g. small&nbsp;+&nbsp;large&nbsp;=&nbsp;total),
+        detect and fix violations, and export a clean dataset with a full audit log.
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="openDataLab()">🧪 Open Data Lab</button>
+      </div>
+    </div>
+
     <!-- Quality Audit -->
     <div class="card">
       <h3>🔍 Quality Audit</h3>
@@ -493,6 +506,12 @@ function openEditor() {
   const ann = activeProj.annotations_path.replaceAll('\\', '/');
   const labels = (activeProj.config.labels || []).join(',');
   window.location.href = `/static/index.html?folder=${encodeURIComponent(ann)}&labels=${encodeURIComponent(labels)}`;
+}
+
+function openDataLab() {
+  if (!activeProj) return;
+  const ann = activeProj.annotations_path.replaceAll('\\', '/');
+  window.location.href = `/static/validator.html?folder=${encodeURIComponent(ann)}&project=${encodeURIComponent(activeProj.name)}`;
 }
 
 // ============================================================
