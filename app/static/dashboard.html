@@ -367,19 +367,6 @@ function renderDetail() {
       </div>
     </div>
 
-    <!-- Data Lab -->
-    <div class="card">
-      <h3>🧪 Data Lab</h3>
-      <p style="font-size:0.82rem;color:#888;margin-bottom:12px;">
-        Import the OCR/LLM output into a structured table, name columns, define
-        algebraic constraints (e.g. small&nbsp;+&nbsp;large&nbsp;=&nbsp;total),
-        detect and fix violations, and export a clean dataset with a full audit log.
-      </p>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="openDataLab()">🧪 Open Data Lab</button>
-      </div>
-    </div>
-
     <!-- Import pages -->
     <div class="card">
       <h3>Import Pages</h3>
@@ -471,7 +458,8 @@ function renderDetail() {
       </div>
     </div>
 
-    <!-- Quality Audit -->
+    <!-- Quality Audit + Data Lab -->
+
     <div class="card">
       <h3>🔍 Quality Audit</h3>
       <p style="font-size:0.82rem;color:#888;margin-bottom:12px;">
@@ -487,6 +475,19 @@ function renderDetail() {
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="openAuditModal()">🔍 Open Validator</button>
+      </div>
+    </div>
+
+    <!-- Data Lab -->
+    <div class="card">
+      <h3>🧪 Data Lab</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px;">
+        Import the OCR/LLM output into a structured table, name columns, define
+        algebraic constraints (e.g. small&nbsp;+&nbsp;large&nbsp;=&nbsp;total),
+        detect and fix violations, and export a clean dataset with a full audit log.
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="openDataLab()">🧪 Open Data Lab</button>
       </div>
     </div>
   `;
