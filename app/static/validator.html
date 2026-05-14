@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EconAI — Table Validator</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #16213e;
+  border-bottom: 2px solid #e94560;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+#topbar h1 { font-size: 15px; font-weight: 700; color: #e94560; white-space: nowrap; }
+#topbar select, #topbar input[type=text] {
+  background: #0f3460; color: #e0e0e0;
+  border: 1px solid #444; border-radius: 4px;
+  padding: 4px 8px; font-size: 13px;
+}
+.btn {
+  padding: 5px 12px; border-radius: 4px; border: none;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: opacity .15s;
+}
+.btn:hover { opacity: .85; }
+.btn-red   { background: #e94560; color: #fff; }
+.btn-blue  { background: #0f3460; color: #e0e0e0; border: 1px solid #555; }
+.btn-green { background: #2d6a4f; color: #fff; }
+.btn-sm    { padding: 3px 8px; font-size: 11px; }
+#status { font-size: 12px; color: #888; margin-left: auto; }
+
+/* ── Main layout ──────────────────────────────────────────────────── */
+#main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Table panel ──────────────────────────────────────────────────── */
+#table-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  min-width: 0;
+}
+
+#tbl {
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+#tbl th, #tbl td {
+  border: 1px solid #333;
+  padding: 3px 6px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+}
+#tbl thead th {
+  background: #16213e;
+  color: #aaa;
+  font-size: 11px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  cursor: default;
+  user-select: none;
+}
+#tbl thead th.col-header {
+  color: #e0e0e0;
+  font-size: 12px;
+  cursor: pointer;
+}
+#tbl thead th.col-header:hover { background: #0f3460; }
+#tbl thead th.col-index { color: #e94560; font-style: italic; }
+
+#tbl td.row-num {
+  background: #16213e;
+  color: #666;
+  font-size: 10px;
+  text-align: right;
+  min-width: 30px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+#tbl tr.deleted td { opacity: .4; text-decoration: line-through; }
+#tbl tr:hover td:not(.row-num) { background: #1e2a4a; }
+
+/* Violation highlights — one colour per constraint (up to 8) */
+.viol-0 { background: rgba(233,69,96,.25)  !important; }
+.viol-1 { background: rgba(255,165,0,.25)  !important; }
+.viol-2 { background: rgba(100,200,100,.2) !important; }
+.viol-3 { background: rgba(100,180,255,.2) !important; }
+.viol-4 { background: rgba(220,100,220,.2) !important; }
+.viol-5 { background: rgba(255,220,80,.2)  !important; }
+.viol-6 { background: rgba(80,220,220,.2)  !important; }
+.viol-7 { background: rgba(255,120,80,.2)  !important; }
+
+/* Editable cell */
+td.editing { padding: 0 !important; }
+td.editing input {
+  width: 100%; height: 100%;
+  background: #0f3460; color: #fff;
+  border: 2px solid #e94560; outline: none;
+  font-size: 12px; padding: 3px 5px;
+  min-width: 80px;
+}
+td.orig-diff { border-bottom: 2px solid #e94560 !important; }
+
+/* row action buttons */
+td.row-actions {
+  padding: 2px 4px !important;
+  white-space: nowrap;
+}
+
+/* ── Side panel ───────────────────────────────────────────────────── */
+#side {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 2px solid #333;
+  overflow: hidden;
+}
+#side-tabs {
+  display: flex;
+  background: #16213e;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+.side-tab {
+  flex: 1;
+  padding: 7px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  color: #888;
+  border-bottom: 2px solid transparent;
+}
+.side-tab.active { color: #e94560; border-bottom-color: #e94560; }
+.side-tab:hover { color: #e0e0e0; }
+#side-content { flex: 1; overflow-y: auto; padding: 10px; }
+
+/* Columns tab */
+.col-item {
+  background: #16213e;
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 7px 9px;
+  margin-bottom: 6px;
+}
+.col-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.col-badge {
+  font-size: 10px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+.col-badge.data  { background: #0f3460; color: #80b4ff; }
+.col-badge.index { background: #3a1a0f; color: #ff9040; }
+.col-item input[type=text] {
+  width: 100%; background: #0f3460; color: #e0e0e0;
+  border: 1px solid #444; border-radius: 3px;
+  padding: 3px 6px; font-size: 12px; margin-bottom: 3px;
+}
+
+/* Rules tab */
+.constraint-item {
+  background: #16213e;
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.constraint-label { font-weight: 700; margin-bottom: 3px; }
+.constraint-expr  { font-family: monospace; color: #80b4ff; font-size: 11px; }
+.constraint-meta  { font-size: 10px; color: #888; margin-top: 2px; }
+
+.add-form label { display: block; font-size: 11px; color: #888; margin: 6px 0 2px; }
+.add-form input, .add-form select {
+  width: 100%; background: #0f3460; color: #e0e0e0;
+  border: 1px solid #444; border-radius: 3px;
+  padding: 4px 7px; font-size: 12px;
+}
+
+/* Violations tab */
+.viol-group {
+  background: #16213e;
+  border: 1px solid #333;
+  border-radius: 5px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.viol-group-head {
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+.viol-group-head:hover { background: #1e2a4a; }
+.viol-count { font-size: 11px; background: #e94560; color: #fff;
+              padding: 1px 6px; border-radius: 10px; }
+.viol-rows { padding: 6px 9px; border-top: 1px solid #333; }
+.viol-row-item {
+  font-size: 11px;
+  padding: 4px 0;
+  border-bottom: 1px solid #2a2a3a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.viol-row-item:last-child { border-bottom: none; }
+.delta-badge {
+  font-family: monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #2a1520;
+  color: #ff8080;
+  white-space: nowrap;
+}
+.delta-pos { background: #152a15; color: #80ff80; }
+
+/* Log tab */
+.log-item {
+  font-size: 11px;
+  padding: 4px 6px;
+  border-bottom: 1px solid #2a2a3a;
+  font-family: monospace;
+}
+.log-item .log-action { color: #e94560; font-weight: 700; }
+.log-item .log-ts { color: #555; font-size: 10px; }
+
+/* ── Modals ───────────────────────────────────────────────────────── */
+.modal-bg {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.7);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.modal-bg.show { display: flex; }
+.modal {
+  background: #16213e;
+  border: 1px solid #e94560;
+  border-radius: 8px;
+  padding: 20px 24px;
+  min-width: 340px;
+  max-width: 480px;
+}
+.modal h3 { color: #e94560; margin-bottom: 12px; font-size: 15px; }
+.modal label { display: block; font-size: 12px; color: #aaa; margin: 8px 0 3px; }
+.modal input, .modal select {
+  width: 100%; background: #0f3460; color: #e0e0e0;
+  border: 1px solid #555; border-radius: 4px;
+  padding: 6px 8px; font-size: 13px;
+}
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.modal p.hint { font-size: 11px; color: #888; margin-top: 4px; }
+
+/* Fix modal table */
+#fix-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+#fix-table th, #fix-table td {
+  border: 1px solid #333; padding: 3px 6px; text-align: right;
+}
+#fix-table th { background: #0f3460; text-align: center; }
+#fix-table td:first-child { text-align: left; }
+.fix-radio { accent-color: #e94560; }
+
+/* Toast */
+#toast {
+  position: fixed; bottom: 20px; left: 50%;
+  transform: translateX(-50%);
+  background: #e94560; color: #fff;
+  padding: 8px 18px; border-radius: 20px;
+  font-size: 13px; font-weight: 600;
+  opacity: 0; pointer-events: none;
+  transition: opacity .3s;
+  z-index: 200;
+}
+#toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topbar">
+  <h1>📊 EconAI Table Validator</h1>
+  <select id="project-sel" onchange="onProjectChange()">
+    <option value="">— select project —</option>
+  </select>
+  <button class="btn btn-blue" onclick="openImportModal()">⬇ Import</button>
+  <label style="display:flex;align-items:center;gap:5px;font-size:12px;">
+    <input type="checkbox" id="show-deleted" onchange="renderTable()"> Show deleted rows
+  </label>
+  <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
+  <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
+  <span id="status">No project loaded</span>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <div id="table-wrap">
+    <table id="tbl"><thead><tr id="tbl-head"></tr></thead><tbody id="tbl-body"></tbody></table>
+  </div>
+
+  <!-- Side panel -->
+  <div id="side">
+    <div id="side-tabs">
+      <div class="side-tab active" onclick="showTab('columns')">Columns</div>
+      <div class="side-tab" onclick="showTab('rules')">Rules</div>
+      <div class="side-tab" onclick="showTab('violations')">Violations</div>
+      <div class="side-tab" onclick="showTab('log')">Log</div>
+    </div>
+    <div id="side-content"></div>
+  </div>
+</div>
+
+<!-- Import modal -->
+<div class="modal-bg" id="import-modal">
+  <div class="modal">
+    <h3>⬇ Import from annotations</h3>
+    <label>Project folder</label>
+    <input type="text" id="imp-folder" placeholder="e.g. NEDA_1891_02">
+    <label>Pages per table row</label>
+    <input type="number" id="imp-ppr" value="1" min="1" max="10">
+    <p class="hint">How many consecutive pages sit side-by-side as one wide row?<br>
+      (1 = single page, 2 = dual page, etc.)</p>
+    <label>Text layer</label>
+    <select id="imp-layer">
+      <option value="best_llm">Best (human → LLM → OCR)</option>
+      <option value="best_ocr">Best OCR (human → OCR → LLM)</option>
+      <option value="human">Human only</option>
+      <option value="llm">LLM only</option>
+      <option value="ocr">OCR only</option>
+    </select>
+    <label>Label types (blank = all)</label>
+    <input type="text" id="imp-types" placeholder="text_cell, numerical_cell">
+    <div class="modal-btns">
+      <button class="btn btn-blue" onclick="closeImportModal()">Cancel</button>
+      <button class="btn btn-red" onclick="doImport()">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- Column edit modal -->
+<div class="modal-bg" id="col-modal">
+  <div class="modal">
+    <h3>Edit column</h3>
+    <label>Display name</label>
+    <input type="text" id="col-name">
+    <label>Variable name <span style="color:#888;font-size:10px;">(used in constraint expressions)</span></label>
+    <input type="text" id="col-variable" placeholder="e.g. total_emp">
+    <label>Role</label>
+    <select id="col-role">
+      <option value="data">Data (numeric)</option>
+      <option value="index">Index (row label)</option>
+    </select>
+    <div class="modal-btns">
+      <button class="btn btn-blue" onclick="closeColModal()">Cancel</button>
+      <button class="btn btn-red" onclick="saveColModal()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fix modal -->
+<div class="modal-bg" id="fix-modal">
+  <div class="modal" style="min-width:500px;max-width:640px;">
+    <h3 id="fix-modal-title">Fix violations</h3>
+    <p style="font-size:12px;color:#aaa;margin-bottom:8px;">
+      Select a column to adjust. Each violating row will be corrected so the
+      constraint holds, by overwriting the chosen column with the residual.
+    </p>
+    <div id="fix-strategy">
+      <label style="font-size:12px;color:#aaa;">Adjust which column?</label>
+      <div id="fix-col-btns" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px;"></div>
+    </div>
+    <div style="max-height:240px;overflow-y:auto;">
+      <table id="fix-table">
+        <thead><tr id="fix-table-head"></tr></thead>
+        <tbody id="fix-table-body"></tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:#888;margin-top:6px;" id="fix-scope-line"></div>
+    <div class="modal-btns">
+      <button class="btn btn-blue" onclick="closeFixModal()">Cancel</button>
+      <button class="btn btn-blue btn-sm" onclick="applyFixSelected()">Apply selected rows</button>
+      <button class="btn btn-red" onclick="applyFixAll()">Apply all</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const API = '';
+let folder      = '';
+let columns     = [];
+let rows        = [];
+let cells       = {};          // row_id → {col_id → {value, original_value, source}}
+let constraints = [];
+let violations  = [];          // from last /violations call
+let activeTab   = 'columns';
+let violColMap  = {};          // row_id → Set of col_ids with violations (for styling)
+let violColorMap = {};         // constraint_id → css class index
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  const resp = await fetch(`${API}/api/projects`).catch(() => null);
+  if (resp && resp.ok) {
+    const projects = await resp.json();
+    const sel = document.getElementById('project-sel');
+    projects.forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.name; o.textContent = p.name;
+      sel.appendChild(o);
+    });
+  }
+  // Restore last folder from localStorage
+  const saved = localStorage.getItem('validator_folder');
+  if (saved) {
+    document.getElementById('project-sel').value = saved;
+    document.getElementById('imp-folder').value  = saved;
+    folder = saved;
+    await loadAll();
+  }
+}
+
+async function onProjectChange() {
+  folder = document.getElementById('project-sel').value;
+  document.getElementById('imp-folder').value = folder;
+  if (folder) {
+    localStorage.setItem('validator_folder', folder);
+    await loadAll();
+  }
+}
+
+async function loadAll() {
+  if (!folder) return;
+  await Promise.all([loadTable(), loadConstraints()]);
+  renderTab();
+}
+
+async function loadTable() {
+  const inc = document.getElementById('show-deleted').checked;
+  const r = await fetch(`${API}/api/validate/table?folder=${encodeURIComponent(folder)}&include_deleted=${inc}`);
+  if (!r.ok) { setStatus('No data — import first'); return; }
+  const d = await r.json();
+  columns = d.columns;
+  rows    = d.rows;
+  cells   = d.cells || {};
+  renderTable();
+  setStatus(`${rows.filter(r=>!r.is_deleted).length} rows · ${columns.length} columns`);
+}
+
+async function loadConstraints() {
+  const r = await fetch(`${API}/api/validate/constraints?folder=${encodeURIComponent(folder)}`);
+  if (r.ok) constraints = await r.json();
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let _toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+// ── Table render ───────────────────────────────────────────────────────────
+function renderTable() {
+  const head = document.getElementById('tbl-head');
+  const body = document.getElementById('tbl-body');
+  const incDel = document.getElementById('show-deleted').checked;
+
+  // Header
+  head.innerHTML = '';
+  const rowNumTh = document.createElement('th');
+  rowNumTh.textContent = '#';
+  head.appendChild(rowNumTh);
+
+  columns.forEach(col => {
+    const th = document.createElement('th');
+    th.className = 'col-header' + (col.role === 'index' ? ' col-index' : '');
+    th.title = `var: ${col.variable} | click to edit`;
+    th.innerHTML = `<span>${col.name}</span>`;
+    th.onclick = () => openColModal(col.col_id);
+    head.appendChild(th);
+  });
+  // Actions header
+  const actTh = document.createElement('th');
+  actTh.textContent = '';
+  head.appendChild(actTh);
+
+  // Body
+  body.innerHTML = '';
+  const visible = rows.filter(r => incDel || !r.is_deleted);
+  visible.forEach((row, ri) => {
+    const tr = document.createElement('tr');
+    if (row.is_deleted) tr.classList.add('deleted');
+
+    // Row number
+    const numTd = document.createElement('td');
+    numTd.className = 'row-num';
+    numTd.textContent = ri + 1;
+    numTd.title = `page: ${row.page_stem}`;
+    tr.appendChild(numTd);
+
+    // Data cells
+    columns.forEach(col => {
+      const td = document.createElement('td');
+      const cellData = (cells[row.row_id] || {})[col.col_id];
+      const val = cellData ? cellData.value : '';
+      const orig = cellData ? cellData.original_value : '';
+      td.textContent = val || '';
+      if (val !== orig && orig) td.classList.add('orig-diff');
+      td.title = orig && val !== orig ? `OCR: ${orig}` : '';
+
+      // Violation class
+      const vKey = `${row.row_id}_${col.col_id}`;
+      if (violColMap[vKey] !== undefined) {
+        td.classList.add('viol-' + (violColMap[vKey] % 8));
+      }
+
+      if (!row.is_deleted && col.role === 'data') {
+        td.style.cursor = 'text';
+        td.ondblclick = () => startEdit(td, row.row_id, col.col_id, val);
+      }
+      tr.appendChild(td);
+    });
+
+    // Action cell
+    const actTd = document.createElement('td');
+    actTd.className = 'row-actions';
+    if (!row.is_deleted) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-blue btn-sm';
+      btn.textContent = '✕';
+      btn.title = 'Delete row';
+      btn.onclick = () => deleteRow(row.row_id);
+      actTd.appendChild(btn);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-green btn-sm';
+      btn.textContent = '↩';
+      btn.title = 'Restore row';
+      btn.onclick = () => restoreRow(row.row_id);
+      actTd.appendChild(btn);
+    }
+    tr.appendChild(actTd);
+    body.appendChild(tr);
+  });
+}
+
+// ── Cell editing ───────────────────────────────────────────────────────────
+function startEdit(td, rowId, colId, currentVal) {
+  td.classList.add('editing');
+  const inp = document.createElement('input');
+  inp.type  = 'text';
+  inp.value = currentVal || '';
+  td.textContent = '';
+  td.appendChild(inp);
+  inp.focus();
+  inp.select();
+
+  const commit = async () => {
+    const newVal = inp.value.trim();
+    td.classList.remove('editing');
+    if (newVal === currentVal) { td.textContent = currentVal || ''; return; }
+    await fetch(`${API}/api/validate/cell`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ folder, row_id: rowId, col_id: colId, value: newVal }),
+    });
+    // Update local state
+    if (!cells[rowId]) cells[rowId] = {};
+    const old = cells[rowId][colId] || {};
+    cells[rowId][colId] = { value: newVal, original_value: old.original_value || newVal, source: 'manual' };
+    td.textContent = newVal;
+    if (newVal !== (old.original_value || newVal)) td.classList.add('orig-diff');
+    else td.classList.remove('orig-diff');
+  };
+  inp.onblur  = commit;
+  inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = currentVal || ''; inp.blur(); } };
+}
+
+// ── Row operations ─────────────────────────────────────────────────────────
+async function deleteRow(rowId) {
+  await fetch(`${API}/api/validate/row/${rowId}?folder=${encodeURIComponent(folder)}`, { method: 'DELETE' });
+  const r = rows.find(r => r.row_id === rowId);
+  if (r) r.is_deleted = 1;
+  renderTable();
+  toast('Row deleted');
+}
+
+async function restoreRow(rowId) {
+  await fetch(`${API}/api/validate/row/${rowId}/restore?folder=${encodeURIComponent(folder)}`, { method: 'POST' });
+  const r = rows.find(r => r.row_id === rowId);
+  if (r) r.is_deleted = 0;
+  renderTable();
+  toast('Row restored');
+}
+
+// ── Import modal ───────────────────────────────────────────────────────────
+function openImportModal() {
+  document.getElementById('imp-folder').value = folder;
+  document.getElementById('import-modal').classList.add('show');
+}
+function closeImportModal() { document.getElementById('import-modal').classList.remove('show'); }
+
+async function doImport() {
+  const f   = document.getElementById('imp-folder').value.trim();
+  const ppr = parseInt(document.getElementById('imp-ppr').value) || 1;
+  const lay = document.getElementById('imp-layer').value;
+  const typ = document.getElementById('imp-types').value.trim();
+  if (!f) { toast('Enter a folder'); return; }
+  closeImportModal();
+  toast('Importing…');
+  const r = await fetch(`${API}/api/validate/import`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ folder: f, pages_per_row: ppr, layer: lay, types: typ }),
+  });
+  if (!r.ok) { const e = await r.json(); toast('Error: ' + e.detail); return; }
+  const d = await r.json();
+  folder = f;
+  document.getElementById('project-sel').value = f;
+  localStorage.setItem('validator_folder', f);
+  toast(`Imported: ${d.pages} pages → ${d.rows} rows, ${d.columns} columns`);
+  violations = []; violColMap = {}; violColorMap = {};
+  await loadAll();
+}
+
+// ── Column modal ───────────────────────────────────────────────────────────
+let _editColId = null;
+function openColModal(colId) {
+  _editColId = colId;
+  const col = columns.find(c => c.col_id === colId);
+  document.getElementById('col-name').value     = col.name     || '';
+  document.getElementById('col-variable').value = col.variable || '';
+  document.getElementById('col-role').value     = col.role     || 'data';
+  document.getElementById('col-modal').classList.add('show');
+}
+function closeColModal() { document.getElementById('col-modal').classList.remove('show'); }
+async function saveColModal() {
+  const name     = document.getElementById('col-name').value.trim();
+  const variable = document.getElementById('col-variable').value.trim();
+  const role     = document.getElementById('col-role').value;
+  const r = await fetch(`${API}/api/validate/column`, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ folder, col_id: _editColId, name, variable, role }),
+  });
+  if (!r.ok) { const e = await r.json(); toast(e.detail); return; }
+  closeColModal();
+  await loadTable();
+  await loadConstraints();
+  renderTab();
+  toast('Column saved');
+}
+
+// ── Violations ─────────────────────────────────────────────────────────────
+async function refreshViolations() {
+  if (!folder) { toast('Load a project first'); return; }
+  toast('Checking rules…');
+  const r = await fetch(`${API}/api/validate/violations?folder=${encodeURIComponent(folder)}`);
+  violations = await r.json();
+
+  // Build cell highlight map
+  violColMap   = {};
+  violColorMap = {};
+  let colorIdx = 0;
+  violations.forEach(vg => {
+    const cid = vg.constraint.constraint_id;
+    if (violColorMap[cid] === undefined) violColorMap[cid] = colorIdx++;
+    const ci = violColorMap[cid];
+    vg.violations.forEach(v => {
+      Object.values(v.cells).forEach(cd => {
+        const key = `${v.row_id}_${cd.col_id}`;
+        if (violColMap[key] === undefined) violColMap[key] = ci;
+      });
+    });
+  });
+
+  renderTable();
+  showTab('violations');
+  const total = violations.reduce((s, vg) => s + vg.count, 0);
+  toast(total ? `${total} violation(s) found` : 'All rules satisfied ✓');
+}
+
+// ── Side panel tabs ────────────────────────────────────────────────────────
+function showTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.side-tab').forEach((el, i) => {
+    el.classList.toggle('active', ['columns','rules','violations','log'][i] === tab);
+  });
+  renderTab();
+}
+function renderTab() {
+  if      (activeTab === 'columns')    renderColumnsTab();
+  else if (activeTab === 'rules')      renderRulesTab();
+  else if (activeTab === 'violations') renderViolationsTab();
+  else if (activeTab === 'log')        renderLogTab();
+}
+
+// ── Columns tab ────────────────────────────────────────────────────────────
+function renderColumnsTab() {
+  const c = document.getElementById('side-content');
+  c.innerHTML = '<div style="font-size:11px;color:#888;margin-bottom:8px;">Click a column header in the table, or click here to edit.</div>';
+  columns.forEach(col => {
+    const div = document.createElement('div');
+    div.className = 'col-item';
+    div.innerHTML = `
+      <div class="col-item-head">
+        <span class="col-badge ${col.role}">${col.role}</span>
+        <strong style="font-size:12px;cursor:pointer;" onclick="openColModal(${col.col_id})">${col.name}</strong>
+      </div>
+      <div style="font-size:10px;color:#666;font-family:monospace;">${col.variable}</div>`;
+    c.appendChild(div);
+  });
+}
+
+// ── Rules tab ──────────────────────────────────────────────────────────────
+function renderRulesTab() {
+  const c = document.getElementById('side-content');
+  c.innerHTML = '';
+
+  // Existing constraints
+  constraints.forEach(con => {
+    const ci   = violColorMap[con.constraint_id];
+    const dot  = ci !== undefined ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--vc${ci % 8});margin-right:5px;"></span>` : '';
+    const div  = document.createElement('div');
+    div.className = 'constraint-item';
+    div.innerHTML = `
+      <div class="constraint-label">${dot}${con.label}
+        <button class="btn btn-blue btn-sm" style="float:right;" onclick="deleteConstraint(${con.constraint_id})">✕</button>
+      </div>
+      <div class="constraint-expr">${con.lhs} == ${con.rhs}</div>
+      <div class="constraint-meta">tolerance ±${con.tolerance} · severity: ${con.severity}</div>`;
+    c.appendChild(div);
+  });
+
+  // Add form
+  const form = document.createElement('div');
+  form.className = 'add-form';
+  form.style.marginTop = '10px';
+  // Build variable options hint
+  const varList = columns.filter(x=>x.role==='data' && x.variable !== x.name.replace(/\s/g,'_'))
+    .map(x=>`<code>${x.variable}</code>`).join(', ') ||
+    columns.filter(x=>x.role==='data').map(x=>`<code>${x.variable}</code>`).slice(0,6).join(', ');
+
+  form.innerHTML = `
+    <div style="font-size:11px;color:#888;margin-bottom:6px;">Add rule</div>
+    <div style="font-size:10px;color:#555;margin-bottom:6px;">Variables: ${varList}</div>
+    <label>Label</label>
+    <input type="text" id="new-con-label" placeholder="e.g. Small + Large = Total">
+    <label>Left-hand side</label>
+    <input type="text" id="new-con-lhs" placeholder="e.g. small_emp + large_emp">
+    <label>Right-hand side</label>
+    <input type="text" id="new-con-rhs" placeholder="e.g. total_emp">
+    <label>Tolerance</label>
+    <input type="number" id="new-con-tol" value="0" min="0">
+    <label>Severity</label>
+    <select id="new-con-sev">
+      <option value="error">Error</option>
+      <option value="warning">Warning</option>
+    </select>
+    <div style="margin-top:8px;">
+      <button class="btn btn-red" onclick="addConstraint()">+ Add rule</button>
+    </div>`;
+  c.appendChild(form);
+}
+
+async function addConstraint() {
+  const label = document.getElementById('new-con-label').value.trim();
+  const lhs   = document.getElementById('new-con-lhs').value.trim();
+  const rhs   = document.getElementById('new-con-rhs').value.trim();
+  const tol   = parseFloat(document.getElementById('new-con-tol').value) || 0;
+  const sev   = document.getElementById('new-con-sev').value;
+  if (!label || !lhs || !rhs) { toast('Fill in label, LHS and RHS'); return; }
+  const r = await fetch(`${API}/api/validate/constraint`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ folder, label, lhs, rhs, tolerance: tol, severity: sev }),
+  });
+  if (!r.ok) { toast('Error adding rule'); return; }
+  await loadConstraints();
+  renderTab();
+  toast('Rule added');
+}
+
+async function deleteConstraint(cid) {
+  await fetch(`${API}/api/validate/constraint/${cid}?folder=${encodeURIComponent(folder)}`, { method: 'DELETE' });
+  await loadConstraints();
+  renderTab();
+  toast('Rule deleted');
+}
+
+// ── Violations tab ─────────────────────────────────────────────────────────
+function renderViolationsTab() {
+  const c = document.getElementById('side-content');
+  c.innerHTML = '';
+
+  if (!violations.length) {
+    c.innerHTML = '<div style="color:#888;font-size:12px;text-align:center;margin-top:20px;">No violations found.<br>Click ⚡ Check rules above.</div>';
+    return;
+  }
+
+  violations.forEach(vg => {
+    if (!vg.count) return;
+    const cid  = vg.constraint.constraint_id;
+    const ci   = violColorMap[cid] ?? 0;
+    const div  = document.createElement('div');
+    div.className = 'viol-group';
+
+    // Head
+    const head = document.createElement('div');
+    head.className = 'viol-group-head';
+    head.innerHTML = `
+      <span style="font-size:12px;font-weight:700;">${vg.constraint.label}</span>
+      <span class="viol-count">${vg.count}</span>`;
+    head.onclick = () => body.style.display = body.style.display === 'none' ? '' : 'none';
+    div.appendChild(head);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'viol-rows';
+    vg.violations.forEach(v => {
+      const ri   = rows.find(r => r.row_id === v.row_id);
+      const pos  = ri ? (rows.indexOf(ri) + 1) : '?';
+      const dpos = v.delta > 0;
+      const item = document.createElement('div');
+      item.className = 'viol-row-item';
+      item.innerHTML = `
+        <span style="color:#888;min-width:28px;">r${pos}</span>
+        <span class="delta-badge ${dpos ? 'delta-pos' : ''}">Δ${v.delta > 0 ? '+' : ''}${v.delta}</span>
+        <span style="flex:1;color:#aaa;font-size:10px;">${v.lhs_val} vs ${v.rhs_val}</span>
+        <button class="btn btn-blue btn-sm" onclick="openFixModal(${cid}, ${v.row_id})">Fix</button>`;
+      body.appendChild(item);
+    });
+
+    // Batch fix button
+    const batchDiv = document.createElement('div');
+    batchDiv.style.cssText = 'padding:6px 0 2px;text-align:right;';
+    batchDiv.innerHTML = `<button class="btn btn-red btn-sm" onclick="openFixModalAll(${cid})">Fix all ${vg.count} rows →</button>`;
+    body.appendChild(batchDiv);
+    div.appendChild(body);
+    c.appendChild(div);
+  });
+}
+
+// ── Fix modal ──────────────────────────────────────────────────────────────
+let _fixConstraintId = null;
+let _fixRowIds       = null;   // null = all
+
+function openFixModal(cid, rowId) {
+  _fixConstraintId = cid;
+  _fixRowIds       = [rowId];
+  buildFixModal(cid, [rowId]);
+  document.getElementById('fix-modal').classList.add('show');
+}
+
+function openFixModalAll(cid) {
+  _fixConstraintId = cid;
+  _fixRowIds       = null;
+  const vg   = violations.find(v => v.constraint.constraint_id === cid);
+  const rids = vg ? vg.violations.map(v => v.row_id) : [];
+  buildFixModal(cid, rids);
+  document.getElementById('fix-modal').classList.add('show');
+}
+
+function buildFixModal(cid, rowIds) {
+  const vg  = violations.find(v => v.constraint.constraint_id === cid);
+  if (!vg) return;
+  const con = vg.constraint;
+
+  document.getElementById('fix-modal-title').textContent = `Fix: "${con.label}"`;
+  document.getElementById('fix-scope-line').textContent =
+    `${rowIds.length} row(s) · ${con.lhs} == ${con.rhs} ± ${con.tolerance}`;
+
+  // Which variables are in this constraint?
+  const allVars   = [...new Set([..._varNames(con.lhs), ..._varNames(con.rhs)])];
+  const varCols   = {};
+  allVars.forEach(v => {
+    const col = columns.find(c => c.variable === v);
+    if (col) varCols[v] = col;
+  });
+
+  // Column choice buttons
+  const btnDiv = document.getElementById('fix-col-btns');
+  btnDiv.innerHTML = '';
+  allVars.forEach(v => {
+    const col = varCols[v];
+    if (!col) return;
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-blue btn-sm';
+    btn.textContent = col.name;
+    btn.dataset.var = v;
+    btn.onclick = () => {
+      btnDiv.querySelectorAll('button').forEach(b => b.classList.remove('btn-red'));
+      btn.classList.add('btn-red');
+      buildFixTable(cid, rowIds, v, con);
+    };
+    btnDiv.appendChild(btn);
+  });
+
+  // Auto-select RHS if it's a single variable
+  const rhsVars = _varNames(con.rhs);
+  const autoVar = rhsVars.length === 1 ? rhsVars[0] : null;
+  if (autoVar) {
+    const btn = btnDiv.querySelector(`[data-var="${autoVar}"]`);
+    if (btn) { btn.classList.add('btn-red'); buildFixTable(cid, rowIds, autoVar, con); }
+  } else {
+    document.getElementById('fix-table-head').innerHTML = '';
+    document.getElementById('fix-table-body').innerHTML = '<tr><td colspan="5" style="color:#888;text-align:center;">← choose a column to adjust</td></tr>';
+  }
+}
+
+function _varNames(expr) {
+  return [...new Set((expr.match(/[A-Za-z_]\w*/g) || []).filter(v => columns.find(c => c.variable === v)))];
+}
+
+function buildFixTable(cid, rowIds, adjustVar, con) {
+  const vg     = violations.find(v => v.constraint.constraint_id === cid);
+  const viols  = vg.violations.filter(v => rowIds.includes(v.row_id));
+  const adjCol = columns.find(c => c.variable === adjustVar);
+
+  const head = document.getElementById('fix-table-head');
+  const body = document.getElementById('fix-table-body');
+  head.innerHTML = `<th>Row</th><th>${adjCol.name} (current)</th><th>→ New value</th><th>Δ</th><th><input type="checkbox" id="fix-all-chk" checked onchange="toggleFixAll(this)"></th>`;
+  body.innerHTML = '';
+
+  viols.forEach(v => {
+    const ri  = rows.find(r => r.row_id === v.row_id);
+    const pos = ri ? rows.indexOf(ri) + 1 : '?';
+    const cur = v.cells[adjustVar]?.value ?? '';
+
+    // Compute new value: solve for adjustVar so lhs == rhs
+    // new_val = rhs_val + (if adjustVar in lhs: -delta, else +delta)
+    const lhsVars = _varNames(con.lhs);
+    const inLhs   = lhsVars.includes(adjustVar);
+    const newNum  = inLhs ? (v.rhs_val - (v.lhs_val - _numVal(cur, adjustVar, v)))
+                           : (v.lhs_val - _numVal(cur, adjustVar, v) + v.rhs_val);
+    // Actually simpler: new = cur - delta_contribution
+    // If var is in LHS: cur_new = cur - delta   (since lhs - rhs = delta, remove var from lhs)
+    // If var is in RHS: cur_new = cur + delta
+    const newVal = inLhs ? Math.round(_parseNum(cur) - v.delta)
+                         : Math.round(_parseNum(cur) + v.delta);
+
+    const tr = document.createElement('tr');
+    tr.dataset.rowId  = v.row_id;
+    tr.dataset.colId  = adjCol.col_id;
+    tr.dataset.newVal = newVal;
+    tr.innerHTML = `
+      <td>r${pos}</td>
+      <td>${cur}</td>
+      <td style="color:#80ff80;font-family:monospace;">${newVal}</td>
+      <td class="delta-badge ${v.delta > 0 ? 'delta-pos' : ''}" style="border:none;">Δ${v.delta > 0 ? '+' : ''}${v.delta}</td>
+      <td><input type="checkbox" class="fix-radio" checked></td>`;
+    body.appendChild(tr);
+  });
+}
+
+function _parseNum(s) { return parseFloat(String(s).replace(/\./g,'').replace(',','')) || 0; }
+function _numVal(cur) { return _parseNum(cur); }
+
+function toggleFixAll(chk) {
+  document.querySelectorAll('#fix-table-body input[type=checkbox]').forEach(c => c.checked = chk.checked);
+}
+
+function closeFixModal() { document.getElementById('fix-modal').classList.remove('show'); }
+
+async function applyFixSelected() {
+  const fixes = _collectFixes(false);
+  if (!fixes.length) { toast('No rows selected'); return; }
+  await _sendFixes(fixes);
+}
+
+async function applyFixAll() {
+  const fixes = _collectFixes(true);
+  await _sendFixes(fixes);
+}
+
+function _collectFixes(all) {
+  const fixes = [];
+  document.querySelectorAll('#fix-table-body tr').forEach(tr => {
+    const chk = tr.querySelector('input[type=checkbox]');
+    if (!all && !chk.checked) return;
+    fixes.push({ row_id: parseInt(tr.dataset.rowId), col_id: parseInt(tr.dataset.colId), value: String(tr.dataset.newVal) });
+  });
+  return fixes;
+}
+
+async function _sendFixes(fixes) {
+  if (!fixes.length) { toast('Nothing to fix'); return; }
+  const r = await fetch(`${API}/api/validate/fix/batch`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ folder, constraint_id: _fixConstraintId, fixes,
+                           note: `batch fix from UI` }),
+  });
+  if (!r.ok) { toast('Error applying fixes'); return; }
+  const d = await r.json();
+  closeFixModal();
+  toast(`Applied ${d.applied} fix(es)`);
+  await loadTable();
+  await refreshViolations();
+}
+
+// ── Log tab ────────────────────────────────────────────────────────────────
+async function renderLogTab() {
+  const c = document.getElementById('side-content');
+  c.innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:8px;">
+      <button class="btn btn-blue btn-sm" onclick="downloadAudit('csv')">⬇ CSV</button>
+      <button class="btn btn-blue btn-sm" onclick="downloadAudit('md')">⬇ Markdown</button>
+    </div>`;
+  const r = await fetch(`${API}/api/validate/audit?folder=${encodeURIComponent(folder)}&limit=200`);
+  if (!r.ok) return;
+  const log = await r.json();
+  log.forEach(entry => {
+    const div = document.createElement('div');
+    div.className = 'log-item';
+    const ts  = entry.ts ? entry.ts.replace('T',' ').slice(0,19) : '';
+    const chg = (entry.old_value !== null && entry.new_value !== null)
+                ? ` ${entry.old_value}→${entry.new_value}` : '';
+    div.innerHTML = `<span class="log-action">${entry.action}</span> <span class="log-ts">${ts}</span>${chg ? ' <span style="color:#80b4ff">'+chg+'</span>' : ''}${entry.note ? '<br><span style="color:#666">'+entry.note+'</span>' : ''}`;
+    c.appendChild(div);
+  });
+}
+
+async function downloadAudit(fmt) {
+  window.open(`${API}/api/validate/audit/export?folder=${encodeURIComponent(folder)}&format=${fmt}`);
+}
+
+// ── Export CSV ─────────────────────────────────────────────────────────────
+async function exportData() {
+  if (!folder || !columns.length) { toast('Load data first'); return; }
+  const inc = document.getElementById('show-deleted').checked;
+  const visRows = rows.filter(r => inc || !r.is_deleted);
+  const lines = [];
+  lines.push(columns.map(c => `"${c.name}"`).join(','));
+  visRows.forEach(row => {
+    const vals = columns.map(col => {
+      const v = (cells[row.row_id] || {})[col.col_id]?.value ?? '';
+      return `"${String(v).replace(/"/g,'""')}"`;
+    });
+    lines.push(vals.join(','));
+  });
+  const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = folder + '_cleaned.csv';
+  a.click();
+  toast('CSV downloaded');
+}
+
+// ── CSS colour vars for violation dots ─────────────────────────────────────
+(function() {
+  const colours = ['#e94560','#ffa500','#64c864','#64b4ff','#dc64dc','#ffdc50','#50dcdc','#ff7850'];
+  const style = document.createElement('style');
+  colours.forEach((c,i) => { style.textContent += `--vc${i}:${c};`; });
+  // Wrap in :root
+  style.textContent = ':root{' + style.textContent + '}';
+  document.head.appendChild(style);
+})();
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
