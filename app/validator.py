@@ -263,7 +263,17 @@ def _shapes_to_cells(shapes, layer="best_llm", selected_types=None):
             for c in winner.values():
                 c["row_idx"] -= min_row
 
-    return list(winner.values())
+    # Return cells with pre-split lines field (mirrors server.py shapes_to_cells)
+    return [
+        dict(
+            row_idx=c["row_idx"],
+            col_idx=c["col_idx"],
+            lines=_text_lines(c["text"]),
+            source=c.get("source", "ocr"),
+            w=c["w"],
+        )
+        for c in winner.values()
+    ]
 
 
 def _lattice_start_row(cells):
@@ -280,6 +290,17 @@ def _lattice_start_row(cells):
     return min(rmap)
 
 
+def _page_height(cells, extra=0):
+    """Total DB rows a page occupies after line expansion (mirrors page_excel_height)."""
+    if not cells:
+        return extra
+    rmap: dict = defaultdict(list)
+    for c in cells:
+        rmap[c["row_idx"]].append(c)
+    return extra + sum(max(len(c["lines"]) for c in row)
+                       for row in rmap.values())
+
+
 def _excel_row_for_lattice(cells):
     if not cells:
         return 1
@@ -291,7 +312,7 @@ def _excel_row_for_lattice(cells):
     for ridx in sorted(rmap):
         if ridx >= target:
             return row
-        row += max(len(c["text"].split("\n")) for c in rmap[ridx])
+        row += max(len(c["lines"]) for c in rmap[ridx])
     return row
 
 
@@ -397,7 +418,7 @@ def api_import(req: ImportRequest):
         global_pos     = 0.0
 
         for group in groups:
-            # Load cells for each page slot in this group
+            # ── Load cells for each page slot (cells now carry .lines list) ───
             group_cells = []
             for jf in group:
                 cells = _shapes_to_cells(_load_shapes(jf), req.layer, selected_types)
@@ -405,84 +426,73 @@ def api_import(req: ImportRequest):
             while len(group_cells) < ppr:
                 group_cells.append(("", []))
 
-            # Lattice-alignment padding (same as dual-page Excel export)
+            # ── Lattice-alignment padding (mirrors dual-page Excel export) ────
             latt_rows = [_excel_row_for_lattice(c) for _, c in group_cells]
             max_latt  = max(latt_rows)
             pads      = [max_latt - lr for lr in latt_rows]
 
-            # Build per-page: original row_idx → group-local logical row
-            page_row_maps = []
-            group_logical_rows: set = set()
+            # ── Total DB rows this group needs (mirrors page_excel_height) ────
+            group_height = max(
+                _page_height(cells, extra=pads[pi])
+                for pi, (_, cells) in enumerate(group_cells)
+            )
+
+            # ── Create all DB rows for this group upfront ─────────────────────
+            # rel_row 0 … group_height-1, stored as global sequential IDs
+            group_db_rows: list = []    # index = rel_row → db_row_id
+            for rel in range(group_height):
+                global_pos += 1.0
+                db_row_id   = row_counter
+                row_counter += 1
+                conn.execute(
+                    "INSERT INTO rows(row_id,position,page_stem,page_row_idx)"
+                    " VALUES(?,?,?,?)",
+                    (db_row_id, global_pos, "", rel),
+                )
+                group_db_rows.append(db_row_id)
+
+            # ── Fill cells using exact write_cells logic ───────────────────────
+            # For each page: rel_row starts at align pad, advances by max_lines
+            # per lattice row_idx (mirrors excel_row = base_row + align_pad
+            # then excel_row += max_lines).
             for pi, (stem, cells) in enumerate(group_cells):
-                rm: dict = defaultdict(list)
-                for c in cells:
-                    rm[c["row_idx"]].append(c)
-                row_map = {ridx: pads[pi] + ridx for ridx in rm}
-                page_row_maps.append((stem, rm, row_map))
-                group_logical_rows.update(row_map.values())
-
-            # ── Max lines per logical row (mirrors Excel expand logic) ─────────
-            # Each cell's text may contain \n-separated lines.  The logical row
-            # expands to max(line_count) across all cells in that row, exactly
-            # as the Excel export does.
-            max_lines: dict = {}   # logical_r → int
-            for stem, rm, row_map in page_row_maps:
-                for ridx, row_cells in rm.items():
-                    logical_r = row_map[ridx]
-                    ml = max(
-                        (len(_text_lines(c["text"])) for c in row_cells),
-                        default=1,
-                    )
-                    if ml > max_lines.get(logical_r, 1):
-                        max_lines[logical_r] = ml
-
-            # ── Create DB rows: one per (logical_r, line_i) ──────────────────
-            logical_to_db: dict = {}   # (logical_r, line_i) → db_row_id
-            for logical_r in sorted(group_logical_rows):
-                n_lines  = max_lines.get(logical_r, 1)
-                stem_src = ""
-                ridx_src = logical_r
-                for stem, rm, row_map in page_row_maps:
-                    for ridx, lr in row_map.items():
-                        if lr == logical_r:
-                            stem_src = stem
-                            ridx_src = ridx
-                            break
-                    if stem_src:
-                        break
-                for line_i in range(n_lines):
-                    global_pos += 1.0
-                    db_row_id   = row_counter
-                    row_counter += 1
-                    conn.execute(
-                        "INSERT INTO rows(row_id,position,page_stem,page_row_idx)"
-                        " VALUES(?,?,?,?)",
-                        (db_row_id, global_pos, stem_src, ridx_src),
-                    )
-                    logical_to_db[(logical_r, line_i)] = db_row_id
-
-            # ── Insert cells line by line ─────────────────────────────────────
-            for pi, (stem, rm, row_map) in enumerate(page_row_maps):
                 col_off = page_col_offsets[pi] if pi < len(page_col_offsets) else 0
-                for ridx, row_cells in rm.items():
-                    logical_r = row_map[ridx]
-                    for c in row_cells:
-                        db_col = col_off + c["col_idx"]
-                        if db_col >= total_cols:
-                            continue
-                        lines  = _text_lines(c["text"])
-                        src    = c.get("source", "ocr")
-                        for line_i, line_text in enumerate(lines):
-                            db_row_id = logical_to_db.get((logical_r, line_i))
-                            if db_row_id is None:
+                rmap: dict = defaultdict(list)
+                for c in cells:
+                    rmap[c["row_idx"]].append(c)
+
+                rel_row = pads[pi]          # start after alignment blank rows
+                for row_idx in sorted(rmap):
+                    row_cells = rmap[row_idx]
+                    max_lines = max(len(c["lines"]) for c in row_cells)
+                    for line_i in range(max_lines):
+                        db_rel = rel_row + line_i
+                        if db_rel >= len(group_db_rows):
+                            break
+                        db_row_id = group_db_rows[db_rel]
+                        # Annotate the row with the real stem/row_idx
+                        # (only set once; first page that covers this rel wins)
+                        conn.execute(
+                            "UPDATE rows SET page_stem=?, page_row_idx=?"
+                            " WHERE row_id=? AND page_stem=''",
+                            (stem, row_idx, db_row_id),
+                        )
+                        for c in row_cells:
+                            db_col = col_off + c["col_idx"]
+                            if db_col >= total_cols:
                                 continue
+                            if line_i < len(c["lines"]):
+                                val = c["lines"][line_i]
+                            else:
+                                val = ""
+                            src = c.get("source", "ocr")
                             conn.execute(
                                 "INSERT OR REPLACE INTO cells"
                                 "(row_id,col_id,value,original_value,source)"
                                 " VALUES(?,?,?,?,?)",
-                                (db_row_id, db_col, line_text,
-                                 line_text, src),
+                                (db_row_id, db_col, val, val, src),
                             )
+                    rel_row += max_lines
 
     return {
         "ok": True,
