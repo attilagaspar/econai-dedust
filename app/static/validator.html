@@ -433,24 +433,47 @@ let violColorMap = {};         // constraint_id → css class index
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
-  // Prefer URL params (coming from dashboard), fall back to localStorage
-  const params  = new URLSearchParams(location.search);
-  const urlFolder  = params.get('folder');
-  const urlProject = params.get('project');
+  const params     = new URLSearchParams(location.search);
+  const urlProject = params.get('project');  // project name, passed by dashboard
 
-  if (urlFolder) {
-    folder = urlFolder;
+  if (urlProject) {
+    folder = urlProject;
     localStorage.setItem('validator_folder', folder);
   } else {
     folder = localStorage.getItem('validator_folder') || '';
   }
 
-  const label = urlProject || folder.split(/[\\/]/).pop();
+  const label = folder.split(/[\\/]/).pop();
   document.getElementById('project-label').textContent = label;
   document.getElementById('imp-folder').value = folder;
 
-  if (folder) await loadAll();
-  else setStatus('No project — use ⬇ Import to load one');
+  if (folder) {
+    await loadAll();
+  } else {
+    setStatus('No project — use ⬇ Import');
+    showEmptyState();
+  }
+}
+
+function showEmptyState() {
+  document.getElementById('tbl-body').innerHTML = '';
+  document.getElementById('tbl-head').innerHTML = '';
+  const wrap = document.getElementById('table-wrap');
+  // Only show if not already there
+  if (!document.getElementById('empty-state')) {
+    const div = document.createElement('div');
+    div.id = 'empty-state';
+    div.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:80%;color:#555;gap:14px;';
+    div.innerHTML = `
+      <div style="font-size:48px;">📊</div>
+      <div style="font-size:16px;color:#888;">No data imported yet</div>
+      <div style="font-size:12px;color:#555;text-align:center;max-width:300px;">
+        Click <strong style="color:#e94560;">⬇ Import</strong> to pull in the OCR/LLM
+        output for this project, choose how many pages sit side-by-side, and start cleaning.
+      </div>
+      <button class="btn btn-red" onclick="openImportModal()">⬇ Import now</button>`;
+    wrap.appendChild(div);
+  }
 }
 
 async function loadAll() {
@@ -462,11 +485,15 @@ async function loadAll() {
 async function loadTable() {
   const inc = document.getElementById('show-deleted').checked;
   const r = await fetch(`${API}/api/validate/table?folder=${encodeURIComponent(folder)}&include_deleted=${inc}`);
-  if (!r.ok) { setStatus('No data — import first'); return; }
+  if (!r.ok) { setStatus('No data — click ⬇ Import'); showEmptyState(); return; }
   const d = await r.json();
   columns = d.columns;
   rows    = d.rows;
   cells   = d.cells || {};
+  // Remove empty state if present
+  const es = document.getElementById('empty-state');
+  if (es) es.remove();
+  if (!columns.length) { showEmptyState(); return; }
   renderTable();
   setStatus(`${rows.filter(r=>!r.is_deleted).length} rows · ${columns.length} columns`);
 }
