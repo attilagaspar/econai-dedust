@@ -915,10 +915,11 @@ def api_detect_crawl(folder: str):
     var_to_col = {v["variable"]: v["col_id"]
                   for v in columns.values() if v["variable"]}
 
-    # ── Step 1: per-column violation vectors ─────────────────────────────────
-    # col_viol[col_id][row_id] = True  iff that row violates a constraint
-    # that involves col_id's variable.
-    col_viol: dict = defaultdict(dict)
+    # ── Step 1: single-pass violation matrix ─────────────────────────────────
+    # For each constraint, pre-compute which col_ids it involves.
+    # Then iterate rows once per constraint (not once per constraint per column).
+    # col_viol[col_id] = set of row_ids that violate any constraint involving it.
+    col_viol: dict = defaultdict(set)
 
     for con in constraints:
         expr_str  = con["lhs"] + " " + con["rhs"]
@@ -927,12 +928,18 @@ def api_detect_crawl(folder: str):
         if not used_cols:
             continue
 
+        lhs_expr = con["lhs"]
+        rhs_expr = con["rhs"]
+        tol      = con["tolerance"]
+        col_ids  = list(used_cols.values())
+        var_list = list(used_cols.items())   # [(var, col_id), …]
+
         for row in rows:
             rid      = row["row_id"]
             row_data = cells_raw.get(rid, {})
             ns: dict = {}
             skip     = False
-            for var, cid in used_cols.items():
+            for var, cid in var_list:
                 num = parse_number(row_data.get(cid))
                 if num is None:
                     skip = True
@@ -941,20 +948,20 @@ def api_detect_crawl(folder: str):
             if skip:
                 continue
 
-            lv = _eval_expr(con["lhs"], ns)
-            rv = _eval_expr(con["rhs"], ns)
+            lv = _eval_expr(lhs_expr, ns)
+            rv = _eval_expr(rhs_expr, ns)
             if lv is None or rv is None:
                 continue
 
-            if abs(lv - rv) > con["tolerance"]:
-                for cid in used_cols.values():
-                    col_viol[cid][rid] = True
+            if abs(lv - rv) > tol:
+                for cid in col_ids:
+                    col_viol[cid].add(rid)
 
     # ── Step 2: find runs per column ─────────────────────────────────────────
     candidates = []   # {col_id, run_row_ids, phantom_row_id, viol_rate}
 
-    for col_id, viol_dict in col_viol.items():
-        seq = [(r["row_id"], viol_dict.get(r["row_id"], False)) for r in rows]
+    for col_id, viol_set in col_viol.items():
+        seq = [(r["row_id"], r["row_id"] in viol_set) for r in rows]
 
         i = 0
         while i < len(seq):
@@ -990,8 +997,7 @@ def api_detect_crawl(folder: str):
                         phantom_rid = rid
                         break
 
-                viol_count = sum(1 for rid in run_row_ids
-                                 if viol_dict.get(rid, False))
+                viol_count = sum(1 for rid in run_row_ids if rid in viol_set)
                 viol_rate  = viol_count / len(run_row_ids)
 
                 candidates.append({
