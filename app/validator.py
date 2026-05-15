@@ -53,20 +53,22 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 CREATE TABLE IF NOT EXISTS columns (
-    col_id    INTEGER PRIMARY KEY,
-    position  INTEGER,
-    name      TEXT,
-    variable  TEXT,
-    role      TEXT DEFAULT 'data',
-    dtype     TEXT DEFAULT 'int',
-    page_stem TEXT DEFAULT ''
+    col_id     INTEGER PRIMARY KEY,
+    position   INTEGER,
+    name       TEXT,
+    variable   TEXT,
+    role       TEXT DEFAULT 'data',
+    dtype      TEXT DEFAULT 'int',
+    page_stem  TEXT DEFAULT '',
+    page_index INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS rows (
     row_id       INTEGER PRIMARY KEY,
     position     REAL,
     page_stem    TEXT,
     page_row_idx INTEGER,
-    is_deleted   INTEGER DEFAULT 0
+    is_deleted   INTEGER DEFAULT 0,
+    group_stems  TEXT DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS cells (
     cell_id        INTEGER PRIMARY KEY,
@@ -105,12 +107,17 @@ def _db(folder: str):
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
-    # Migration: add page_stem to columns if missing (existing DBs)
-    try:
-        conn.execute("ALTER TABLE columns ADD COLUMN page_stem TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass
+    # Migrations for new columns (silently ignored if already present)
+    for stmt in [
+        "ALTER TABLE columns ADD COLUMN page_stem  TEXT    DEFAULT ''",
+        "ALTER TABLE columns ADD COLUMN page_index INTEGER DEFAULT 0",
+        "ALTER TABLE rows    ADD COLUMN group_stems TEXT   DEFAULT '[]'",
+    ]:
+        try:
+            conn.execute(stmt)
+            conn.commit()
+        except Exception:
+            pass
     try:
         yield conn
         conn.commit()
@@ -434,19 +441,20 @@ def api_import(req: ImportRequest):
                 for col_id in range(col_off, col_off + n_cols):
                     conn.execute(
                         "INSERT INTO columns"
-                        "(col_id,position,name,variable,role,dtype,page_stem)"
-                        " VALUES(?,?,?,?,?,?,?)",
+                        "(col_id,position,name,variable,role,dtype,page_stem,page_index)"
+                        " VALUES(?,?,?,?,?,?,?,?)",
                         (col_id, col_id, f"col_{col_id}", f"col_{col_id}",
-                         "data", "int", jf.stem),
+                         "data", "int", jf.stem, pi),
                     )
         else:
-            # Update page_stem even when preserving names/variables/roles
+            # Update page_stem / page_index even when preserving names/variables/roles
             for pi, jf in enumerate(groups[0]):
                 col_off = page_col_offsets[pi]
                 n_cols  = page_col_counts[pi]
                 for col_id in range(col_off, col_off + n_cols):
-                    conn.execute("UPDATE columns SET page_stem=? WHERE col_id=?",
-                                 (jf.stem, col_id))
+                    conn.execute(
+                        "UPDATE columns SET page_stem=?, page_index=? WHERE col_id=?",
+                        (jf.stem, pi, col_id))
 
         # Always reset rows and cells
         conn.execute("DELETE FROM cells")
@@ -482,15 +490,16 @@ def api_import(req: ImportRequest):
 
             # ── Create all DB rows for this group upfront ─────────────────────
             # rel_row 0 … group_height-1, stored as global sequential IDs
+            group_stems_json = json.dumps([stem for stem, _ in group_cells])
             group_db_rows: list = []    # index = rel_row → db_row_id
             for rel in range(group_height):
                 global_pos += 1.0
                 db_row_id   = row_counter
                 row_counter += 1
                 conn.execute(
-                    "INSERT INTO rows(row_id,position,page_stem,page_row_idx)"
-                    " VALUES(?,?,?,?)",
-                    (db_row_id, global_pos, "", rel),
+                    "INSERT INTO rows(row_id,position,page_stem,page_row_idx,group_stems)"
+                    " VALUES(?,?,?,?,?)",
+                    (db_row_id, global_pos, "", rel, group_stems_json),
                 )
                 group_db_rows.append(db_row_id)
 
