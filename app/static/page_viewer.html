@@ -28,13 +28,17 @@ body {
 .btn:hover { opacity: .8; }
 #zoom-label { font-size: 12px; min-width: 40px; text-align: center; }
 #wrap {
-  flex: 1; overflow: auto; display: flex;
-  align-items: flex-start; justify-content: center;
+  flex: 1; overflow: auto;
   padding: 8px; min-height: 0; background: #0a0a1a;
+  /* No flexbox centering — it clips left/top overflow on zoom */
 }
-#img { display: block; cursor: grab; user-select: none; max-width: none; }
+#img {
+  display: block; cursor: grab; user-select: none; max-width: none;
+  /* margin:auto centres when smaller than wrap; collapses when larger so all edges scroll */
+  margin: auto;
+}
 #img.grabbing { cursor: grabbing; }
-#msg { color: #666; font-size: 14px; align-self: center; }
+#msg { color: #666; font-size: 14px; text-align: center; margin-top: 40px; }
 </style>
 </head>
 <body>
@@ -107,9 +111,22 @@ function fit() {
   applyZoom();
 }
 
-function zoom(delta) {
+function zoom(delta, originX, originY) {
+  // originX/Y are pixel positions within the image to keep fixed on screen.
+  // When called from buttons/keyboard we default to the viewport centre.
+  const wrap = document.getElementById('wrap');
+  const img  = document.getElementById('img');
+  if (originX === undefined) {
+    originX = wrap.scrollLeft + wrap.clientWidth  / 2;
+    originY = wrap.scrollTop  + wrap.clientHeight / 2;
+  }
+  const oldZ = z;
   z = Math.max(0.1, Math.min(8, z + delta));
   applyZoom();
+  // Reposition scroll so the same image point stays under the cursor/centre
+  const scale = z / oldZ;
+  wrap.scrollLeft = originX * scale - (originX - wrap.scrollLeft);
+  wrap.scrollTop  = originY * scale - (originY - wrap.scrollTop);
 }
 
 function applyZoom() {
@@ -137,10 +154,13 @@ window.addEventListener('mouseup', () => {
   img.classList.remove('grabbing');
 });
 
-// Scroll-wheel zoom
+// Scroll-wheel zoom — zoom around the cursor position
 wrap.addEventListener('wheel', e => {
   e.preventDefault();
-  zoom(e.deltaY < 0 ? 0.15 : -0.15);
+  const rect = wrap.getBoundingClientRect();
+  const originX = e.clientX - rect.left + wrap.scrollLeft;
+  const originY = e.clientY - rect.top  + wrap.scrollTop;
+  zoom(e.deltaY < 0 ? 0.15 : -0.15, originX, originY);
 }, { passive: false });
 
 // Keyboard navigation
