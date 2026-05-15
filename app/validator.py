@@ -985,31 +985,36 @@ def api_detect_crawl(folder: str):
 
             if len(run_row_ids) >= MIN_RUN:
                 # ── Step 3: find phantom ──────────────────────────────────
-                # Search from 2 rows before the run to 2 rows into the run
+                # Phantom is always the FIRST row of the crawl, so search only
+                # at run_start-1 (just before) and run_start (first row of run).
                 phantom_rid = None
-                search = range(max(0, run_start - 2),
-                               min(len(seq), run_start + 3))
-                for k in search:
-                    rid = seq[k][0]
-                    val = cells_raw.get(rid, {}).get(col_id)
-                    num = parse_number(val)
-                    if num == 0:       # dashes → 0, explicit 0, or missing
-                        phantom_rid = rid
-                        break
+                for k in [run_start - 1, run_start]:
+                    if 0 <= k < len(seq):
+                        rid = seq[k][0]
+                        val = cells_raw.get(rid, {}).get(col_id)
+                        if parse_number(val) == 0:   # dashes → 0, or explicit 0
+                            phantom_rid = rid
+                            break
+
+                if phantom_rid is None:
+                    i = run_end if run_end > i else i + 1
+                    continue
 
                 viol_count = sum(1 for rid in run_row_ids if rid in viol_set)
                 viol_rate  = viol_count / len(run_row_ids)
 
                 candidates.append({
-                    "col_id":        col_id,
-                    "run_row_ids":   run_row_ids,
+                    "col_id":         col_id,
+                    "run_row_ids":    run_row_ids,
                     "phantom_row_id": phantom_rid,
-                    "viol_rate":     viol_rate,
+                    "viol_rate":      viol_rate,
                 })
 
             i = run_end if run_end > i else i + 1
 
     # ── Step 4: group columns with same phantom + overlapping runs ────────────
+    pos_of = {r["row_id"]: r["position"] for r in rows}
+
     used   = set()
     groups = []
 
@@ -1024,20 +1029,99 @@ def api_detect_crawl(folder: str):
         for j, c2 in enumerate(candidates):
             if j in used:
                 continue
+            if c2["phantom_row_id"] != p1:
+                continue
             s2 = set(c2["run_row_ids"])
-            p2 = c2["phantom_row_id"]
             overlap = len(s1 & s2) / max(len(s1 | s2), 1)
-            if p1 == p2 and overlap > 0.4:
+            if overlap > 0.4:
                 group.append(c2)
                 used.add(j)
 
+        col_ids_g = [c["col_id"] for c in group]
+
+        # ── Filter A: phantom must be zero in ALL group columns ───────────
+        phantom_data = cells_raw.get(p1, {})
+        if not all(parse_number(phantom_data.get(cid)) == 0 for cid in col_ids_g):
+            continue
+
         union_rows = sorted(
             set().union(*(set(c["run_row_ids"]) for c in group)),
-            key=lambda rid: next(r["position"] for r in rows if r["row_id"] == rid),
+            key=lambda rid: pos_of[rid],
         )
+
+        # ── Filter B: simulated 1-row upward shift must improve squared errors
+        # For each consecutive row pair in the run, simulate replacing the
+        # crawl-group columns in row k with values from row k+1.
+        # Requirement: no constraint squared error worsens; at least one improves.
+        group_col_set = set(col_ids_g)
+        rel_constraints = []
+        for con in constraints:
+            expr_str  = con["lhs"] + " " + con["rhs"]
+            used_vars = {m for m in _VAR_RE.findall(expr_str) if m in var_to_col}
+            con_cols  = {var_to_col[v] for v in used_vars}
+            if con_cols & group_col_set:
+                var_list = [(v, var_to_col[v]) for v in used_vars]
+                rel_constraints.append((con["lhs"], con["rhs"], var_list))
+
+        if not rel_constraints:
+            continue
+
+        any_improves = False
+        any_worsens  = False
+
+        for k in range(len(union_rows) - 1):
+            rid_cur  = union_rows[k]
+            rid_next = union_rows[k + 1]
+            data_cur  = cells_raw.get(rid_cur,  {})
+            data_next = cells_raw.get(rid_next, {})
+
+            for lhs_expr, rhs_expr, var_list in rel_constraints:
+                # Before: current row values unchanged
+                ns_b: dict = {}
+                skip_b = False
+                for var, cid in var_list:
+                    num = parse_number(data_cur.get(cid))
+                    if num is None:
+                        skip_b = True
+                        break
+                    ns_b[var] = num
+
+                # After: crawl-group cols taken from next row, rest from current row
+                ns_a: dict = {}
+                skip_a = False
+                for var, cid in var_list:
+                    src = data_next if cid in group_col_set else data_cur
+                    num = parse_number(src.get(cid))
+                    if num is None:
+                        skip_a = True
+                        break
+                    ns_a[var] = num
+
+                if skip_b or skip_a:
+                    continue
+
+                lv_b = _eval_expr(lhs_expr, ns_b)
+                rv_b = _eval_expr(rhs_expr, ns_b)
+                lv_a = _eval_expr(lhs_expr, ns_a)
+                rv_a = _eval_expr(rhs_expr, ns_a)
+
+                if None in (lv_b, rv_b, lv_a, rv_a):
+                    continue
+
+                err_b = (lv_b - rv_b) ** 2
+                err_a = (lv_a - rv_a) ** 2
+
+                if err_a > err_b + 1e-9:
+                    any_worsens = True
+                if err_b > err_a + 1e-9:
+                    any_improves = True
+
+        if any_worsens or not any_improves:
+            continue
+
         groups.append({
-            "col_ids":        [c["col_id"] for c in group],
-            "col_names":      [columns[c["col_id"]]["name"] for c in group],
+            "col_ids":        col_ids_g,
+            "col_names":      [columns[cid]["name"] for cid in col_ids_g],
             "run_row_ids":    union_rows,
             "phantom_row_id": p1,
             "viol_rate":      round(max(c["viol_rate"] for c in group), 2),
