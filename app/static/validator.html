@@ -114,6 +114,11 @@ body {
 .viol-6 { background: rgba(80,220,220,.2)  !important; }
 .viol-7 { background: rgba(255,120,80,.2)  !important; }
 
+/* Crawl detection highlights */
+td.crawl-region  { background: rgba(255,140,0,.18) !important; }
+td.crawl-phantom { background: rgba(233,69,96,.45) !important;
+                   outline: 2px solid #e94560; outline-offset: -2px; }
+
 /* Editable cell */
 td.editing { padding: 0 !important; }
 td.editing input {
@@ -324,6 +329,7 @@ td.row-actions {
     📝 Config ↑<input type="file" accept=".json" style="display:none" onchange="uploadConfig(this)">
   </label>
   <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
+  <button class="btn btn-blue" onclick="detectCrawls()">🔍 Find crawls</button>
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
   <span id="status">No project loaded</span>
@@ -341,6 +347,7 @@ td.row-actions {
       <div class="side-tab active" onclick="showTab('columns')">Columns</div>
       <div class="side-tab" onclick="showTab('rules')">Rules</div>
       <div class="side-tab" onclick="showTab('violations')">Violations</div>
+      <div class="side-tab" onclick="showTab('crawls')">Crawls</div>
       <div class="side-tab" onclick="showTab('log')">Log</div>
     </div>
     <div id="side-content"></div>
@@ -432,9 +439,11 @@ let rows        = [];
 let cells       = {};          // row_id → {col_id → {value, original_value, source}}
 let constraints = [];
 let violations  = [];          // from last /violations call
-let activeTab   = 'columns';
-let violColMap  = {};          // row_id → Set of col_ids with violations (for styling)
-let violColorMap = {};         // constraint_id → css class index
+let activeTab    = 'columns';
+let violColMap   = {};          // "rowId_colId" → colour index
+let violColorMap = {};          // constraint_id → colour index
+let crawlGroups  = [];          // from /crawl endpoint
+let crawlCellMap = {};          // "rowId_colId" → "phantom" | "region"
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -582,11 +591,15 @@ function renderTable() {
       if (val !== orig && orig) td.classList.add('orig-diff');
       td.title = orig && val !== orig ? `OCR: ${orig}` : '';
 
-      // Violation class
+      // Violation highlight
       const vKey = `${row.row_id}_${col.col_id}`;
       if (violColMap[vKey] !== undefined) {
         td.classList.add('viol-' + (violColMap[vKey] % 8));
       }
+      // Crawl highlight (overrides violation colour)
+      const cKey = `${row.row_id}_${col.col_id}`;
+      if (crawlCellMap[cKey] === 'phantom') td.classList.add('crawl-phantom');
+      else if (crawlCellMap[cKey] === 'region') td.classList.add('crawl-region');
 
       if (!row.is_deleted && col.role === 'data') {
         td.style.cursor = 'text';
@@ -760,7 +773,8 @@ async function refreshViolations() {
 function showTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.side-tab').forEach((el, i) => {
-    el.classList.toggle('active', ['columns','rules','violations','log'][i] === tab);
+    el.classList.toggle('active',
+      ['columns','rules','violations','crawls','log'][i] === tab);
   });
   renderTab();
 }
@@ -768,6 +782,7 @@ function renderTab() {
   if      (activeTab === 'columns')    renderColumnsTab();
   else if (activeTab === 'rules')      renderRulesTab();
   else if (activeTab === 'violations') renderViolationsTab();
+  else if (activeTab === 'crawls')     renderCrawlsTab();
   else if (activeTab === 'log')        renderLogTab();
 }
 
@@ -1119,6 +1134,121 @@ async function exportData() {
   a.download = folder + '_cleaned.csv';
   a.click();
   toast('CSV downloaded');
+}
+
+// ── Crawl detection ───────────────────────────────────────────────────────
+async function detectCrawls() {
+  if (!folder) { toast('Load a project first'); return; }
+  toast('Scanning for crawls…');
+  const r = await fetch(`${API}/api/validate/crawl?folder=${encodeURIComponent(folder)}`);
+  if (!r.ok) { toast('Error running crawl detection'); return; }
+  crawlGroups = await r.json();
+
+  // Build cell map for rendering
+  crawlCellMap = {};
+  crawlGroups.forEach(g => {
+    g.col_ids.forEach(cid => {
+      g.run_row_ids.forEach(rid => {
+        const key = `${rid}_${cid}`;
+        crawlCellMap[key] = (rid === g.phantom_row_id) ? 'phantom' : 'region';
+      });
+    });
+  });
+
+  renderTable();
+  showTab('crawls');
+  toast(crawlGroups.length
+    ? `${crawlGroups.length} crawl candidate(s) found`
+    : 'No crawls detected ✓');
+}
+
+function renderCrawlsTab() {
+  const c = document.getElementById('side-content');
+  c.innerHTML = '';
+
+  if (!crawlGroups.length) {
+    c.innerHTML = `<div style="color:#888;font-size:12px;text-align:center;margin-top:20px;">
+      No crawls detected.<br>Click 🔍 Find crawls above.<br>
+      <span style="font-size:10px;color:#555;">(Run ⚡ Check rules first so violations are available)</span>
+    </div>`;
+    return;
+  }
+
+  crawlGroups.forEach((g, gi) => {
+    const conf = g.viol_rate >= 0.8 ? '🔴 High' : g.viol_rate >= 0.5 ? '🟠 Medium' : '🟡 Low';
+    const div  = document.createElement('div');
+    div.className = 'viol-group';
+    div.style.marginBottom = '10px';
+
+    const head = document.createElement('div');
+    head.className = 'viol-group-head';
+    head.style.flexDirection = 'column';
+    head.style.alignItems    = 'flex-start';
+    head.style.gap           = '4px';
+    head.innerHTML = `
+      <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
+        <span style="font-size:12px;font-weight:700;">${conf} confidence</span>
+        <span class="viol-count">${Math.round(g.viol_rate * 100)}%</span>
+      </div>
+      <div style="font-size:11px;color:#80b4ff;">Columns: ${g.col_names.join(', ')}</div>
+      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} rows affected</div>`;
+    div.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'viol-rows';
+    body.style.padding = '8px';
+
+    // Phantom row info
+    const phantomRow = rows.find(r => r.row_id === g.phantom_row_id);
+    const phantomPos = phantomRow ? rows.indexOf(phantomRow) + 1 : '?';
+    body.innerHTML += `<div style="font-size:11px;margin-bottom:8px;">
+      <span style="color:#e94560;font-weight:700;">Phantom row:</span>
+      <span style="color:#aaa;"> row ${phantomPos}
+        ${g.phantom_row_id !== null ? '' : ' <em>(not found — no zero row near run)</em>'}
+      </span>
+    </div>`;
+
+    // Scroll-to button
+    const scrollBtn = document.createElement('button');
+    scrollBtn.className = 'btn btn-blue btn-sm';
+    scrollBtn.textContent = '⬆ Scroll to phantom';
+    scrollBtn.style.marginBottom = '6px';
+    scrollBtn.onclick = () => scrollToRow(g.phantom_row_id);
+    body.appendChild(scrollBtn);
+
+    // Dismiss button
+    const dimBtn = document.createElement('button');
+    dimBtn.className = 'btn btn-blue btn-sm';
+    dimBtn.style.marginLeft = '6px';
+    dimBtn.style.marginBottom = '6px';
+    dimBtn.textContent = '✕ Dismiss';
+    dimBtn.onclick = () => {
+      crawlGroups.splice(gi, 1);
+      // Rebuild map
+      crawlCellMap = {};
+      crawlGroups.forEach(gg => {
+        gg.col_ids.forEach(cid => {
+          gg.run_row_ids.forEach(rid => {
+            crawlCellMap[`${rid}_${cid}`] = rid === gg.phantom_row_id ? 'phantom' : 'region';
+          });
+        });
+      });
+      renderTable();
+      renderTab();
+    };
+    body.appendChild(dimBtn);
+
+    div.appendChild(body);
+    c.appendChild(div);
+  });
+}
+
+function scrollToRow(rowId) {
+  const body  = document.getElementById('tbl-body');
+  const idx   = rows.findIndex(r => r.row_id === rowId);
+  if (idx < 0) return;
+  const trs   = body.querySelectorAll('tr');
+  if (trs[idx]) trs[idx].scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // ── Config export / import ────────────────────────────────────────────────

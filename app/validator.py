@@ -876,6 +876,170 @@ def api_violations(folder: str):
     return result
 
 
+# ── Crawl detection ──────────────────────────────────────────────────────────
+
+@router.get("/crawl")
+def api_detect_crawl(folder: str):
+    """
+    Detect column crawls — segments where a phantom all-dash row was inserted,
+    shifting real values down.
+
+    Algorithm:
+    1. Build a per-column violation vector (True = row violates a constraint
+       that involves this column).
+    2. Find contiguous runs of violations (gap tolerance 2, min length 4).
+    3. Within each run, locate the phantom row (value parses to 0 / dash).
+    4. Group columns that share the same phantom and overlapping run extent.
+    5. Return groups sorted by violation rate descending.
+    """
+    GAP_TOL = 2   # non-violating rows allowed inside a run
+    MIN_RUN = 4   # minimum run length to be a candidate
+
+    with _db(folder) as conn:
+        constraints = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
+        columns     = {r["col_id"]: dict(r) for r in conn.execute("SELECT * FROM columns")}
+        rows        = [dict(r) for r in conn.execute(
+            "SELECT * FROM rows WHERE is_deleted=0 ORDER BY position")]
+        row_ids     = [r["row_id"] for r in rows]
+        cells_raw: dict = {}
+        if row_ids:
+            ph = ",".join("?" * len(row_ids))
+            for r in conn.execute(
+                    f"SELECT row_id,col_id,value FROM cells WHERE row_id IN ({ph})",
+                    row_ids):
+                cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
+
+    if not constraints or not rows:
+        return []
+
+    var_to_col = {v["variable"]: v["col_id"]
+                  for v in columns.values() if v["variable"]}
+
+    # ── Step 1: per-column violation vectors ─────────────────────────────────
+    # col_viol[col_id][row_id] = True  iff that row violates a constraint
+    # that involves col_id's variable.
+    col_viol: dict = defaultdict(dict)
+
+    for con in constraints:
+        expr_str  = con["lhs"] + " " + con["rhs"]
+        used_vars = {m for m in _VAR_RE.findall(expr_str) if m in var_to_col}
+        used_cols = {var: var_to_col[var] for var in used_vars}
+        if not used_cols:
+            continue
+
+        for row in rows:
+            rid      = row["row_id"]
+            row_data = cells_raw.get(rid, {})
+            ns: dict = {}
+            skip     = False
+            for var, cid in used_cols.items():
+                num = parse_number(row_data.get(cid))
+                if num is None:
+                    skip = True
+                    break
+                ns[var] = num
+            if skip:
+                continue
+
+            lv = _eval_expr(con["lhs"], ns)
+            rv = _eval_expr(con["rhs"], ns)
+            if lv is None or rv is None:
+                continue
+
+            if abs(lv - rv) > con["tolerance"]:
+                for cid in used_cols.values():
+                    col_viol[cid][rid] = True
+
+    # ── Step 2: find runs per column ─────────────────────────────────────────
+    candidates = []   # {col_id, run_row_ids, phantom_row_id, viol_rate}
+
+    for col_id, viol_dict in col_viol.items():
+        seq = [(r["row_id"], viol_dict.get(r["row_id"], False)) for r in rows]
+
+        i = 0
+        while i < len(seq):
+            if not seq[i][1]:
+                i += 1
+                continue
+            # start of a run
+            run_start = i
+            gap = 0
+            j   = i + 1
+            while j < len(seq):
+                if seq[j][1]:
+                    gap = 0
+                else:
+                    gap += 1
+                    if gap > GAP_TOL:
+                        break
+                j += 1
+            run_end     = j - gap          # exclusive index
+            run_row_ids = [seq[k][0] for k in range(run_start, run_end)]
+
+            if len(run_row_ids) >= MIN_RUN:
+                # ── Step 3: find phantom ──────────────────────────────────
+                # Search from 2 rows before the run to 2 rows into the run
+                phantom_rid = None
+                search = range(max(0, run_start - 2),
+                               min(len(seq), run_start + 3))
+                for k in search:
+                    rid = seq[k][0]
+                    val = cells_raw.get(rid, {}).get(col_id)
+                    num = parse_number(val)
+                    if num == 0:       # dashes → 0, explicit 0, or missing
+                        phantom_rid = rid
+                        break
+
+                viol_count = sum(1 for rid in run_row_ids
+                                 if viol_dict.get(rid, False))
+                viol_rate  = viol_count / len(run_row_ids)
+
+                candidates.append({
+                    "col_id":        col_id,
+                    "run_row_ids":   run_row_ids,
+                    "phantom_row_id": phantom_rid,
+                    "viol_rate":     viol_rate,
+                })
+
+            i = run_end if run_end > i else i + 1
+
+    # ── Step 4: group columns with same phantom + overlapping runs ────────────
+    used   = set()
+    groups = []
+
+    for i, c1 in enumerate(candidates):
+        if i in used:
+            continue
+        group = [c1]
+        used.add(i)
+        s1 = set(c1["run_row_ids"])
+        p1 = c1["phantom_row_id"]
+
+        for j, c2 in enumerate(candidates):
+            if j in used:
+                continue
+            s2 = set(c2["run_row_ids"])
+            p2 = c2["phantom_row_id"]
+            overlap = len(s1 & s2) / max(len(s1 | s2), 1)
+            if p1 == p2 and overlap > 0.4:
+                group.append(c2)
+                used.add(j)
+
+        union_rows = sorted(
+            set().union(*(set(c["run_row_ids"]) for c in group)),
+            key=lambda rid: next(r["position"] for r in rows if r["row_id"] == rid),
+        )
+        groups.append({
+            "col_ids":        [c["col_id"] for c in group],
+            "col_names":      [columns[c["col_id"]]["name"] for c in group],
+            "run_row_ids":    union_rows,
+            "phantom_row_id": p1,
+            "viol_rate":      round(max(c["viol_rate"] for c in group), 2),
+        })
+
+    return sorted(groups, key=lambda g: -g["viol_rate"])
+
+
 # ── Fix — single cell ─────────────────────────────────────────────────────────
 
 class FixCell(BaseModel):
