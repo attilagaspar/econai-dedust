@@ -53,12 +53,13 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 CREATE TABLE IF NOT EXISTS columns (
-    col_id   INTEGER PRIMARY KEY,
-    position INTEGER,
-    name     TEXT,
-    variable TEXT,
-    role     TEXT DEFAULT 'data',
-    dtype    TEXT DEFAULT 'int'
+    col_id    INTEGER PRIMARY KEY,
+    position  INTEGER,
+    name      TEXT,
+    variable  TEXT,
+    role      TEXT DEFAULT 'data',
+    dtype     TEXT DEFAULT 'int',
+    page_stem TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS rows (
     row_id       INTEGER PRIMARY KEY,
@@ -104,6 +105,12 @@ def _db(folder: str):
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    # Migration: add page_stem to columns if missing (existing DBs)
+    try:
+        conn.execute("ALTER TABLE columns ADD COLUMN page_stem TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
     try:
         yield conn
         conn.commit()
@@ -421,12 +428,25 @@ def api_import(req: ImportRequest):
         existing_cols = conn.execute("SELECT COUNT(*) FROM columns").fetchone()[0]
         if existing_cols != total_cols:
             conn.execute("DELETE FROM columns")
-            for col_id in range(total_cols):
-                conn.execute(
-                    "INSERT INTO columns(col_id,position,name,variable,role,dtype)"
-                    " VALUES(?,?,?,?,?,?)",
-                    (col_id, col_id, f"col_{col_id}", f"col_{col_id}", "data", "int"),
-                )
+            for pi, jf in enumerate(groups[0]):
+                col_off = page_col_offsets[pi]
+                n_cols  = page_col_counts[pi]
+                for col_id in range(col_off, col_off + n_cols):
+                    conn.execute(
+                        "INSERT INTO columns"
+                        "(col_id,position,name,variable,role,dtype,page_stem)"
+                        " VALUES(?,?,?,?,?,?,?)",
+                        (col_id, col_id, f"col_{col_id}", f"col_{col_id}",
+                         "data", "int", jf.stem),
+                    )
+        else:
+            # Update page_stem even when preserving names/variables/roles
+            for pi, jf in enumerate(groups[0]):
+                col_off = page_col_offsets[pi]
+                n_cols  = page_col_counts[pi]
+                for col_id in range(col_off, col_off + n_cols):
+                    conn.execute("UPDATE columns SET page_stem=? WHERE col_id=?",
+                                 (jf.stem, col_id))
 
         # Always reset rows and cells
         conn.execute("DELETE FROM cells")

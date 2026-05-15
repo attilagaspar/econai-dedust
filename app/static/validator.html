@@ -548,8 +548,12 @@ function renderTable() {
     const tr = document.createElement('tr');
     if (row.is_deleted) tr.classList.add('deleted');
 
-    // Clicking anywhere in the row sets the active page in the viewer
-    if (row.page_stem) tr.onclick = () => setActiveStem(row.page_stem);
+    // Clicking any cell switches the viewer to that cell's source page
+    tr.onclick = e => {
+      const td   = e.target.closest('td');
+      const stem = (td && td.dataset.pageStem) || row.page_stem;
+      if (stem) setActiveStem(stem);
+    };
 
     // Row number
     const numTd = document.createElement('td');
@@ -561,6 +565,7 @@ function renderTable() {
     // Data cells
     columns.forEach(col => {
       const td = document.createElement('td');
+      if (col.page_stem) td.dataset.pageStem = col.page_stem;
       const cellData = (cells[row.row_id] || {})[col.col_id];
       const val = cellData ? cellData.value : '';
       const orig = cellData ? cellData.original_value : '';
