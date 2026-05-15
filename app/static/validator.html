@@ -320,6 +320,7 @@ td.row-actions {
     <input type="checkbox" id="show-deleted" onchange="renderTable()"> Show deleted rows
   </label>
   <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
+  <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
   <span id="status">No project loaded</span>
 </div>
@@ -495,6 +496,8 @@ async function loadTable() {
   if (es) es.remove();
   if (!columns.length) { showEmptyState(); return; }
   renderTable();
+  // Set active page to first available stem if not already set
+  if (!_activeStem) { const s = _pageStems()[0]; if (s) _activeStem = s; }
   setStatus(`${rows.filter(r=>!r.is_deleted).length} rows · ${columns.length} columns`);
 }
 
@@ -545,11 +548,18 @@ function renderTable() {
     const tr = document.createElement('tr');
     if (row.is_deleted) tr.classList.add('deleted');
 
-    // Row number
+    // Row number — click to set active page
     const numTd = document.createElement('td');
     numTd.className = 'row-num';
     numTd.textContent = ri + 1;
-    numTd.title = `page: ${row.page_stem}`;
+    numTd.title = `page: ${row.page_stem} (click to set active page)`;
+    numTd.style.cursor = 'pointer';
+    if (row.page_stem) numTd.onclick = () => {
+      setActiveStem(row.page_stem);
+      // If viewer is open, switch image immediately
+      if (document.getElementById('page-modal').classList.contains('show'))
+        _loadPageImage(row.page_stem);
+    };
     tr.appendChild(numTd);
 
     // Data cells
@@ -698,9 +708,11 @@ async function saveColModal() {
     body: JSON.stringify({ folder, col_id: _editColId, name, variable, role }),
   });
   if (!r.ok) { const e = await r.json(); toast(e.detail); return; }
+  // Update local state only — no need to re-fetch all rows/cells
+  const col = columns.find(c => c.col_id === _editColId);
+  if (col) { col.name = name; col.variable = variable; col.role = role; }
   closeColModal();
-  await loadTable();
-  await loadConstraints();
+  renderTable();
   renderTab();
   toast('Column saved');
 }
@@ -1097,6 +1109,48 @@ async function exportData() {
   a.download = folder + '_cleaned.csv';
   a.click();
   toast('CSV downloaded');
+}
+
+// ── Page viewer (separate window) ──────────────────────────────────────────
+let _activeStem = '';
+let _pageWin    = null;
+
+function _pageStems() {
+  const seen = new Set(), out = [];
+  rows.filter(r => r.page_stem).forEach(r => {
+    if (!seen.has(r.page_stem)) { seen.add(r.page_stem); out.push(r.page_stem); }
+  });
+  return out;
+}
+
+function setActiveStem(stem) {
+  if (!stem) return;
+  _activeStem = stem;
+  if (_pageWin && !_pageWin.closed && _pageWin.goTo) _pageWin.goTo(stem);
+}
+
+function openPageView(stem) {
+  if (stem) _activeStem = stem;
+  if (!_activeStem) {
+    const s = _pageStems()[0];
+    if (!s) { toast('No page images available'); return; }
+    _activeStem = s;
+  }
+
+  // Reuse existing window if alive
+  if (_pageWin && !_pageWin.closed) {
+    _pageWin.focus();
+    if (_pageWin.goTo) _pageWin.goTo(_activeStem);
+    return;
+  }
+
+  const stems = _pageStems();
+  const url   = '/static/page_viewer.html'
+              + '?folder=' + encodeURIComponent(folder)
+              + '&stem='   + encodeURIComponent(_activeStem)
+              + '&stems='  + encodeURIComponent(JSON.stringify(stems));
+  _pageWin = window.open(url, 'econai_pageview',
+             'width=960,height=800,resizable=yes,scrollbars=no');
 }
 
 // ── CSS colour vars for violation dots ─────────────────────────────────────
