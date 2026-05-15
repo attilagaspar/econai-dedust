@@ -55,8 +55,7 @@ body {
 
 <script>
 const params = new URLSearchParams(location.search);
-// Images live in <project>/annotations/ — append subdir for the API call
-const FOLDER = (params.get('folder') || '') + '/annotations';
+const FOLDER = params.get('folder') || '';
 let   STEMS  = [];
 try { STEMS = JSON.parse(params.get('stems') || '[]'); } catch(e) {}
 let cur = params.get('stem') || STEMS[0] || '';
@@ -64,7 +63,7 @@ let z   = 1;
 let drag = null;
 
 function imgUrl(stem) {
-  return '/api/image?folder=' + encodeURIComponent(FOLDER)
+  return '/api/validate/image?folder=' + encodeURIComponent(FOLDER)
        + '&stem='   + encodeURIComponent(stem);
 }
 

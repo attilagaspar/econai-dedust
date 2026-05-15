@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 # ── Router ────────────────────────────────────────────────────────────────────
@@ -325,6 +325,29 @@ def _load_shapes(jf: Path):
         return json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
     except Exception:
         return []
+
+
+def _find_image(folder: Path, stem: str) -> Optional[Path]:
+    """Look for stem.{jpg,jpeg,png,tif,tiff} inside folder/annotations/."""
+    ann = folder / "annotations"
+    for ext in (".jpg", ".jpeg", ".png", ".tif", ".tiff"):
+        p = ann / (stem + ext)
+        if p.exists():
+            return p
+    return None
+
+
+@router.get("/image")
+def api_image(folder: str = Query(...), stem: str = Query(...)):
+    """Serve a page image for the Data Lab page viewer."""
+    d   = _resolve_folder(folder)
+    img = _find_image(d, stem)
+    if img is None:
+        raise HTTPException(status_code=404, detail=f"Image not found: {stem}")
+    suffix = img.suffix.lower()
+    media  = "image/jpeg" if suffix in (".jpg", ".jpeg") else \
+             "image/png"  if suffix == ".png" else "image/tiff"
+    return FileResponse(str(img), media_type=media)
 
 
 # ── Text helpers ─────────────────────────────────────────────────────────────
