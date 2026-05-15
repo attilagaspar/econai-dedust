@@ -596,10 +596,17 @@ function renderTable() {
       if (violColMap[vKey] !== undefined) {
         td.classList.add('viol-' + (violColMap[vKey] % 8));
       }
-      // Crawl highlight (overrides violation colour)
-      const cKey = `${row.row_id}_${col.col_id}`;
-      if (crawlCellMap[cKey] === 'phantom') td.classList.add('crawl-phantom');
-      else if (crawlCellMap[cKey] === 'region') td.classList.add('crawl-region');
+      // Crawl highlight + group outline
+      const cKey  = `${row.row_id}_${col.col_id}`;
+      const crawl = crawlCellMap[cKey];
+      if (crawl) {
+        td.classList.add(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
+        const bw = '2px solid ' + crawl.color;
+        if (crawl.borderTop)    td.style.borderTop    = bw;
+        if (crawl.borderBottom) td.style.borderBottom = bw;
+        if (crawl.borderLeft)   td.style.borderLeft   = bw;
+        if (crawl.borderRight)  td.style.borderRight  = bw;
+      }
 
       if (!row.is_deleted && col.role === 'data') {
         td.style.cursor = 'text';
@@ -1146,12 +1153,49 @@ async function detectCrawls() {
 
   // Build cell map for rendering
   crawlCellMap = {};
-  crawlGroups.forEach(g => {
+  const GROUP_COLORS = ['#00e5ff','#69ff47','#ffea00','#e040fb','#ff6d00','#00e676','#ff4081','#40c4ff'];
+
+  crawlGroups.forEach((g, gi) => {
+    const color = GROUP_COLORS[gi % GROUP_COLORS.length];
+
+    // Column order: sort g.col_ids by display position
+    const sortedCols = [...g.col_ids].sort((a, b) => {
+      const ia = columns.findIndex(c => c.col_id === a);
+      const ib = columns.findIndex(c => c.col_id === b);
+      return ia - ib;
+    });
+    const leftCid  = sortedCols[0];
+    const rightCid = sortedCols[sortedCols.length - 1];
+
+    // Row order: sort run_row_ids by display position
+    const sortedRows = [...g.run_row_ids].sort((a, b) => {
+      const ia = rows.findIndex(r => r.row_id === a);
+      const ib = rows.findIndex(r => r.row_id === b);
+      return ia - ib;
+    });
+    const firstRid = sortedRows[0];
+    const lastRid  = sortedRows[sortedRows.length - 1];
+
     g.col_ids.forEach(cid => {
       g.run_row_ids.forEach(rid => {
-        const key = `${rid}_${cid}`;
-        crawlCellMap[key] = (rid === g.phantom_row_id) ? 'phantom' : 'region';
+        crawlCellMap[`${rid}_${cid}`] = {
+          type:         rid === g.phantom_row_id ? 'phantom' : 'region',
+          color,
+          borderTop:    rid === firstRid,
+          borderBottom: rid === lastRid,
+          borderLeft:   cid === leftCid,
+          borderRight:  cid === rightCid,
+        };
       });
+      // Phantom may sit just outside the run — include it too
+      if (g.phantom_row_id !== null && !g.run_row_ids.includes(g.phantom_row_id)) {
+        const rid = g.phantom_row_id;
+        crawlCellMap[`${rid}_${cid}`] = {
+          type: 'phantom', color,
+          borderTop: true, borderBottom: false,
+          borderLeft: cid === leftCid, borderRight: cid === rightCid,
+        };
+      }
     });
   });
 
