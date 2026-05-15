@@ -55,7 +55,8 @@ body {
 
 <script>
 const params = new URLSearchParams(location.search);
-const FOLDER = params.get('folder') || '';
+// Images live in <project>/annotations/ — append subdir for the API call
+const FOLDER = (params.get('folder') || '') + '/annotations';
 let   STEMS  = [];
 try { STEMS = JSON.parse(params.get('stems') || '[]'); } catch(e) {}
 let cur = params.get('stem') || STEMS[0] || '';
