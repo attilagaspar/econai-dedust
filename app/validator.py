@@ -683,6 +683,73 @@ def api_col_edit(req: ColEdit):
     return {"ok": True}
 
 
+# ── Config export / import ───────────────────────────────────────────────────
+
+@router.get("/config")
+def api_config_export(folder: str):
+    """Download columns + constraints as an editable JSON file."""
+    with _db(folder) as conn:
+        cols = [dict(r) for r in conn.execute(
+            "SELECT col_id, name, variable, role FROM columns ORDER BY position")]
+        cons = [dict(r) for r in conn.execute(
+            "SELECT label, lhs, rhs, tolerance, severity FROM constraints ORDER BY constraint_id")]
+    payload = json.dumps({"columns": cols, "constraints": cons}, indent=2, ensure_ascii=False)
+    return StreamingResponse(
+        iter([payload]),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="datalab_config.json"'},
+    )
+
+
+class ConfigImport(BaseModel):
+    folder: str
+    columns: list
+    constraints: list
+
+
+@router.post("/config")
+def api_config_import(req: ConfigImport):
+    """Apply columns + constraints from an edited JSON config."""
+    with _db(req.folder) as conn:
+        # Update columns (name, variable, role only — never touch col_id/position)
+        for col in req.columns:
+            cid  = col.get("col_id")
+            name = col.get("name", "")
+            var  = col.get("variable", "")
+            role = col.get("role", "data")
+            if cid is None:
+                continue
+            if var:
+                clash = conn.execute(
+                    "SELECT col_id FROM columns WHERE variable=? AND col_id!=?",
+                    (var, cid),
+                ).fetchone()
+                if clash:
+                    raise HTTPException(400, detail=f"Variable '{var}' already used by col {clash['col_id']}")
+            conn.execute(
+                "UPDATE columns SET name=?, variable=?, role=? WHERE col_id=?",
+                (name, var, role, cid),
+            )
+            _log(conn, "col_config", col_id=cid,
+                 note=f"name={name!r} var={var!r} role={role!r}")
+
+        # Replace all constraints
+        conn.execute("DELETE FROM constraints")
+        for con in req.constraints:
+            conn.execute(
+                "INSERT INTO constraints(label,lhs,rhs,tolerance,severity)"
+                " VALUES(?,?,?,?,?)",
+                (con.get("label", ""),
+                 con.get("lhs", ""),
+                 con.get("rhs", ""),
+                 float(con.get("tolerance", 0)),
+                 con.get("severity", "error")),
+            )
+        _log(conn, "config_import",
+             note=f"{len(req.columns)} cols, {len(req.constraints)} constraints")
+    return {"ok": True}
+
+
 # ── Constraints ───────────────────────────────────────────────────────────────
 
 class ConstraintIn(BaseModel):

@@ -319,6 +319,10 @@ td.row-actions {
   <label style="display:flex;align-items:center;gap:5px;font-size:12px;">
     <input type="checkbox" id="show-deleted" onchange="renderTable()"> Show deleted rows
   </label>
+  <button class="btn btn-blue" onclick="downloadConfig()" title="Download columns + rules as JSON for editing in a text editor">📝 Config ↓</button>
+  <label class="btn btn-blue" title="Upload edited config JSON" style="cursor:pointer;">
+    📝 Config ↑<input type="file" accept=".json" style="display:none" onchange="uploadConfig(this)">
+  </label>
   <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
@@ -1115,6 +1119,31 @@ async function exportData() {
   a.download = folder + '_cleaned.csv';
   a.click();
   toast('CSV downloaded');
+}
+
+// ── Config export / import ────────────────────────────────────────────────
+function downloadConfig() {
+  if (!folder) { toast('Load a project first'); return; }
+  window.open(`${API}/api/validate/config?folder=${encodeURIComponent(folder)}`);
+}
+
+async function uploadConfig(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';           // reset so same file can be re-uploaded
+  let cfg;
+  try { cfg = JSON.parse(await file.text()); }
+  catch(e) { toast('Invalid JSON'); return; }
+  if (!cfg.columns || !cfg.constraints) { toast('Missing columns or constraints key'); return; }
+  toast('Applying config…');
+  const r = await fetch(`${API}/api/validate/config`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ folder, columns: cfg.columns, constraints: cfg.constraints }),
+  });
+  if (!r.ok) { const e = await r.json(); toast('Error: ' + e.detail); return; }
+  toast('Config applied ✓');
+  await loadAll();
 }
 
 // ── Page viewer (separate window) ──────────────────────────────────────────
