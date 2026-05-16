@@ -562,21 +562,27 @@ def api_table(folder: str, include_deleted: bool = False):
     with _db(folder) as conn:
         cols = [dict(r) for r in conn.execute(
             "SELECT * FROM columns ORDER BY position")]
-        q = ("SELECT * FROM rows"
-             + ("" if include_deleted else " WHERE is_deleted=0")
-             + " ORDER BY position")
-        rows = [dict(r) for r in conn.execute(q)]
+        row_filter = "" if include_deleted else "WHERE r.is_deleted=0"
+        rows = [dict(r) for r in conn.execute(
+            f"SELECT r.* FROM rows r {row_filter} ORDER BY r.position")]
         cells: dict = {}
-        if rows:
-            ids = [r["row_id"] for r in rows]
-            ph  = ",".join("?" * len(ids))
-            for r in conn.execute(
-                    f"SELECT * FROM cells WHERE row_id IN ({ph})", ids):
+        # JOIN avoids a huge IN (?,?,…) clause that can hit SQLite's variable limit
+        del_filter = "" if include_deleted else "JOIN rows r ON c.row_id=r.row_id AND r.is_deleted=0"
+        for r in conn.execute(
+                f"SELECT c.row_id, c.col_id, c.value, c.original_value, c.source"
+                f" FROM cells c {del_filter}"):
+            val  = r["value"]
+            orig = r["original_value"]
+            # Only ship original_value/source when value was edited — cuts payload
+            # roughly in half for large unedited imports.
+            if orig and orig != val:
                 cells.setdefault(r["row_id"], {})[r["col_id"]] = {
-                    "value":          r["value"],
-                    "original_value": r["original_value"],
+                    "value":          val,
+                    "original_value": orig,
                     "source":         r["source"],
                 }
+            else:
+                cells.setdefault(r["row_id"], {})[r["col_id"]] = {"value": val}
     return {"columns": cols, "rows": rows, "cells": cells}
 
 
@@ -810,14 +816,11 @@ def api_violations(folder: str):
         columns     = {r["col_id"]: dict(r) for r in conn.execute("SELECT * FROM columns")}
         rows        = [dict(r) for r in conn.execute(
             "SELECT * FROM rows WHERE is_deleted=0 ORDER BY position")]
-        row_ids     = [r["row_id"] for r in rows]
         cells_raw: dict = {}
-        if row_ids:
-            ph = ",".join("?" * len(row_ids))
-            for r in conn.execute(
-                    f"SELECT row_id,col_id,value FROM cells WHERE row_id IN ({ph})",
-                    row_ids):
-                cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
+        for r in conn.execute(
+                "SELECT c.row_id, c.col_id, c.value FROM cells c"
+                " JOIN rows r ON c.row_id=r.row_id AND r.is_deleted=0"):
+            cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
 
     var_to_col = {
         v["variable"]: v["col_id"]
@@ -900,14 +903,11 @@ def api_detect_crawl(folder: str):
         columns     = {r["col_id"]: dict(r) for r in conn.execute("SELECT * FROM columns")}
         rows        = [dict(r) for r in conn.execute(
             "SELECT * FROM rows WHERE is_deleted=0 ORDER BY position")]
-        row_ids     = [r["row_id"] for r in rows]
         cells_raw: dict = {}
-        if row_ids:
-            ph = ",".join("?" * len(row_ids))
-            for r in conn.execute(
-                    f"SELECT row_id,col_id,value FROM cells WHERE row_id IN ({ph})",
-                    row_ids):
-                cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
+        for r in conn.execute(
+                "SELECT c.row_id, c.col_id, c.value FROM cells c"
+                " JOIN rows r ON c.row_id=r.row_id AND r.is_deleted=0"):
+            cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
 
     if not constraints or not rows:
         return []
@@ -961,26 +961,44 @@ def api_detect_crawl(folder: str):
     candidates = []   # {col_id, run_row_ids, phantom_row_id, viol_rate}
 
     for col_id, viol_set in col_viol.items():
-        seq = [(r["row_id"], r["row_id"] in viol_set) for r in rows]
+        # Three-state sequence: True=violating, None=transparent (zero/dash),
+        # False=clean (real non-zero data satisfying constraints).
+        # Transparent rows are invisible to the gap counter — a stretch of zeroes
+        # between two violation runs does not break them into separate crawls.
+        def _state(row):
+            rid = row["row_id"]
+            if rid in viol_set:
+                return True   # violating
+            val = cells_raw.get(rid, {}).get(col_id)
+            if parse_number(val) == 0:
+                return None   # transparent
+            return False      # clean
+
+        seq = [(r["row_id"], _state(r)) for r in rows]
 
         i = 0
         while i < len(seq):
-            if not seq[i][1]:
+            if seq[i][1] is not True:
                 i += 1
                 continue
-            # start of a run
+            # start of a violation run
             run_start = i
             gap = 0
             j   = i + 1
             while j < len(seq):
-                if seq[j][1]:
-                    gap = 0
+                if seq[j][1] is True:
+                    gap = 0          # violating row resets gap
+                elif seq[j][1] is None:
+                    pass             # transparent row: ignore, don't count as gap
                 else:
-                    gap += 1
+                    gap += 1         # clean row advances gap counter
                     if gap > GAP_TOL:
                         break
                 j += 1
-            run_end     = j - gap          # exclusive index
+            # trim trailing transparent/gap rows
+            run_end = j - gap
+            while run_end > run_start and seq[run_end - 1][1] is None:
+                run_end -= 1
             run_row_ids = [seq[k][0] for k in range(run_start, run_end)]
 
             if len(run_row_ids) >= MIN_RUN:
@@ -1000,8 +1018,12 @@ def api_detect_crawl(folder: str):
                     i = run_end if run_end > i else i + 1
                     continue
 
-                viol_count = sum(1 for rid in run_row_ids if rid in viol_set)
-                viol_rate  = viol_count / len(run_row_ids)
+                # viol_rate counts only non-transparent rows so zeroes don't dilute
+                non_transparent = [rid for rid in run_row_ids
+                                   if cells_raw.get(rid, {}).get(col_id) is not None
+                                   and parse_number(cells_raw[rid].get(col_id)) != 0]
+                viol_count = sum(1 for rid in non_transparent if rid in viol_set)
+                viol_rate  = viol_count / len(non_transparent) if non_transparent else 0.0
 
                 candidates.append({
                     "col_id":         col_id,

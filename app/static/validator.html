@@ -529,113 +529,127 @@ function toast(msg) {
 }
 function setStatus(msg) { document.getElementById('status').textContent = msg; }
 
+// ── HTML escaping helper ────────────────────────────────────────────────────
+function _esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 // ── Table render ───────────────────────────────────────────────────────────
+// Uses innerHTML string-building instead of createElement per cell.
+// For 10k rows × N cols this is 10–50× faster than the DOM-creation loop.
+// Click / dblclick use event delegation (one handler on tbody).
 function renderTable() {
-  const head = document.getElementById('tbl-head');
-  const body = document.getElementById('tbl-body');
+  const head   = document.getElementById('tbl-head');
+  const body   = document.getElementById('tbl-body');
   const incDel = document.getElementById('show-deleted').checked;
 
-  // Header
+  // ── Header (small — keep as DOM) ─────────────────────────────────────────
   head.innerHTML = '';
   const rowNumTh = document.createElement('th');
   rowNumTh.textContent = '#';
   head.appendChild(rowNumTh);
-
   columns.forEach(col => {
     const th = document.createElement('th');
     th.className = 'col-header' + (col.role === 'index' ? ' col-index' : '');
     th.title = `var: ${col.variable} | click to edit`;
-    th.innerHTML = `<span>${col.name}</span>`;
+    th.innerHTML = `<span>${_esc(col.name)}</span>`;
     th.onclick = () => openColModal(col.col_id);
     head.appendChild(th);
   });
-  // Actions header
-  const actTh = document.createElement('th');
-  actTh.textContent = '';
-  head.appendChild(actTh);
+  head.appendChild(document.createElement('th'));
 
-  // Body
-  body.innerHTML = '';
+  // ── Body: one big HTML string, then assign once ───────────────────────────
   const visible = rows.filter(r => incDel || !r.is_deleted);
+  const html = [];
+
   visible.forEach((row, ri) => {
-    const tr = document.createElement('tr');
-    if (row.is_deleted) tr.classList.add('deleted');
+    const gs = _esc(row.group_stems || '[]');
+    html.push(
+      `<tr${row.is_deleted ? ' class="deleted"' : ''}`
+      + ` data-row-id="${row.row_id}"`
+      + ` data-page-stem="${_esc(row.page_stem || '')}"`
+      + ` data-group-stems="${gs}">`
+    );
 
-    // Clicking any cell switches the viewer to that cell's source page.
-    // group_stems is a JSON array of all stems in this row's group;
-    // col.page_index tells us which slot the clicked column came from.
-    const groupStems = JSON.parse(row.group_stems || '[]');
-    tr.onclick = e => {
-      const td  = e.target.closest('td');
-      const pi  = td && td.dataset.pageIndex !== undefined
-                  ? parseInt(td.dataset.pageIndex) : 0;
-      const stem = groupStems[pi] || row.page_stem;
-      if (stem) setActiveStem(stem);
-    };
-
-    // Row number
-    const numTd = document.createElement('td');
-    numTd.className = 'row-num';
-    numTd.textContent = ri + 1;
-    numTd.title = `page: ${row.page_stem}`;
-    tr.appendChild(numTd);
+    // Row-number cell
+    html.push(`<td class="row-num" title="page: ${_esc(row.page_stem || '')}">${ri + 1}</td>`);
 
     // Data cells
     columns.forEach(col => {
-      const td = document.createElement('td');
-      td.dataset.pageIndex = col.page_index ?? 0;
-      const cellData = (cells[row.row_id] || {})[col.col_id];
-      const val = cellData ? cellData.value : '';
-      const orig = cellData ? cellData.original_value : '';
-      td.textContent = val || '';
-      if (val !== orig && orig) td.classList.add('orig-diff');
-      td.title = orig && val !== orig ? `OCR: ${orig}` : '';
+      const cdata = (cells[row.row_id] || {})[col.col_id];
+      const val  = cdata ? (cdata.value          ?? '') : '';
+      const orig = cdata ? (cdata.original_value  ?? '') : '';
+      const key  = `${row.row_id}_${col.col_id}`;
 
-      // Violation highlight
-      const vKey = `${row.row_id}_${col.col_id}`;
-      if (violColMap[vKey] !== undefined) {
-        td.classList.add('viol-' + (violColMap[vKey] % 8));
-      }
-      // Crawl highlight + group outline
-      const cKey  = `${row.row_id}_${col.col_id}`;
-      const crawl = crawlCellMap[cKey];
+      // CSS classes
+      const cls = [];
+      if (val !== orig && orig) cls.push('orig-diff');
+      if (violColMap[key] !== undefined) cls.push('viol-' + (violColMap[key] % 8));
+      const crawl = crawlCellMap[key];
+      if (crawl) cls.push(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
+
+      // Inline styles (merge cursor + crawl borders)
+      const styles = [];
+      if (!row.is_deleted && col.role === 'data') styles.push('cursor:text');
       if (crawl) {
-        td.classList.add(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
         const bw = '2px solid ' + crawl.color;
-        if (crawl.borderTop)    td.style.borderTop    = bw;
-        if (crawl.borderBottom) td.style.borderBottom = bw;
-        if (crawl.borderLeft)   td.style.borderLeft   = bw;
-        if (crawl.borderRight)  td.style.borderRight  = bw;
+        if (crawl.borderTop)    styles.push(`border-top:${bw}`);
+        if (crawl.borderBottom) styles.push(`border-bottom:${bw}`);
+        if (crawl.borderLeft)   styles.push(`border-left:${bw}`);
+        if (crawl.borderRight)  styles.push(`border-right:${bw}`);
       }
 
-      if (!row.is_deleted && col.role === 'data') {
-        td.style.cursor = 'text';
-        td.ondblclick = () => startEdit(td, row.row_id, col.col_id, val);
-      }
-      tr.appendChild(td);
+      const clsA   = cls.length    ? ` class="${cls.join(' ')}"` : '';
+      const styleA = styles.length ? ` style="${styles.join(';')}"` : '';
+      const titleA = orig && val !== orig ? ` title="OCR: ${_esc(orig)}"` : '';
+
+      html.push(
+        `<td${clsA}${styleA}${titleA}`
+        + ` data-col-id="${col.col_id}"`
+        + ` data-page-index="${col.page_index ?? 0}">`
+        + `${_esc(val)}</td>`
+      );
     });
 
     // Action cell
-    const actTd = document.createElement('td');
-    actTd.className = 'row-actions';
     if (!row.is_deleted) {
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-blue btn-sm';
-      btn.textContent = '✕';
-      btn.title = 'Delete row';
-      btn.onclick = () => deleteRow(row.row_id);
-      actTd.appendChild(btn);
+      html.push(`<td class="row-actions"><button class="btn btn-blue btn-sm" title="Delete row" onclick="deleteRow(${row.row_id})">✕</button></td>`);
     } else {
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-green btn-sm';
-      btn.textContent = '↩';
-      btn.title = 'Restore row';
-      btn.onclick = () => restoreRow(row.row_id);
-      actTd.appendChild(btn);
+      html.push(`<td class="row-actions"><button class="btn btn-green btn-sm" title="Restore row" onclick="restoreRow(${row.row_id})">↩</button></td>`);
     }
-    tr.appendChild(actTd);
-    body.appendChild(tr);
+    html.push('</tr>');
   });
+
+  body.innerHTML = html.join('');
+
+  // ── Delegated event handlers (one listener each, not one per row) ─────────
+  body.onclick = e => {
+    if (e.target.closest('button')) return;   // let action buttons bubble normally
+    const td = e.target.closest('td');
+    if (!td) return;
+    const tr = td.closest('tr[data-row-id]');
+    if (!tr) return;
+    const pi = parseInt(td.dataset.pageIndex || '0');
+    let gs = [];
+    try { gs = JSON.parse(tr.dataset.groupStems || '[]'); } catch (_) {}
+    const stem = gs[pi] || tr.dataset.pageStem;
+    if (stem) setActiveStem(stem);
+  };
+
+  body.ondblclick = e => {
+    const td = e.target.closest('td[data-col-id]');
+    if (!td) return;
+    const tr = td.closest('tr[data-row-id]');
+    if (!tr) return;
+    const rowId = parseInt(tr.dataset.rowId);
+    const colId = parseInt(td.dataset.colId);
+    const col = columns.find(c => c.col_id === colId);
+    const row = rows.find(r => r.row_id === rowId);
+    if (!row || !col || row.is_deleted || col.role !== 'data') return;
+    const cdata = (cells[rowId] || {})[colId];
+    startEdit(td, rowId, colId, cdata ? (cdata.value ?? '') : '');
+  };
 }
 
 // ── Cell editing ───────────────────────────────────────────────────────────
