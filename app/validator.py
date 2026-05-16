@@ -188,8 +188,15 @@ def _get_text(shape, layer):
     return v, "human" if human else ("llm" if llm else "ocr")
 
 
-def _shapes_to_cells(shapes, layer="best_llm", selected_types=None):
-    """Return list of raw cell dicts with spatial grid coordinates."""
+def _shapes_to_cells(shapes, layer="best_llm", selected_types=None,
+                     ref_col_centers=None):
+    """Return (cells, col_centers).
+
+    col_centers are the column x-centroids used for col_idx assignment.
+    Pass ref_col_centers (from a previous call on the same page slot) to pin
+    the column layout — this prevents a small bounding-box edit on one cell
+    from shifting the clustering and blanking out adjacent columns on re-import.
+    """
     raw = []
     for sh in shapes:
         if selected_types and sh.get("label", "") not in selected_types:
@@ -211,7 +218,7 @@ def _shapes_to_cells(shapes, layer="best_llm", selected_types=None):
             label=sh.get("label", "?"),
         ))
     if not raw:
-        return []
+        return [], ref_col_centers or []
 
     # Row clustering: mirror JS _latticeAssignCoords (band-based, tol=10px)
     ROW_TOL = 10
@@ -233,20 +240,24 @@ def _shapes_to_cells(shapes, layer="best_llm", selected_types=None):
             c["row_idx"] = row_idx
         grp.sort(key=lambda c: c["cx"])
 
-    # Column clustering (global, cx-based)
-    med_w    = sorted(c["w"] for c in raw)[len(raw) // 2]
-    thresh_x = max(3, med_w * 0.45)
-    all_cx   = sorted({c["cx"] for c in raw})
-    col_centers: list = []
-    if all_cx:
-        grp = [all_cx[0]]
-        for cx in all_cx[1:]:
-            if cx - grp[-1] <= thresh_x:
-                grp.append(cx)
-            else:
-                col_centers.append(sum(grp) / len(grp))
-                grp = [cx]
-        col_centers.append(sum(grp) / len(grp))
+    # Column clustering: use reference centers if supplied, otherwise compute fresh
+    if ref_col_centers:
+        col_centers = ref_col_centers
+    else:
+        med_w    = sorted(c["w"] for c in raw)[len(raw) // 2]
+        thresh_x = max(3, med_w * 0.45)
+        all_cx   = sorted({c["cx"] for c in raw})
+        col_centers = []
+        if all_cx:
+            grp = [all_cx[0]]
+            for cx in all_cx[1:]:
+                if cx - grp[-1] <= thresh_x:
+                    grp.append(cx)
+                else:
+                    col_centers.append(sum(grp) / len(grp))
+                    grp = [cx]
+            col_centers.append(sum(grp) / len(grp))
+
     for c in raw:
         c["col_idx"] = min(
             range(len(col_centers)),
@@ -287,7 +298,7 @@ def _shapes_to_cells(shapes, layer="best_llm", selected_types=None):
             w=c["w"],
         )
         for c in winner.values()
-    ]
+    ], col_centers
 
 
 def _lattice_start_row(cells):
@@ -414,13 +425,19 @@ def api_import(req: ImportRequest):
     groups = [jfiles[i:i + ppr] for i in range(0, len(jfiles), ppr)]
 
     # ── Determine column layout from first complete group ─────────────────────
-    first_group_cells = []
+    # Also capture per-slot reference column centers so subsequent groups use
+    # the same col_idx mapping (prevents a bounding-box edit on one page from
+    # shifting the clustering and blanking adjacent columns on re-import).
+    first_group_cells  = []
+    ref_col_centers    = []   # one list of x-centers per page slot
     for jf in groups[0]:
-        cells = _shapes_to_cells(_load_shapes(jf), req.layer, selected_types)
+        cells, centers = _shapes_to_cells(_load_shapes(jf), req.layer, selected_types)
         first_group_cells.append(cells)
+        ref_col_centers.append(centers)
     # Pad to ppr if first group is short
     while len(first_group_cells) < ppr:
         first_group_cells.append([])
+        ref_col_centers.append([])
 
     page_col_counts  = [_max_col_of(c) + 1 if c else 0 for c in first_group_cells]
     page_col_offsets = []
@@ -470,9 +487,14 @@ def api_import(req: ImportRequest):
 
         for group in groups:
             # ── Load cells for each page slot (cells now carry .lines list) ───
+            # Pass reference col_centers per slot so col_idx is pinned to the
+            # layout from the first group — stable across re-imports.
             group_cells = []
-            for jf in group:
-                cells = _shapes_to_cells(_load_shapes(jf), req.layer, selected_types)
+            for pi, jf in enumerate(group):
+                ref = ref_col_centers[pi] if pi < len(ref_col_centers) else None
+                cells, _ = _shapes_to_cells(
+                    _load_shapes(jf), req.layer, selected_types,
+                    ref_col_centers=ref)
                 group_cells.append((jf.stem, cells))
             while len(group_cells) < ppr:
                 group_cells.append(("", []))
