@@ -118,12 +118,6 @@ body {
 td.crawl-region  { background: rgba(255,140,0,.18) !important; }
 td.crawl-phantom { background: rgba(233,69,96,.45) !important;
                    outline: 2px solid #e94560; outline-offset: -2px; }
-/* Lattice group frame (multi-row source cells) */
-td.lattice-top    { border-top:    1px solid #4fc3f7 !important; }
-td.lattice-bottom { border-bottom: 1px solid #4fc3f7 !important; }
-td.lattice-left   { border-left:   1px solid #4fc3f7 !important; }
-td.lattice-right  { border-right:  1px solid #4fc3f7 !important; }
-
 /* Editable cell */
 td.editing { padding: 0 !important; }
 td.editing input {
@@ -568,10 +562,12 @@ function renderTable() {
   // ── Body: one big HTML string, then assign once ───────────────────────────
   const visible = rows.filter(r => incDel || !r.is_deleted);
 
-  // ── Lattice group borders (light blue frame around multi-row source cells) ─
-  // page_row_idx is the lattice row index within its page-group. Consecutive
-  // DB rows with the SAME page_row_idx AND same group_stems all came from the
-  // same multi-line lattice cell. Only frame groups spanning more than one row.
+  // ── Lattice grid borders (blue frame around every lattice cell) ─────────
+  // page_row_idx is the lattice row index on the page; consecutive DB rows
+  // with the same page_row_idx + group_stems are all lines of one lattice cell.
+  // We frame ALL lattice elements (including single-row ones) so the grid is
+  // always visible. Borders are inline styles — CSS classes lose to the
+  // browser's border-collapse conflict resolution on adjacent cells.
   const latticeBorderMap = {};   // "rowId_colId" → {top,bottom,left,right}
   if (columns.length) {
     const firstCid = columns[0].col_id;
@@ -586,18 +582,17 @@ function renderTable() {
              (visible[end].group_stems  || '[]') === gs) {
         end++;
       }
-      if (end - k > 1) {   // multi-row lattice element — draw frame
-        for (let m = k; m < end; m++) {
-          const rid = visible[m].row_id;
-          columns.forEach(col => {
-            latticeBorderMap[`${rid}_${col.col_id}`] = {
-              top:    m === k,
-              bottom: m === end - 1,
-              left:   col.col_id === firstCid,
-              right:  col.col_id === lastCid,
-            };
-          });
-        }
+      // Frame every lattice element (no size guard)
+      for (let m = k; m < end; m++) {
+        const rid = visible[m].row_id;
+        columns.forEach(col => {
+          latticeBorderMap[`${rid}_${col.col_id}`] = {
+            top:    m === k,
+            bottom: m === end - 1,
+            left:   col.col_id === firstCid,
+            right:  col.col_id === lastCid,
+          };
+        });
       }
       k = end;
     }
@@ -629,18 +624,18 @@ function renderTable() {
       if (violColMap[key] !== undefined) cls.push('viol-' + (violColMap[key] % 8));
       const crawl   = crawlCellMap[key];
       const lattice = latticeBorderMap[key];
-      if (crawl)   cls.push(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
-      // Lattice classes (CSS !important handles priority vs table defaults)
-      if (lattice) {
-        if (lattice.top)    cls.push('lattice-top');
-        if (lattice.bottom) cls.push('lattice-bottom');
-        if (lattice.left)   cls.push('lattice-left');
-        if (lattice.right)  cls.push('lattice-right');
-      }
+      if (crawl) cls.push(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
 
-      // Inline styles: cursor + crawl outer border (red, overrides lattice blue)
+      // Inline styles: cursor + lattice blue frame + crawl red frame (crawl wins)
       const styles = [];
       if (!row.is_deleted && col.role === 'data') styles.push('cursor:text');
+      if (lattice) {
+        const lb = '1px solid #4fc3f7';
+        if (lattice.top)    styles.push(`border-top:${lb}`);
+        if (lattice.bottom) styles.push(`border-bottom:${lb}`);
+        if (lattice.left)   styles.push(`border-left:${lb}`);
+        if (lattice.right)  styles.push(`border-right:${lb}`);
+      }
       if (crawl) {
         const bw = '2px solid #e94560';
         if (crawl.borderTop)    styles.push(`border-top:${bw}`);
