@@ -1015,11 +1015,17 @@ def api_detect_crawl(folder: str):
         if not present:
             continue
 
-        # Non-zero count = effective vector length for each column
+        # Non-empty count = effective vector length for each column.
+        # We count any cell that has a non-empty string value — including zeros
+        # and dashes (which parse to 0 but ARE real OCR output).  Excluding them
+        # would miss the most common merge: two adjacent dashes collapsed into one,
+        # where the missing element is a zero, so non-zero counts look identical.
+        # Only "" padding rows (inserted by the import to reach max_lines) are
+        # excluded, because they represent "no OCR line here" rather than real data.
         col_len = {
             cid: sum(
                 1 for rid in elem_rids
-                if parse_number(cells_raw.get(rid, {}).get(cid)) not in (None, 0)
+                if cells_raw.get(rid, {}).get(cid, "") != ""
             )
             for cid in present
         }
