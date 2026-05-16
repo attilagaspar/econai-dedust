@@ -118,6 +118,11 @@ body {
 td.crawl-region  { background: rgba(255,140,0,.18) !important; }
 td.crawl-phantom { background: rgba(233,69,96,.45) !important;
                    outline: 2px solid #e94560; outline-offset: -2px; }
+/* Lattice group frame (multi-row source cells) */
+td.lattice-top    { border-top:    1px solid #4fc3f7 !important; }
+td.lattice-bottom { border-bottom: 1px solid #4fc3f7 !important; }
+td.lattice-left   { border-left:   1px solid #4fc3f7 !important; }
+td.lattice-right  { border-right:  1px solid #4fc3f7 !important; }
 
 /* Editable cell */
 td.editing { padding: 0 !important; }
@@ -442,8 +447,9 @@ let violations  = [];          // from last /violations call
 let activeTab    = 'columns';
 let violColMap   = {};          // "rowId_colId" → colour index
 let violColorMap = {};          // constraint_id → colour index
-let crawlGroups  = [];          // from /crawl endpoint
-let crawlCellMap = {};          // "rowId_colId" → "phantom" | "region"
+let crawlGroups   = [];          // from /crawl endpoint
+let crawlCellMap  = {};          // "rowId_colId" → {type, color, borderTop/Bottom/Left/Right}
+let crawlSortKey  = 'phantom';   // 'phantom' | 'confidence' | 'column'
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -561,6 +567,35 @@ function renderTable() {
 
   // ── Body: one big HTML string, then assign once ───────────────────────────
   const visible = rows.filter(r => incDel || !r.is_deleted);
+
+  // ── Lattice group borders (light blue frame around multi-row source cells) ─
+  // Consecutive rows with the same group_stems came from one lattice element.
+  // Only frame groups that span more than one row.
+  const latticeBorderMap = {};   // "rowId_colId" → {top,bottom,left,right}
+  if (columns.length) {
+    const firstCid = columns[0].col_id;
+    const lastCid  = columns[columns.length - 1].col_id;
+    let k = 0;
+    while (k < visible.length) {
+      const stems = visible[k].group_stems || '[]';
+      let end = k + 1;
+      while (end < visible.length && visible[end].group_stems === stems) end++;
+      if (end - k > 1) {
+        for (let m = k; m < end; m++) {
+          const rid = visible[m].row_id;
+          columns.forEach(col => {
+            latticeBorderMap[`${rid}_${col.col_id}`] = {
+              top:    m === k,
+              bottom: m === end - 1,
+              left:   col.col_id === firstCid,
+              right:  col.col_id === lastCid,
+            };
+          });
+        }
+      }
+      k = end;
+    }
+  }
   const html = [];
 
   visible.forEach((row, ri) => {
@@ -586,14 +621,22 @@ function renderTable() {
       const cls = [];
       if (val !== orig && orig) cls.push('orig-diff');
       if (violColMap[key] !== undefined) cls.push('viol-' + (violColMap[key] % 8));
-      const crawl = crawlCellMap[key];
-      if (crawl) cls.push(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
+      const crawl   = crawlCellMap[key];
+      const lattice = latticeBorderMap[key];
+      if (crawl)   cls.push(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
+      // Lattice classes (CSS !important handles priority vs table defaults)
+      if (lattice) {
+        if (lattice.top)    cls.push('lattice-top');
+        if (lattice.bottom) cls.push('lattice-bottom');
+        if (lattice.left)   cls.push('lattice-left');
+        if (lattice.right)  cls.push('lattice-right');
+      }
 
-      // Inline styles (merge cursor + crawl borders)
+      // Inline styles: cursor + crawl outer border (red, overrides lattice blue)
       const styles = [];
       if (!row.is_deleted && col.role === 'data') styles.push('cursor:text');
       if (crawl) {
-        const bw = '2px solid ' + crawl.color;
+        const bw = '2px solid #e94560';
         if (crawl.borderTop)    styles.push(`border-top:${bw}`);
         if (crawl.borderBottom) styles.push(`border-bottom:${bw}`);
         if (crawl.borderLeft)   styles.push(`border-left:${bw}`);
@@ -1158,35 +1201,20 @@ async function exportData() {
 }
 
 // ── Crawl detection ───────────────────────────────────────────────────────
-async function detectCrawls() {
-  if (!folder) { toast('Load a project first'); return; }
-  toast('Scanning for crawls…');
-  const r = await fetch(`${API}/api/validate/crawl?folder=${encodeURIComponent(folder)}`);
-  if (!r.ok) { toast('Error running crawl detection'); return; }
-  crawlGroups = await r.json();
-
-  // Build cell map for rendering
+function rebuildCrawlCellMap() {
   crawlCellMap = {};
-  const GROUP_COLORS = ['#00e5ff','#69ff47','#ffea00','#e040fb','#ff6d00','#00e676','#ff4081','#40c4ff'];
+  const CRAWL_COLOR = '#e94560';   // always red outer frame
 
-  crawlGroups.forEach((g, gi) => {
-    const color = GROUP_COLORS[gi % GROUP_COLORS.length];
-
-    // Column order: sort g.col_ids by display position
-    const sortedCols = [...g.col_ids].sort((a, b) => {
-      const ia = columns.findIndex(c => c.col_id === a);
-      const ib = columns.findIndex(c => c.col_id === b);
-      return ia - ib;
-    });
+  crawlGroups.forEach(g => {
+    // Column order by display position
+    const sortedCols = [...g.col_ids].sort((a, b) =>
+      columns.findIndex(c => c.col_id === a) - columns.findIndex(c => c.col_id === b));
     const leftCid  = sortedCols[0];
     const rightCid = sortedCols[sortedCols.length - 1];
 
-    // Row order: sort run_row_ids by display position
-    const sortedRows = [...g.run_row_ids].sort((a, b) => {
-      const ia = rows.findIndex(r => r.row_id === a);
-      const ib = rows.findIndex(r => r.row_id === b);
-      return ia - ib;
-    });
+    // Row order by display position
+    const sortedRows = [...g.run_row_ids].sort((a, b) =>
+      rows.findIndex(r => r.row_id === a) - rows.findIndex(r => r.row_id === b));
     const firstRid = sortedRows[0];
     const lastRid  = sortedRows[sortedRows.length - 1];
 
@@ -1194,7 +1222,7 @@ async function detectCrawls() {
       g.run_row_ids.forEach(rid => {
         crawlCellMap[`${rid}_${cid}`] = {
           type:         rid === g.phantom_row_id ? 'phantom' : 'region',
-          color,
+          color:        CRAWL_COLOR,
           borderTop:    rid === firstRid,
           borderBottom: rid === lastRid,
           borderLeft:   cid === leftCid,
@@ -1205,14 +1233,22 @@ async function detectCrawls() {
       if (g.phantom_row_id !== null && !g.run_row_ids.includes(g.phantom_row_id)) {
         const rid = g.phantom_row_id;
         crawlCellMap[`${rid}_${cid}`] = {
-          type: 'phantom', color,
+          type: 'phantom', color: CRAWL_COLOR,
           borderTop: true, borderBottom: false,
           borderLeft: cid === leftCid, borderRight: cid === rightCid,
         };
       }
     });
   });
+}
 
+async function detectCrawls() {
+  if (!folder) { toast('Load a project first'); return; }
+  toast('Scanning for crawls…');
+  const r = await fetch(`${API}/api/validate/crawl?folder=${encodeURIComponent(folder)}`);
+  if (!r.ok) { toast('Error running crawl detection'); return; }
+  crawlGroups = await r.json();
+  rebuildCrawlCellMap();
   renderTable();
   showTab('crawls');
   toast(crawlGroups.length
@@ -1232,39 +1268,58 @@ function renderCrawlsTab() {
     return;
   }
 
-  crawlGroups.forEach((g, gi) => {
+  // ── Sort controls ─────────────────────────────────────────────────────────
+  const sortBar = document.createElement('div');
+  sortBar.style.cssText = 'display:flex;gap:4px;padding:6px 8px;flex-wrap:wrap;border-bottom:1px solid #1e3a5f;margin-bottom:6px;';
+  sortBar.innerHTML = '<span style="font-size:11px;color:#888;align-self:center;">Sort:</span>';
+  [['phantom','Phantom pos.'],['confidence','Confidence'],['column','Column']].forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-blue btn-sm';
+    btn.textContent = label;
+    btn.style.fontWeight = crawlSortKey === key ? '900' : '400';
+    btn.style.opacity    = crawlSortKey === key ? '1' : '0.6';
+    btn.onclick = () => { crawlSortKey = key; renderCrawlsTab(); };
+    sortBar.appendChild(btn);
+  });
+  c.appendChild(sortBar);
+
+  // ── Sort groups ───────────────────────────────────────────────────────────
+  const sorted = [...crawlGroups].sort((a, b) => {
+    if (crawlSortKey === 'confidence') return b.viol_rate - a.viol_rate;
+    if (crawlSortKey === 'column') {
+      const ia = Math.min(...a.col_ids.map(cid => columns.findIndex(col => col.col_id === cid)));
+      const ib = Math.min(...b.col_ids.map(cid => columns.findIndex(col => col.col_id === cid)));
+      return ia - ib;
+    }
+    // 'phantom': sort by phantom row position in the table
+    const ia = rows.findIndex(r => r.row_id === a.phantom_row_id);
+    const ib = rows.findIndex(r => r.row_id === b.phantom_row_id);
+    return ia - ib;
+  });
+
+  sorted.forEach(g => {
     const conf = g.viol_rate >= 0.8 ? '🔴 High' : g.viol_rate >= 0.5 ? '🟠 Medium' : '🟡 Low';
+    const phantomPos = rows.findIndex(r => r.row_id === g.phantom_row_id) + 1;
+
     const div  = document.createElement('div');
     div.className = 'viol-group';
     div.style.marginBottom = '10px';
 
     const head = document.createElement('div');
     head.className = 'viol-group-head';
-    head.style.flexDirection = 'column';
-    head.style.alignItems    = 'flex-start';
-    head.style.gap           = '4px';
+    head.style.cssText = 'flex-direction:column;align-items:flex-start;gap:4px;';
     head.innerHTML = `
       <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
         <span style="font-size:12px;font-weight:700;">${conf} confidence</span>
         <span class="viol-count">${Math.round(g.viol_rate * 100)}%</span>
       </div>
       <div style="font-size:11px;color:#80b4ff;">Columns: ${g.col_names.join(', ')}</div>
-      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} rows affected</div>`;
+      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} rows · phantom at row ${phantomPos || '?'}</div>`;
     div.appendChild(head);
 
     const body = document.createElement('div');
     body.className = 'viol-rows';
     body.style.padding = '8px';
-
-    // Phantom row info
-    const phantomRow = rows.find(r => r.row_id === g.phantom_row_id);
-    const phantomPos = phantomRow ? rows.indexOf(phantomRow) + 1 : '?';
-    body.innerHTML += `<div style="font-size:11px;margin-bottom:8px;">
-      <span style="color:#e94560;font-weight:700;">Phantom row:</span>
-      <span style="color:#aaa;"> row ${phantomPos}
-        ${g.phantom_row_id !== null ? '' : ' <em>(not found — no zero row near run)</em>'}
-      </span>
-    </div>`;
 
     // Scroll-to button
     const scrollBtn = document.createElement('button');
@@ -1277,20 +1332,12 @@ function renderCrawlsTab() {
     // Dismiss button
     const dimBtn = document.createElement('button');
     dimBtn.className = 'btn btn-blue btn-sm';
-    dimBtn.style.marginLeft = '6px';
-    dimBtn.style.marginBottom = '6px';
+    dimBtn.style.cssText = 'margin-left:6px;margin-bottom:6px;';
     dimBtn.textContent = '✕ Dismiss';
     dimBtn.onclick = () => {
-      crawlGroups.splice(gi, 1);
-      // Rebuild map
-      crawlCellMap = {};
-      crawlGroups.forEach(gg => {
-        gg.col_ids.forEach(cid => {
-          gg.run_row_ids.forEach(rid => {
-            crawlCellMap[`${rid}_${cid}`] = rid === gg.phantom_row_id ? 'phantom' : 'region';
-          });
-        });
-      });
+      const idx = crawlGroups.indexOf(g);
+      if (idx >= 0) crawlGroups.splice(idx, 1);
+      rebuildCrawlCellMap();
       renderTable();
       renderTab();
     };
