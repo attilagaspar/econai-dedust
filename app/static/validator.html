@@ -444,6 +444,8 @@ let violColorMap = {};          // constraint_id → colour index
 let crawlGroups   = [];          // from /crawl endpoint
 let crawlCellMap  = {};          // "rowId_colId" → {type, color, borderTop/Bottom/Left/Right}
 let crawlSortKey  = 'phantom';   // 'phantom' | 'confidence' | 'column'
+let crawlState    = 'idle';      // 'idle' | 'running' | 'done'
+let crawlLastRun  = null;        // Date of last completed scan
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -1245,13 +1247,21 @@ function rebuildCrawlCellMap() {
 
 async function detectCrawls() {
   if (!folder) { toast('Load a project first'); return; }
-  toast('Scanning for crawls…');
+  crawlState = 'running';
+  showTab('crawls');   // immediately show the spinner
   const r = await fetch(`${API}/api/validate/crawl?folder=${encodeURIComponent(folder)}`);
-  if (!r.ok) { toast('Error running crawl detection'); return; }
-  crawlGroups = await r.json();
+  if (!r.ok) {
+    crawlState = 'idle';
+    renderCrawlsTab();
+    toast('Error running crawl detection');
+    return;
+  }
+  crawlGroups  = await r.json();
+  crawlState   = 'done';
+  crawlLastRun = new Date();
   rebuildCrawlCellMap();
   renderTable();
-  showTab('crawls');
+  renderCrawlsTab();
   toast(crawlGroups.length
     ? `${crawlGroups.length} crawl candidate(s) found`
     : 'No crawls detected ✓');
@@ -1261,11 +1271,22 @@ function renderCrawlsTab() {
   const c = document.getElementById('side-content');
   c.innerHTML = '';
 
-  if (!crawlGroups.length) {
-    c.innerHTML = `<div style="color:#888;font-size:12px;text-align:center;margin-top:20px;">
-      No crawls detected.<br>Click 🔍 Find crawls above.<br>
-      <span style="font-size:10px;color:#555;">(Run ⚡ Check rules first so violations are available)</span>
+  if (crawlState === 'running') {
+    c.innerHTML = `<div style="color:#80b4ff;font-size:12px;text-align:center;margin-top:30px;">
+      <div style="font-size:22px;margin-bottom:10px;">⏳</div>
+      Scanning for crawls…
     </div>`;
+    return;
+  }
+
+  if (!crawlGroups.length) {
+    const ts = crawlLastRun
+      ? `<div style="font-size:10px;color:#555;margin-top:6px;">Last scan: ${crawlLastRun.toLocaleTimeString()}</div>`
+      : '';
+    const msg = crawlState === 'done'
+      ? `<div style="font-size:14px;margin-bottom:6px;">✓</div>Scan complete — no crawls found.${ts}`
+      : `Not yet scanned.<br><span style="font-size:10px;color:#555;">Click 🔍 Find crawls to start.</span>`;
+    c.innerHTML = `<div style="color:#888;font-size:12px;text-align:center;margin-top:30px;">${msg}</div>`;
     return;
   }
 
