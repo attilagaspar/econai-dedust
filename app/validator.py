@@ -16,7 +16,7 @@ import io
 import json
 import re
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -906,24 +906,26 @@ def api_violations(folder: str):
 @router.get("/crawl")
 def api_detect_crawl(folder: str):
     """
-    Detect column crawls — segments where a phantom all-dash row was inserted,
-    shifting real values down.
+    Detect column-length mismatches within lattice elements.
 
-    Algorithm:
-    1. Build a per-column violation vector (True = row violates a constraint
-       that involves this column).
-    2. Find contiguous runs of violations (gap tolerance 2, min length 4).
-    3. Within each run, locate the phantom row (value parses to 0 / dash).
-    4. Group columns that share the same phantom and overlapping run extent.
-    5. Return groups sorted by violation rate descending.
+    A "lattice element" is the group of DB rows that share the same
+    page_row_idx + group_stems — i.e., all DB lines that came from one
+    multi-line lattice cell.  Within each element we count how many
+    non-zero data values each constrained column contributes.  If that
+    count differs from the majority across columns, one column is
+    "too short" (OCR merged two dashes → one value missing, e.g. 55 vs 56)
+    or "too long" (OCR added a ghost line → one extra value, e.g. 57 vs 56).
+
+    For each mismatched column we simulate inserting (too-short) or removing
+    (too-long) a phantom zero at every possible position and measure the
+    resulting change in constraint violations.  Results where at least one
+    shift reduces violations are returned, sorted by absolute improvement.
     """
-    GAP_TOL = 2   # non-violating rows allowed inside a run
-    MIN_RUN = 4   # minimum run length to be a candidate
-
     with _db(folder) as conn:
-        constraints = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
-        columns     = {r["col_id"]: dict(r) for r in conn.execute("SELECT * FROM columns")}
-        rows        = [dict(r) for r in conn.execute(
+        constraints_list = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
+        columns_dict     = {r["col_id"]: dict(r) for r in conn.execute(
+            "SELECT * FROM columns ORDER BY position")}
+        rows = [dict(r) for r in conn.execute(
             "SELECT * FROM rows WHERE is_deleted=0 ORDER BY position")]
         cells_raw: dict = {}
         for r in conn.execute(
@@ -931,177 +933,172 @@ def api_detect_crawl(folder: str):
                 " JOIN rows r ON c.row_id=r.row_id AND r.is_deleted=0"):
             cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
 
-    if not constraints or not rows:
+    if not constraints_list or not rows:
         return []
 
     var_to_col = {v["variable"]: v["col_id"]
-                  for v in columns.values() if v["variable"]}
+                  for v in columns_dict.values() if v["variable"]}
 
-    # ── Step 1: single-pass violation matrix ─────────────────────────────────
-    # For each constraint, pre-compute which col_ids it involves.
-    # Then iterate rows once per constraint (not once per constraint per column).
-    # col_viol[col_id] = set of row_ids that violate any constraint involving it.
-    col_viol: dict = defaultdict(set)
-
-    for con in constraints:
-        expr_str  = con["lhs"] + " " + con["rhs"]
-        used_vars = {m for m in _VAR_RE.findall(expr_str) if m in var_to_col}
+    # Pre-parse constraints
+    parsed_cons = []
+    for con in constraints_list:
+        used_vars = {m for m in _VAR_RE.findall(con["lhs"] + " " + con["rhs"])
+                     if m in var_to_col}
         used_cols = {var: var_to_col[var] for var in used_vars}
-        if not used_cols:
-            continue
+        if used_cols:
+            parsed_cons.append({
+                "lhs": con["lhs"], "rhs": con["rhs"], "tol": con["tolerance"],
+                "used_cols": used_cols,
+                "col_id_set": set(used_cols.values()),
+            })
 
-        lhs_expr = con["lhs"]
-        rhs_expr = con["rhs"]
-        tol      = con["tolerance"]
-        col_ids  = list(used_cols.values())
-        var_list = list(used_cols.items())   # [(var, col_id), …]
+    if not parsed_cons:
+        return []
 
-        for row in rows:
-            rid      = row["row_id"]
-            row_data = cells_raw.get(rid, {})
-            ns: dict = {}
-            skip     = False
-            for var, cid in var_list:
-                num = parse_number(row_data.get(cid))
+    constrained_col_ids = set().union(*(pc["col_id_set"] for pc in parsed_cons))
+
+    # ── Violation helpers ─────────────────────────────────────────────────────
+    def row_viols(rid, override=None):
+        """Constraint-violation count for one row, with optional value overrides."""
+        count    = 0
+        row_data = cells_raw.get(rid, {})
+        for pc in parsed_cons:
+            ns   = {}
+            skip = False
+            for var, cid in pc["used_cols"].items():
+                raw = (override.get((rid, cid), row_data.get(cid))
+                       if override else row_data.get(cid))
+                num = parse_number(raw)
                 if num is None:
                     skip = True
                     break
                 ns[var] = num
             if skip:
                 continue
+            lv = _eval_expr(pc["lhs"], ns)
+            rv = _eval_expr(pc["rhs"], ns)
+            if lv is not None and rv is not None and abs(lv - rv) > pc["tol"]:
+                count += 1
+        return count
 
-            lv = _eval_expr(lhs_expr, ns)
-            rv = _eval_expr(rhs_expr, ns)
-            if lv is None or rv is None:
-                continue
+    def elem_viols(rids, override=None):
+        return sum(row_viols(rid, override) for rid in rids)
 
-            if abs(lv - rv) > tol:
-                for cid in col_ids:
-                    col_viol[cid].add(rid)
+    # ── Group DB rows into lattice elements ───────────────────────────────────
+    lattice_elements = []
+    i = 0
+    while i < len(rows):
+        idx = rows[i].get("page_row_idx")
+        gs  = rows[i].get("group_stems") or "[]"
+        j   = i + 1
+        while j < len(rows) and (rows[j].get("page_row_idx") == idx) \
+                and ((rows[j].get("group_stems") or "[]") == gs):
+            j += 1
+        lattice_elements.append([rows[k]["row_id"] for k in range(i, j)])
+        i = j
 
-    # ── Step 2: find runs per column ─────────────────────────────────────────
-    candidates = []   # {col_id, run_row_ids, phantom_row_id, viol_rate}
+    results = []
 
-    for col_id, viol_set in col_viol.items():
-        # Three-state sequence: True=violating, None=transparent (zero/dash),
-        # False=clean (real non-zero data satisfying constraints).
-        # Transparent rows are invisible to the gap counter — a stretch of zeroes
-        # between two violation runs does not break them into separate crawls.
-        def _state(row):
-            rid = row["row_id"]
-            if rid in viol_set:
-                return True   # violating
-            val = cells_raw.get(rid, {}).get(col_id)
-            if parse_number(val) == 0:
-                return None   # transparent
-            return False      # clean
+    for elem_rids in lattice_elements:
+        n = len(elem_rids)
+        if n < 2:
+            continue
 
-        seq = [(r["row_id"], _state(r)) for r in rows]
+        # Only consider constrained data columns present in this element
+        present = {
+            cid
+            for rid in elem_rids
+            for cid in cells_raw.get(rid, {})
+            if cid in constrained_col_ids
+            and columns_dict.get(cid, {}).get("role") == "data"
+        }
+        if not present:
+            continue
 
-        i = 0
-        while i < len(seq):
-            if seq[i][1] is not True:
-                i += 1
-                continue
-            # start of a violation run
-            run_start = i
-            gap = 0
-            j   = i + 1
-            while j < len(seq):
-                if seq[j][1] is True:
-                    gap = 0          # violating row resets gap
-                elif seq[j][1] is None:
-                    pass             # transparent row: ignore, don't count as gap
+        # Non-zero count = effective vector length for each column
+        col_len = {
+            cid: sum(
+                1 for rid in elem_rids
+                if parse_number(cells_raw.get(rid, {}).get(cid)) not in (None, 0)
+            )
+            for cid in present
+        }
+
+        expected = Counter(col_len.values()).most_common(1)[0][0]
+        if expected == 0:
+            continue
+
+        mismatched = {cid: L for cid, L in col_len.items() if L != expected}
+        if not mismatched:
+            continue
+
+        baseline = elem_viols(elem_rids)
+        if baseline == 0:
+            continue   # no violations to fix
+
+        # ── Per-column shift search ───────────────────────────────────────────
+        # For each mismatched column, try inserting (too-short) or removing
+        # (too-long) a phantom at every position 0..n-1 and measure the
+        # resulting total violation count across the whole element.
+        col_best: dict = {}   # cid → {pos, viols_after, diff}
+
+        for cid, cur_len in mismatched.items():
+            diff     = cur_len - expected     # <0 too short, >0 too long
+            cur_vals = [cells_raw.get(rid, {}).get(cid, "") for rid in elem_rids]
+
+            best_v   = baseline
+            best_pos = None
+
+            for p in range(n):
+                ov: dict = {}
+                if diff < 0:
+                    # Insert phantom 0 at position p:
+                    # positions p..n-2 shift down to p+1..n-1; position p → "0"
+                    for k in range(n - 1, p, -1):
+                        ov[(elem_rids[k], cid)] = cur_vals[k - 1]
+                    ov[(elem_rids[p], cid)] = "0"
                 else:
-                    gap += 1         # clean row advances gap counter
-                    if gap > GAP_TOL:
-                        break
-                j += 1
-            # trim trailing transparent/gap rows
-            run_end = j - gap
-            while run_end > run_start and seq[run_end - 1][1] is None:
-                run_end -= 1
-            run_row_ids = [seq[k][0] for k in range(run_start, run_end)]
+                    # Remove value at position p:
+                    # positions p+1..n-1 shift up to p..n-2; last position → ""
+                    if not cur_vals[p]:
+                        continue   # nothing to remove
+                    for k in range(p, n - 1):
+                        ov[(elem_rids[k], cid)] = cur_vals[k + 1]
+                    ov[(elem_rids[n - 1], cid)] = ""
 
-            if len(run_row_ids) >= MIN_RUN:
-                # ── Step 3: find phantom ──────────────────────────────────
-                # Phantom is always the FIRST row of the crawl, so search only
-                # at run_start-1 (just before) and run_start (first row of run).
-                phantom_rid = None
-                for k in [run_start - 1, run_start]:
-                    if 0 <= k < len(seq):
-                        rid = seq[k][0]
-                        val = cells_raw.get(rid, {}).get(col_id)
-                        if parse_number(val) == 0:   # dashes → 0, or explicit 0
-                            phantom_rid = rid
-                            break
+                v = elem_viols(elem_rids, ov)
+                if v < best_v:
+                    best_v   = v
+                    best_pos = p
 
-                if phantom_rid is None:
-                    i = run_end if run_end > i else i + 1
-                    continue
+            if best_pos is not None:
+                col_best[cid] = {"pos": best_pos, "viols_after": best_v, "diff": diff}
 
-                # viol_rate counts only non-transparent rows so zeroes don't dilute
-                non_transparent = [rid for rid in run_row_ids
-                                   if cells_raw.get(rid, {}).get(col_id) is not None
-                                   and parse_number(cells_raw[rid].get(col_id)) != 0]
-                viol_count = sum(1 for rid in non_transparent if rid in viol_set)
-                viol_rate  = viol_count / len(non_transparent) if non_transparent else 0.0
-
-                candidates.append({
-                    "col_id":         col_id,
-                    "run_row_ids":    run_row_ids,
-                    "phantom_row_id": phantom_rid,
-                    "viol_rate":      viol_rate,
-                })
-
-            i = run_end if run_end > i else i + 1
-
-    # ── Step 4: group columns with same phantom + overlapping runs ────────────
-    pos_of = {r["row_id"]: r["position"] for r in rows}
-
-    used   = set()
-    groups = []
-
-    for i, c1 in enumerate(candidates):
-        if i in used:
-            continue
-        group = [c1]
-        used.add(i)
-        s1 = set(c1["run_row_ids"])
-        p1 = c1["phantom_row_id"]
-
-        for j, c2 in enumerate(candidates):
-            if j in used:
-                continue
-            if c2["phantom_row_id"] != p1:
-                continue
-            s2 = set(c2["run_row_ids"])
-            overlap = len(s1 & s2) / max(len(s1 | s2), 1)
-            if overlap > 0.4:
-                group.append(c2)
-                used.add(j)
-
-        col_ids_g = [c["col_id"] for c in group]
-
-        # ── Filter A: phantom must be zero in ALL group columns ───────────
-        phantom_data = cells_raw.get(p1, {})
-        if not all(parse_number(phantom_data.get(cid)) == 0 for cid in col_ids_g):
+        if not col_best:
             continue
 
-        union_rows = sorted(
-            set().union(*(set(c["run_row_ids"]) for c in group)),
-            key=lambda rid: pos_of[rid],
-        )
+        # ── Group columns that share the same best correction position ─────────
+        pos_to_cols: dict = defaultdict(list)
+        for cid, info in col_best.items():
+            pos_to_cols[info["pos"]].append(cid)
 
-        groups.append({
-            "col_ids":        col_ids_g,
-            "col_names":      [columns[cid]["name"] for cid in col_ids_g],
-            "run_row_ids":    union_rows,
-            "phantom_row_id": p1,
-            "viol_rate":      round(max(c["viol_rate"] for c in group), 2),
-        })
+        for pos, col_ids in pos_to_cols.items():
+            best_after = min(col_best[cid]["viols_after"] for cid in col_ids)
+            diff       = col_best[col_ids[0]]["diff"]
+            results.append({
+                "col_ids":        col_ids,
+                "col_names":      [columns_dict[cid]["name"] for cid in col_ids],
+                "run_row_ids":    elem_rids,
+                "phantom_row_id": elem_rids[pos],
+                "mismatch":       diff,      # <0 = too short, >0 = too long
+                "viols_before":   baseline,
+                "viols_after":    best_after,
+                "viol_rate":      round((baseline - best_after) / baseline, 2),
+            })
 
-    return sorted(groups, key=lambda g: -g["viol_rate"])
+    # Sort by absolute improvement (most violations fixed first)
+    results.sort(key=lambda g: -(g["viols_before"] - g["viols_after"]))
+    return results
 
 
 # ── Fix — single cell ─────────────────────────────────────────────────────────

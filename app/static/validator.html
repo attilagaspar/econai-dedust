@@ -1273,7 +1273,7 @@ function renderCrawlsTab() {
   const sortBar = document.createElement('div');
   sortBar.style.cssText = 'display:flex;gap:4px;padding:6px 8px;flex-wrap:wrap;border-bottom:1px solid #1e3a5f;margin-bottom:6px;';
   sortBar.innerHTML = '<span style="font-size:11px;color:#888;align-self:center;">Sort:</span>';
-  [['phantom','Phantom pos.'],['confidence','Confidence'],['column','Column']].forEach(([key, label]) => {
+  [['phantom','Fix position'],['confidence','Improvement'],['column','Column']].forEach(([key, label]) => {
     const btn = document.createElement('button');
     btn.className = 'btn btn-blue btn-sm';
     btn.textContent = label;
@@ -1286,21 +1286,27 @@ function renderCrawlsTab() {
 
   // ── Sort groups ───────────────────────────────────────────────────────────
   const sorted = [...crawlGroups].sort((a, b) => {
-    if (crawlSortKey === 'confidence') return b.viol_rate - a.viol_rate;
+    if (crawlSortKey === 'confidence') {
+      // Sort by absolute improvement (most violations fixed first)
+      return (b.viols_before - b.viols_after) - (a.viols_before - a.viols_after);
+    }
     if (crawlSortKey === 'column') {
       const ia = Math.min(...a.col_ids.map(cid => columns.findIndex(col => col.col_id === cid)));
       const ib = Math.min(...b.col_ids.map(cid => columns.findIndex(col => col.col_id === cid)));
       return ia - ib;
     }
-    // 'phantom': sort by phantom row position in the table
+    // 'phantom': sort by fix-position row in the table
     const ia = rows.findIndex(r => r.row_id === a.phantom_row_id);
     const ib = rows.findIndex(r => r.row_id === b.phantom_row_id);
     return ia - ib;
   });
 
   sorted.forEach(g => {
-    const conf = g.viol_rate >= 0.8 ? '🔴 High' : g.viol_rate >= 0.5 ? '🟠 Medium' : '🟡 Low';
-    const phantomPos = rows.findIndex(r => r.row_id === g.phantom_row_id) + 1;
+    const improvement = g.viols_before > 0
+      ? Math.round(g.viol_rate * 100) : 0;
+    const conf = improvement >= 80 ? '🔴 High' : improvement >= 50 ? '🟠 Medium' : '🟡 Low';
+    const direction = g.mismatch < 0 ? '↑ too short (missing row)' : '↓ too long (extra row)';
+    const fixPos = rows.findIndex(r => r.row_id === g.phantom_row_id) + 1;
 
     const div  = document.createElement('div');
     div.className = 'viol-group';
@@ -1311,11 +1317,12 @@ function renderCrawlsTab() {
     head.style.cssText = 'flex-direction:column;align-items:flex-start;gap:4px;';
     head.innerHTML = `
       <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
-        <span style="font-size:12px;font-weight:700;">${conf} confidence</span>
-        <span class="viol-count">${Math.round(g.viol_rate * 100)}%</span>
+        <span style="font-size:12px;font-weight:700;">${conf} fix confidence</span>
+        <span class="viol-count" title="violations reduced">${g.viols_before}→${g.viols_after}</span>
       </div>
       <div style="font-size:11px;color:#80b4ff;">Columns: ${g.col_names.join(', ')}</div>
-      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} rows · phantom at row ${phantomPos || '?'}</div>`;
+      <div style="font-size:10px;color:#e0a060;">${direction}</div>
+      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} rows · fix at row ${fixPos || '?'}</div>`;
     div.appendChild(head);
 
     const body = document.createElement('div');
