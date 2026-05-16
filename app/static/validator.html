@@ -569,18 +569,20 @@ function renderTable() {
   const visible = rows.filter(r => incDel || !r.is_deleted);
 
   // ── Lattice group borders (light blue frame around multi-row source cells) ─
-  // Consecutive rows with the same group_stems came from one lattice element.
-  // Only frame groups that span more than one row.
+  // page_row_idx resets to 0 at the start of each lattice element and counts
+  // up (0, 1, 2, …) within it. A run of consecutive rows with indices 0,1,2,…
+  // is one multi-row cell. Only frame groups that span more than one row.
   const latticeBorderMap = {};   // "rowId_colId" → {top,bottom,left,right}
   if (columns.length) {
     const firstCid = columns[0].col_id;
     const lastCid  = columns[columns.length - 1].col_id;
     let k = 0;
     while (k < visible.length) {
-      const stems = visible[k].group_stems || '[]';
+      const startIdx = visible[k].page_row_idx ?? 0;
+      if (startIdx !== 0) { k++; continue; }   // not start of a lattice element
       let end = k + 1;
-      while (end < visible.length && visible[end].group_stems === stems) end++;
-      if (end - k > 1) {
+      while (end < visible.length && (visible[end].page_row_idx ?? 0) === end - k) end++;
+      if (end - k > 1) {   // multi-row lattice element — draw frame
         for (let m = k; m < end; m++) {
           const rid = visible[m].row_id;
           columns.forEach(col => {
