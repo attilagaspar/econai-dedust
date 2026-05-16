@@ -111,7 +111,8 @@ def _db(folder: str):
     for stmt in [
         "ALTER TABLE columns ADD COLUMN page_stem  TEXT    DEFAULT ''",
         "ALTER TABLE columns ADD COLUMN page_index INTEGER DEFAULT 0",
-        "ALTER TABLE rows    ADD COLUMN group_stems TEXT   DEFAULT '[]'",
+        "ALTER TABLE rows    ADD COLUMN group_stems   TEXT    DEFAULT '[]'",
+        "ALTER TABLE rows    ADD COLUMN page_row_idx  INTEGER",
     ]:
         try:
             conn.execute(stmt)
@@ -985,6 +986,12 @@ def api_detect_crawl(folder: str):
         return sum(row_viols(rid, override) for rid in rids)
 
     # ── Group DB rows into lattice elements ───────────────────────────────────
+    # Rows with page_row_idx IS NULL mean the DB pre-dates that column being
+    # added — they all compare equal (None == None) and would collapse into one
+    # giant element, making the O(n²) shift scan hang indefinitely.
+    # MAX_ELEM_SIZE caps the scan regardless.
+    MAX_ELEM_SIZE = 40
+
     lattice_elements = []
     i = 0
     while i < len(rows):
@@ -994,14 +1001,15 @@ def api_detect_crawl(folder: str):
         while j < len(rows) and (rows[j].get("page_row_idx") == idx) \
                 and ((rows[j].get("group_stems") or "[]") == gs):
             j += 1
-        lattice_elements.append([rows[k]["row_id"] for k in range(i, j)])
+        if idx is not None:          # skip NULL-epoch rows (re-import needed)
+            lattice_elements.append([rows[k]["row_id"] for k in range(i, j)])
         i = j
 
     results = []
 
     for elem_rids in lattice_elements:
         n = len(elem_rids)
-        if n < 2:
+        if n < 2 or n > MAX_ELEM_SIZE:
             continue
 
         # Only consider constrained data columns present in this element
@@ -1038,14 +1046,25 @@ def api_detect_crawl(folder: str):
         if not mismatched:
             continue
 
-        baseline = elem_viols(elem_rids)
+        # Precompute per-row violation counts once (reused across columns and
+        # across shift positions via prefix sums — rows before the shift point
+        # are unaffected and don't need re-evaluation).
+        row_viol_cache = [row_viols(rid) for rid in elem_rids]
+        baseline = sum(row_viol_cache)
         if baseline == 0:
             continue   # no violations to fix
+
+        # Prefix sums so we can get sum(row_viol_cache[0..p-1]) in O(1)
+        prefix = [0] * (n + 1)
+        for k in range(n):
+            prefix[k + 1] = prefix[k] + row_viol_cache[k]
 
         # ── Per-column shift search ───────────────────────────────────────────
         # For each mismatched column, try inserting (too-short) or removing
         # (too-long) a phantom at every position 0..n-1 and measure the
         # resulting total violation count across the whole element.
+        # Only rows at position p..n-1 are affected by a shift at p, so rows
+        # 0..p-1 are taken from the prefix sum — no re-evaluation needed.
         col_best: dict = {}   # cid → {pos, viols_after, diff}
 
         for cid, cur_len in mismatched.items():
@@ -1072,7 +1091,8 @@ def api_detect_crawl(folder: str):
                         ov[(elem_rids[k], cid)] = cur_vals[k + 1]
                     ov[(elem_rids[n - 1], cid)] = ""
 
-                v = elem_viols(elem_rids, ov)
+                # Rows 0..p-1 unchanged → use prefix sum; recompute only p..n-1
+                v = prefix[p] + sum(row_viols(elem_rids[k], ov) for k in range(p, n))
                 if v < best_v:
                     best_v   = v
                     best_pos = p
