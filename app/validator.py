@@ -926,8 +926,15 @@ def api_detect_crawl(folder: str):
         constraints_list = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
         columns_dict     = {r["col_id"]: dict(r) for r in conn.execute(
             "SELECT * FROM columns ORDER BY position")}
+        # Exclude alignment-padding rows (page_stem = '').
+        # The import inserts blank rows first with page_row_idx = rel, then
+        # updates content rows to page_row_idx = row_idx.  Padding row 0 and
+        # the first real lattice row both end up with page_row_idx = 0 and the
+        # same group_stems, so including padding rows in the grouping adds a
+        # spurious extra element at position 0 and shifts every detected
+        # phantom position off by one.
         rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM rows WHERE is_deleted=0 ORDER BY position")]
+            "SELECT * FROM rows WHERE is_deleted=0 AND page_stem != '' ORDER BY position")]
         cells_raw: dict = {}
         for r in conn.execute(
                 "SELECT c.row_id, c.col_id, c.value FROM cells c"
