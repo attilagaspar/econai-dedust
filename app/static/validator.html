@@ -443,7 +443,7 @@ let violColMap   = {};          // "rowId_colId" → colour index
 let violColorMap = {};          // constraint_id → colour index
 let crawlGroups   = [];          // from /crawl endpoint
 let crawlCellMap  = {};          // "rowId_colId" → {type, color, borderTop/Bottom/Left/Right}
-let crawlSortKey  = 'phantom';   // 'phantom' | 'confidence' | 'column'
+let crawlSortKey  = 'position';  // 'position' | 'confidence' | 'column'
 let crawlState    = 'idle';      // 'idle' | 'running' | 'done'
 let crawlLastRun  = null;        // Date of last completed scan
 
@@ -626,7 +626,7 @@ function renderTable() {
       if (violColMap[key] !== undefined) cls.push('viol-' + (violColMap[key] % 8));
       const crawl   = crawlCellMap[key];
       const lattice = latticeBorderMap[key];
-      if (crawl) cls.push(crawl.type === 'phantom' ? 'crawl-phantom' : 'crawl-region');
+      if (crawl) cls.push('crawl-region');
 
       // Inline styles: cursor + lattice blue frame + crawl red frame (crawl wins)
       const styles = [];
@@ -1206,16 +1206,14 @@ async function exportData() {
 // ── Crawl detection ───────────────────────────────────────────────────────
 function rebuildCrawlCellMap() {
   crawlCellMap = {};
-  const CRAWL_COLOR = '#e94560';   // always red outer frame
+  const CRAWL_COLOR = '#e94560';
 
   crawlGroups.forEach(g => {
-    // Column order by display position
     const sortedCols = [...g.col_ids].sort((a, b) =>
       columns.findIndex(c => c.col_id === a) - columns.findIndex(c => c.col_id === b));
     const leftCid  = sortedCols[0];
     const rightCid = sortedCols[sortedCols.length - 1];
 
-    // Row order by display position
     const sortedRows = [...g.run_row_ids].sort((a, b) =>
       rows.findIndex(r => r.row_id === a) - rows.findIndex(r => r.row_id === b));
     const firstRid = sortedRows[0];
@@ -1224,7 +1222,6 @@ function rebuildCrawlCellMap() {
     g.col_ids.forEach(cid => {
       g.run_row_ids.forEach(rid => {
         crawlCellMap[`${rid}_${cid}`] = {
-          type:         rid === g.phantom_row_id ? 'phantom' : 'region',
           color:        CRAWL_COLOR,
           borderTop:    rid === firstRid,
           borderBottom: rid === lastRid,
@@ -1232,15 +1229,6 @@ function rebuildCrawlCellMap() {
           borderRight:  cid === rightCid,
         };
       });
-      // Phantom may sit just outside the run — include it too
-      if (g.phantom_row_id !== null && !g.run_row_ids.includes(g.phantom_row_id)) {
-        const rid = g.phantom_row_id;
-        crawlCellMap[`${rid}_${cid}`] = {
-          type: 'phantom', color: CRAWL_COLOR,
-          borderTop: true, borderBottom: false,
-          borderLeft: cid === leftCid, borderRight: cid === rightCid,
-        };
-      }
     });
   });
 }
@@ -1294,7 +1282,7 @@ function renderCrawlsTab() {
   const sortBar = document.createElement('div');
   sortBar.style.cssText = 'display:flex;gap:4px;padding:6px 8px;flex-wrap:wrap;border-bottom:1px solid #1e3a5f;margin-bottom:6px;';
   sortBar.innerHTML = '<span style="font-size:11px;color:#888;align-self:center;">Sort:</span>';
-  [['phantom','Fix position'],['confidence','Improvement'],['column','Column']].forEach(([key, label]) => {
+  [['position','Table position'],['confidence','Improvement'],['column','Column']].forEach(([key, label]) => {
     const btn = document.createElement('button');
     btn.className = 'btn btn-blue btn-sm';
     btn.textContent = label;
@@ -1308,7 +1296,6 @@ function renderCrawlsTab() {
   // ── Sort groups ───────────────────────────────────────────────────────────
   const sorted = [...crawlGroups].sort((a, b) => {
     if (crawlSortKey === 'confidence') {
-      // Sort by absolute improvement (most violations fixed first)
       return (b.viols_before - b.viols_after) - (a.viols_before - a.viols_after);
     }
     if (crawlSortKey === 'column') {
@@ -1316,20 +1303,20 @@ function renderCrawlsTab() {
       const ib = Math.min(...b.col_ids.map(cid => columns.findIndex(col => col.col_id === cid)));
       return ia - ib;
     }
-    // 'phantom': sort by fix-position row in the table
-    const ia = rows.findIndex(r => r.row_id === a.phantom_row_id);
-    const ib = rows.findIndex(r => r.row_id === b.phantom_row_id);
-    return ia - ib;
+    // 'position': sort by first row of the element in the table
+    const firstA = Math.min(...a.run_row_ids.map(rid => rows.findIndex(r => r.row_id === rid)));
+    const firstB = Math.min(...b.run_row_ids.map(rid => rows.findIndex(r => r.row_id === rid)));
+    return firstA - firstB;
   });
 
   sorted.forEach(g => {
-    const improvement = g.viols_before > 0
-      ? Math.round(g.viol_rate * 100) : 0;
+    const improvement = g.viols_before > 0 ? Math.round(g.viol_rate * 100) : 0;
     const conf = improvement >= 80 ? '🔴 High' : improvement >= 50 ? '🟠 Medium' : '🟡 Low';
-    const direction = g.mismatch < 0 ? '↑ too short (missing row)' : '↓ too long (extra row)';
-    const fixPos = rows.findIndex(r => r.row_id === g.phantom_row_id) + 1;
+    const remedyDir = g.remedy.direction === 'down'
+      ? `↓ shift down ${g.remedy.amount} row(s)  — column is too short`
+      : `↑ shift up ${g.remedy.amount} row(s)  — column is too long`;
 
-    const div  = document.createElement('div');
+    const div = document.createElement('div');
     div.className = 'viol-group';
     div.style.marginBottom = '10px';
 
@@ -1338,24 +1325,56 @@ function renderCrawlsTab() {
     head.style.cssText = 'flex-direction:column;align-items:flex-start;gap:4px;';
     head.innerHTML = `
       <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
-        <span style="font-size:12px;font-weight:700;">${conf} fix confidence</span>
-        <span class="viol-count" title="violations reduced">${g.viols_before}→${g.viols_after}</span>
+        <span style="font-size:12px;font-weight:700;">${conf} confidence</span>
+        <span class="viol-count" title="total violations in element">${g.viols_before}→${g.viols_after}</span>
       </div>
       <div style="font-size:11px;color:#80b4ff;">Columns: ${g.col_names.join(', ')}</div>
-      <div style="font-size:10px;color:#e0a060;">${direction}</div>
-      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} rows · fix at row ${fixPos || '?'}</div>`;
+      <div style="font-size:10px;color:#e0a060;">${remedyDir}</div>
+      <div style="font-size:10px;color:#888;">${g.run_row_ids.length} DB rows in element</div>`;
     div.appendChild(head);
 
     const body = document.createElement('div');
     body.className = 'viol-rows';
     body.style.padding = '8px';
 
+    // Per-rule improvement table
+    if (g.per_rule && g.per_rule.length) {
+      const tbl = document.createElement('table');
+      tbl.style.cssText = 'width:100%;font-size:10px;border-collapse:collapse;margin-bottom:8px;';
+      tbl.innerHTML = `
+        <thead>
+          <tr style="color:#888;border-bottom:1px solid #333;">
+            <th style="text-align:left;padding:2px 4px;">Rule</th>
+            <th style="text-align:right;padding:2px 4px;">Before</th>
+            <th style="text-align:right;padding:2px 4px;">After</th>
+            <th style="text-align:right;padding:2px 4px;">Δ</th>
+          </tr>
+        </thead>`;
+      const tbody = document.createElement('tbody');
+      g.per_rule.forEach(pr => {
+        const delta = pr.viols_before - pr.viols_after;
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid #222';
+        tr.innerHTML = `
+          <td style="padding:2px 4px;color:#ccc;">${pr.label || '—'}</td>
+          <td style="text-align:right;padding:2px 4px;color:#e94560;">${pr.viols_before}</td>
+          <td style="text-align:right;padding:2px 4px;">${pr.viols_after}</td>
+          <td style="text-align:right;padding:2px 4px;color:${delta > 0 ? '#4caf50' : delta < 0 ? '#e94560' : '#888'};">
+            ${delta > 0 ? '−' + delta : delta < 0 ? '+' + Math.abs(delta) : '0'}
+          </td>`;
+        tbody.appendChild(tr);
+      });
+      tbl.appendChild(tbody);
+      body.appendChild(tbl);
+    }
+
     // Scroll-to button
+    const firstRid = g.run_row_ids[0];
     const scrollBtn = document.createElement('button');
     scrollBtn.className = 'btn btn-blue btn-sm';
-    scrollBtn.textContent = '⬆ Scroll to phantom';
+    scrollBtn.textContent = '⬆ Scroll to element';
     scrollBtn.style.marginBottom = '6px';
-    scrollBtn.onclick = () => scrollToRow(g.phantom_row_id);
+    scrollBtn.onclick = () => scrollToRow(firstRid);
     body.appendChild(scrollBtn);
 
     // Dismiss button

@@ -98,6 +98,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
     constraint_id INTEGER,
     note          TEXT
 );
+CREATE TABLE IF NOT EXISTS raw_line_counts (
+    page_stem  TEXT,
+    row_idx    INTEGER,
+    col_idx    INTEGER,
+    page_index INTEGER DEFAULT 0,
+    line_count INTEGER,
+    PRIMARY KEY (page_stem, row_idx, col_idx)
+);
 """
 
 
@@ -474,9 +482,10 @@ def api_import(req: ImportRequest):
                         "UPDATE columns SET page_stem=?, page_index=? WHERE col_id=?",
                         (jf.stem, pi, col_id))
 
-        # Always reset rows and cells
+        # Always reset rows, cells and raw line counts
         conn.execute("DELETE FROM cells")
         conn.execute("DELETE FROM rows")
+        conn.execute("DELETE FROM raw_line_counts")
 
         _log(conn, "import",
              note=f"pages_per_row={ppr}, layer={req.layer}, "
@@ -568,6 +577,19 @@ def api_import(req: ImportRequest):
                                 (db_row_id, db_col, val, val, src),
                             )
                     rel_row += max_lines
+
+                # Store raw line count per lattice cell (before any padding).
+                # len(c["lines"]) reflects the actual OCR/LLM/human line count
+                # for the preferred layer — used by crawl detection to find
+                # columns whose vector length differs from the majority.
+                if stem:
+                    for c in cells:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO raw_line_counts"
+                            "(page_stem,row_idx,col_idx,page_index,line_count)"
+                            " VALUES(?,?,?,?,?)",
+                            (stem, c["row_idx"], c["col_idx"], pi, len(c["lines"])),
+                        )
 
     return {
         "ok": True,
@@ -902,52 +924,99 @@ def api_violations(folder: str):
     return result
 
 
+def _row_rule_viol(rid, pc, cells_raw, override=None):
+    """Return True if row rid violates parsed constraint pc (with optional overrides)."""
+    row_data = cells_raw.get(rid, {})
+    ns: dict = {}
+    for var, cid in pc["used_cols"].items():
+        raw = (override.get((rid, cid), row_data.get(cid))
+               if override else row_data.get(cid))
+        num = parse_number(raw)
+        if num is None:
+            return False   # unevaluable → not a violation
+        ns[var] = num
+    lv = _eval_expr(pc["lhs"], ns)
+    rv = _eval_expr(pc["rhs"], ns)
+    return lv is not None and rv is not None and abs(lv - rv) > pc["tol"]
+
+
 # ── Crawl detection ──────────────────────────────────────────────────────────
 
 @router.get("/crawl")
 def api_detect_crawl(folder: str):
     """
-    Detect column-length mismatches within lattice elements.
+    Detect column-length mismatches within lattice elements using raw line
+    counts stored during import (before any line-count padding).
 
-    A "lattice element" is the group of DB rows that share the same
-    page_row_idx + group_stems — i.e., all DB lines that came from one
-    multi-line lattice cell.  Within each element we count how many
-    non-zero data values each constrained column contributes.  If that
-    count differs from the majority across columns, one column is
-    "too short" (OCR merged two dashes → one value missing, e.g. 55 vs 56)
-    or "too long" (OCR added a ghost line → one extra value, e.g. 57 vs 56).
+    For each lattice row (page_stem × row_idx) we compare how many lines
+    each column had in the original annotation.  Columns whose count differs
+    from the majority are candidates for a crawl: the OCR/LLM either merged
+    two adjacent cells into one (too short) or split one cell into two (too
+    long).
 
-    For each mismatched column we simulate inserting (too-short) or removing
-    (too-long) a phantom zero at every possible position and measure the
-    resulting change in constraint violations.  Results where at least one
-    shift reduces violations are returned, sorted by absolute improvement.
+    For each mismatched constrained-data column we simulate inserting or
+    removing a phantom row at every position within the DB lattice element
+    and pick the position that most reduces constraint violations.  Results
+    with no improvement are suppressed.  All mismatched columns of the same
+    lattice element are reported as a single result (same phantom_row_id).
     """
     with _db(folder) as conn:
         constraints_list = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
-        columns_dict     = {r["col_id"]: dict(r) for r in conn.execute(
-            "SELECT * FROM columns ORDER BY position")}
-        # Exclude alignment-padding rows (page_stem = '').
-        # The import inserts blank rows first with page_row_idx = rel, then
-        # updates content rows to page_row_idx = row_idx.  Padding row 0 and
-        # the first real lattice row both end up with page_row_idx = 0 and the
-        # same group_stems, so including padding rows in the grouping adds a
-        # spurious extra element at position 0 and shifts every detected
-        # phantom position off by one.
-        rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM rows WHERE is_deleted=0 AND page_stem != '' ORDER BY position")]
+        columns_list     = [dict(r) for r in conn.execute(
+            "SELECT * FROM columns ORDER BY position")]
+        columns_dict     = {r["col_id"]: r for r in columns_list}
+
+        rows_db = [dict(r) for r in conn.execute(
+            "SELECT row_id, position, page_stem, page_row_idx FROM rows"
+            " WHERE is_deleted=0 AND page_stem != '' ORDER BY position")]
+
         cells_raw: dict = {}
         for r in conn.execute(
                 "SELECT c.row_id, c.col_id, c.value FROM cells c"
                 " JOIN rows r ON c.row_id=r.row_id AND r.is_deleted=0"):
             cells_raw.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
 
-    if not constraints_list or not rows:
+        # Raw line counts written during import — one row per lattice cell,
+        # reflecting the actual preferred-layer line count before padding.
+        raw_counts = [dict(r) for r in conn.execute(
+            "SELECT page_stem, row_idx, col_idx, page_index, line_count"
+            " FROM raw_line_counts")]
+
+    if not constraints_list or not rows_db or not raw_counts:
         return []
 
-    var_to_col = {v["variable"]: v["col_id"]
-                  for v in columns_dict.values() if v["variable"]}
+    # ── Build lookup structures ───────────────────────────────────────────────
 
-    # Pre-parse constraints
+    var_to_col = {v["variable"]: v["col_id"]
+                  for v in columns_list if v.get("variable")}
+
+    # col_id offset for each page slot: min col_id that belongs to page_index pi
+    page_index_to_offset: dict = {}
+    for col in columns_list:
+        pi  = col.get("page_index", 0)
+        cid = col["col_id"]
+        if pi not in page_index_to_offset or cid < page_index_to_offset[pi]:
+            page_index_to_offset[pi] = cid
+
+    # (page_stem, page_row_idx) → DB row_ids in position order
+    row_position = {r["row_id"]: r["position"] for r in rows_db}
+    stem_rowidx_to_db_rows: dict = defaultdict(list)
+    for r in rows_db:
+        if r["page_row_idx"] is not None:
+            stem_rowidx_to_db_rows[(r["page_stem"], r["page_row_idx"])].append(r["row_id"])
+    for key in stem_rowidx_to_db_rows:
+        stem_rowidx_to_db_rows[key].sort(key=lambda rid: row_position[rid])
+
+    # Group raw line counts by (page_stem, row_idx)
+    # → {col_idx: line_count}, and remember the page_index for col_id mapping
+    stem_rowidx_col_lines: dict = defaultdict(dict)   # key → {col_idx: line_count}
+    stem_rowidx_pi:        dict = {}                   # key → page_index
+    for rc in raw_counts:
+        key = (rc["page_stem"], rc["row_idx"])
+        stem_rowidx_col_lines[key][rc["col_idx"]] = rc["line_count"]
+        stem_rowidx_pi[key] = rc["page_index"]
+
+    # ── Pre-parse constraints ─────────────────────────────────────────────────
     parsed_cons = []
     for con in constraints_list:
         used_vars = {m for m in _VAR_RE.findall(con["lhs"] + " " + con["rhs"])
@@ -965,9 +1034,8 @@ def api_detect_crawl(folder: str):
 
     constrained_col_ids = set().union(*(pc["col_id_set"] for pc in parsed_cons))
 
-    # ── Violation helpers ─────────────────────────────────────────────────────
+    # ── Violation helper ──────────────────────────────────────────────────────
     def row_viols(rid, override=None):
-        """Constraint-violation count for one row, with optional value overrides."""
         count    = 0
         row_data = cells_raw.get(rid, {})
         for pc in parsed_cons:
@@ -989,116 +1057,83 @@ def api_detect_crawl(folder: str):
                 count += 1
         return count
 
-    def elem_viols(rids, override=None):
-        return sum(row_viols(rid, override) for rid in rids)
-
-    # ── Group DB rows into lattice elements ───────────────────────────────────
-    # Rows with page_row_idx IS NULL mean the DB pre-dates that column being
-    # added — they all compare equal (None == None) and would collapse into one
-    # giant element, making the O(n²) shift scan hang indefinitely.
-    # MAX_ELEM_SIZE caps the scan regardless.
+    # ── Main scan ─────────────────────────────────────────────────────────────
     MAX_ELEM_SIZE = 40
-
-    lattice_elements = []
-    i = 0
-    while i < len(rows):
-        idx = rows[i].get("page_row_idx")
-        gs  = rows[i].get("group_stems") or "[]"
-        j   = i + 1
-        while j < len(rows) and (rows[j].get("page_row_idx") == idx) \
-                and ((rows[j].get("group_stems") or "[]") == gs):
-            j += 1
-        if idx is not None:          # skip NULL-epoch rows (re-import needed)
-            lattice_elements.append([rows[k]["row_id"] for k in range(i, j)])
-        i = j
-
     results = []
 
-    for elem_rids in lattice_elements:
+    for key, col_line_counts in stem_rowidx_col_lines.items():
+        page_stem, row_idx = key
+
+        if len(col_line_counts) < 2:
+            continue   # single-column lattice row — nothing to compare
+
+        # Majority line count for this lattice row
+        expected = Counter(col_line_counts.values()).most_common(1)[0][0]
+        if expected == 0:
+            continue
+
+        # col_idxs whose line count differs from the majority
+        mismatched_cidx = {cidx: cnt
+                           for cidx, cnt in col_line_counts.items()
+                           if cnt != expected}
+        if not mismatched_cidx:
+            continue
+
+        # Map col_idx → col_id via the stored page_index offset
+        pi     = stem_rowidx_pi.get(key, 0)
+        col_off = page_index_to_offset.get(pi, 0)
+
+        # Keep only constrained data columns
+        mismatched_cid_diff: dict = {}   # col_id → diff (<0 short, >0 long)
+        for cidx, cnt in mismatched_cidx.items():
+            cid = col_off + cidx
+            col = columns_dict.get(cid, {})
+            if cid in constrained_col_ids and col.get("role") == "data":
+                mismatched_cid_diff[cid] = cnt - expected
+
+        if not mismatched_cid_diff:
+            continue
+
+        # DB rows for this lattice element
+        elem_rids = stem_rowidx_to_db_rows.get(key, [])
         n = len(elem_rids)
         if n < 2 or n > MAX_ELEM_SIZE:
             continue
 
-        # Only consider constrained data columns present in this element
-        present = {
-            cid
-            for rid in elem_rids
-            for cid in cells_raw.get(rid, {})
-            if cid in constrained_col_ids
-            and columns_dict.get(cid, {}).get("role") == "data"
-        }
-        if not present:
-            continue
-
-        # Non-empty count = effective vector length for each column.
-        # We count any cell that has a non-empty string value — including zeros
-        # and dashes (which parse to 0 but ARE real OCR output).  Excluding them
-        # would miss the most common merge: two adjacent dashes collapsed into one,
-        # where the missing element is a zero, so non-zero counts look identical.
-        # Only "" padding rows (inserted by the import to reach max_lines) are
-        # excluded, because they represent "no OCR line here" rather than real data.
-        col_len = {
-            cid: sum(
-                1 for rid in elem_rids
-                if cells_raw.get(rid, {}).get(cid, "") != ""
-            )
-            for cid in present
-        }
-
-        expected = Counter(col_len.values()).most_common(1)[0][0]
-        if expected == 0:
-            continue
-
-        mismatched = {cid: L for cid, L in col_len.items() if L != expected}
-        if not mismatched:
-            continue
-
-        # Precompute per-row violation counts once (reused across columns and
-        # across shift positions via prefix sums — rows before the shift point
-        # are unaffected and don't need re-evaluation).
+        # Baseline violations
         row_viol_cache = [row_viols(rid) for rid in elem_rids]
         baseline = sum(row_viol_cache)
         if baseline == 0:
-            continue   # no violations to fix
+            continue   # nothing to improve
 
-        # Prefix sums so we can get sum(row_viol_cache[0..p-1]) in O(1)
+        # Prefix sums: rows before shift position are unaffected
         prefix = [0] * (n + 1)
         for k in range(n):
             prefix[k + 1] = prefix[k] + row_viol_cache[k]
 
         # ── Per-column shift search ───────────────────────────────────────────
-        # For each mismatched column, try inserting (too-short) or removing
-        # (too-long) a phantom at every position 0..n-1 and measure the
-        # resulting total violation count across the whole element.
-        # Only rows at position p..n-1 are affected by a shift at p, so rows
-        # 0..p-1 are taken from the prefix sum — no re-evaluation needed.
-        col_best: dict = {}   # cid → {pos, viols_after, diff}
+        col_best: dict = {}   # col_id → {pos, viols_after, diff}
 
-        for cid, cur_len in mismatched.items():
-            diff     = cur_len - expected     # <0 too short, >0 too long
+        for cid, diff in mismatched_cid_diff.items():
             cur_vals = [cells_raw.get(rid, {}).get(cid, "") for rid in elem_rids]
-
             best_v   = baseline
             best_pos = None
 
             for p in range(n):
                 ov: dict = {}
                 if diff < 0:
-                    # Insert phantom 0 at position p:
-                    # positions p..n-2 shift down to p+1..n-1; position p → "0"
+                    # Too short: insert phantom "0" at position p, shift rest down
                     for k in range(n - 1, p, -1):
                         ov[(elem_rids[k], cid)] = cur_vals[k - 1]
                     ov[(elem_rids[p], cid)] = "0"
                 else:
-                    # Remove value at position p:
-                    # positions p+1..n-1 shift up to p..n-2; last position → ""
+                    # Too long: remove value at position p, shift rest up
                     if not cur_vals[p]:
-                        continue   # nothing to remove
+                        continue
                     for k in range(p, n - 1):
                         ov[(elem_rids[k], cid)] = cur_vals[k + 1]
                     ov[(elem_rids[n - 1], cid)] = ""
 
-                # Rows 0..p-1 unchanged → use prefix sum; recompute only p..n-1
                 v = prefix[p] + sum(row_viols(elem_rids[k], ov) for k in range(p, n))
                 if v < best_v:
                     best_v   = v
@@ -1110,7 +1145,7 @@ def api_detect_crawl(folder: str):
         if not col_best:
             continue
 
-        # ── Group columns that share the same best correction position ─────────
+        # ── One result per lattice element (grouped by best fix position) ─────
         pos_to_cols: dict = defaultdict(list)
         for cid, info in col_best.items():
             pos_to_cols[info["pos"]].append(cid)
@@ -1118,18 +1153,53 @@ def api_detect_crawl(folder: str):
         for pos, col_ids in pos_to_cols.items():
             best_after = min(col_best[cid]["viols_after"] for cid in col_ids)
             diff       = col_best[col_ids[0]]["diff"]
+
+            # Build the combined value override for the best shift position
+            # so we can measure per-rule improvement at that exact fix.
+            combined_ov: dict = {}
+            for cid in col_ids:
+                cur_vals = [cells_raw.get(rid, {}).get(cid, "") for rid in elem_rids]
+                d = col_best[cid]["diff"]
+                if d < 0:
+                    for k in range(n - 1, pos, -1):
+                        combined_ov[(elem_rids[k], cid)] = cur_vals[k - 1]
+                    combined_ov[(elem_rids[pos], cid)] = "0"
+                else:
+                    for k in range(pos, n - 1):
+                        combined_ov[(elem_rids[k], cid)] = cur_vals[k + 1]
+                    combined_ov[(elem_rids[n - 1], cid)] = ""
+
+            # Per-rule breakdown: how many violations in this element,
+            # before and after the proposed shift, for each constraint.
+            per_rule = []
+            for i, pc in enumerate(parsed_cons):
+                vb = sum(1 for rid in elem_rids
+                         if _row_rule_viol(rid, pc, cells_raw))
+                va = sum(1 for rid in elem_rids
+                         if _row_rule_viol(rid, pc, cells_raw, combined_ov))
+                if vb > 0 or va > 0:
+                    per_rule.append({
+                        "constraint_id": constraints_list[i]["constraint_id"],
+                        "label":         constraints_list[i]["label"],
+                        "viols_before":  vb,
+                        "viols_after":   va,
+                    })
+
             results.append({
-                "col_ids":        col_ids,
-                "col_names":      [columns_dict[cid]["name"] for cid in col_ids],
-                "run_row_ids":    elem_rids,
-                "phantom_row_id": elem_rids[pos],
-                "mismatch":       diff,      # <0 = too short, >0 = too long
-                "viols_before":   baseline,
-                "viols_after":    best_after,
-                "viol_rate":      round((baseline - best_after) / baseline, 2),
+                "col_ids":      col_ids,
+                "col_names":    [columns_dict[cid]["name"] for cid in col_ids],
+                "run_row_ids":  elem_rids,
+                "mismatch":     diff,
+                "remedy": {
+                    "direction": "down" if diff < 0 else "up",
+                    "amount":    abs(diff),
+                },
+                "viols_before": baseline,
+                "viols_after":  best_after,
+                "viol_rate":    round((baseline - best_after) / baseline, 2),
+                "per_rule":     per_rule,
             })
 
-    # Sort by absolute improvement (most violations fixed first)
     results.sort(key=lambda g: -(g["viols_before"] - g["viols_after"]))
     return results
 
