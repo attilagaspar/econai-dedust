@@ -49,12 +49,19 @@
 
     #page-nav {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 5px 10px;
+      flex-direction: column;
       background: #16213e;
       border-bottom: 1px solid #0f3460;
       flex-shrink: 0;
+    }
+    .nav-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+    }
+    .nav-row + .nav-row {
+      border-top: 1px solid #0f3460;
     }
     .nav-btn {
       background: #0f3460;
@@ -347,6 +354,16 @@
       line-height: 1.6;
       font-size: 12px;
     }
+    /* ── Foldable panel sections ──────────────────────────────────────── */
+    .fg-toggle-btn {
+      background:none; border:none; color:#666; font-size:11px; cursor:pointer;
+      padding:0 3px; line-height:1; flex-shrink:0; transition:transform .15s;
+    }
+    .fg-toggle-btn:hover { color:#aaa; }
+    .fg-body-collapsed  { display:none !important; }
+    /* Batch status line shown below "All" buttons */
+    .batch-status-line  { font-size:10px; color:#80b4ff; min-height:13px; margin-top:1px; }
+
     .llm-controls { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
     .llm-select {
       background:#0f3460; border:1px solid #1a3a6e; border-radius:3px;
@@ -586,55 +603,65 @@
   <!-- Left: image viewer -->
   <div id="viewer-col">
 
-    <!-- Tool bar: all action buttons -->
+    <!-- Tool bar: all action buttons (two rows) -->
     <div id="page-nav">
-      <button class="nav-btn" id="overlap-btn" onclick="findOverlaps()" disabled
-              title="Flag shapes whose area is mostly covered by other shapes">🔍 Overlaps</button>
-      <input id="overlap-threshold" type="number" value="50" min="1" max="99"
-             style="width:40px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 4px;font-size:11px;text-align:center"
-             title="Overlap threshold (%)">
-      <span style="font-size:11px;color:#666">%</span>
-      <button class="nav-btn" id="lattice-btn" onclick="openLatticeModal()" disabled
-              title="Detect lattice rows and columns from annotated cells">🔲 Lattice</button>
-      <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
-              title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
-      <button class="nav-btn" id="lattice-col-sep-btn" onclick="toggleLatticeSepMode('col')" disabled style="display:none"
-              title="Click inside a lattice column to split it with a vertical separator">┃ Col sep</button>
-      <button class="nav-btn" id="lattice-row-sep-btn" onclick="toggleLatticeSepMode('row')" disabled style="display:none"
-              title="Click inside a lattice row to split it with a horizontal separator">━ Row sep</button>
-      <button class="nav-btn" id="lattice-del-sep-btn" onclick="toggleLatticeSepMode('delete')" disabled style="display:none"
-              title="Click a lattice grid line to delete that separator and merge the two adjacent columns/rows">✕ Del sep</button>
-      <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled
-              title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
-      <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
-              title="Fill inner gaps in each lattice column with one shape, then re-detect">↕ Col fill</button>
-      <button class="nav-btn" id="snap-btn" onclick="runSnapToGrid()" disabled
-              title="Snap every lattice shape's edges to the median band position of its row and column">⊞ Snap</button>
-      <button class="nav-btn" id="clear-ann-btn" onclick="openBatchModal()" disabled
-              title="Batch operations across multiple pages">Batch</button>
-      <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
-              title="Copy annotations from first N pages to all remaining pages">Autofill</button>
-      <button class="nav-btn" id="table-btn" onclick="startTableMode()" disabled
-              title="Draw a table and split it into cells">Draw table</button>
-      <button class="nav-btn" id="persp-btn" onclick="startPerspMode()" disabled
-              title="Perspective correction: click 4 corners to straighten a trapezoid">Perspective</button>
-      <button class="nav-btn" id="mode-btn" onclick="toggleEditMode()" disabled
-              title="Toggle between review and edit mode (E)">Review mode</button>
-      <button class="nav-btn" id="ocr-view-btn" onclick="toggleOcrView()" disabled
-              title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
-      <div style="flex:1"></div>
-      <span style="font-size:11px;color:#666;">Diagnose:</span>
-      <select id="diagnostic-select" onchange="onDiagnosticChange()"
-              style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 5px;font-size:11px;">
-        <option value="none">— none —</option>
-        <option value="ocr_rows">OCR row mismatch</option>
-        <option value="llm_rows">LLM row mismatch</option>
-        <option value="human_rows">Human row mismatch</option>
-        <option value="ocr_llm">OCR ≠ LLM line count</option>
-      </select>
-      <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
-      <button class="nav-btn" onclick="openExcelExportModal()"
-              title="Export annotations to Excel">↓ Excel</button>
+      <!-- Row 1: annotation analysis tools -->
+      <div class="nav-row">
+        <button class="nav-btn" id="overlap-btn" onclick="findOverlaps()" disabled
+                title="Flag shapes whose area is mostly covered by other shapes">🔍 Overlaps</button>
+        <input id="overlap-threshold" type="number" value="50" min="1" max="99"
+               style="width:40px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 4px;font-size:11px;text-align:center"
+               title="Overlap threshold (%)">
+        <span style="font-size:11px;color:#666">%</span>
+        <button class="nav-btn" id="trim-overlaps-btn" onclick="trimOverlaps()" disabled
+                title="For every overlapping pair, split the overlap region evenly between both shapes">✂ Trim overlaps</button>
+        <button class="nav-btn" id="lattice-btn" onclick="openLatticeModal()" disabled
+                title="Detect lattice rows and columns from annotated cells">🔲 Lattice</button>
+        <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
+                title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
+        <button class="nav-btn" id="lattice-col-sep-btn" onclick="toggleLatticeSepMode('col')" disabled style="display:none"
+                title="Click inside a lattice column to split it with a vertical separator">┃ Col sep</button>
+        <button class="nav-btn" id="lattice-row-sep-btn" onclick="toggleLatticeSepMode('row')" disabled style="display:none"
+                title="Click inside a lattice row to split it with a horizontal separator">━ Row sep</button>
+        <button class="nav-btn" id="lattice-del-sep-btn" onclick="toggleLatticeSepMode('delete')" disabled style="display:none"
+                title="Click a lattice grid line to delete that separator and merge the two adjacent columns/rows">✕ Del sep</button>
+        <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled
+                title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
+        <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
+                title="Fill inner gaps in each lattice column with one shape, then re-detect">↕ Col fill</button>
+        <button class="nav-btn" id="snap-btn" onclick="runSnapToGrid()" disabled
+                title="Snap every lattice shape's edges to the median band position of its row and column">⊞ Snap</button>
+      </div>
+      <!-- Row 2: page-level ops + diagnose -->
+      <div class="nav-row">
+        <button class="nav-btn" id="clear-ann-btn" onclick="openBatchModal()" disabled
+                title="Batch operations across multiple pages">Batch</button>
+        <button class="nav-btn" id="autofill-btn" onclick="autofill()" disabled
+                title="Copy annotations from first N pages to all remaining pages">Autofill</button>
+        <button class="nav-btn" id="table-btn" onclick="startTableMode()" disabled
+                title="Draw a table and split it into cells">Draw table</button>
+        <button class="nav-btn" id="persp-btn" onclick="startPerspMode()" disabled
+                title="Perspective correction: click 4 corners to straighten a trapezoid">Perspective</button>
+        <button class="nav-btn" id="mode-btn" onclick="toggleEditMode()" disabled
+                title="Toggle between review and edit mode (E)">Review mode</button>
+        <button class="nav-btn" id="ocr-view-btn" onclick="toggleOcrView()" disabled
+                title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
+        <span style="font-size:11px;color:#666;">Diagnose:</span>
+        <select id="diagnostic-select" onchange="onDiagnosticChange()"
+                style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 5px;font-size:11px;">
+          <option value="none">— none —</option>
+          <option value="ocr_rows">OCR row mismatch</option>
+          <option value="llm_rows">LLM row mismatch</option>
+          <option value="human_rows">Human row mismatch</option>
+          <option value="ocr_llm">OCR ≠ LLM line count</option>
+          <option value="best_rows">Human&gt;LLM&gt;OCR mismatch</option>
+        </select>
+        <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
+        <button class="nav-btn" id="smart-correct-btn" onclick="runSmartCorrect()" disabled
+                title="Auto-correct ±1 line-count mismatches found by Diagnose: remove spurious empty lines or add leading padding">✨ Smart Correct</button>
+        <button class="nav-btn" onclick="openExcelExportModal()"
+                title="Export annotations to Excel">↓ Excel</button>
+      </div>
     </div>
 
     <!-- Perspective correction toolbar (shown only in persp mode) -->
@@ -779,7 +806,10 @@
         </div>
         <div class="field-group" id="fg-ocr" style="display:none">
           <div class="field-label-row">
-            <span class="field-label">OCR (Tesseract)</span>
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-ocr-toggle" onclick="toggleFg('fg-ocr')" title="Collapse/expand">▾</button>
+              <span class="field-label">OCR (Tesseract)</span>
+            </div>
             <div style="display:flex;gap:3px;align-items:center;">
               <select id="ocr-mode" class="llm-select" style="flex:none;" onchange="updateOcrMode()">
                 <option value="full">Tesseract</option>
@@ -792,80 +822,102 @@
               <button id="ocr-stop-btn" class="field-run-btn" onclick="stopBatch()" style="display:none;color:#fca5a5;border-color:#e94560;">■</button>
             </div>
           </div>
-          <div id="ocr-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
-            <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
-            <input id="ocr-cell-height" type="number" value="26" min="6" max="300"
-              style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
+          <div style="display:flex;gap:3px;justify-content:flex-end;margin-top:2px;">
+            <button class="field-run-btn" onclick="clearOcr()"     title="Clear OCR for selected shape(s)"  style="color:#fca5a5;border-color:#c04040;">✕ OCR</button>
+            <button class="field-run-btn" onclick="clearOcrPage()" title="Clear OCR for all shapes on page" style="color:#fca5a5;border-color:#c04040;">✕ Whole page</button>
           </div>
-          <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
-            <div class="line-nums" id="f-ocr-lines">1</div>
-            <textarea id="f-ocr" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+          <div id="fg-ocr-body">
+            <div id="ocr-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
+              <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
+              <input id="ocr-cell-height" type="number" value="26" min="6" max="300"
+                style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
+            </div>
+            <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
+              <div class="line-nums" id="f-ocr-lines">1</div>
+              <textarea id="f-ocr" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+            </div>
+            <div id="f-ocr-conf"></div>
           </div>
-          <div id="f-ocr-conf"></div>
+          <div id="ocr-batch-status" class="batch-status-line"></div>
         </div>
         <div class="field-group" id="fg-llm">
           <div class="field-label-row">
-            <span class="field-label">LLM Cleaner</span>
-            <div style="display:flex;gap:3px;">
-              <button id="llm-btn"           class="field-run-btn" onclick="runLlm()">▶ Send</button>
-              <button id="llm-all-btn"       class="field-run-btn" onclick="runLlmAll()">▶ All</button>
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-llm-toggle" onclick="toggleFg('fg-llm')" title="Collapse/expand">▾</button>
+              <span class="field-label">LLM Cleaner</span>
+            </div>
+            <div style="display:flex;gap:3px;align-items:center;">
+              <button id="llm-btn"            class="field-run-btn" onclick="runLlm()">▶ Send</button>
+              <button id="llm-all-btn"        class="field-run-btn" onclick="runLlmAll()">▶ All</button>
               <button id="llm-batch-stop-btn" class="field-run-btn" onclick="stopBatch()" style="display:none;color:#fca5a5;border-color:#e94560;">■</button>
               <button class="field-run-btn" onclick="openLlmTestModal()" title="Run N times and compare results side-by-side">⚗ Test</button>
             </div>
           </div>
-          <div class="llm-controls">
-            <select id="llm-model" class="llm-select" title="Model">
-              <option value="gpt-4.1-mini">4.1-mini</option>
-              <option value="gpt-5-nano">5-nano</option>
-              <option value="gpt-4.1-nano">4.1-nano</option>
-              <option value="gpt-4.1">4.1</option>
-              <option value="gpt-4o-mini">4o-mini</option>
-              <option value="gpt-4o">4o</option>
-              <option value="gpt-4-turbo">4-turbo</option>
-              <option value="qwen2.5vl:7b">Qwen2.5-VL 7B (local)</option>
-            </select>
-            <select id="llm-mode" class="llm-select" title="Input mode" onchange="updateLlmPrompt()">
-              <option value="image">Image</option>
-              <option value="image+ocr">Image + OCR</option>
-              <option value="ocr">OCR only</option>
-              <option value="linebyline">Line-by-line</option>
-            </select>
+          <div style="display:flex;gap:3px;justify-content:flex-end;margin-top:2px;">
+            <button class="field-run-btn" onclick="clearLlm()"     title="Clear LLM for selected shape(s)"  style="color:#fca5a5;border-color:#c04040;">✕ LLM</button>
+            <button class="field-run-btn" onclick="clearLlmPage()" title="Clear LLM for all shapes on page" style="color:#fca5a5;border-color:#c04040;">✕ Whole page</button>
           </div>
-          <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;margin-top:2px;">
-            <input type="checkbox" id="llm-use-shadow" style="accent-color:#e94560;cursor:pointer;">
-            Use shadow (line-erased) image
-          </label>
-          <div id="llm-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
-            <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
-            <input id="llm-cell-height" type="number" value="26" min="6" max="300"
-              style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
-            <button id="llm-stop-btn" onclick="stopLlmLineByLine()"
-              style="display:none;background:#7f1d1d;border:1px solid #e94560;border-radius:3px;color:#fca5a5;font-size:10px;font-weight:700;padding:1px 7px;cursor:pointer;line-height:16px;">
-              ■ Stop
-            </button>
+          <div id="fg-llm-body">
+            <div class="llm-controls">
+              <select id="llm-model" class="llm-select" title="Model">
+                <option value="gpt-4.1-mini">4.1-mini</option>
+                <option value="gpt-5-nano">5-nano</option>
+                <option value="gpt-4.1-nano">4.1-nano</option>
+                <option value="gpt-4.1">4.1</option>
+                <option value="gpt-4o-mini">4o-mini</option>
+                <option value="gpt-4o">4o</option>
+                <option value="gpt-4-turbo">4-turbo</option>
+                <option value="qwen2.5vl:7b">Qwen2.5-VL 7B (local)</option>
+              </select>
+              <select id="llm-mode" class="llm-select" title="Input mode" onchange="updateLlmPrompt()">
+                <option value="image">Image</option>
+                <option value="image+ocr">Image + OCR</option>
+                <option value="ocr">OCR only</option>
+                <option value="linebyline">Line-by-line</option>
+              </select>
+            </div>
+            <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;margin-top:2px;">
+              <input type="checkbox" id="llm-use-shadow" style="accent-color:#e94560;cursor:pointer;">
+              Use shadow (line-erased) image
+            </label>
+            <div id="llm-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
+              <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
+              <input id="llm-cell-height" type="number" value="26" min="6" max="300"
+                style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
+              <button id="llm-stop-btn" onclick="stopLlmLineByLine()"
+                style="display:none;background:#7f1d1d;border:1px solid #e94560;border-radius:3px;color:#fca5a5;font-size:10px;font-weight:700;padding:1px 7px;cursor:pointer;line-height:16px;">
+                ■ Stop
+              </button>
+            </div>
+            <textarea id="llm-prompt" rows="4" placeholder="Prompt…"></textarea>
+            <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:68px;">
+              <div class="line-nums" id="f-llm-result-lines">1</div>
+              <textarea id="f-llm-result" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+            </div>
+            <div id="f-llm-meta"></div>
           </div>
-          <textarea id="llm-prompt" rows="4" placeholder="Prompt…"></textarea>
-          <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:68px;">
-            <div class="line-nums" id="f-llm-result-lines">1</div>
-            <textarea id="f-llm-result" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
-          </div>
-          <div id="f-llm-meta"></div>
+          <div id="llm-batch-status" class="batch-status-line"></div>
         </div>
         <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;">
           <input type="checkbox" id="overwrite-cb" style="accent-color:#e94560;cursor:pointer;">
           Overwrite existing OCR / LLM results
         </label>
-        <div class="field-group">
+        <div class="field-group" id="fg-human">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
-            <div class="field-label" style="margin-bottom:0;">Human correction</div>
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-human-toggle" onclick="toggleFg('fg-human')" title="Collapse/expand">▾</button>
+              <div class="field-label" style="margin-bottom:0;">Human correction</div>
+            </div>
             <div style="display:flex;gap:4px;">
               <button onclick="copyToHuman('ocr')" style="font-size:10px;padding:2px 7px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;" title="Copy OCR text here">← OCR</button>
               <button onclick="copyToHuman('llm')" style="font-size:10px;padding:2px 7px;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#aac;cursor:pointer;" title="Copy LLM text here">← LLM</button>
             </div>
           </div>
-          <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
-            <div class="line-nums" id="human-input-lines">1</div>
-            <textarea id="human-input" placeholder="Type correction here…" style="resize:none;width:100%;box-sizing:border-box;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;padding:5px 7px;"></textarea>
+          <div id="fg-human-body">
+            <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
+              <div class="line-nums" id="human-input-lines">1</div>
+              <textarea id="human-input" placeholder="Type correction here…" style="resize:none;width:100%;box-sizing:border-box;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;padding:5px 7px;"></textarea>
+            </div>
           </div>
         </div>
         <button id="save-btn" onclick="saveCorrection()" disabled>Save (Ctrl+S)</button>
@@ -907,6 +959,9 @@
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
         <option value="llm">LLM</option>
         <option value="score_delete">Delete shapes below score threshold</option>
+        <option value="clear_ocr">✕ Remove OCR results</option>
+        <option value="clear_llm">✕ Remove LLM results</option>
+        <option value="trim_overlaps">✂ Trim overlaps</option>
       </select>
     </div>
     <div>
@@ -1010,6 +1065,22 @@
       <div>
         <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Restrict to label types (leave all unchecked = any label):</div>
         <div id="batch-score-label-checks"></div>
+      </div>
+    </div>
+
+    <!-- Clear OCR options -->
+    <div id="batch-clear-ocr-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Remove OCR from these label types:</div>
+        <div id="batch-clear-ocr-label-checks"></div>
+      </div>
+    </div>
+
+    <!-- Clear LLM options -->
+    <div id="batch-clear-llm-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Remove LLM from these label types:</div>
+        <div id="batch-clear-llm-label-checks"></div>
       </div>
     </div>
 
@@ -1152,11 +1223,12 @@ let latticeSepMode     = null;      // 'col' | 'row' | null — lattice separato
 let diagnosticMode      = 'none';
 let diagnosticFlagged   = new Set();
 let diagnosticRowCounts = {}; // shape index → line count (for row-mismatch modes)
-let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow}
+let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow, emptyRows}
 let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
 let batchAbort      = false;     // flag to stop a running "All" batch
 let batchHighlight  = -1;        // shape index highlighted during batch processing
 let lastRowLines    = null;      // persists detected rows on the crop panel after a run
+let lastEmptyRows   = new Set(); // persists empty-row classification after llmProgress clears
 let _lastPanelIdx   = -2;        // tracks when selection changes, to clear lastRowLines
 
 // ── Toast ────────────────────────────────────────────────────────────────────
@@ -1616,6 +1688,43 @@ function findOverlaps() {
     : 'No significant overlaps found');
 }
 
+async function trimOverlaps() {
+  if (!pageData?.shapes?.length) return;
+  const shapes = pageData.shapes;
+  // Work with mutable rect copies so multi-overlap pairs resolve consistently
+  const rects = shapes.map(_shapeRect);
+  let trimmed = 0;
+  for (let i = 0; i < shapes.length; i++) {
+    if (rects[i].x2 <= rects[i].x1 || rects[i].y2 <= rects[i].y1) continue;
+    for (let j = i + 1; j < shapes.length; j++) {
+      if (rects[j].x2 <= rects[j].x1 || rects[j].y2 <= rects[j].y1) continue;
+      const a = rects[i], b = rects[j];
+      const ix1 = Math.max(a.x1, b.x1), iy1 = Math.max(a.y1, b.y1);
+      const ix2 = Math.min(a.x2, b.x2), iy2 = Math.min(a.y2, b.y2);
+      if (ix1 >= ix2 || iy1 >= iy2) continue;   // no overlap
+      const overlapW = ix2 - ix1, overlapH = iy2 - iy1;
+      if (overlapW <= overlapH) {
+        // Thin vertical strip → move the shared X boundary to the midpoint
+        const mid = Math.round((ix1 + ix2) / 2);
+        if (a.x1 <= b.x1) { a.x2 = Math.min(a.x2, mid); b.x1 = Math.max(b.x1, mid); }
+        else               { b.x2 = Math.min(b.x2, mid); a.x1 = Math.max(a.x1, mid); }
+      } else {
+        // Thin horizontal strip → move the shared Y boundary to the midpoint
+        const mid = Math.round((iy1 + iy2) / 2);
+        if (a.y1 <= b.y1) { a.y2 = Math.min(a.y2, mid); b.y1 = Math.max(b.y1, mid); }
+        else               { b.y2 = Math.min(b.y2, mid); a.y1 = Math.max(a.y1, mid); }
+      }
+      trimmed++;
+    }
+  }
+  if (!trimmed) { showToast('No overlaps found'); return; }
+  // Write updated rects back as canonical [[x1,y1],[x2,y2]] points
+  rects.forEach((r, i) => { shapes[i].points = [[r.x1, r.y1], [r.x2, r.y2]]; });
+  drawOverlay(); updatePanel();
+  await replaceAllShapes();
+  showToast(`Trimmed ${trimmed} overlapping pair${trimmed !== 1 ? 's' : ''}`);
+}
+
 // ── Diagnostic highlighting ───────────────────────────────────────────────────
 function _lineCount(text) {
   return text ? text.split('\n').filter(l => l.trim()).length : 0;
@@ -1644,6 +1753,10 @@ function computeDiagnostics() {
       if (diagnosticMode === 'ocr_rows')   return s.tesseract_output?.ocr_text;
       if (diagnosticMode === 'llm_rows')   return s.openai_output?.response;
       if (diagnosticMode === 'human_rows') return s.human_output?.human_corrected_text;
+      if (diagnosticMode === 'best_rows')
+        return s.human_output?.human_corrected_text
+            || s.openai_output?.response
+            || s.tesseract_output?.ocr_text;
     };
     const rowGroups = {};
     shapes.forEach((s, i) => {
@@ -1679,6 +1792,14 @@ function onDiagnosticChange() {
   diagnosticMode = document.getElementById('diagnostic-select').value;
   computeDiagnostics();
   drawOverlay();
+  const scBtn = document.getElementById('smart-correct-btn');
+  if (scBtn && !scBtn.disabled) {
+    const rowModes = ['ocr_rows','llm_rows','human_rows','best_rows'];
+    scBtn.style.opacity = rowModes.includes(diagnosticMode) ? '1' : '0.35';
+    scBtn.title = rowModes.includes(diagnosticMode)
+      ? 'Auto-correct ±1 line-count mismatches found by Diagnose'
+      : 'Switch Diagnose to a row-mismatch mode to use Smart Correct';
+  }
 }
 
 // ── Lattice detection ─────────────────────────────────────────────────────────
@@ -2698,9 +2819,11 @@ function drawOverlay() {
 
   // LLM line-by-line progress: show all detected rows, highlight active one
   if (llmProgress && llmProgress.lines.length) {
-    const { cropOriginX, cropOriginY, cropRight, lines, activeRow } = llmProgress;
+    const { cropOriginX, cropOriginY, cropRight, lines, activeRow, emptyRows } = llmProgress;
+    const empty = emptyRows ?? new Set();
     lines.forEach(([top, bottom], i) => {
-      const isActive = i === activeRow;
+      const isActive  = i === activeRow;
+      const isEmpty   = empty.has(i);
       const tl = imgToScreen(cropOriginX, cropOriginY + top);
       const br = imgToScreen(cropRight,   cropOriginY + bottom);
       if (!tl || !br) return;
@@ -2709,10 +2832,10 @@ function drawOverlay() {
       r.setAttribute('y',      tl.y);
       r.setAttribute('width',  Math.max(0, br.x - tl.x));
       r.setAttribute('height', Math.max(0, br.y - tl.y));
-      r.setAttribute('fill',         isActive ? 'rgba(255,100,0,0.18)' : 'none');
-      r.setAttribute('stroke',       isActive ? '#ff6400' : '#00a0ff');
-      r.setAttribute('stroke-width', isActive ? '2.5'    : '1');
-      r.setAttribute('stroke-opacity', isActive ? '1'    : '0.5');
+      r.setAttribute('fill',   isActive ? 'rgba(255,100,0,0.18)' : isEmpty ? 'rgba(220,30,30,0.10)' : 'none');
+      r.setAttribute('stroke', isActive ? '#ff6400' : isEmpty ? '#dc1e1e' : '#00a0ff');
+      r.setAttribute('stroke-width',   isActive ? '2.5' : '1');
+      r.setAttribute('stroke-opacity', isActive ? '1'   : isEmpty ? '0.7' : '0.5');
       r.style.pointerEvents = 'none';
       svgOverlay.appendChild(r);
     });
@@ -3161,10 +3284,12 @@ function _batchPopulateLabels(containerId, storageKey) {
 }
 
 function openBatchModal() {
-  _batchPopulateLabels('batch-label-checks',       'latticeLabels');
-  _batchPopulateLabels('batch-ocr-label-checks',   'batchOcrLabels');
-  _batchPopulateLabels('batch-llm-label-checks',   'batchLlmLabels');
-  _batchPopulateLabels('batch-score-label-checks', 'batchScoreLabels');
+  _batchPopulateLabels('batch-label-checks',           'latticeLabels');
+  _batchPopulateLabels('batch-ocr-label-checks',       'batchOcrLabels');
+  _batchPopulateLabels('batch-llm-label-checks',       'batchLlmLabels');
+  _batchPopulateLabels('batch-score-label-checks',     'batchScoreLabels');
+  _batchPopulateLabels('batch-clear-ocr-label-checks', 'batchClearOcrLabels');
+  _batchPopulateLabels('batch-clear-llm-label-checks', 'batchClearLlmLabels');
   // Sync model/mode from the main LLM panel if available
   const savedModel = localStorage.getItem('llm-model');
   const savedMode  = localStorage.getItem('llm-mode');
@@ -3195,12 +3320,14 @@ function closeBatchModal() {
 
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
-  document.getElementById('batch-ol-opts').style.display    = op === 'overlaps_lattice' ? 'flex' : 'none';
+  document.getElementById('batch-ol-opts').style.display        = op === 'overlaps_lattice' ? 'flex' : 'none';
   const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
-  document.getElementById('batch-ocr-opts').style.display   = isOcr ? 'flex' : 'none';
+  document.getElementById('batch-ocr-opts').style.display       = isOcr            ? 'flex' : 'none';
   document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
-  document.getElementById('batch-llm-opts').style.display   = op === 'llm'          ? 'flex' : 'none';
-  document.getElementById('batch-score-opts').style.display = op === 'score_delete' ? 'flex' : 'none';
+  document.getElementById('batch-llm-opts').style.display       = op === 'llm'          ? 'flex' : 'none';
+  document.getElementById('batch-score-opts').style.display     = op === 'score_delete' ? 'flex' : 'none';
+  document.getElementById('batch-clear-ocr-opts').style.display = op === 'clear_ocr'    ? 'flex' : 'none';
+  document.getElementById('batch-clear-llm-opts').style.display = op === 'clear_llm'    ? 'flex' : 'none';
 }
 
 function onBatchLlmModeChange() {
@@ -3279,6 +3406,12 @@ async function runBatch() {
   } else if (op === 'score_delete') {
     const t = parseFloat(document.getElementById('batch-score-thresh').value);
     if (!confirm(`Delete all shapes with score < ${t} across ${sorted.length} page(s)? This cannot be undone.`)) return;
+  } else if (op === 'clear_ocr') {
+    if (!confirm(`Remove OCR results on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'clear_llm') {
+    if (!confirm(`Remove LLM results on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'trim_overlaps') {
+    if (!confirm(`Trim overlapping annotation pairs on ${sorted.length} page(s)?`)) return;
   }
 
   _batchRunning = true;
@@ -3423,6 +3556,82 @@ async function runBatch() {
         });
       }
       progText.textContent = `Page ${idx + 1}/${pages.length} — removed ${deleted} shape(s)`;
+
+    } else if (op === 'clear_ocr') {
+      const checks = document.querySelectorAll('#batch-clear-ocr-label-checks input[type=checkbox]');
+      const remembered = {}; const selLabels = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchClearOcrLabels', JSON.stringify(remembered));
+      const labelSet = new Set(selLabels);
+
+      const res = await fetch(`${API}/api/page?${params}`);
+      const pdata = await res.json();
+      const shapes = pdata.shapes || [];
+      let n = 0;
+      shapes.forEach(s => { if (labelSet.has(s.label) && s.tesseract_output) { s.tesseract_output = null; n++; } });
+      if (n > 0) {
+        await fetch(`${API}/api/page/shapes?${params}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shapes }),
+        });
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — cleared OCR from ${n} shape(s)`;
+
+    } else if (op === 'clear_llm') {
+      const checks = document.querySelectorAll('#batch-clear-llm-label-checks input[type=checkbox]');
+      const remembered = {}; const selLabels = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchClearLlmLabels', JSON.stringify(remembered));
+      const labelSet = new Set(selLabels);
+
+      const res = await fetch(`${API}/api/page?${params}`);
+      const pdata = await res.json();
+      const shapes = pdata.shapes || [];
+      let n = 0;
+      shapes.forEach(s => { if (labelSet.has(s.label) && s.openai_output) { s.openai_output = null; n++; } });
+      if (n > 0) {
+        await fetch(`${API}/api/page/shapes?${params}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shapes }),
+        });
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — cleared LLM from ${n} shape(s)`;
+
+    } else if (op === 'trim_overlaps') {
+      const res = await fetch(`${API}/api/page?${params}`);
+      const pdata = await res.json();
+      const shapes = pdata.shapes || [];
+      const rects = shapes.map(_shapeRect);
+      let trimmed = 0;
+      for (let i = 0; i < shapes.length; i++) {
+        if (rects[i].x2 <= rects[i].x1 || rects[i].y2 <= rects[i].y1) continue;
+        for (let j = i + 1; j < shapes.length; j++) {
+          if (rects[j].x2 <= rects[j].x1 || rects[j].y2 <= rects[j].y1) continue;
+          const a = rects[i], b = rects[j];
+          const ix1 = Math.max(a.x1, b.x1), iy1 = Math.max(a.y1, b.y1);
+          const ix2 = Math.min(a.x2, b.x2), iy2 = Math.min(a.y2, b.y2);
+          if (ix1 >= ix2 || iy1 >= iy2) continue;
+          const overlapW = ix2 - ix1, overlapH = iy2 - iy1;
+          if (overlapW <= overlapH) {
+            const mid = Math.round((ix1 + ix2) / 2);
+            if (a.x1 <= b.x1) { a.x2 = Math.min(a.x2, mid); b.x1 = Math.max(b.x1, mid); }
+            else               { b.x2 = Math.min(b.x2, mid); a.x1 = Math.max(a.x1, mid); }
+          } else {
+            const mid = Math.round((iy1 + iy2) / 2);
+            if (a.y1 <= b.y1) { a.y2 = Math.min(a.y2, mid); b.y1 = Math.max(b.y1, mid); }
+            else               { b.y2 = Math.min(b.y2, mid); a.y1 = Math.max(a.y1, mid); }
+          }
+          trimmed++;
+        }
+      }
+      if (trimmed > 0) {
+        rects.forEach((r, i) => { shapes[i].points = [[r.x1, r.y1], [r.x2, r.y2]]; });
+        await fetch(`${API}/api/page/shapes?${params}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shapes }),
+        });
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — trimmed ${trimmed} overlapping pair(s)`;
     }
 
     done++;
@@ -3801,10 +4010,19 @@ function updatePanel() {
     selectLbl.innerHTML=labels.map(l=>`<option value="${l}"${allSame&&l===commonLabel[0]?' selected':''}>${l}</option>`).join('');
     document.getElementById('fg-score').style.display='none';
     document.getElementById('fg-super').style.display='none';
-    document.getElementById('fg-ocr').style.display='none';
-    document.getElementById('fg-llm').style.display='none';
-    document.getElementById('f-llm-result').value='—';
-    document.getElementById('f-llm-meta').textContent='';
+
+    // Show OCR/LLM panels so the user can run/clear on all selected shapes
+    const selArr = [...selSet];
+    const ocrCount = selArr.filter(i => pageData.shapes[i]?.tesseract_output?.ocr_text).length;
+    const llmCount = selArr.filter(i => pageData.shapes[i]?.openai_output?.response).length;
+    document.getElementById('fg-ocr').style.display='flex';
+    document.getElementById('fg-llm').style.display='flex';
+    document.getElementById('f-ocr').value =
+      `${selSet.size} shapes selected · ${ocrCount} have OCR · ${selSet.size - ocrCount} empty`;
+    document.getElementById('f-ocr-conf').textContent='';
+    document.getElementById('f-llm-result').value =
+      `${selSet.size} shapes selected · ${llmCount} have LLM · ${selSet.size - llmCount} empty`;
+    document.getElementById('f-llm-meta').textContent='▶ Run / ▶ All / ✕ operate on all selected shapes';
     document.getElementById('cell-meta').textContent=`${selSet.size} shapes selected`;
     document.getElementById('save-btn').disabled=true;
     document.getElementById('save-status').textContent='';
@@ -3904,6 +4122,13 @@ function updateOcrMode() {
 async function runOcr() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('ocr-mode').value;
+
+  // Multi-select: run on every selected shape
+  if (selSet.size > 1) {
+    await _runOcrBatch([...selSet].sort((a, b) => a - b));
+    return;
+  }
+
   if (mode === 'linebyline')         { runOcrLineByLine('/api/page/shape/ocr/linebyline');                return; }
   if (mode === 'easyocr-linebyline') { runOcrLineByLine('/api/page/shape/ocr/easyocr/linebyline');       return; }
   if (mode === 'easyocr')            { runOcrEasyOcr();                                                  return; }
@@ -3924,6 +4149,62 @@ async function runOcr() {
   } finally {
     btn.disabled = false; btn.textContent = '▶ Run';
   }
+}
+
+// Shared OCR batch runner — used by both runOcr (multi-select) and runOcrAll (by-label)
+async function _runOcrBatch(targets) {
+  if (!targets.length) return;
+  const ocrMode    = document.getElementById('ocr-mode').value;
+  const cellHeight = parseInt(document.getElementById('ocr-cell-height').value) || 26;
+  const overwrite  = document.getElementById('overwrite-cb').checked;
+  const allBtn     = document.getElementById('ocr-all-btn');
+  const stopBtn    = document.getElementById('ocr-stop-btn');
+  const runBtn     = document.getElementById('ocr-btn');
+  _batchStart(allBtn, stopBtn, runBtn);
+
+  const ocrStatusEl = document.getElementById('ocr-batch-status');
+  let done = 0, skipped = 0;
+  for (const i of targets) {
+    if (batchAbort) break;
+    if (!overwrite && pageData.shapes[i].tesseract_output?.ocr_text) {
+      skipped++;
+      if (ocrStatusEl) ocrStatusEl.textContent = `⏭ ${skipped} already have OCR (check Overwrite to redo)`;
+      continue;
+    }
+    batchHighlight = i;
+    allBtn.textContent = `${done + 1}/${targets.length}`;
+    const s = pageData.shapes[i];
+    const cellInfo = (s.super_row != null && s.super_col != null)
+      ? `row ${s.super_row}, col ${s.super_col}` : `shape ${i}`;
+    if (ocrStatusEl) ocrStatusEl.textContent = `⟳ ${cellInfo}  (${done + 1}/${targets.length - skipped} to run)`;
+    drawOverlay();
+    try {
+      if (ocrMode === 'linebyline') {
+        await _ocrLineByLineOne(i, cellHeight, '/api/page/shape/ocr/linebyline');
+      } else if (ocrMode === 'easyocr-linebyline') {
+        await _ocrLineByLineOne(i, cellHeight, '/api/page/shape/ocr/easyocr/linebyline');
+      } else if (ocrMode === 'easyocr') {
+        const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
+        const r = await fetch(`${API}/api/page/shape/ocr/easyocr?${params}`, {method: 'POST'});
+        if (!r.ok) throw new Error(r.status);
+        const data = await r.json();
+        pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr'};
+      } else {
+        const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
+        const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
+        if (!r.ok) throw new Error(r.status);
+        const data = await r.json();
+        pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf};
+      }
+      done++;
+      if (i === selIdx) updatePanel(); else drawOverlay();
+    } catch(e) { if (batchAbort) break; else showToast(`OCR error shape ${i}: ${e.message}`); }
+  }
+  if (ocrStatusEl) ocrStatusEl.textContent = skipped && !done
+    ? `All ${skipped} skipped — use ✕ Page to clear OCR first, or check Overwrite`
+    : (skipped ? `${skipped} skipped, ${done} run` : '');
+  _batchEnd(allBtn, stopBtn, done, targets.length, pageData.shapes[targets[0]]?.label || '', runBtn);
+  updatePanel();  // refresh summary counts after batch
 }
 
 async function runOcrEasyOcr() {
@@ -3995,8 +4276,9 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
         let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
 
         if (msg.type === 'lines_detected') {
-          lastRowLines = msg.lines;
-          llmProgress = { cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1 };
+          lastRowLines  = msg.lines;
+          lastEmptyRows = new Set();   // reset so stale results don't persist
+          llmProgress = { cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1, emptyRows: null };
           drawOverlay();
           drawRowOverlay(msg.lines, -1);
           // Pre-create one placeholder img per row
@@ -4088,7 +4370,8 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shap
       if (!chunk.startsWith('data: ')) continue;
       let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
       if (msg.type === 'lines_detected') {
-        llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1};
+        lastEmptyRows = new Set();
+        llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1, emptyRows: null};
         drawOverlay();
       } else if (msg.type === 'row_result') {
         llmProgress.activeRow = msg.row; drawOverlay();
@@ -4122,8 +4405,94 @@ function updateLlmPrompt() {
   document.getElementById('llm-cellheight-wrap').style.display = mode === 'linebyline' ? 'flex' : 'none';
 }
 
+// ── Empty row detection ───────────────────────────────────────────────────────
+// Returns a Set of row indices whose pixel content is essentially blank (no ink).
+//
+// Strategy: scan texture / grid lines produce a noisy baseline that varies by
+// image, so a fixed luminance threshold is unreliable.  Instead we:
+//   1. Sample the whole cell image and compute an Otsu threshold — this finds
+//      the natural ink/background split for THIS specific scan.
+//   2. Trim BORDER_PAD pixels from the top+bottom of each band to exclude the
+//      horizontal table-border line.
+//   3. Count pixels below the Otsu threshold in the trimmed interior.
+//   4. If the count is below MIN_INK_PX (absolute, not ratio) → empty.
+//      A single dash stroke ≈ 20-40 ink pixels; empty bands ≈ 0-5.
+function _otsuThreshold(data) {
+  // data: raw RGBA pixel array; returns the optimal binarisation threshold (0-255).
+  const hist = new Int32Array(256);
+  const n    = data.length >> 2;          // pixel count
+  for (let p = 0; p < data.length; p += 4) {
+    hist[Math.round(0.299 * data[p] + 0.587 * data[p+1] + 0.114 * data[p+2])]++;
+  }
+  let sum = 0;
+  for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, maxVar = 0, t = 128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i]; if (!wB) continue;
+    const wF = n - wB; if (!wF) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const v  = wB * wF * (mB - mF) ** 2;
+    if (v > maxVar) { maxVar = v; t = i; }
+  }
+  return t;
+}
+
+async function _classifyEmptyRowBands(lines) {
+  const BORDER_PAD = 3;    // px trimmed top+bottom to exclude border lines
+  const MIN_INK_PX = 1;    // ink pixels below Otsu threshold → "not empty"
+                            // (dash ≈ 15-40 px; empty ≈ 0 px; text ≈ 30-300 px)
+
+  // Use the shadow (line-erased) cell crop so table borders don't pollute the count
+  const shadowUrl = `${API}/api/cell?folder=${encodeURIComponent(folder)}`
+                  + `&stem=${encodeURIComponent(pages[pageIdx].stem)}`
+                  + `&idx=${selIdx}&shadow=true`;
+
+  const shadowImg = await new Promise(resolve => {
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload  = () => resolve(im);
+    im.onerror = () => resolve(null);
+    im.src = shadowUrl;
+  });
+  if (!shadowImg) return new Set();
+
+  const natW = shadowImg.naturalWidth, natH = shadowImg.naturalHeight;
+  const off  = document.createElement('canvas');
+  off.width  = natW; off.height = natH;
+  const ctx  = off.getContext('2d', { willReadFrequently: true });
+  try { ctx.drawImage(shadowImg, 0, 0); } catch { return new Set(); }
+
+  // Otsu threshold from the whole shadow cell image.
+  // Cap at 180: if Otsu fires above that, the image has no clear ink/paper split
+  // (very clean shadow with no foreground), and using a high threshold would count
+  // background texture as ink, giving false "non-empty" classifications.
+  let fullData;
+  try { fullData = ctx.getImageData(0, 0, natW, natH).data; } catch { return new Set(); }
+  const otsu = Math.min(_otsuThreshold(fullData), 180);
+
+  const emptyRows = new Set();
+  const log = [];
+  lines.forEach(([top, bottom], i) => {
+    const y  = Math.min(natH - 1, Math.max(0, top  + BORDER_PAD));
+    const y2 = Math.min(natH,     Math.max(y + 1,  bottom - BORDER_PAD));
+    const h  = y2 - y;
+    if (h <= 0) { log.push(`row${i+1}: thin`); return; }
+    let data;
+    try { data = ctx.getImageData(0, y, natW, h).data; } catch { log.push(`row${i+1}: ERR`); return; }
+    let ink = 0;
+    for (let p = 0; p < data.length; p += 4) {
+      if (0.299 * data[p] + 0.587 * data[p+1] + 0.114 * data[p+2] < otsu) ink++;
+    }
+    log.push(`row${i+1}: ${ink}px${ink < MIN_INK_PX ? ' ← EMPTY' : ''}`);
+    if (ink < MIN_INK_PX) emptyRows.add(i);
+  });
+  console.log(`[emptyRows] shadow otsu=${otsu} minInk=${MIN_INK_PX} found=${emptyRows.size}/${lines.length}\n` + log.join('\n'));
+  return emptyRows;
+}
+
 // ── Row overlay on cell crop ──────────────────────────────────────────────────
-function drawRowOverlay(lines, activeRow) {
+async function drawRowOverlay(lines, activeRow) {
   const canvas = document.getElementById('row-canvas');
   const img    = document.getElementById('cell-crop');
   if (!lines || !lines.length) { canvas.style.display = 'none'; return; }
@@ -4141,6 +4510,15 @@ function drawRowOverlay(lines, activeRow) {
   canvas.width  = natW;
   canvas.height = natH;
 
+  // Classify empty bands once per run and cache in both llmProgress (for the
+  // SVG overlay during the run) and lastEmptyRows (survives after llmProgress
+  // is cleared, so the cell-crop view stays correct after the run ends).
+  if (llmProgress && !llmProgress.emptyRows) {
+    llmProgress.emptyRows = await _classifyEmptyRowBands(lines);
+    lastEmptyRows = llmProgress.emptyRows;          // persist for post-run redraws
+  }
+  const emptyRows = llmProgress?.emptyRows ?? lastEmptyRows;
+
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, natW, natH);
 
@@ -4148,17 +4526,28 @@ function drawRowOverlay(lines, activeRow) {
   ctx.font = `bold ${fontSize}px sans-serif`;
 
   lines.forEach(([top, bottom], i) => {
-    const active = i === activeRow;
-    ctx.fillStyle   = active ? 'rgba(255,100,0,0.22)' : 'rgba(0,160,255,0.07)';
-    ctx.strokeStyle = active ? 'rgba(255,100,0,0.95)' : 'rgba(0,160,255,0.45)';
-    ctx.lineWidth   = active ? 2 : 1;
+    const active  = i === activeRow;
+    const isEmpty = emptyRows.has(i);
+    if (active) {
+      ctx.fillStyle   = 'rgba(255,100,0,0.22)';
+      ctx.strokeStyle = 'rgba(255,100,0,0.95)';
+      ctx.lineWidth   = 2;
+    } else if (isEmpty) {
+      ctx.fillStyle   = 'rgba(220,30,30,0.12)';
+      ctx.strokeStyle = 'rgba(220,30,30,0.80)';
+      ctx.lineWidth   = 1;
+    } else {
+      ctx.fillStyle   = 'rgba(0,160,255,0.07)';
+      ctx.strokeStyle = 'rgba(0,160,255,0.45)';
+      ctx.lineWidth   = 1;
+    }
     ctx.fillRect(0, top, natW, bottom - top);
     ctx.strokeRect(0.5, top + 0.5, natW - 1, bottom - top - 1);
 
     // Row number label
     const label = String(i + 1);
     const mid   = top + (bottom - top) / 2;
-    ctx.fillStyle    = active ? 'rgba(255,100,0,0.9)' : 'rgba(0,100,200,0.75)';
+    ctx.fillStyle    = active ? 'rgba(255,100,0,0.9)' : isEmpty ? 'rgba(200,20,20,0.85)' : 'rgba(0,100,200,0.75)';
     ctx.textBaseline = 'middle';
     ctx.textAlign    = 'right';
     ctx.fillText(label, natW - 3, mid);
@@ -4497,6 +4886,10 @@ async function runLlmTest() {
 async function runLlm() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('llm-mode').value;
+  if (selSet.size > 1) {
+    await _runLlmBatch([...selSet].sort((a, b) => a - b));
+    return;
+  }
   if (mode === 'linebyline') { runLlmLineByLine(); return; }
 
   const myIdx = selIdx;  // capture now — user may click away during await
@@ -4546,6 +4939,62 @@ function stopBatch() {
   batchAbort = true;
 }
 
+// ── Panel section fold/unfold ────────────────────────────────────────────────
+function toggleFg(id) {
+  const body = document.getElementById(id + '-body');
+  const btn  = document.getElementById(id + '-toggle');
+  if (!body) return;
+  const collapsed = body.classList.toggle('fg-body-collapsed');
+  if (btn) btn.textContent = collapsed ? '▸' : '▾';
+}
+
+// ── Clear OCR / LLM results ──────────────────────────────────────────────────
+function _clearTargets() {
+  // Returns the set of shape indices to operate on:
+  // multi-selection if >1 selected, otherwise just the focused shape.
+  if (selSet.size > 1) return [...selSet];
+  if (selIdx >= 0)     return [selIdx];
+  return [];
+}
+
+async function clearOcr() {
+  if (!pageData?.shapes) return;
+  const targets = _clearTargets();
+  if (!targets.length) return;
+  targets.forEach(i => { pageData.shapes[i].tesseract_output = null; });
+  updatePanel(); drawOverlay();
+  await replaceAllShapes();
+  showToast(`OCR cleared for ${targets.length} shape${targets.length !== 1 ? 's' : ''}`);
+}
+
+async function clearOcrPage() {
+  if (!pageData?.shapes?.length) return;
+  let n = 0;
+  pageData.shapes.forEach(s => { if (s.tesseract_output) { s.tesseract_output = null; n++; } });
+  updatePanel(); drawOverlay();
+  await replaceAllShapes();
+  showToast(`OCR cleared for ${n} shape${n !== 1 ? 's' : ''} on this page`);
+}
+
+async function clearLlm() {
+  if (!pageData?.shapes) return;
+  const targets = _clearTargets();
+  if (!targets.length) return;
+  targets.forEach(i => { pageData.shapes[i].openai_output = null; });
+  updatePanel(); drawOverlay();
+  await replaceAllShapes();
+  showToast(`LLM cleared for ${targets.length} shape${targets.length !== 1 ? 's' : ''}`);
+}
+
+async function clearLlmPage() {
+  if (!pageData?.shapes?.length) return;
+  let n = 0;
+  pageData.shapes.forEach(s => { if (s.openai_output) { s.openai_output = null; n++; } });
+  updatePanel(); drawOverlay();
+  await replaceAllShapes();
+  showToast(`LLM cleared for ${n} shape${n !== 1 ? 's' : ''} on this page`);
+}
+
 // ── Batch helpers (shared by runOcrAll / runLlmAll) ───────────────────────────
 
 function _batchTargets() {
@@ -4573,48 +5022,11 @@ function _batchEnd(allBtn, stopBtn, done, total, label, ...enableBtns) {
 }
 
 async function runOcrAll() {
+  // "All" = every shape on the page with the same label as the selected shape
   if (selIdx < 0 || !pages.length) return;
   const targets = _batchTargets();
   if (!targets.length) return;
-  const label      = pageData.shapes[selIdx].label;
-  const ocrMode    = document.getElementById('ocr-mode').value;
-  const cellHeight = parseInt(document.getElementById('ocr-cell-height').value) || 26;
-  const allBtn  = document.getElementById('ocr-all-btn');
-  const stopBtn = document.getElementById('ocr-stop-btn');
-  const runBtn  = document.getElementById('ocr-btn');
-  _batchStart(allBtn, stopBtn, runBtn);
-
-  const overwrite = document.getElementById('overwrite-cb').checked;
-  let done = 0;
-  for (const i of targets) {
-    if (batchAbort) break;
-    if (!overwrite && pageData.shapes[i].tesseract_output?.ocr_text) continue;
-    batchHighlight = i;
-    allBtn.textContent = `${done + 1}/${targets.length}`;
-    drawOverlay();
-    try {
-      if (ocrMode === 'linebyline') {
-        await _ocrLineByLineOne(i, cellHeight, '/api/page/shape/ocr/linebyline');
-      } else if (ocrMode === 'easyocr-linebyline') {
-        await _ocrLineByLineOne(i, cellHeight, '/api/page/shape/ocr/easyocr/linebyline');
-      } else if (ocrMode === 'easyocr') {
-        const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
-        const r = await fetch(`${API}/api/page/shape/ocr/easyocr?${params}`, {method: 'POST'});
-        if (!r.ok) throw new Error(r.status);
-        const data = await r.json();
-        pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr'};
-      } else {
-        const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
-        const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
-        if (!r.ok) throw new Error(r.status);
-        const data = await r.json();
-        pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf};
-      }
-      done++;
-      if (i === selIdx) updatePanel(); else drawOverlay();
-    } catch(e) { if (batchAbort) break; }
-  }
-  _batchEnd(allBtn, stopBtn, done, targets.length, label, runBtn);
+  await _runOcrBatch(targets);
 }
 
 async function _llmSingleShape(shapeIdx, model, mode, prompt) {
@@ -4662,7 +5074,8 @@ async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
       if (!chunk.startsWith('data: ')) continue;
       let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
       if (msg.type === 'lines_detected') {
-        llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1};
+        lastEmptyRows = new Set();
+        llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1, emptyRows: null};
         drawOverlay();
       } else if (msg.type === 'row_result') {
         llmProgress.activeRow = msg.row; drawOverlay();
@@ -4678,11 +5091,8 @@ async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
   llmProgress = null;
 }
 
-async function runLlmAll() {
-  if (selIdx < 0 || !pages.length) return;
-  const targets = _batchTargets();
+async function _runLlmBatch(targets) {
   if (!targets.length) return;
-  const label      = pageData.shapes[selIdx].label;
   const model      = document.getElementById('llm-model').value;
   const mode       = document.getElementById('llm-mode').value;
   const prompt     = document.getElementById('llm-prompt').value.trim();
@@ -4694,13 +5104,23 @@ async function runLlmAll() {
   const sendBtn = document.getElementById('llm-btn');
   _batchStart(allBtn, stopBtn, sendBtn);
 
-  const overwrite = document.getElementById('overwrite-cb').checked;
-  let done = 0;
+  const overwrite   = document.getElementById('overwrite-cb').checked;
+  const llmStatusEl = document.getElementById('llm-batch-status');
+  const label       = pageData.shapes[selIdx]?.label ?? '';
+  let done = 0, skipped = 0;
   for (const i of targets) {
     if (batchAbort) break;
-    if (!overwrite && pageData.shapes[i].openai_output?.response) continue;
+    if (!overwrite && pageData.shapes[i].openai_output?.response) {
+      skipped++;
+      if (llmStatusEl) llmStatusEl.textContent = `⏭ ${skipped} already have LLM (check Overwrite to redo)`;
+      continue;
+    }
     batchHighlight = i;
     allBtn.textContent = `${done + 1}/${targets.length}`;
+    const s = pageData.shapes[i];
+    const cellInfo = (s.super_row != null && s.super_col != null)
+      ? `row ${s.super_row}, col ${s.super_col}` : `shape ${i}`;
+    if (llmStatusEl) llmStatusEl.textContent = `⟳ ${cellInfo}  (${done + 1}/${targets.length - skipped} to run)`;
     drawOverlay();
     try {
       if (mode === 'linebyline') {
@@ -4710,9 +5130,20 @@ async function runLlmAll() {
       }
       done++;
       if (i === selIdx) updatePanel(); else drawOverlay();
-    } catch(e) { if (batchAbort) break; }
+    } catch(e) { if (batchAbort) break; else showToast(`LLM error shape ${i}: ${e.message}`); }
   }
+  if (llmStatusEl) llmStatusEl.textContent = skipped && !done
+    ? `All ${skipped} skipped — use ✕ Page to clear LLM first, or check Overwrite`
+    : (skipped ? `${skipped} skipped, ${done} run` : '');
   _batchEnd(allBtn, stopBtn, done, targets.length, label, sendBtn);
+  updatePanel();
+}
+
+async function runLlmAll() {
+  if (selIdx < 0 || !pages.length) return;
+  const targets = _batchTargets();
+  if (!targets.length) return;
+  await _runLlmBatch(targets);
 }
 
 async function runLlmLineByLine() {
@@ -4785,8 +5216,9 @@ async function runLlmLineByLine() {
 
         if (msg.type === 'lines_detected') {
           // Initialise main-image progress overlay (all rows, none active)
+          lastEmptyRows = new Set();
           llmProgress = { cropOriginX, cropOriginY, cropRight,
-                          lines: msg.lines, activeRow: -1 };
+                          lines: msg.lines, activeRow: -1, emptyRows: null };
           drawOverlay();
           lastRowLines = msg.lines;
           drawRowOverlay(msg.lines, -1);
@@ -4852,6 +5284,124 @@ async function saveCorrection() {
   drawOverlay();
 }
 
+// ── Smart Correct ────────────────────────────────────────────────────────────
+
+function _applyHumanCorrection(shape, text) {
+  if (!shape.human_output) shape.human_output = {};
+  shape.human_output.human_corrected_text = text;
+}
+
+async function runSmartCorrect() {
+  if (!pageData?.shapes?.length) return;
+  const mode = diagnosticMode;
+  const ROW_MODES = ['ocr_rows','llm_rows','human_rows','best_rows'];
+  if (!ROW_MODES.includes(mode)) {
+    showToast('Smart Correct only works in row-mismatch Diagnose modes');
+    return;
+  }
+
+  const shapes = pageData.shapes;
+
+  // Read from current diagnostic source field
+  const getField = s => {
+    if (mode === 'ocr_rows')   return s.tesseract_output?.ocr_text;
+    if (mode === 'llm_rows')   return s.openai_output?.response;
+    if (mode === 'human_rows') return s.human_output?.human_corrected_text;
+    if (mode === 'best_rows')
+      return s.human_output?.human_corrected_text
+          || s.openai_output?.response
+          || s.tesseract_output?.ocr_text;
+  };
+
+  // Write back to the same source field (overwrite machine-generated results)
+  const setField = (s, text) => {
+    if (mode === 'ocr_rows') {
+      if (!s.tesseract_output) s.tesseract_output = {};
+      s.tesseract_output.ocr_text = text;
+    } else if (mode === 'llm_rows') {
+      if (!s.openai_output) s.openai_output = {};
+      s.openai_output.response = text;
+    } else if (mode === 'human_rows') {
+      if (!s.human_output) s.human_output = {};
+      s.human_output.human_corrected_text = text;
+    } else if (mode === 'best_rows') {
+      // Write to whichever field provided the value
+      if (s.human_output?.human_corrected_text) {
+        s.human_output.human_corrected_text = text;
+      } else if (s.openai_output?.response) {
+        s.openai_output.response = text;
+      } else {
+        if (!s.tesseract_output) s.tesseract_output = {};
+        s.tesseract_output.ocr_text = text;
+      }
+    }
+  };
+
+  // A line is "empty" if it is blank/whitespace only
+  const isBlank   = l => l.trim() === '';
+  // A line is a "dash or zero" placeholder (non-empty but trivially empty-meaning)
+  const isDashZero = l => l.trim().length > 0 && /^[-—–0]+$/.test(l.trim());
+  const isEmptyOrDash = l => isBlank(l) || isDashZero(l);
+
+  // Group shapes by super_row
+  const rowGroups = {};
+  shapes.forEach((s, i) => {
+    if (s.super_row == null) return;
+    (rowGroups[s.super_row] ??= []).push(i);
+  });
+
+  let fixCount = 0;
+
+  for (const idxs of Object.values(rowGroups)) {
+    const withData = idxs.filter(i => getField(shapes[i]));
+    if (withData.length < 2) continue;
+
+    // Cache split lines for each shape index
+    const linesOf = {};
+    withData.forEach(i => { linesOf[i] = getField(shapes[i]).split('\n'); });
+
+    // Step 1: mismatch = raw line counts are not all equal
+    const rawLen = i => linesOf[i].length;
+    const rawVals = withData.map(rawLen);
+    if (rawVals.every(v => v === rawVals[0])) continue;
+
+    // "Longer" = raw count strictly above the minimum raw count in this row
+    const minRaw = Math.min(...rawVals);
+    const longer = withData.filter(i => rawLen(i) > minRaw);
+    if (!longer.length) continue;
+
+    // Trim each longer cell independently:
+    // prefer removing the last line if it is EOD, otherwise the first line if it is EOD.
+    for (const i of longer) {
+      let ls = linesOf[i].slice();
+      let changed = false;
+
+      if (isEmptyOrDash(ls[ls.length - 1])) {
+        ls = ls.slice(0, -1);
+        changed = true;
+      } else if (isEmptyOrDash(ls[0])) {
+        ls = ls.slice(1);
+        changed = true;
+      }
+
+      if (changed) {
+        setField(shapes[i], ls.join('\n'));
+        fixCount++;
+      }
+    }
+  }
+
+  if (!fixCount) {
+    showToast('No fixable mismatches found');
+    return;
+  }
+
+  await replaceAllShapes();
+  onDiagnosticChange();   // re-run in same mode — diagnostic now reads the corrected values
+  updatePanel();
+  showToast(`Smart Correct: fixed ${fixCount} cell${fixCount!==1?'s':''}`);
+}
+
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   const inField=e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT';
@@ -4903,8 +5453,10 @@ async function loadFolder() {
   document.getElementById('persp-btn').disabled=false;
   document.getElementById('clear-ann-btn').disabled=false;
   document.getElementById('overlap-btn').disabled=false;
+  document.getElementById('trim-overlaps-btn').disabled=false;
   document.getElementById('lattice-btn').disabled=false;
   document.getElementById('ocr-view-btn').disabled=false;
+  document.getElementById('smart-correct-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);
 }
 

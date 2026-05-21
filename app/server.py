@@ -308,10 +308,11 @@ def delete_shape(
 
 @app.get("/api/cell")
 def get_cell(
-    folder: str = Query(...),
-    stem:   str = Query(...),
-    idx:    int = Query(...),
-    pad:    int = Query(4, description="Padding in pixels"),
+    folder: str  = Query(...),
+    stem:   str  = Query(...),
+    idx:    int  = Query(...),
+    pad:    int  = Query(4, description="Padding in pixels"),
+    shadow: bool = Query(False, description="Return shadow (line-erased) version"),
 ):
     """Return a cropped image of a single cell (for the right panel zoom)."""
     from PIL import Image
@@ -337,7 +338,7 @@ def get_cell(
     ys  = [p[1] for p in pts]
     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
 
-    img = Image.open(str(img_path))
+    img  = _get_shadow_page(folder, stem, img_path) if shadow else Image.open(str(img_path))
     w, h = img.size
     crop = img.crop((
         max(0, int(x1) - pad),
