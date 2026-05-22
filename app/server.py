@@ -1755,34 +1755,82 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str):
 
 @app.post("/api/project/{name}/train")
 async def api_train(name: str, body: TrainRequest = TrainRequest()):
-    """Push data to server then run training inside Docker. Streams log via SSE."""
+    """Push data to server then run training inside Docker. Streams log via SSE.
+
+    Training is launched detached (nohup + disown) so it survives webapp
+    restarts and browser disconnects.  The log is streamed via tail -f;
+    closing the browser does NOT kill training.  Clicking Train again while
+    training is running re-attaches to the existing log instead of starting
+    a second job.
+    """
     from app import ssh_ops
 
     try:
         cfg = load_config(name)
         srv = _server_cfg(name)
         passphrase = body.passphrase
-        remote = srv["remote_path"].rstrip("/")
 
-        # Ensure intermediate data is prepared
         pdir  = project_dir(name)
         inter = pdir / "intermediate"
-        if not (inter / "annotations.json").exists():
-            raise HTTPException(status_code=400,
-                                detail="Run 'Prepare training data' first")
 
-        # Build docker command
-        docker_cmd = (
-            f"docker start detectron_training_container && "
-            f"docker exec detectron_training_container "
-            f"bash /workspace/layout-model-training/scripts/{name}.sh"
-        )
+        script_path = f"/workspace/layout-model-training/scripts/{name}.sh"
+        log_path    = f"/workspace/layout-model-training/logs/{name}_train.log"
+        pid_path    = f"/workspace/layout-model-training/logs/{name}_train.pid"
+
+        def _quick(cmd: str) -> str:
+            """Run a non-streaming SSH command, return stdout."""
+            c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+            _, out, _ = c.exec_command(cmd)
+            result = out.read().decode(errors="replace").strip()
+            c.close()
+            return result
 
         def full_gen():
-            yield from _push_training_data_gen(name, srv, passphrase)
-            yield "[push] Starting Docker training..."
-            yield from ssh_ops.stream_command(srv["host"], srv["user"],
-                                              srv["key_path"], docker_cmd, passphrase)
+            # ── Check if training is already running ──────────────────────────
+            already_running = False
+            try:
+                status = _quick(
+                    f"docker exec detectron_training_container bash -c "
+                    f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
+                    f"kill -0 $pid 2>/dev/null && echo RUNNING || echo STOPPED'"
+                    f" 2>/dev/null || echo STOPPED"
+                )
+                already_running = "RUNNING" in status
+            except Exception:
+                already_running = False
+
+            if already_running:
+                yield "[train] Training already running — re-attaching to log..."
+            else:
+                # ── Validate + push data ──────────────────────────────────────
+                if not (inter / "annotations.json").exists():
+                    yield "ERROR: Run 'Prepare training data' first."
+                    return
+                yield from _push_training_data_gen(name, srv, passphrase)
+
+                # ── Launch detached training ──────────────────────────────────
+                yield "[train] Launching detached training (safe to close browser)..."
+                launch_result = _quick(
+                    f"docker start detectron_training_container && "
+                    f"docker exec detectron_training_container bash -c "
+                    f"'mkdir -p /workspace/layout-model-training/logs && "
+                    f"nohup bash {script_path} >{log_path} 2>&1 & disown && "
+                    f"echo $! >{pid_path} && echo LAUNCHED:$!'"
+                )
+                yield f"[train] {launch_result.strip()}"
+
+            # ── Stream log, stop when process exits ───────────────────────────
+            yield "[train] Streaming log — closing browser won't stop training..."
+            tail_cmd = (
+                f"docker exec detectron_training_container bash -c '"
+                f"tail -n 0 -f {log_path} & TAIL=$!; "
+                f"pid=$(cat {pid_path} 2>/dev/null); "
+                f"[ -n \"$pid\" ] && while kill -0 $pid 2>/dev/null; do sleep 5; done; "
+                f"sleep 2; kill $TAIL 2>/dev/null; "
+                f"echo \"[Training complete — process has exited]\"'"
+            )
+            yield from ssh_ops.stream_command(
+                srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
 
         return await _sse_stream(full_gen())
 
