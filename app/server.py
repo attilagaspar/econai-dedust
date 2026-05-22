@@ -1971,6 +1971,26 @@ def _push_infer_from_gen(new_name: str, source_name: str,
     c    = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
     sftp = c.open_sftp()
     try:
+        # Determine the actual host directory that the predicting container mounts as /workspace.
+        # This may differ from predict_root/remote if predict_remote_path isn't configured.
+        _, _out, _ = c.exec_command(
+            "docker inspect detectron_predicting_container "
+            "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
+        )
+        container_ws_host = predict_root  # fallback
+        for _bind in _out.read().decode().strip().splitlines():
+            _parts = _bind.strip().split(':')
+            if len(_parts) >= 2 and _parts[1].rstrip('/') == '/workspace':
+                container_ws_host = _parts[0].rstrip('/')
+                break
+        # Recompute ws_prefix from the real container mount rather than config assumptions
+        if remote.startswith(container_ws_host + "/"):
+            ws_prefix = remote[len(container_ws_host) + 1:]
+        else:
+            ws_prefix = ""
+        yield f"[infer-from] container /workspace ← {container_ws_host}"
+        yield f"[infer-from] effective ws_prefix  : '{ws_prefix}'"
+
         # Ensure directories exist for the new project
         dirs = [
             f"{remote}/{new_name}/images",
@@ -1983,9 +2003,6 @@ def _push_infer_from_gen(new_name: str, source_name: str,
             ssh_ops._sftp_mkdir_p(sftp, d)
 
         # Verify source model weights exist on the server
-        weights_path = (f"/workspace/{ws_prefix + '/' if ws_prefix else ''}"
-                        f"layout-model-training/outputs/{source_name}/"
-                        f"fast_rcnn_R_50_FPN_3x/model_final.pth")
         host_weights = (f"{remote}/layout-model-training/outputs/{source_name}/"
                         f"fast_rcnn_R_50_FPN_3x/model_final.pth")
         _, out, _ = c.exec_command(f"test -f {host_weights} && echo OK || echo MISSING")
@@ -2025,10 +2042,11 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         output_path  = f"/workspace/{pfx}{new_name}/predictions"
         labels_str   = " ".join(src_labels)
 
+        tool_path = f"/workspace/{pfx}layout-model-training/tools/infer_layout.py"
         script = (
             f"#!/bin/bash\nset -e\n"
             f"echo '=== EconAI: {new_name} inference from {source_name} model ==='\n"
-            f"python3 /workspace/layout-model-training/tools/infer_layout.py \\\n"
+            f"python3 {tool_path} \\\n"
             f"    --config  {config_path} \\\n"
             f"    --weights {weights_path} \\\n"
             f"    --images  {images_path} \\\n"
@@ -2048,10 +2066,12 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         sftp.close()
         c.close()
 
-    # The predicting container bind-mounts predict_root as /workspace, so the script
-    # uploaded to script_dest is already visible inside the container at container_script.
-    # No docker cp needed for either script or weights — the bind mount covers both.
-    container_script = f"/workspace/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+    # Translate the host script path to the container path via the bind mount
+    if script_dest.startswith(container_ws_host + "/"):
+        container_script = "/workspace/" + script_dest[len(container_ws_host) + 1:]
+    else:
+        container_script = f"/workspace/{(ws_prefix + '/') if ws_prefix else ''}layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+    yield f"[infer-from] container script path: {container_script}"
     yield f"__docker_cmd__:{container_script}"
 
 
