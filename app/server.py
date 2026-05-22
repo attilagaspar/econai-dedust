@@ -2208,38 +2208,65 @@ def api_perspective(body: PerspectiveRequest):
     tl, tr = top[0],    top[1]
     bl, br = bottom[0], bottom[1]
 
-    # Output width = max of top & bottom edge; height = max of left & right edge
-    w_top  = math.dist(tl, tr)
-    w_bot  = math.dist(bl, br)
-    h_left = math.dist(tl, bl)
-    h_right= math.dist(tr, br)
+    # Rectangle size: max of opposite edges
+    w_top  = math.dist(tl, tr);  w_bot  = math.dist(bl, br)
+    h_left = math.dist(tl, bl);  h_right= math.dist(tr, br)
     dst_w  = int(max(w_top, w_bot))
     dst_h  = int(max(h_left, h_right))
 
     if dst_w < 2 or dst_h < 2:
         raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
 
-    src = np.float32([tl, tr, br, bl])
-    dst = np.float32([[0, 0], [dst_w, 0], [dst_w, dst_h], [0, dst_h]])
-
-    # Solve perspective transform with numpy (no OpenCV needed)
-    def _perspective_coeffs(src_pts, dst_pts):
+    # Forward homography: selection corners → rectangle (via SVD)
+    def _solve_homography(src_pts, dst_pts):
         A = []
         for (sx, sy), (dx, dy) in zip(src_pts, dst_pts):
-            A.append([sx, sy, 1, 0, 0, 0, -dx*sx, -dx*sy])
-            A.append([0, 0, 0, sx, sy, 1, -dy*sx, -dy*sy])
+            A.append([-sx, -sy, -1,   0,   0,  0, dx*sx, dx*sy, dx])
+            A.append([  0,   0,  0, -sx, -sy, -1, dy*sx, dy*sy, dy])
         A = np.array(A, dtype=np.float64)
-        b = dst_pts.flatten().astype(np.float64)
-        coeffs, *_ = np.linalg.lstsq(A, b, rcond=None)
-        return coeffs.tolist() + [1.0]
+        _, _, V = np.linalg.svd(A)
+        H = V[-1].reshape(3, 3)
+        return H / H[2, 2]
 
-    # PIL PERSPECTIVE uses the inverse transform (dst→src)
-    coeffs = _perspective_coeffs(dst, src)
+    def _apply_H(H, pts):
+        out = []
+        for (x, y) in pts:
+            v = H @ np.array([x, y, 1.0])
+            out.append((v[0] / v[2], v[1] / v[2]))
+        return out
 
+    src_pts = [tl, tr, br, bl]
+    dst_pts = [(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)]
+    H_fwd   = _solve_homography(src_pts, dst_pts)
+
+    # Apply forward transform to the full image corners to get output bounds
     try:
         img = Image.open(str(img_path)).convert("RGB")
-        out = img.transform((dst_w, dst_h), Image.PERSPECTIVE, coeffs, Image.BICUBIC)
-    except Exception as exc:
+    except Exception:
+        import traceback
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
+    W_img, H_img = img.size
+    warped_corners = _apply_H(H_fwd, [(0, 0), (W_img, 0), (W_img, H_img), (0, H_img)])
+    xs = [p[0] for p in warped_corners];  ys = [p[1] for p in warped_corners]
+    min_x, min_y = min(xs), min(ys)
+    out_w = int(round(max(xs) - min_x))
+    out_h = int(round(max(ys) - min_y))
+
+    # Shift dst_pts so the full warped image starts at (0, 0)
+    adj_dst = [(dx - min_x, dy - min_y) for (dx, dy) in dst_pts]
+
+    # PIL PERSPECTIVE needs the inverse (output pixel → source pixel).
+    # Reuse the same SVD approach: solve H_inv mapping adj_dst → src_pts.
+    H_inv = _solve_homography(adj_dst, src_pts)
+    pil_coeffs = [
+        H_inv[0,0], H_inv[0,1], H_inv[0,2],
+        H_inv[1,0], H_inv[1,1], H_inv[1,2],
+        H_inv[2,0], H_inv[2,1],
+    ]
+
+    try:
+        out = img.transform((out_w, out_h), Image.PERSPECTIVE, pil_coeffs, Image.BICUBIC)
+    except Exception:
         import traceback
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
@@ -2250,16 +2277,16 @@ def api_perspective(body: PerspectiveRequest):
         out.save(str(img_path), format=fmt, **save_kw)
         data = json.loads(jf.read_text(encoding="utf-8"))
         data["shapes"] = []
-        data["imageWidth"]  = dst_w
-        data["imageHeight"] = dst_h
+        data["imageWidth"]  = out_w
+        data["imageHeight"] = out_h
         jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"ok": True, "width": dst_w, "height": dst_h}
+        return {"ok": True, "width": out_w, "height": out_h}
     else:
         buf = io.BytesIO()
         out.save(buf, format="JPEG", quality=88)
         buf.seek(0)
         b64 = base64.b64encode(buf.read()).decode()
-        return {"ok": True, "preview": b64, "width": dst_w, "height": dst_h}
+        return {"ok": True, "preview": b64, "width": out_w, "height": out_h}
 
 
 # ---------------------------------------------------------------------------
