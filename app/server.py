@@ -1928,7 +1928,8 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
 
 def _push_infer_from_gen(new_name: str, source_name: str,
                          srv: dict, passphrase: str,
-                         skip_images: bool = False):
+                         skip_images: bool = False,
+                         threshold: float = 0.3):
     """Generator: run inference on new_name's images using source_name's trained model.
 
     Identical to _push_infer_data_gen except the --weights and --config paths
@@ -2052,7 +2053,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
             f"    --images  {images_path} \\\n"
             f"    --output  {output_path} \\\n"
             f"    --labels  {labels_str} \\\n"
-            f"    --threshold 0.5\n"
+            f"    --threshold {threshold}\n"
             f"echo '=== Inference complete ==='\n"
         ).encode()
 
@@ -2078,6 +2079,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
 class InferFromRequest(BaseModel):
     passphrase:        Optional[str] = None
     skip_image_upload: bool = False
+    threshold:         float = 0.3
 
 
 @app.post("/api/project/{name}/infer-from/{source}")
@@ -2090,7 +2092,8 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
         def full_gen():
             docker_cmd = None
             for line in _push_infer_from_gen(name, source, srv,
-                                             body.passphrase, body.skip_image_upload):
+                                             body.passphrase, body.skip_image_upload,
+                                             body.threshold):
                 if line.startswith("__docker_cmd__:"):
                     docker_cmd = line[len("__docker_cmd__:"):]
                 else:

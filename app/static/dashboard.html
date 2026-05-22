@@ -439,6 +439,9 @@ function renderDetail() {
       <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;">
         <span style="font-size:0.8rem;color:#aaa;">Bootstrap from model:</span>
         <select id="infer-from-src" style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;"></select>
+        <label style="font-size:0.8rem;color:#aaa;margin-left:4px;">threshold</label>
+        <input id="infer-from-threshold" type="number" min="0.01" max="0.99" step="0.05" value="0.3"
+               style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
         <button class="btn btn-success" onclick="runInferFrom()" style="background:#1a5c38;">🔄 Infer from selected model</button>
       </div>
     </div>
@@ -817,7 +820,8 @@ async function runInferFrom() {
   if (!src) { alert('Select a source project first.'); return; }
   if (src === activeProj.name) { alert('Source and target project must be different.'); return; }
   await saveServerConfig();
-  const reupload = document.getElementById('chk-reupload')?.checked ?? true;
+  const reupload   = document.getElementById('chk-reupload')?.checked ?? true;
+  const threshold  = parseFloat(document.getElementById('infer-from-threshold')?.value ?? '0.3');
   const url   = `/api/project/${activeProj.name}/infer-from/${encodeURIComponent(src)}`;
   const title = `🔄 Inference from '${src}' → '${activeProj.name}'`;
   openLogModal(title);
@@ -829,7 +833,7 @@ async function runInferFrom() {
   fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload }),
+    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload, threshold }),
     signal:  ctrl.signal,
   }).then(async res => {
     if (!res.ok) {
