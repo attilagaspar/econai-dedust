@@ -2048,11 +2048,11 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         sftp.close()
         c.close()
 
-    # Return host/container paths for both the script and model weights
-    # so the caller can docker cp both into the container before exec-ing
-    container_script  = f"/workspace/{pfx}layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
-    container_weights = f"/workspace/{pfx}layout-model-training/outputs/{source_name}/fast_rcnn_R_50_FPN_3x/model_final.pth"
-    yield f"__docker_cmd__:{script_dest}|{container_script}|{host_weights}|{container_weights}"
+    # The predicting container bind-mounts predict_root as /workspace, so the script
+    # uploaded to script_dest is already visible inside the container at container_script.
+    # No docker cp needed for either script or weights — the bind mount covers both.
+    container_script = f"/workspace/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+    yield f"__docker_cmd__:{container_script}"
 
 
 class InferFromRequest(BaseModel):
@@ -2076,15 +2076,10 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                 else:
                     yield line
             if docker_cmd:
-                host_script, container_script, host_weights, container_weights = docker_cmd.split("|", 3)
-                weights_dir = container_weights.rsplit("/", 1)[0]
-                yield "[infer-from] Starting Docker container..."
-                yield "[infer-from] Copying weights and script into container..."
+                container_script = docker_cmd
+                yield "[infer-from] Starting Docker inference..."
                 cmd = (
                     f"docker start detectron_predicting_container && "
-                    f"docker exec detectron_predicting_container mkdir -p {weights_dir} && "
-                    f"docker cp {host_weights} detectron_predicting_container:{container_weights} && "
-                    f"docker cp {host_script} detectron_predicting_container:{container_script} && "
                     f"docker exec detectron_predicting_container bash {container_script}"
                 )
                 yield from ssh_ops.stream_command(
