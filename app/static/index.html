@@ -3791,6 +3791,8 @@ function startPerspMode() {
   document.getElementById('persp-btn').classList.add('active');
   document.getElementById('persp-toolbar').style.display = 'flex';
   document.getElementById('persp-corner-count').textContent = '0 / 4 corners';
+  const btn = document.getElementById('persp-apply-btn');
+  if (btn) btn.disabled = false;
   showToast('Click 4 corners of the region to correct', 4000);
 }
 
@@ -3808,23 +3810,28 @@ async function applyPerspective() {
   const btn = document.getElementById('persp-apply-btn');
   if (btn) btn.disabled = true;
   showToast('Computing preview…', 5000);
-  const r = await fetch(`${API}/api/page/perspective`, {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      folder, stem: pages[pageIdx].stem,
-      points: perspPoints, save: false,
-    }),
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    showToast(`Error ${r.status}: ${txt.slice(0,120)}`, 6000);
-    if (btn) btn.disabled=false; return;
+  try {
+    const r = await fetch(`${API}/api/page/perspective`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        folder, stem: pages[pageIdx].stem,
+        points: perspPoints, save: false,
+      }),
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      showToast(`Error ${r.status}: ${txt.slice(0,120)}`, 6000);
+      if (btn) btn.disabled = false; return;
+    }
+    const data = await r.json();
+    document.getElementById('persp-preview').src = `data:image/jpeg;base64,${data.preview}`;
+    document.getElementById('persp-modal-info').textContent =
+      `Preview: ${data.width} × ${data.height} px — accept to overwrite image and clear shapes`;
+    document.getElementById('persp-modal').classList.add('show');
+  } catch(err) {
+    showToast(`Network error: ${err.message}`, 6000);
+    if (btn) btn.disabled = false;
   }
-  const data = await r.json();
-  document.getElementById('persp-preview').src = `data:image/jpeg;base64,${data.preview}`;
-  document.getElementById('persp-modal-info').textContent =
-    `Preview: ${data.width} × ${data.height} px — accept to overwrite image and clear shapes`;
-  document.getElementById('persp-modal').classList.add('show');
 }
 
 async function acceptPerspective() {
