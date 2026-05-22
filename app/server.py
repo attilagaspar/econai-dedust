@@ -1926,6 +1926,167 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _push_infer_from_gen(new_name: str, source_name: str,
+                         srv: dict, passphrase: str,
+                         skip_images: bool = False):
+    """Generator: run inference on new_name's images using source_name's trained model.
+
+    Identical to _push_infer_data_gen except the --weights and --config paths
+    point at the source project, while --images and --output point at the new project.
+    The source project's config YAML is expected to already be on the server
+    (from a previous prepare+push cycle on that project).
+    """
+    from app import ssh_ops
+    import posixpath as pp
+
+    new_cfg  = load_config(new_name)
+    src_cfg  = load_config(source_name)
+
+    # Label compatibility check
+    new_labels = new_cfg.get("labels", [])
+    src_labels = src_cfg.get("labels", [])
+    if set(new_labels) != set(src_labels):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Label mismatch: '{new_name}' has {new_labels} "
+                    f"but '{source_name}' was trained with {src_labels}. "
+                    f"Projects must share the same label set."),
+        )
+
+    pdir         = project_dir(new_name)
+    remote       = srv["remote_path"].rstrip("/")
+    predict_root = srv.get("predict_remote_path", remote).rstrip("/")
+
+    if remote.startswith(predict_root + "/"):
+        ws_prefix = remote[len(predict_root) + 1:]
+    else:
+        ws_prefix = ""
+
+    yield f"[infer-from] source model : {source_name}"
+    yield f"[infer-from] target project: {new_name}"
+    yield f"[infer-from] remote_path   : {remote}"
+    yield f"[infer-from] ws_prefix     : '{ws_prefix}'"
+    yield f"[infer-from] Connecting to {srv['host']} as {srv['user']}..."
+
+    c    = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+    sftp = c.open_sftp()
+    try:
+        # Ensure directories exist for the new project
+        dirs = [
+            f"{remote}/{new_name}/images",
+            f"{remote}/{new_name}/predictions",
+            f"{predict_root}/layout-model-training/tools",
+            f"{predict_root}/layout-model-training/scripts",
+        ]
+        for d in dirs:
+            yield f"[infer-from] mkdir -p {d}"
+            ssh_ops._sftp_mkdir_p(sftp, d)
+
+        # Verify source model weights exist on the server
+        weights_path = (f"/workspace/{ws_prefix + '/' if ws_prefix else ''}"
+                        f"layout-model-training/outputs/{source_name}/"
+                        f"fast_rcnn_R_50_FPN_3x/model_final.pth")
+        host_weights = (f"{remote}/layout-model-training/outputs/{source_name}/"
+                        f"fast_rcnn_R_50_FPN_3x/model_final.pth")
+        _, out, _ = c.exec_command(f"test -f {host_weights} && echo OK || echo MISSING")
+        status = out.read().decode().strip()
+        if status != "OK":
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model weights not found on server: {host_weights}\n"
+                       f"Run 'Train model' on project '{source_name}' first.",
+            )
+        yield f"[infer-from] ✓ weights found: {host_weights}"
+
+        # Upload images for the new project
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+        images = [p for p in (pdir / "annotations").iterdir()
+                  if p.suffix.lower() in IMAGE_EXTS]
+        if skip_images:
+            yield f"[infer-from] Skipping image upload ({len(images)} images already on server)."
+        else:
+            total = len(images)
+            yield f"[infer-from] Uploading {total} image(s) → {remote}/{new_name}/images/"
+            for i, img in enumerate(images, 1):
+                sftp.put(str(img), f"{remote}/{new_name}/images/{img.name}")
+                if i % 10 == 0 or i == total:
+                    yield f"[infer-from]   {i}/{total}  {img.name}"
+
+        # Upload the inference tool
+        dest = f"{predict_root}/layout-model-training/tools/infer_layout.py"
+        yield f"[infer-from] infer_layout.py → {dest}"
+        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+
+        # Build an infer script: source model weights/config, new project images/output
+        pfx = (ws_prefix + "/") if ws_prefix else ""
+        config_path  = f"/workspace/{pfx}layout-model-training/configs/{source_name}/fast_rcnn_R_50_FPN_3x.yaml"
+        weights_path = f"/workspace/{pfx}layout-model-training/outputs/{source_name}/fast_rcnn_R_50_FPN_3x/model_final.pth"
+        images_path  = f"/workspace/{pfx}{new_name}/images"
+        output_path  = f"/workspace/{pfx}{new_name}/predictions"
+        labels_str   = " ".join(src_labels)
+
+        script = (
+            f"#!/bin/bash\nset -e\n"
+            f"echo '=== EconAI: {new_name} inference from {source_name} model ==='\n"
+            f"python3 /workspace/layout-model-training/tools/infer_layout.py \\\n"
+            f"    --config  {config_path} \\\n"
+            f"    --weights {weights_path} \\\n"
+            f"    --images  {images_path} \\\n"
+            f"    --output  {output_path} \\\n"
+            f"    --labels  {labels_str} \\\n"
+            f"    --threshold 0.5\n"
+            f"echo '=== Inference complete ==='\n"
+        ).encode()
+
+        script_dest = f"{predict_root}/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+        yield f"[infer-from] script → {script_dest}"
+        with sftp.open(script_dest, "wb") as fh:
+            fh.write(script)
+
+        yield "[infer-from] All files uploaded successfully."
+    finally:
+        sftp.close()
+        c.close()
+
+    # Return the docker command to run (yielded so the caller can stream it)
+    yield f"__docker_cmd__:bash /workspace/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+
+
+class InferFromRequest(BaseModel):
+    passphrase:        Optional[str] = None
+    skip_image_upload: bool = False
+
+
+@app.post("/api/project/{name}/infer-from/{source}")
+async def api_infer_from(name: str, source: str, body: InferFromRequest = InferFromRequest()):
+    """Run inference on name's images using source project's trained model. Streams log via SSE."""
+    from app import ssh_ops
+    try:
+        srv = _server_cfg(name)
+
+        def full_gen():
+            docker_cmd = None
+            for line in _push_infer_from_gen(name, source, srv,
+                                             body.passphrase, body.skip_image_upload):
+                if line.startswith("__docker_cmd__:"):
+                    docker_cmd = line[len("__docker_cmd__:"):]
+                else:
+                    yield line
+            if docker_cmd:
+                yield "[infer-from] Starting Docker inference..."
+                cmd = (f"docker start detectron_predicting_container && "
+                       f"docker exec detectron_predicting_container bash {docker_cmd}")
+                yield from ssh_ops.stream_command(
+                    srv["host"], srv["user"], srv["key_path"], cmd, body.passphrase)
+
+        return await _sse_stream(full_gen())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/project/{name}/pull-predictions")
 def api_pull_predictions(name: str, body: TrainRequest = TrainRequest()):
     """Pull predicted JSONs from server into local predictions/ folder (never touches annotations/)."""
