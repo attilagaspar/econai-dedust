@@ -2048,8 +2048,9 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         sftp.close()
         c.close()
 
-    # Return the docker command to run (yielded so the caller can stream it)
-    yield f"__docker_cmd__:bash /workspace/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+    # Return the host script path and container script path so the caller can docker cp + exec
+    container_script = f"/workspace/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
+    yield f"__docker_cmd__:{script_dest}|{container_script}"
 
 
 class InferFromRequest(BaseModel):
@@ -2073,9 +2074,13 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                 else:
                     yield line
             if docker_cmd:
+                host_path, container_script = docker_cmd.split("|", 1)
+                script_name = container_script.split("/")[-1]
+                yield "[infer-from] Copying script into container..."
                 yield "[infer-from] Starting Docker inference..."
                 cmd = (f"docker start detectron_predicting_container && "
-                       f"docker exec detectron_predicting_container bash {docker_cmd}")
+                       f"docker cp {host_path} detectron_predicting_container:/workspace/layout-model-training/scripts/{script_name} && "
+                       f"docker exec detectron_predicting_container bash {container_script}")
                 yield from ssh_ops.stream_command(
                     srv["host"], srv["user"], srv["key_path"], cmd, body.passphrase)
 
