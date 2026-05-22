@@ -2079,7 +2079,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
 class InferFromRequest(BaseModel):
     passphrase:        Optional[str] = None
     skip_image_upload: bool = False
-    threshold:         float = 0.3
+    threshold:         float = 0.1
 
 
 @app.post("/api/project/{name}/infer-from/{source}")
