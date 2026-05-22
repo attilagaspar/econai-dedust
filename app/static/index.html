@@ -2382,7 +2382,7 @@ function _applyLatticeDrag(adjustments, origPts, delta, axis) {
 function drawOverlay() {
   if (!svgOverlay || !pageData) return;
   while (svgOverlay.firstChild) svgOverlay.removeChild(svgOverlay.firstChild);
-  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode) ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
     const pts = (() => {
@@ -3711,7 +3711,7 @@ function cancelTableMode() {
   tableMode = false; tableRect = null; tableColSeps = []; tableRowSeps = []; tableTool = null;
   document.getElementById('table-toolbar').style.display = 'none';
   document.getElementById('table-btn').classList.remove('active');
-  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode) ? 'all' : 'none';
   drawOverlay();
 }
 
@@ -3799,7 +3799,7 @@ function cancelPerspMode() {
   svgOverlay.style.cursor = '';
   document.getElementById('persp-btn').classList.remove('active');
   document.getElementById('persp-toolbar').style.display = 'none';
-  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode) ? 'all' : 'none';
   drawOverlay();
 }
 
@@ -3839,6 +3839,7 @@ async function acceptPerspective() {
   });
   if (!r.ok) { showToast(`Save error: ${await r.text()}`); return; }
   cancelPerspMode();
+  loadPage._bust = true;
   await loadPage(pageIdx);
   showToast('Perspective correction saved. Shapes cleared.');
 }
@@ -5471,7 +5472,8 @@ async function loadPage(idx) {
   document.getElementById('mode-btn').classList.remove('active');
   updatePanel();
   await reloadPageData();
-  viewer.open({type:'image',url:`${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[idx].stem)}`});
+  viewer.open({type:'image',url:`${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[idx].stem)}${loadPage._bust ? '&t='+Date.now() : ''}`});
+  loadPage._bust = false;
   if (ocrViewActive) { _shadowResetTransform(); loadShadowPreview(); }
   buildLegend();
   // Show grid button if this page already has lattice data
