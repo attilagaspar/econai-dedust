@@ -1814,8 +1814,8 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                     f"docker start detectron_training_container && "
                     f"docker exec detectron_training_container bash -c "
                     f"'mkdir -p /workspace/layout-model-training/logs && "
-                    f"nohup bash {script_path} >{log_path} 2>&1 & disown && "
-                    f"echo $! >{pid_path} && echo LAUNCHED:$!'"
+                    f"nohup bash {script_path} >{log_path} 2>&1 & echo $! >{pid_path}; "
+                    f"echo LAUNCHED:$(cat {pid_path})'"
                 )
                 yield f"[train] {launch_result.strip()}"
 
@@ -1852,21 +1852,33 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
     import posixpath as pp
     pdir         = project_dir(name)
     inter        = pdir / "intermediate"
-    remote       = srv["remote_path"].rstrip("/")        # where data lives (training ws root on host)
+    remote       = srv["remote_path"].rstrip("/")        # where data lives on host
     predict_root = srv.get("predict_remote_path", remote).rstrip("/")  # predict container ws root on host
-
-    # Derive the prefix that maps from predict /workspace to the data directory
-    # e.g. remote=/home/.../koren, predict_root=/home/.../econai → prefix=koren
-    if remote.startswith(predict_root + "/"):
-        ws_prefix = remote[len(predict_root) + 1:]  # e.g. "koren"
-    else:
-        ws_prefix = ""
 
     yield f"[push] remote_path (data)    = {remote}"
     yield f"[push] predict_remote_path   = {predict_root}"
-    yield f"[push] container ws prefix   = '{ws_prefix}'"
     yield f"[push] Connecting to {srv['host']} as {srv['user']}..."
     c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+
+    # Detect the actual bind mount so we get the correct ws_prefix regardless
+    # of how remote_path / predict_remote_path are configured.
+    _, _out, _ = c.exec_command(
+        "docker inspect detectron_predicting_container "
+        "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
+    )
+    container_ws_host = predict_root
+    for _bind in _out.read().decode().strip().splitlines():
+        _parts = _bind.strip().split(':')
+        if len(_parts) >= 2 and _parts[1].rstrip('/') == '/workspace':
+            container_ws_host = _parts[0].rstrip('/')
+            break
+    if remote.startswith(container_ws_host + "/"):
+        ws_prefix = remote[len(container_ws_host) + 1:]
+    else:
+        ws_prefix = ""
+
+    yield f"[push] container /workspace ← {container_ws_host}"
+    yield f"[push] container ws prefix   = '{ws_prefix}'"
     sftp = c.open_sftp()
     try:
         # All paths that must be visible inside the predict container go under predict_root.
@@ -1912,21 +1924,14 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
                 fh.write(content)
 
         def sftp_put_infer_sh(local: Path, remote_dest: str):
-            """Upload infer.sh, patching data paths to include ws_prefix if needed.
-            The script is generated with /workspace as root, but the predict container
-            maps predict_root → /workspace.  Data (images, weights, predictions) lives
-            under remote = predict_root/ws_prefix, so those paths need the extra prefix.
-            Tool/config/script paths stay as-is (already uploaded under predict_root).
+            """Upload infer.sh, patching all /workspace/ paths to include ws_prefix.
+            Every path in the generated infer.sh lives under the prefixed workspace,
+            so we replace all /workspace/ occurrences at once.
             """
             content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
             if ws_prefix:
-                pfx = ws_prefix.encode()
-                # data paths: images, predictions, model weights
-                content = (content
-                    .replace(f"/workspace/{name}/".encode(),
-                             f"/workspace/{pfx.decode()}/{name}/".encode())
-                    .replace(b"/workspace/layout-model-training/outputs/",
-                             f"/workspace/{pfx.decode()}/layout-model-training/outputs/".encode()))
+                content = content.replace(b"/workspace/",
+                                          f"/workspace/{ws_prefix}/".encode())
             with sftp.open(remote_dest, "wb") as fh:
                 fh.write(content)
 
@@ -1949,20 +1954,44 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
     """Run inference on the server. Streams log via SSE."""
     from app import ssh_ops
     try:
-        srv        = _server_cfg(name)
-        passphrase = body.passphrase
-        remote     = srv["remote_path"].rstrip("/")
+        srv          = _server_cfg(name)
+        passphrase   = body.passphrase
+        remote       = srv["remote_path"].rstrip("/")
+        predict_root = srv.get("predict_remote_path", remote).rstrip("/")
 
-        docker_cmd = (
-            f"docker start detectron_predicting_container && "
-            f"docker exec detectron_predicting_container "
-            f"bash /workspace/layout-model-training/scripts/{name}_infer.sh"
-        )
+        # Detect bind mount to build the correct in-container script path.
+        def _detect_script_path() -> str:
+            try:
+                c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+                _, _out, _ = c.exec_command(
+                    "docker inspect detectron_predicting_container "
+                    "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
+                )
+                container_ws_host = predict_root
+                for _bind in _out.read().decode().strip().splitlines():
+                    _parts = _bind.strip().split(':')
+                    if len(_parts) >= 2 and _parts[1].rstrip('/') == '/workspace':
+                        container_ws_host = _parts[0].rstrip('/')
+                        break
+                c.close()
+                if remote.startswith(container_ws_host + "/"):
+                    pfx = remote[len(container_ws_host) + 1:] + "/"
+                else:
+                    pfx = ""
+                return f"/workspace/{pfx}layout-model-training/scripts/{name}_infer.sh"
+            except Exception:
+                return f"/workspace/layout-model-training/scripts/{name}_infer.sh"
 
         def full_gen():
             yield from _push_infer_data_gen(name, srv, passphrase,
                                             skip_images=body.skip_image_upload)
-            yield "[push] Starting Docker inference..."
+            script_path = _detect_script_path()
+            docker_cmd = (
+                f"docker start detectron_predicting_container && "
+                f"docker exec detectron_predicting_container "
+                f"bash {script_path}"
+            )
+            yield f"[push] Starting Docker inference (script: {script_path})..."
             yield from ssh_ops.stream_command(srv["host"], srv["user"],
                                               srv["key_path"], docker_cmd, passphrase)
 
