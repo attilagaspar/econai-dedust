@@ -2249,16 +2249,112 @@ def api_apply_predictions(name: str):
 class PerspectiveRequest(BaseModel):
     folder: str
     stem:   str
-    points: list   # [[x,y], [x,y], [x,y], [x,y]] — four corners in any order
+    points: list = []  # [[x,y]×4] for manual; empty [] triggers auto-detection
     save:   bool = False
+
+
+def _auto_detect_page_quad(img_np):
+    """
+    Automatically find the four corners of a document page.
+    Returns a list of four [x, y] points (any order) or None.
+
+    Strategy 1 — Canny edges → largest quad-shaped contour.
+      Works well when the page has a visible border against the scanner bed.
+    Strategy 2 — HoughLinesP intersections.
+      Works when the page fills the frame but has prominent table/text lines.
+    """
+    import cv2
+    import numpy as np
+
+    H, W = img_np.shape[:2]
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # ── Strategy 1: largest quad contour ──────────────────────────────────────
+    for lo, hi in [(30, 100), (50, 150), (10, 50)]:
+        edges = cv2.Canny(blur, lo, hi)
+        edges = cv2.dilate(edges, np.ones((3, 3), np.uint8))
+        cnts, _ = cv2.findContours(edges, cv2.RETR_LIST,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        for c in sorted(cnts, key=cv2.contourArea, reverse=True)[:10]:
+            if cv2.contourArea(c) < 0.15 * H * W:
+                break  # sorted, so no point continuing
+            peri = cv2.arcLength(c, True)
+            for eps in [0.01, 0.02, 0.03, 0.05]:
+                approx = cv2.approxPolyDP(c, eps * peri, True)
+                if len(approx) == 4:
+                    return [p[0].tolist() for p in approx]
+
+    # ── Strategy 2: Hough line intersections ──────────────────────────────────
+    edges = cv2.Canny(blur, 50, 150)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
+                            threshold=max(50, min(W, H) // 8),
+                            minLineLength=min(W, H) // 5,
+                            maxLineGap=40)
+    if lines is None:
+        return None
+
+    segs = lines.reshape(-1, 4).tolist()
+    h_segs, v_segs = [], []
+    for x1, y1, x2, y2 in segs:
+        ang = np.degrees(np.arctan2(abs(y2 - y1), abs(x2 - x1) + 1e-9))
+        (h_segs if ang < 20 else v_segs if ang > 70 else []).append(
+            (x1, y1, x2, y2))
+
+    if len(h_segs) < 2 or len(v_segs) < 2:
+        return None
+
+    h_segs.sort(key=lambda s: (s[1] + s[3]) / 2)
+    v_segs.sort(key=lambda s: (s[0] + s[2]) / 2)
+
+    def _avg(segs):
+        return (float(np.mean([s[0] for s in segs])),
+                float(np.mean([s[1] for s in segs])),
+                float(np.mean([s[2] for s in segs])),
+                float(np.mean([s[3] for s in segs])))
+
+    def _isect(a, b):
+        x1, y1, x2, y2 = a
+        x3, y3, x4, y4 = b
+        d = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(d) < 1e-8:
+            return None
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / d
+        return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)]
+
+    n_h = max(1, len(h_segs) // 5)
+    n_v = max(1, len(v_segs) // 5)
+    top_l  = _avg(h_segs[:n_h])
+    bot_l  = _avg(h_segs[-n_h:])
+    left_l = _avg(v_segs[:n_v])
+    rgt_l  = _avg(v_segs[-n_v:])
+
+    corners = [
+        _isect(top_l, left_l), _isect(top_l, rgt_l),
+        _isect(bot_l, rgt_l),  _isect(bot_l, left_l),
+    ]
+    if any(c is None for c in corners):
+        return None
+    # Sanity: all corners within ±30 % of the image bounds
+    m = 0.3
+    if not all(-W * m <= c[0] <= W * (1 + m) and
+               -H * m <= c[1] <= H * (1 + m) for c in corners):
+        return None
+
+    return corners   # [TL, TR, BR, BL]
 
 
 @app.post("/api/page/perspective")
 def api_perspective(body: PerspectiveRequest):
     """
-    Apply perspective (trapezoid→rectangle) correction to a page image.
-    save=False → return base64 JPEG preview.
-    save=True  → overwrite image on disk, clear shapes, update JSON dimensions.
+    Perspective (trapezoid→rectangle) correction.
+
+    points=[]   → auto-detect page corners, return preview + detected_points.
+    points=[×4] → use the supplied corners (manual or re-submit of detected).
+    save=False  → base64 JPEG preview only.
+    save=True   → overwrite image, clear shapes, update JSON dimensions.
     """
     import base64, io, math
     import cv2
@@ -2273,26 +2369,8 @@ def api_perspective(body: PerspectiveRequest):
         raise HTTPException(status_code=404, detail="Image not found")
     if not jf.exists():
         raise HTTPException(status_code=404, detail="JSON not found")
-    if len(body.points) != 4:
-        raise HTTPException(status_code=400, detail="Exactly 4 points required")
-
-    pts = [tuple(float(v) for v in p) for p in body.points]
-
-    # Sort corners into TL, TR, BR, BL regardless of click order.
-    by_y   = sorted(pts, key=lambda p: p[1])
-    top    = sorted(by_y[:2], key=lambda p: p[0])
-    bottom = sorted(by_y[2:], key=lambda p: p[0])
-    tl, tr = top[0],    top[1]
-    bl, br = bottom[0], bottom[1]
-
-    # Rectangle size: max of opposite edges
-    w_top  = math.dist(tl, tr);  w_bot  = math.dist(bl, br)
-    h_left = math.dist(tl, bl);  h_right= math.dist(tr, br)
-    dst_w  = int(max(w_top, w_bot))
-    dst_h  = int(max(h_left, h_right))
-
-    if dst_w < 2 or dst_h < 2:
-        raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
+    if body.points and len(body.points) != 4:
+        raise HTTPException(status_code=400, detail="Supply 0 or exactly 4 points")
 
     try:
         img = Image.open(str(img_path)).convert("RGB")
@@ -2303,33 +2381,54 @@ def api_perspective(body: PerspectiveRequest):
     img_np = np.array(img)
     H_img, W_img = img_np.shape[:2]
 
-    # H maps the user-selected quadrilateral to an upright rectangle.
-    # src points: TL, TR, BR, BL (image pixel coords, xy order)
-    # dst points: the corners of the target rectangle
+    # ── Determine the four source corners ─────────────────────────────────────
+    if not body.points:
+        raw = _auto_detect_page_quad(img_np)
+        if raw is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not automatically detect the page boundary. "
+                       "Try again or mark the four corners manually.")
+        detected_points = [[float(v) for v in p] for p in raw]
+    else:
+        detected_points = [[float(v) for v in p] for p in body.points]
+
+    # Sort into TL, TR, BR, BL regardless of supplied order
+    pts = [tuple(p) for p in detected_points]
+    by_y   = sorted(pts, key=lambda p: p[1])
+    top    = sorted(by_y[:2], key=lambda p: p[0])
+    bottom = sorted(by_y[2:], key=lambda p: p[0])
+    tl, tr = top[0],    top[1]
+    bl, br = bottom[0], bottom[1]
+
+    w_top  = math.dist(tl, tr);  w_bot  = math.dist(bl, br)
+    h_left = math.dist(tl, bl);  h_right = math.dist(tr, br)
+    dst_w  = int(max(w_top, w_bot))
+    dst_h  = int(max(h_left, h_right))
+
+    if dst_w < 2 or dst_h < 2:
+        raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
+
+    # ── Build homography and warp the full image ───────────────────────────────
     src_arr = np.float32([tl, tr, br, bl])
     dst_arr = np.float32([(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)])
-    H = cv2.getPerspectiveTransform(src_arr, dst_arr)
+    H_mat   = cv2.getPerspectiveTransform(src_arr, dst_arr)
 
-    # Find where the four image corners land under H.
-    # perspectiveTransform expects shape (N,1,2).
-    img_corners = np.float32([
-        [0, 0], [W_img, 0], [W_img, H_img], [0, H_img]
-    ]).reshape(-1, 1, 2)
-    warped_corners = cv2.perspectiveTransform(img_corners, H).reshape(-1, 2)
+    # Project all four image corners through H to find the full output canvas.
+    img_corners = np.float32(
+        [[0, 0], [W_img, 0], [W_img, H_img], [0, H_img]]
+    ).reshape(-1, 1, 2)
+    wc = cv2.perspectiveTransform(img_corners, H_mat).reshape(-1, 2)
 
-    min_x = float(warped_corners[:, 0].min())
-    min_y = float(warped_corners[:, 1].min())
-    max_x = float(warped_corners[:, 0].max())
-    max_y = float(warped_corners[:, 1].max())
+    min_x, min_y = float(wc[:, 0].min()), float(wc[:, 1].min())
+    max_x, max_y = float(wc[:, 0].max()), float(wc[:, 1].max())
 
-    # Translation to shift all warped pixels into non-negative coordinates.
-    T = np.array([[1, 0, -min_x],
-                  [0, 1, -min_y],
-                  [0, 0, 1    ]], dtype=np.float64)
-    H_eff = (T @ H.astype(np.float64)).astype(np.float32)
-
-    out_w = int(round(max_x - min_x))
-    out_h = int(round(max_y - min_y))
+    # Translate so all pixels land in non-negative coordinates.
+    T = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]],
+                 dtype=np.float64)
+    H_eff = (T @ H_mat.astype(np.float64)).astype(np.float32)
+    out_w  = int(round(max_x - min_x))
+    out_h  = int(round(max_y - min_y))
 
     try:
         out_np = cv2.warpPerspective(img_np, H_eff, (out_w, out_h),
@@ -2339,28 +2438,32 @@ def api_perspective(body: PerspectiveRequest):
         import traceback
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
+    # ── Save or preview ────────────────────────────────────────────────────────
     if body.save:
-        # Parse JSON first — if it's corrupt we must not touch the image.
         try:
             data = json.loads(jf.read_text(encoding="utf-8"))
         except Exception as exc:
             raise HTTPException(status_code=500,
-                                detail=f"Annotation JSON is corrupt and cannot be updated: {exc}")
+                                detail=f"Annotation JSON corrupt: {exc}")
         fmt = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG",
-               "tif": "TIFF", "tiff": "TIFF"}.get(img_path.suffix.lstrip(".").lower(), "JPEG")
+               "tif": "TIFF", "tiff": "TIFF"}.get(
+            img_path.suffix.lstrip(".").lower(), "JPEG")
         save_kw = {"quality": 92} if fmt == "JPEG" else {}
         out.save(str(img_path), format=fmt, **save_kw)
-        data["shapes"] = []
+        data["shapes"]      = []
         data["imageWidth"]  = out_w
         data["imageHeight"] = out_h
-        jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        jf.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                      encoding="utf-8")
         return {"ok": True, "width": out_w, "height": out_h}
     else:
         buf = io.BytesIO()
         out.save(buf, format="JPEG", quality=88)
         buf.seek(0)
         b64 = base64.b64encode(buf.read()).decode()
-        return {"ok": True, "preview": b64, "width": out_w, "height": out_h}
+        return {"ok": True, "preview": b64,
+                "width": out_w, "height": out_h,
+                "detected_points": detected_points}
 
 
 # ---------------------------------------------------------------------------

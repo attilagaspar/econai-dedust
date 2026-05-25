@@ -664,15 +664,8 @@
       </div>
     </div>
 
-    <!-- Perspective correction toolbar (shown only in persp mode) -->
-    <div id="persp-toolbar" style="display:none; padding:4px 8px; background:#2a1a3a; border-bottom:1px solid #633; align-items:center; gap:8px; flex-wrap:wrap;">
-      <span style="color:#e94560; font-size:12px; font-weight:600;">Perspective:</span>
-      <span id="persp-corner-count" style="color:#ccc; font-size:12px;">0 / 4 corners</span>
-      <button class="nav-btn" onclick="perspPoints=[]; drawOverlay(); document.getElementById('persp-corner-count').textContent='0 / 4 corners';" title="Clear corners and start over">&#x21ba; Clear</button>
-      <span style="flex:1"></span>
-      <button class="nav-btn active" id="persp-apply-btn" onclick="applyPerspective()" title="Preview the perspective correction">&#x2713; Apply correction</button>
-      <button class="nav-btn" onclick="cancelPerspMode()" title="Cancel perspective mode">Cancel</button>
-    </div>
+    <!-- Perspective correction toolbar — retired (auto-detect mode, no manual corners) -->
+    <div id="persp-toolbar" style="display:none;"></div>
 
     <!-- Table drawing toolbar (shown only in table mode) -->
     <div id="table-toolbar" style="display:none; padding:4px 8px; background:#1e2a3a; border-bottom:1px solid #334; align-items:center; gap:6px; flex-wrap:wrap;">
@@ -3782,63 +3775,56 @@ async function finishTable() {
 }
 
 // ── Perspective correction ────────────────────────────────────────────────────
-function startPerspMode() {
+// Auto-detect mode: clicking the button immediately triggers server-side
+// corner detection and shows the corrected preview.  No manual corner picking.
+async function startPerspMode() {
   if (editMode) toggleEditMode();
   if (tableMode) cancelTableMode();
-  perspMode = true; perspPoints = [];
-  svgOverlay.style.pointerEvents = 'all';
-  svgOverlay.style.cursor = 'crosshair';
+  perspPoints = [];
   document.getElementById('persp-btn').classList.add('active');
-  document.getElementById('persp-toolbar').style.display = 'flex';
-  document.getElementById('persp-corner-count').textContent = '0 / 4 corners';
-  const btn = document.getElementById('persp-apply-btn');
-  if (btn) btn.disabled = false;
-  showToast('Click 4 corners of the region to correct', 4000);
-}
-
-function cancelPerspMode() {
-  perspMode = false; perspPoints = [];
-  svgOverlay.style.cursor = '';
-  document.getElementById('persp-btn').classList.remove('active');
-  document.getElementById('persp-toolbar').style.display = 'none';
-  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode) ? 'all' : 'none';
-  drawOverlay();
-}
-
-async function applyPerspective() {
-  if (perspPoints.length !== 4) { showToast('Place exactly 4 corners first'); return; }
-  const btn = document.getElementById('persp-apply-btn');
-  if (btn) btn.disabled = true;
-  showToast('Computing preview…', 5000);
+  showToast('Auto-detecting page boundaries…', 8000);
   try {
     const r = await fetch(`${API}/api/page/perspective`, {
-      method: 'POST', headers: {'Content-Type':'application/json'},
+      method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         folder, stem: pages[pageIdx].stem,
-        points: perspPoints, save: false,
+        points: [], save: false,
       }),
     });
     if (!r.ok) {
       const txt = await r.text();
-      showToast(`Error ${r.status}: ${txt.slice(0,120)}`, 6000);
-      if (btn) btn.disabled = false; return;
+      showToast(`Detection failed: ${txt.slice(0, 200)}`, 8000);
+      document.getElementById('persp-btn').classList.remove('active');
+      return;
     }
     const data = await r.json();
-    document.getElementById('persp-preview').src = `data:image/jpeg;base64,${data.preview}`;
+    // Store detected corners so acceptPerspective() can re-submit them for save.
+    perspPoints = data.detected_points || [];
+    document.getElementById('persp-preview').src =
+      `data:image/jpeg;base64,${data.preview}`;
     document.getElementById('persp-modal-info').textContent =
-      `Preview: ${data.width} × ${data.height} px — accept to overwrite image and clear shapes`;
+      `Auto-corrected preview: ${data.width} × ${data.height} px — accept to save, reject to discard`;
     document.getElementById('persp-modal').classList.add('show');
   } catch(err) {
     showToast(`Network error: ${err.message}`, 6000);
-    if (btn) btn.disabled = false;
+    document.getElementById('persp-btn').classList.remove('active');
   }
+}
+
+function cancelPerspMode() {
+  perspPoints = [];
+  svgOverlay.style.cursor = '';
+  document.getElementById('persp-btn').classList.remove('active');
+  document.getElementById('persp-toolbar').style.display = 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
+  drawOverlay();
 }
 
 async function acceptPerspective() {
   document.getElementById('persp-modal').classList.remove('show');
   showToast('Saving…', 3000);
   const r = await fetch(`${API}/api/page/perspective`, {
-    method: 'POST', headers: {'Content-Type':'application/json'},
+    method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       folder, stem: pages[pageIdx].stem,
       points: perspPoints, save: true,
@@ -3853,9 +3839,9 @@ async function acceptPerspective() {
 
 function rejectPerspective() {
   document.getElementById('persp-modal').classList.remove('show');
-  const btn = document.getElementById('persp-apply-btn');
-  if (btn) btn.disabled = false;
-  showToast('Rejected — adjust corners and try again');
+  document.getElementById('persp-btn').classList.remove('active');
+  perspPoints = [];
+  showToast('Rejected — click Perspective to try again');
 }
 
 // ── Excel export ─────────────────────────────────────────────────────────────
