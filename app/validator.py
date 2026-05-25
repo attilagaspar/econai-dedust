@@ -1406,20 +1406,29 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         if not candidates:
             continue
 
+        violated_ids = {v["con"]["constraint_id"] for v in violated}
+
         for proposed in candidates:
-            ns_new    = make_ns({cid: str(proposed)})
-            n_fixed   = 0
-            new_abs   = 0.0
-            rem_labels = []
-            for v in violated:
-                nd = delta(v["con"], ns_new)
+            ns_new     = make_ns({cid: str(proposed)})
+            n_fixed    = 0
+            new_abs    = 0.0
+            rem_labels   = []
+            broken_labels = []
+            # Check ALL constraints — fixes AND newly broken ones
+            for con in constrs:
+                nd = delta(con, ns_new)
                 if nd is None:
                     continue
-                if abs(nd) <= v["con"]["tolerance"]:
+                was_violated = con["constraint_id"] in violated_ids
+                now_violated = abs(nd) > con["tolerance"]
+                if was_violated and not now_violated:
                     n_fixed += 1
-                else:
-                    new_abs    += abs(nd)
-                    rem_labels.append(v["con"]["label"])
+                elif was_violated and now_violated:
+                    new_abs += abs(nd)
+                    rem_labels.append(con["label"])
+                elif not was_violated and now_violated:
+                    broken_labels.append(con["label"])
+                    new_abs += abs(nd)   # penalise in total
             improvement = total_abs - new_abs
             if improvement > 1e-6 or n_fixed > 0:
                 best_single.append({
@@ -1429,12 +1438,16 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                     "old_value":            cell_vals.get(cid, ""),
                     "proposed_value":       str(proposed),
                     "constraints_fixed":    n_fixed,
+                    "constraints_broken":   len(broken_labels),
+                    "broken_labels":        broken_labels,
                     "remaining_violations": rem_labels,
                     "violation_reduction":  round(improvement, 4),
                 })
                 break   # first valid rounding wins
 
-    best_single.sort(key=lambda x: (-x["constraints_fixed"],
+    # Sort: fewest broken first, then most fixed, then largest reduction
+    best_single.sort(key=lambda x: (x["constraints_broken"],
+                                    -x["constraints_fixed"],
                                     -x["violation_reduction"]))
 
     # ── Q2: minimum set of changes that fixes every violation ─────────────────

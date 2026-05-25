@@ -1657,14 +1657,19 @@ async function openSuggestModal(rowId) {
         onclick="applySuggestion(${rowId},[{col_id:${s.col_id},value:'${_esc(s.proposed_value)}'}])">
         Apply</button>`;
       const rem = s.remaining_violations.length
-        ? `<span style="color:#888;">${s.remaining_violations.length} remaining</span>`
+        ? `<span style="color:#888;">${s.remaining_violations.length} left</span>`
         : `<span style="color:#4caf50;">✓ all fixed</span>`;
-      return `<tr${idx===0?' style="background:#1a2a1a"':''}>
+      const brk = s.constraints_broken
+        ? `<span style="color:#e94560;" title="${_esc((s.broken_labels||[]).join(', '))}">⚠ ${s.constraints_broken} broken</span>`
+        : `<span style="color:#4caf50;">—</span>`;
+      const rowBg = idx === 0 && !s.constraints_broken ? ' style="background:#1a2a1a"' : (s.constraints_broken ? ' style="background:#2a1520"' : '');
+      return `<tr${rowBg}>
         <td>${_esc(s.col_name)}</td>
         <td>${_esc(s.old_value)}</td>
         <td style="color:#80ff80;font-weight:700;">${_esc(s.proposed_value)}</td>
         <td>${s.constraints_fixed} / ${data.n_violations}</td>
         <td>${rem}</td>
+        <td>${brk}</td>
         <td>${applyBtn}</td>
       </tr>`;
     }).join('');
@@ -1672,7 +1677,7 @@ async function openSuggestModal(rowId) {
       <table class="suggest-tbl">
         <thead><tr>
           <th>Column</th><th>From</th><th>To</th>
-          <th>Rules fixed</th><th>Remaining</th><th></th>
+          <th>Fixes</th><th>Remaining</th><th>Breaks</th><th></th>
         </tr></thead>
         <tbody>${rows_html}</tbody>
       </table>`;
