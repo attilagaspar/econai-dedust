@@ -157,7 +157,8 @@ def get_image(folder: str = Query(...), stem: str = Query(...)):
     img = _find_image(d, stem)
     if img is None:
         raise HTTPException(status_code=404, detail=f"No image found for '{stem}'")
-    return FileResponse(str(img), media_type="image/jpeg")
+    return FileResponse(str(img), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/page")
