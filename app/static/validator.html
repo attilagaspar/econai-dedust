@@ -549,6 +549,8 @@ function showEmptyState() {
 async function loadAll() {
   if (!folder) return;
   await Promise.all([loadTable(), loadConstraints(), loadMeta()]);
+  await _loadViolCache();
+  renderTable();
   renderTab();
 }
 
@@ -850,6 +852,11 @@ async function doImport() {
   document.getElementById('project-label').textContent = f.split(/[\\/]/).pop();
   toast(`Imported: ${d.pages} pages → ${d.rows} rows, ${d.columns} columns`);
   violations = []; violColMap = {}; violColorMap = {};
+  // Clear stale violation cache — row_ids change on re-import
+  await fetch(`${API}/api/validate/meta`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ folder, key: 'violations_cache', value: '' }),
+  });
   await loadAll();
 }
 
@@ -889,8 +896,15 @@ async function refreshViolations() {
   toast('Checking rules…');
   const r = await fetch(`${API}/api/validate/violations?folder=${encodeURIComponent(folder)}`);
   violations = await r.json();
+  _buildViolMaps();
+  renderTable();
+  showTab('violations');
+  const total = violations.reduce((s, vg) => s + vg.count, 0);
+  toast(total ? `${total} violation(s) found` : 'All rules satisfied ✓');
+  _saveViolCache();
+}
 
-  // Build cell highlight map
+function _buildViolMaps() {
   violColMap   = {};
   violColorMap = {};
   let colorIdx = 0;
@@ -905,11 +919,32 @@ async function refreshViolations() {
       });
     });
   });
+}
 
-  renderTable();
-  showTab('violations');
-  const total = violations.reduce((s, vg) => s + vg.count, 0);
-  toast(total ? `${total} violation(s) found` : 'All rules satisfied ✓');
+async function _saveViolCache() {
+  const payload = JSON.stringify({ violations, violColMap, violColorMap,
+                                   ts: new Date().toISOString() });
+  await fetch(`${API}/api/validate/meta`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ folder, key: 'violations_cache', value: payload }),
+  });
+}
+
+async function _loadViolCache() {
+  const r = await fetch(`${API}/api/validate/meta?folder=${encodeURIComponent(folder)}`);
+  if (!r.ok) return;
+  const meta = await r.json();
+  if (!meta.violations_cache) return;
+  try {
+    const cached = JSON.parse(meta.violations_cache);
+    violations  = cached.violations  || [];
+    violColMap  = cached.violColMap  || {};
+    violColorMap= cached.violColorMap|| {};
+    if (cached.ts) {
+      const age = Math.round((Date.now() - new Date(cached.ts)) / 60000);
+      setStatus(`${rows.filter(r=>!r.is_deleted).length} rows · ${columns.length} columns · violations from ${age < 1 ? 'just now' : age + ' min ago'}`);
+    }
+  } catch(_) {}
 }
 
 // ── Side panel tabs ────────────────────────────────────────────────────────
