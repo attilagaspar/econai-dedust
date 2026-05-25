@@ -2261,6 +2261,7 @@ def api_perspective(body: PerspectiveRequest):
     save=True  → overwrite image on disk, clear shapes, update JSON dimensions.
     """
     import base64, io, math
+    import cv2
     import numpy as np
     from PIL import Image
 
@@ -2278,9 +2279,7 @@ def api_perspective(body: PerspectiveRequest):
     pts = [tuple(float(v) for v in p) for p in body.points]
 
     # Sort corners into TL, TR, BR, BL regardless of click order.
-    # Strategy: top 2 (smallest y) sorted by x → TL, TR;
-    #           bottom 2 (largest y) sorted by x → BL, BR.
-    by_y = sorted(pts, key=lambda p: p[1])
+    by_y   = sorted(pts, key=lambda p: p[1])
     top    = sorted(by_y[:2], key=lambda p: p[0])
     bottom = sorted(by_y[2:], key=lambda p: p[0])
     tl, tr = top[0],    top[1]
@@ -2295,58 +2294,36 @@ def api_perspective(body: PerspectiveRequest):
     if dst_w < 2 or dst_h < 2:
         raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
 
-    # Forward homography: selection corners → rectangle (via SVD)
-    def _solve_homography(src_pts, dst_pts):
-        A = []
-        for (sx, sy), (dx, dy) in zip(src_pts, dst_pts):
-            A.append([-sx, -sy, -1,   0,   0,  0, dx*sx, dx*sy, dx])
-            A.append([  0,   0,  0, -sx, -sy, -1, dy*sx, dy*sy, dy])
-        A = np.array(A, dtype=np.float64)
-        _, _, V = np.linalg.svd(A)
-        H = V[-1].reshape(3, 3)
-        return H / H[2, 2]
-
-    def _apply_H(H, pts):
-        out = []
-        for (x, y) in pts:
-            v = H @ np.array([x, y, 1.0])
-            out.append((v[0] / v[2], v[1] / v[2]))
-        return out
-
-    src_pts = [tl, tr, br, bl]
-    dst_pts = [(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)]
-    H_fwd   = _solve_homography(src_pts, dst_pts)
-
-    # Apply forward transform to the full image corners to get output bounds
     try:
         img = Image.open(str(img_path)).convert("RGB")
     except Exception:
         import traceback
         raise HTTPException(status_code=500, detail=traceback.format_exc())
-    W_img, H_img = img.size
-    warped_corners = _apply_H(H_fwd, [(0, 0), (W_img, 0), (W_img, H_img), (0, H_img)])
-    xs = [p[0] for p in warped_corners];  ys = [p[1] for p in warped_corners]
-    min_x, min_y = min(xs), min(ys)
-    out_w = int(round(max(xs) - min_x))
-    out_h = int(round(max(ys) - min_y))
 
-    # PIL PERSPECTIVE needs output→source mapping.
-    # H_fwd maps source→rect; compose with a shift T that moves the output
-    # bounding box to start at (0,0), then invert directly.
-    T = np.array([[1, 0, -min_x],
-                  [0, 1, -min_y],
-                  [0, 0,      1]], dtype=np.float64)
-    H_eff = T @ H_fwd                          # source → shifted-output
-    H_inv = np.linalg.inv(H_eff)              # shifted-output → source
-    H_inv = H_inv / H_inv[2, 2]               # normalise
-    pil_coeffs = [
-        H_inv[0,0], H_inv[0,1], H_inv[0,2],
-        H_inv[1,0], H_inv[1,1], H_inv[1,2],
-        H_inv[2,0], H_inv[2,1],
-    ]
+    img_np = np.array(img)
+    W_img, H_img = img.size   # PIL: (width, height)
 
+    # Forward homography: selected corners → rectangle
+    src_arr = np.float32([tl, tr, br, bl])
+    dst_arr = np.float32([(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)])
+    H_fwd   = cv2.getPerspectiveTransform(src_arr, dst_arr)
+
+    # Find bounding box of the full image in the warped space
+    corners = np.float32([[0, 0], [W_img, 0], [W_img, H_img], [0, H_img]]).reshape(-1, 1, 2)
+    warped  = cv2.perspectiveTransform(corners, H_fwd).reshape(-1, 2)
+    min_x, min_y = float(warped[:, 0].min()), float(warped[:, 1].min())
+    out_w = int(round(float(warped[:, 0].max()) - min_x))
+    out_h = int(round(float(warped[:, 1].max()) - min_y))
+
+    # Shift H_fwd so the output starts at (0, 0)
+    T     = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]], dtype=np.float64)
+    H_eff = (T @ H_fwd.astype(np.float64)).astype(np.float32)
+
+    # cv2.warpPerspective takes the forward transform and inverts internally
     try:
-        out = img.transform((out_w, out_h), Image.PERSPECTIVE, pil_coeffs, Image.BICUBIC)
+        out_np = cv2.warpPerspective(img_np, H_eff, (out_w, out_h),
+                                     flags=cv2.INTER_CUBIC)
+        out = Image.fromarray(out_np)
     except Exception:
         import traceback
         raise HTTPException(status_code=500, detail=traceback.format_exc())
