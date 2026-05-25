@@ -16,7 +16,7 @@ import io
 import json
 import re
 import sqlite3
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1314,65 +1314,215 @@ def api_meta_set(req: MetaSet):
     return {"ok": True}
 
 
+def _digit_edits(val_str: str) -> set:
+    """
+    All integer values reachable from val_str by exactly ONE digit operation:
+      - replace any digit with another (0-9)
+      - delete any one digit
+      - insert any digit at any position
+    Leading zeros (except '0' itself) are rejected.
+    The original value is excluded.
+    Non-numeric / empty strings: only single-digit insertions are returned.
+    """
+    s = str(val_str).strip()
+    results: set = set()
+
+    def _add(ns: str):
+        ns = ns.strip()
+        if not ns:
+            results.add(0)
+            return
+        if len(ns) > 1 and ns[0] == '0':
+            return  # leading zero
+        try:
+            results.add(int(ns))
+        except ValueError:
+            pass
+
+    if not s or not any(c.isdigit() for c in s):
+        for d in '0123456789':
+            _add(d)
+        return results
+
+    # Replace any digit
+    for i, ch in enumerate(s):
+        if ch.isdigit():
+            for d in '0123456789':
+                if d != ch:
+                    _add(s[:i] + d + s[i + 1:])
+
+    # Delete any one digit
+    for i, ch in enumerate(s):
+        if ch.isdigit():
+            _add(s[:i] + s[i + 1:])
+
+    # Insert a digit at any position
+    for i in range(len(s) + 1):
+        for d in '0123456789':
+            _add(s[:i] + d + s[i:])
+
+    # Exclude the original value
+    try:
+        results.discard(int(s))
+    except ValueError:
+        pass
+
+    return results
+
+
+def _build_hier_constraints(conn, row_id: int, cols_list: list) -> list:
+    """
+    Build implicit hierarchy constraints for row_id so the solver can see
+    vertical sum rules alongside horizontal formula rules.
+
+    If row_id is a hierarchy row of level N:
+      For each data column c:  row[c] = sum of children rows' c values.
+      Children = non-deleted rows above this row, back to the previous row
+      with hierarchy_level >= N, that have hierarchy_level < N.
+
+    If row_id is a plain (non-hierarchy) row:
+      For each hierarchy level N (1–4), find the nearest hierarchy row H of
+      level N that follows this row AND for which this row is actually a child
+      (no same-or-higher-level row sits in between).
+      For each data column c:  row[c] = H[c] − sum_of_siblings[c]
+      (i.e. changing this row's value should keep H's sum intact).
+    """
+    all_rows = [dict(r) for r in conn.execute(
+        "SELECT row_id, position, hierarchy_level, is_deleted FROM rows ORDER BY position"
+    )]
+    cell_map: dict = {}
+    for cell in conn.execute("SELECT row_id, col_id, value FROM cells"):
+        cell_map.setdefault(cell["row_id"], {})[cell["col_id"]] = cell["value"]
+
+    data_cols = [c for c in cols_list if c["role"] == "data"]
+
+    ri = next((i for i, r in enumerate(all_rows) if r["row_id"] == row_id), None)
+    if ri is None:
+        return []
+
+    this_hl = all_rows[ri]["hierarchy_level"] or 0
+    constraints: list = []
+
+    def _pf(v):
+        try:
+            return float(v) if v else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _children_of(hier_ri: int, level: int) -> list:
+        start = 0
+        for j in range(hier_ri - 1, -1, -1):
+            if (all_rows[j]["hierarchy_level"] or 0) >= level and not all_rows[j]["is_deleted"]:
+                start = j + 1
+                break
+        return [
+            all_rows[j]["row_id"]
+            for j in range(start, hier_ri)
+            if not all_rows[j]["is_deleted"]
+            and (all_rows[j]["hierarchy_level"] or 0) < level
+        ]
+
+    if this_hl > 0:
+        # This is a hierarchy row — add constraint: row[c] = sum(children[c])
+        child_ids = _children_of(ri, this_hl)
+        for col in data_cols:
+            cid = col["col_id"]
+            child_sum = sum(_pf(cell_map.get(rid, {}).get(cid)) for rid in child_ids)
+            constraints.append({
+                "constraint_id": f"__hier_{row_id}_{cid}",
+                "label":         f"H{this_hl}∑ {col['name']}",
+                "lhs":           col["variable"],
+                "rhs":           str(child_sum),
+                "tolerance":     0.5,
+            })
+    else:
+        # Plain row — check which hierarchy rows it feeds into
+        for level in range(1, 5):
+            hier_ri = None
+            for j in range(ri + 1, len(all_rows)):
+                if (all_rows[j]["hierarchy_level"] or 0) == level and not all_rows[j]["is_deleted"]:
+                    hier_ri = j
+                    break
+            if hier_ri is None:
+                continue
+            # Make sure no same-or-higher-level row sits between this row and H
+            if any(
+                (all_rows[j]["hierarchy_level"] or 0) >= level and not all_rows[j]["is_deleted"]
+                for j in range(ri + 1, hier_ri)
+            ):
+                continue
+            hier_rid = all_rows[hier_ri]["row_id"]
+            sibling_ids = [rid for rid in _children_of(hier_ri, level) if rid != row_id]
+            for col in data_cols:
+                cid = col["col_id"]
+                hier_val = _pf(cell_map.get(hier_rid, {}).get(cid))
+                sib_sum  = sum(_pf(cell_map.get(sid, {}).get(cid)) for sid in sibling_ids)
+                constraints.append({
+                    "constraint_id": f"__hier_{hier_rid}_{cid}_feed",
+                    "label":         f"→H{level} {col['name']}",
+                    "lhs":           col["variable"],
+                    "rhs":           str(hier_val - sib_sum),
+                    "tolerance":     0.5,
+                })
+
+    return constraints
+
+
 @router.get("/suggest")
 def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                 non_negative: bool = Query(False)):
     """
-    For a given row return two cleaning suggestions:
+    For a given row return two cleaning suggestions based on DIGIT-LEVEL edits.
 
-    best_single — the one data-column change that most reduces the total
-        absolute constraint violation.  Computed by single-variable weighted
-        least-squares: for each data column c, α_c is its coefficient in
-        (lhs − rhs) for every violated constraint (extracted by finite
-        difference); the optimal Δc = −Σ(α·δ) / Σ(α²).
+    A "single change" = one digit operation on one cell value:
+      replace a digit / insert a digit / delete a digit.
 
-    min_fix — the smallest set of data-column changes that makes every
-        violated constraint hold within its tolerance.  Found by enumerating
-        subsets of data columns in order of increasing size, building the
-        linear system A·Δ = −δ (where A[i,j] = coefficient of column j in
-        violated constraint i), solving with numpy least-squares, rounding,
-        and verifying.  Caps at subsets of size 4.
+    best_single — for each data column, enumerate all values reachable by one
+        digit operation and pick the candidate that most reduces total
+        constraint violation (explicit rules + implicit hierarchy sum checks).
+        Returns up to 5 candidates (one per column), best first.
+
+    min_fix — the fewest total digit operations across all data columns that
+        makes every constraint hold within tolerance.  Found by BFS over edit
+        depth (max 4 total digit edits, 15 k states).
     """
-    import numpy as np
-    from itertools import combinations
-
     with _db(folder) as conn:
-        cols_list  = [dict(r) for r in conn.execute(
+        cols_list        = [dict(r) for r in conn.execute(
             "SELECT * FROM columns ORDER BY position")]
-        cell_rows  = conn.execute(
+        cell_rows        = conn.execute(
             "SELECT col_id, value FROM cells WHERE row_id=?", (row_id,)
         ).fetchall()
-        constrs    = [dict(r) for r in conn.execute(
-            "SELECT * FROM constraints")]
+        constrs_explicit = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
+        hier_constrs     = _build_hier_constraints(conn, row_id, cols_list)
 
-    col_by_id  = {c["col_id"]: c for c in cols_list}
-    cell_vals  = {r["col_id"]: r["value"] for r in cell_rows}
+    all_constrs = constrs_explicit + hier_constrs
+    col_by_id   = {c["col_id"]: c for c in cols_list}
+    cell_vals   = {r["col_id"]: r["value"] for r in cell_rows}
 
-    if not constrs:
+    if not all_constrs:
         return {"row_id": row_id, "n_violations": 0,
                 "violations": [], "best_single": [], "min_fix": None}
 
-    # Build variable namespace, respecting optional per-column overrides
+    data_cols = [c for c in cols_list if c["role"] == "data"]
+
     def make_ns(overrides: dict = None):
         ns = {}
         for c in cols_list:
-            raw = (overrides or {}).get(c["col_id"],
-                                        cell_vals.get(c["col_id"], ""))
+            raw = (overrides or {}).get(c["col_id"], cell_vals.get(c["col_id"], ""))
             ns[c["variable"]] = parse_number(raw) or 0.0
         return ns
 
     base_ns = make_ns()
 
-    def delta(con, ns):
-        """lhs − rhs for constraint con in namespace ns, or None."""
+    def eval_delta(con, ns):
         lv = _eval_expr(con["lhs"], ns)
         rv = _eval_expr(con["rhs"], ns)
         return (lv - rv) if (lv is not None and rv is not None) else None
 
     # Identify violated constraints for this row
     violated = []
-    for con in constrs:
-        d = delta(con, base_ns)
+    for con in all_constrs:
+        d = eval_delta(con, base_ns)
         if d is not None and abs(d) > con["tolerance"]:
             violated.append({"con": con, "delta": d})
 
@@ -1380,187 +1530,159 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         return {"row_id": row_id, "n_violations": 0,
                 "violations": [], "best_single": [], "min_fix": None}
 
-    total_abs = sum(abs(v["delta"]) for v in violated)
+    total_abs    = sum(abs(v["delta"]) for v in violated)
+    violated_ids = {v["con"]["constraint_id"] for v in violated}
 
-    # Coefficient of col_id in (lhs − rhs) of con:
-    # α = Δ(lhs−rhs) per unit change in x_j, extracted by finite difference.
-    def coeff(con, col_id):
-        var = col_by_id[col_id]["variable"]
-        ns0 = dict(base_ns); ns0[var] = 0.0
-        ns1 = dict(base_ns); ns1[var] = 1.0
-        d0 = delta(con, ns0)
-        d1 = delta(con, ns1)
-        if d0 is None or d1 is None:
-            return 0.0
-        return d1 - d0     # coefficient of x_j in (lhs − rhs)
-
-    data_cols = [c for c in cols_list if c["role"] == "data"]
-
-    # ── Q1: best single-column fix ─────────────────────────────────────────────
-    best_single = []
+    # ── Q1: best single-digit edit per column ─────────────────────────────────
+    best_single: list = []
     for col in data_cols:
-        cid = col["col_id"]
-        alphas, deltas = [], []
-        for v in violated:
-            a = coeff(v["con"], cid)
-            if abs(a) < 1e-10:
-                continue
-            alphas.append(a)
-            deltas.append(v["delta"])
-
-        if not alphas:
-            continue
-
-        # Optimal Δ that minimises Σ(δ_i + α_i·Δ)² → Δ = −Σ(α_i·δ_i)/Σ(α_i²)
-        d_opt = -sum(a * d for a, d in zip(alphas, deltas)) / sum(a * a for a in alphas)
-        cur   = parse_number(cell_vals.get(cid, "")) or 0
-
-        candidates = _round_candidates(cur + d_opt)
+        cid     = col["col_id"]
+        cur_str = str(cell_vals.get(cid) or "")
+        candidates = _digit_edits(cur_str)
         if non_negative:
-            candidates = [v for v in candidates if v >= 0]
+            candidates = {v for v in candidates if v >= 0}
         if not candidates:
             continue
 
-        violated_ids = {v["con"]["constraint_id"] for v in violated}
-
+        col_best = None
         for proposed in candidates:
-            ns_new     = make_ns({cid: str(proposed)})
-            n_fixed    = 0
-            new_abs    = 0.0
-            rem_labels   = []
-            broken_labels = []
-            # Check ALL constraints — fixes AND newly broken ones
-            for con in constrs:
-                nd = delta(con, ns_new)
+            ns_new = make_ns({cid: str(proposed)})
+            n_fixed, n_broken = 0, 0
+            new_abs = 0.0
+            broken_labels: list = []
+            rem_labels:    list = []
+            for con in all_constrs:
+                nd = eval_delta(con, ns_new)
                 if nd is None:
                     continue
-                was_violated = con["constraint_id"] in violated_ids
-                now_violated = abs(nd) > con["tolerance"]
-                if was_violated and not now_violated:
+                was_v = con["constraint_id"] in violated_ids
+                now_v = abs(nd) > con["tolerance"]
+                if was_v and not now_v:
                     n_fixed += 1
-                elif was_violated and now_violated:
+                elif was_v and now_v:
                     new_abs += abs(nd)
                     rem_labels.append(con["label"])
-                elif not was_violated and now_violated:
+                elif not was_v and now_v:
+                    n_broken += 1
                     broken_labels.append(con["label"])
-                    new_abs += abs(nd)   # penalise in total
+                    new_abs += abs(nd)
             improvement = total_abs - new_abs
-            if improvement > 1e-6 or n_fixed > 0:
-                best_single.append({
-                    "col_id":               cid,
-                    "col_name":             col["name"],
-                    "variable":             col["variable"],
-                    "old_value":            cell_vals.get(cid, ""),
-                    "proposed_value":       str(proposed),
-                    "constraints_fixed":    n_fixed,
-                    "constraints_broken":   len(broken_labels),
-                    "broken_labels":        broken_labels,
-                    "remaining_violations": rem_labels,
-                    "violation_reduction":  round(improvement, 4),
-                })
-                break   # first valid rounding wins
+            if improvement <= 1e-6 and n_fixed == 0:
+                continue
+            entry = {
+                "col_id":               cid,
+                "col_name":             col["name"],
+                "variable":             col["variable"],
+                "old_value":            cur_str,
+                "proposed_value":       str(proposed),
+                "n_digit_edits":        1,
+                "constraints_fixed":    n_fixed,
+                "constraints_broken":   n_broken,
+                "broken_labels":        broken_labels,
+                "remaining_violations": rem_labels,
+                "violation_reduction":  round(improvement, 4),
+            }
+            if col_best is None or (
+                entry["constraints_broken"] < col_best["constraints_broken"] or
+                (entry["constraints_broken"] == col_best["constraints_broken"] and
+                 entry["constraints_fixed"] > col_best["constraints_fixed"]) or
+                (entry["constraints_broken"] == col_best["constraints_broken"] and
+                 entry["constraints_fixed"] == col_best["constraints_fixed"] and
+                 entry["violation_reduction"] > col_best["violation_reduction"])
+            ):
+                col_best = entry
 
-    # Sort: fewest broken first, then most fixed, then largest reduction
+        if col_best:
+            best_single.append(col_best)
+
     best_single.sort(key=lambda x: (x["constraints_broken"],
                                     -x["constraints_fixed"],
                                     -x["violation_reduction"]))
 
-    # ── Q2: minimum set of changes that fixes every violation ─────────────────
-    # A[i,j]·Δ[j] = −δ[i]  where Δ[j] = x_j_new − x_j_cur
+    # ── Q2: BFS — minimum total digit edits that fixes everything ─────────────
+    MAX_DEPTH   = 4
+    STATE_LIMIT = 15_000
+
+    def check_all(overrides: dict) -> bool:
+        ns = make_ns(overrides)
+        for con in all_constrs:
+            d = eval_delta(con, ns)
+            if d is None or abs(d) > con["tolerance"]:
+                return False
+        return True
+
     min_fix = None
-    MAX_K   = min(4, len(data_cols))
 
-    for size in range(1, MAX_K + 1):
-        if min_fix:
+    # Shortcut: if any Q1 candidate already fixes everything, use it directly
+    for s in best_single:
+        if not s["remaining_violations"] and not s["constraints_broken"]:
+            min_fix = {
+                "n_digit_edits": 1,
+                "n_changes":     1,
+                "changes": [{
+                    "col_id":         s["col_id"],
+                    "col_name":       s["col_name"],
+                    "variable":       s["variable"],
+                    "old_value":      s["old_value"],
+                    "proposed_value": s["proposed_value"],
+                }],
+            }
             break
-        for subset in combinations(data_cols, size):
-            # Build coefficient matrix rows and rhs vector
-            A_rows, b_vec = [], []
-            for v in violated:
-                row_a = [coeff(v["con"], col["col_id"]) for col in subset]
-                A_rows.append(row_a)
-                b_vec.append(-v["delta"])
 
-            A = np.array(A_rows, dtype=float)
-            b = np.array(b_vec,  dtype=float)
+    if min_fix is None and not check_all({}):
+        # BFS: state = dict {col_id → value_str for overridden cells}
+        queue:   deque = deque([({}, 0)])
+        visited: set   = {frozenset()}
+        states_seen    = 0
 
-            try:
-                d_sol, *_ = np.linalg.lstsq(A, b, rcond=None)
-            except Exception:
+        while queue and states_seen < STATE_LIMIT:
+            overrides, depth = queue.popleft()
+            if depth >= MAX_DEPTH:
                 continue
-
-            cur_vals = [parse_number(cell_vals.get(col["col_id"], "")) or 0
-                        for col in subset]
-
-            # Try all floor/ceil combos for robustness with integer data
-            for candidates in _round_combos(cur_vals, d_sol.tolist()):
-                if non_negative and any(v < 0 for v in candidates):
-                    continue
-                overrides = {col["col_id"]: str(v)
-                             for col, v in zip(subset, candidates)}
-                ns_chk = make_ns(overrides)
-                if all(
-                    (delta(con, ns_chk) or 0) is not None and
-                    abs(delta(con, ns_chk) or 0) <= con["tolerance"]
-                    for con in constrs
-                ):
-                    min_fix = {
-                        "n_changes": size,
-                        "changes": [
-                            {
-                                "col_id":         col["col_id"],
-                                "col_name":       col["name"],
-                                "variable":       col["variable"],
-                                "old_value":      cell_vals.get(col["col_id"], ""),
-                                "proposed_value": str(v),
-                            }
-                            for col, v in zip(subset, candidates)
-                        ],
-                    }
+            found = False
+            for col in data_cols:
+                cid     = col["col_id"]
+                cur_str = overrides.get(cid, str(cell_vals.get(cid) or ""))
+                for new_val in _digit_edits(cur_str):
+                    if non_negative and new_val < 0:
+                        continue
+                    new_ov  = {**overrides, cid: str(new_val)}
+                    key     = frozenset(new_ov.items())
+                    if key in visited:
+                        continue
+                    visited.add(key)
+                    states_seen += 1
+                    if check_all(new_ov):
+                        min_fix = {
+                            "n_digit_edits": depth + 1,
+                            "n_changes":     len(new_ov),
+                            "changes": [
+                                {
+                                    "col_id":         c["col_id"],
+                                    "col_name":       c["name"],
+                                    "variable":       c["variable"],
+                                    "old_value":      str(cell_vals.get(c["col_id"]) or ""),
+                                    "proposed_value": new_ov[c["col_id"]],
+                                }
+                                for c in data_cols if c["col_id"] in new_ov
+                            ],
+                        }
+                        found = True
+                        break
+                    queue.append((new_ov, depth + 1))
+                if found:
                     break
-            if min_fix:
+            if found:
                 break
 
     return {
-        "row_id":      row_id,
+        "row_id":       row_id,
         "n_violations": len(violated),
-        "violations":  [{"label": v["con"]["label"],
-                          "delta": round(v["delta"], 4)} for v in violated],
-        "best_single": best_single[:5],
-        "min_fix":     min_fix,
+        "violations":   [{"label": v["con"]["label"],
+                           "delta": round(v["delta"], 4)} for v in violated],
+        "best_single":  best_single[:5],
+        "min_fix":      min_fix,
     }
-
-
-def _round_candidates(x: float):
-    """int(round(x)) plus floor/ceil, deduplicated."""
-    import math
-    seen, out = set(), []
-    for v in (round(x), math.floor(x), math.ceil(x)):
-        if v not in seen:
-            seen.add(v); out.append(v)
-    return out
-
-
-def _round_combos(cur_vals: list, d_sol: list):
-    """
-    Yield candidate integer vectors for subset columns.
-    For each variable independently tries round/floor/ceil (3 options each),
-    capped at 16 combinations to stay fast.
-    """
-    import math, itertools
-    per_col = []
-    for cur, d in zip(cur_vals, d_sol):
-        new_f = cur + d
-        opts  = list(dict.fromkeys(
-            [round(new_f), math.floor(new_f), math.ceil(new_f)]))
-        per_col.append(opts)
-    seen = set()
-    for combo in itertools.product(*per_col):
-        if combo not in seen:
-            seen.add(combo)
-            yield list(combo)
-            if len(seen) >= 16:
-                return
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────────

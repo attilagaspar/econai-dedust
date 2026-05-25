@@ -531,15 +531,15 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
 
     <!-- Best single fix -->
     <div style="font-size:13px;font-weight:700;color:#e0e0e0;margin-bottom:6px;">
-      1 · Best single change
-      <span style="font-size:11px;font-weight:400;color:#888;">— the one edit that reduces violations the most</span>
+      1 · Best single-digit edit
+      <span style="font-size:11px;font-weight:400;color:#888;">— the one digit change (replace / insert / delete) that reduces violations the most</span>
     </div>
     <div id="suggest-single" style="margin-bottom:14px;"></div>
 
     <!-- Minimum fix set -->
     <div style="font-size:13px;font-weight:700;color:#e0e0e0;margin-bottom:6px;">
-      2 · Minimum fix set
-      <span style="font-size:11px;font-weight:400;color:#888;">— fewest changes that satisfy all rules</span>
+      2 · Minimum digit edits
+      <span style="font-size:11px;font-weight:400;color:#888;">— fewest total digit operations (across all cells) that satisfy all rules</span>
     </div>
     <div id="suggest-minfix" style="margin-bottom:6px;"></div>
 
@@ -1855,8 +1855,9 @@ async function openSuggestModal(rowId) {
   const mf = data.min_fix;
   if (!mf) {
     document.getElementById('suggest-minfix').innerHTML =
-      '<span style="color:#888;font-size:12px;">No complete fix found within 4 column changes.</span>';
+      '<span style="color:#888;font-size:12px;">No complete fix found within 4 digit edits.</span>';
   } else {
+    const nEdits = mf.n_digit_edits ?? mf.n_changes;
     const changeList = mf.changes.map(c =>
       `<tr>
         <td>${_esc(c.col_name)}</td>
@@ -1866,7 +1867,7 @@ async function openSuggestModal(rowId) {
     ).join('');
     const applyAll = `<button class="btn btn-red btn-sm suggest-apply"
       onclick="applySuggestion(${rowId},${JSON.stringify(mf.changes.map(c=>({col_id:c.col_id,value:c.proposed_value})))})">
-      Apply all ${mf.n_changes} change${mf.n_changes>1?'s':''}</button>`;
+      Apply (${nEdits} digit edit${nEdits>1?'s':''})</button>`;
     document.getElementById('suggest-minfix').innerHTML = `
       <table class="suggest-tbl">
         <thead><tr><th>Column</th><th>From</th><th>To</th></tr></thead>
