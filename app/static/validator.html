@@ -331,6 +331,21 @@ tr.hier-row-4 td { border-top: 2px solid rgba(233, 69, 96,.6) !important; }
 #hier-menu .hier-menu-item:hover { background: #0f3460; }
 #hier-menu .hier-menu-sep { border-top: 1px solid #333; margin: 3px 0; }
 
+/* Hierarchy sum annotation */
+.hier-sum-ok  { color: #4cff8f; font-size: 10px; margin-left: 4px; }
+.hier-sum-err { color: #ff5555; font-size: 10px; margin-left: 4px; }
+
+/* Collapse-level filter buttons */
+#collapse-btns { display: flex; gap: 3px; align-items: center; }
+#collapse-btns span { font-size: 11px; color: #888; margin-right: 2px; }
+.collapse-btn {
+  padding: 3px 8px; border-radius: 4px; border: 1px solid #555;
+  font-size: 11px; font-weight: 600; cursor: pointer;
+  background: #0f3460; color: #aaa; transition: background .15s, color .15s;
+}
+.collapse-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+.collapse-btn:hover:not(.active) { background: #1e2a4a; }
+
 /* Clean mode */
 #clean-mode-btn.active { background: #e94560; color: #fff; }
 body.clean-mode #tbl tbody tr:not(.deleted) { cursor: pointer; }
@@ -390,6 +405,14 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
   <label style="display:flex;align-items:center;gap:5px;font-size:12px;" title="Solver will not suggest negative values for any data column">
     <input type="checkbox" id="non-negative-chk" onchange="saveNonNeg()"> Non-negative
   </label>
+  <div id="collapse-btns">
+    <span>Show:</span>
+    <button class="collapse-btn active" onclick="setCollapseLevel(0)">All</button>
+    <button class="collapse-btn" onclick="setCollapseLevel(1)">H1+</button>
+    <button class="collapse-btn" onclick="setCollapseLevel(2)">H2+</button>
+    <button class="collapse-btn" onclick="setCollapseLevel(3)">H3+</button>
+    <button class="collapse-btn" onclick="setCollapseLevel(4)">H4+</button>
+  </div>
   <span id="status">No project loaded</span>
 </div>
 
@@ -543,6 +566,7 @@ let crawlCellMap  = {};          // "rowId_colId" → {type, color, borderTop/Bo
 let crawlSortKey  = 'position';  // 'position' | 'confidence' | 'column'
 let crawlState    = 'idle';      // 'idle' | 'running' | 'done'
 let crawlLastRun  = null;        // Date of last completed scan
+let collapseLevel = 0;           // 0=all; N=only show rows with hierarchy_level>=N
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -645,6 +669,14 @@ function toast(msg) {
 }
 function setStatus(msg) { document.getElementById('status').textContent = msg; }
 
+function setCollapseLevel(n) {
+  collapseLevel = n;
+  document.querySelectorAll('.collapse-btn').forEach((btn, i) => {
+    btn.classList.toggle('active', [0,1,2,3,4][i] === n);
+  });
+  renderTable();
+}
+
 // ── HTML escaping helper ────────────────────────────────────────────────────
 function _esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -676,7 +708,37 @@ function renderTable() {
   head.appendChild(document.createElement('th'));
 
   // ── Body: one big HTML string, then assign once ───────────────────────────
-  const visible = rows.filter(r => incDel || !r.is_deleted);
+  const allVisible = rows.filter(r => incDel || !r.is_deleted);
+
+  // ── Hierarchy sum map ─────────────────────────────────────────────────────
+  // For each hierarchy row of level N, sum all rows with level < N that sit
+  // between this row and the nearest preceding row with level >= N.
+  const dataCols = columns.filter(c => c.role === 'data');
+  const hierSumMap = {};   // row_id → {col_id → sum}
+  allVisible.forEach((row, ri) => {
+    const hl = row.hierarchy_level || 0;
+    if (!hl) return;
+    // Find start index: one past the most recent row whose level >= hl
+    let startRi = 0;
+    for (let j = ri - 1; j >= 0; j--) {
+      if ((allVisible[j].hierarchy_level || 0) >= hl) { startRi = j + 1; break; }
+    }
+    const sums = {};
+    for (let j = startRi; j < ri; j++) {
+      if ((allVisible[j].hierarchy_level || 0) >= hl) continue;
+      dataCols.forEach(col => {
+        const v = parseFloat(((cells[allVisible[j].row_id] || {})[col.col_id] || {}).value);
+        if (!isNaN(v)) sums[col.col_id] = (sums[col.col_id] || 0) + v;
+      });
+    }
+    hierSumMap[row.row_id] = sums;
+  });
+
+  // ── Apply collapse filter ─────────────────────────────────────────────────
+  // collapseLevel=0 → show all; N → only rows with hierarchy_level >= N
+  const visible = collapseLevel === 0
+    ? allVisible
+    : allVisible.filter(r => (r.hierarchy_level || 0) >= collapseLevel);
 
   // ── Lattice grid borders (blue frame around every lattice cell) ─────────
   // page_row_idx is the lattice row index on the page; consecutive DB rows
@@ -768,11 +830,23 @@ function renderTable() {
       const styleA = styles.length ? ` style="${styles.join(';')}"` : '';
       const titleA = orig && val !== orig ? ` title="OCR: ${_esc(orig)}"` : '';
 
+      // Hierarchy sum annotation (only for hierarchy rows, data cols)
+      let sumAnnot = '';
+      if (hl && col.role === 'data' && hierSumMap[row.row_id]) {
+        const s = hierSumMap[row.row_id][col.col_id];
+        if (s !== undefined) {
+          const cellNum = parseFloat(val);
+          const match   = !isNaN(cellNum) && Math.abs(cellNum - s) < 0.5;
+          const cls2    = match ? 'hier-sum-ok' : 'hier-sum-err';
+          sumAnnot = `<span class="${cls2}">(${Number.isInteger(s) ? s : s.toFixed(1)})</span>`;
+        }
+      }
+
       html.push(
         `<td${clsA}${styleA}${titleA}`
         + ` data-col-id="${col.col_id}"`
         + ` data-page-index="${col.page_index ?? 0}">`
-        + `${_esc(val)}</td>`
+        + `${_esc(val)}${sumAnnot}</td>`
       );
     });
 
