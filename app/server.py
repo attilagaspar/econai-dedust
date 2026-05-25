@@ -2301,27 +2301,17 @@ def api_perspective(body: PerspectiveRequest):
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
     img_np = np.array(img)
-    W_img, H_img = img.size   # PIL: (width, height)
 
-    # Forward homography: selected corners → rectangle
+    # Warp the selected quadrilateral to a rectangle.
+    # cv2.warpPerspective takes the forward transform (src→dst) and
+    # inverts it internally for the pixel lookup — no manual inversion needed.
     src_arr = np.float32([tl, tr, br, bl])
     dst_arr = np.float32([(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)])
-    H_fwd   = cv2.getPerspectiveTransform(src_arr, dst_arr)
+    H       = cv2.getPerspectiveTransform(src_arr, dst_arr)
+    out_w, out_h = dst_w, dst_h
 
-    # Find bounding box of the full image in the warped space
-    corners = np.float32([[0, 0], [W_img, 0], [W_img, H_img], [0, H_img]]).reshape(-1, 1, 2)
-    warped  = cv2.perspectiveTransform(corners, H_fwd).reshape(-1, 2)
-    min_x, min_y = float(warped[:, 0].min()), float(warped[:, 1].min())
-    out_w = int(round(float(warped[:, 0].max()) - min_x))
-    out_h = int(round(float(warped[:, 1].max()) - min_y))
-
-    # Shift H_fwd so the output starts at (0, 0)
-    T     = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]], dtype=np.float64)
-    H_eff = (T @ H_fwd.astype(np.float64)).astype(np.float32)
-
-    # cv2.warpPerspective takes the forward transform and inverts internally
     try:
-        out_np = cv2.warpPerspective(img_np, H_eff, (out_w, out_h),
+        out_np = cv2.warpPerspective(img_np, H, (out_w, out_h),
                                      flags=cv2.INTER_CUBIC)
         out = Image.fromarray(out_np)
     except Exception:
