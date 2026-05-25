@@ -1275,6 +1275,235 @@ def api_fix_batch(req: FixBatch):
     return {"ok": True, "applied": applied}
 
 
+# ── Cleaning suggestions ─────────────────────────────────────────────────────
+
+@router.get("/suggest")
+def api_suggest(folder: str = Query(...), row_id: int = Query(...)):
+    """
+    For a given row return two cleaning suggestions:
+
+    best_single — the one data-column change that most reduces the total
+        absolute constraint violation.  Computed by single-variable weighted
+        least-squares: for each data column c, α_c is its coefficient in
+        (lhs − rhs) for every violated constraint (extracted by finite
+        difference); the optimal Δc = −Σ(α·δ) / Σ(α²).
+
+    min_fix — the smallest set of data-column changes that makes every
+        violated constraint hold within its tolerance.  Found by enumerating
+        subsets of data columns in order of increasing size, building the
+        linear system A·Δ = −δ (where A[i,j] = coefficient of column j in
+        violated constraint i), solving with numpy least-squares, rounding,
+        and verifying.  Caps at subsets of size 4.
+    """
+    import numpy as np
+    from itertools import combinations
+
+    with _db(folder) as conn:
+        cols_list  = [dict(r) for r in conn.execute(
+            "SELECT * FROM columns ORDER BY position")]
+        cell_rows  = conn.execute(
+            "SELECT col_id, value FROM cells WHERE row_id=?", (row_id,)
+        ).fetchall()
+        constrs    = [dict(r) for r in conn.execute(
+            "SELECT * FROM constraints")]
+
+    col_by_id  = {c["col_id"]: c for c in cols_list}
+    cell_vals  = {r["col_id"]: r["value"] for r in cell_rows}
+
+    if not constrs:
+        return {"row_id": row_id, "n_violations": 0,
+                "violations": [], "best_single": [], "min_fix": None}
+
+    # Build variable namespace, respecting optional per-column overrides
+    def make_ns(overrides: dict = None):
+        ns = {}
+        for c in cols_list:
+            raw = (overrides or {}).get(c["col_id"],
+                                        cell_vals.get(c["col_id"], ""))
+            ns[c["variable"]] = parse_number(raw) or 0.0
+        return ns
+
+    base_ns = make_ns()
+
+    def delta(con, ns):
+        """lhs − rhs for constraint con in namespace ns, or None."""
+        lv = _eval_expr(con["lhs"], ns)
+        rv = _eval_expr(con["rhs"], ns)
+        return (lv - rv) if (lv is not None and rv is not None) else None
+
+    # Identify violated constraints for this row
+    violated = []
+    for con in constrs:
+        d = delta(con, base_ns)
+        if d is not None and abs(d) > con["tolerance"]:
+            violated.append({"con": con, "delta": d})
+
+    if not violated:
+        return {"row_id": row_id, "n_violations": 0,
+                "violations": [], "best_single": [], "min_fix": None}
+
+    total_abs = sum(abs(v["delta"]) for v in violated)
+
+    # Coefficient of col_id in (lhs − rhs) of con:
+    # α = Δ(lhs−rhs) per unit change in x_j, extracted by finite difference.
+    def coeff(con, col_id):
+        var = col_by_id[col_id]["variable"]
+        ns0 = dict(base_ns); ns0[var] = 0.0
+        ns1 = dict(base_ns); ns1[var] = 1.0
+        d0 = delta(con, ns0)
+        d1 = delta(con, ns1)
+        if d0 is None or d1 is None:
+            return 0.0
+        return d1 - d0     # coefficient of x_j in (lhs − rhs)
+
+    data_cols = [c for c in cols_list if c["role"] == "data"]
+
+    # ── Q1: best single-column fix ─────────────────────────────────────────────
+    best_single = []
+    for col in data_cols:
+        cid = col["col_id"]
+        alphas, deltas = [], []
+        for v in violated:
+            a = coeff(v["con"], cid)
+            if abs(a) < 1e-10:
+                continue
+            alphas.append(a)
+            deltas.append(v["delta"])
+
+        if not alphas:
+            continue
+
+        # Optimal Δ that minimises Σ(δ_i + α_i·Δ)² → Δ = −Σ(α_i·δ_i)/Σ(α_i²)
+        d_opt = -sum(a * d for a, d in zip(alphas, deltas)) / sum(a * a for a in alphas)
+        cur   = parse_number(cell_vals.get(cid, "")) or 0
+
+        for proposed in _round_candidates(cur + d_opt):
+            ns_new    = make_ns({cid: str(proposed)})
+            n_fixed   = 0
+            new_abs   = 0.0
+            rem_labels = []
+            for v in violated:
+                nd = delta(v["con"], ns_new)
+                if nd is None:
+                    continue
+                if abs(nd) <= v["con"]["tolerance"]:
+                    n_fixed += 1
+                else:
+                    new_abs    += abs(nd)
+                    rem_labels.append(v["con"]["label"])
+            improvement = total_abs - new_abs
+            if improvement > 1e-6 or n_fixed > 0:
+                best_single.append({
+                    "col_id":               cid,
+                    "col_name":             col["name"],
+                    "variable":             col["variable"],
+                    "old_value":            cell_vals.get(cid, ""),
+                    "proposed_value":       str(proposed),
+                    "constraints_fixed":    n_fixed,
+                    "remaining_violations": rem_labels,
+                    "violation_reduction":  round(improvement, 4),
+                })
+                break   # first valid rounding wins
+
+    best_single.sort(key=lambda x: (-x["constraints_fixed"],
+                                    -x["violation_reduction"]))
+
+    # ── Q2: minimum set of changes that fixes every violation ─────────────────
+    # A[i,j]·Δ[j] = −δ[i]  where Δ[j] = x_j_new − x_j_cur
+    min_fix = None
+    MAX_K   = min(4, len(data_cols))
+
+    for size in range(1, MAX_K + 1):
+        if min_fix:
+            break
+        for subset in combinations(data_cols, size):
+            # Build coefficient matrix rows and rhs vector
+            A_rows, b_vec = [], []
+            for v in violated:
+                row_a = [coeff(v["con"], col["col_id"]) for col in subset]
+                A_rows.append(row_a)
+                b_vec.append(-v["delta"])
+
+            A = np.array(A_rows, dtype=float)
+            b = np.array(b_vec,  dtype=float)
+
+            try:
+                d_sol, *_ = np.linalg.lstsq(A, b, rcond=None)
+            except Exception:
+                continue
+
+            cur_vals = [parse_number(cell_vals.get(col["col_id"], "")) or 0
+                        for col in subset]
+
+            # Try all floor/ceil combos for robustness with integer data
+            for candidates in _round_combos(cur_vals, d_sol.tolist()):
+                overrides = {col["col_id"]: str(v)
+                             for col, v in zip(subset, candidates)}
+                ns_chk = make_ns(overrides)
+                if all(
+                    (delta(con, ns_chk) or 0) is not None and
+                    abs(delta(con, ns_chk) or 0) <= con["tolerance"]
+                    for con in constrs
+                ):
+                    min_fix = {
+                        "n_changes": size,
+                        "changes": [
+                            {
+                                "col_id":         col["col_id"],
+                                "col_name":       col["name"],
+                                "variable":       col["variable"],
+                                "old_value":      cell_vals.get(col["col_id"], ""),
+                                "proposed_value": str(v),
+                            }
+                            for col, v in zip(subset, candidates)
+                        ],
+                    }
+                    break
+            if min_fix:
+                break
+
+    return {
+        "row_id":      row_id,
+        "n_violations": len(violated),
+        "violations":  [{"label": v["con"]["label"],
+                          "delta": round(v["delta"], 4)} for v in violated],
+        "best_single": best_single[:5],
+        "min_fix":     min_fix,
+    }
+
+
+def _round_candidates(x: float):
+    """int(round(x)) plus floor/ceil, deduplicated."""
+    import math
+    seen, out = set(), []
+    for v in (round(x), math.floor(x), math.ceil(x)):
+        if v not in seen:
+            seen.add(v); out.append(v)
+    return out
+
+
+def _round_combos(cur_vals: list, d_sol: list):
+    """
+    Yield candidate integer vectors for subset columns.
+    For each variable independently tries round/floor/ceil (3 options each),
+    capped at 16 combinations to stay fast.
+    """
+    import math, itertools
+    per_col = []
+    for cur, d in zip(cur_vals, d_sol):
+        new_f = cur + d
+        opts  = list(dict.fromkeys(
+            [round(new_f), math.floor(new_f), math.ceil(new_f)]))
+        per_col.append(opts)
+    seen = set()
+    for combo in itertools.product(*per_col):
+        if combo not in seen:
+            seen.add(combo)
+            yield list(combo)
+            if len(seen) >= 16:
+                return
+
+
 # ── Audit log ─────────────────────────────────────────────────────────────────
 
 @router.get("/audit")

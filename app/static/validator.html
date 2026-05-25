@@ -298,6 +298,28 @@ td.row-actions {
 #fix-table td:first-child { text-align: left; }
 .fix-radio { accent-color: #e94560; }
 
+/* Clean mode */
+#clean-mode-btn.active { background: #e94560; color: #fff; }
+body.clean-mode #tbl tbody tr:not(.deleted) { cursor: pointer; }
+body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
+  background: rgba(233,69,96,.12) !important;
+}
+/* Suggestion tables */
+.suggest-tbl {
+  width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 8px;
+}
+.suggest-tbl th, .suggest-tbl td {
+  border: 1px solid #333; padding: 4px 7px; text-align: right;
+}
+.suggest-tbl th { background: #0f3460; text-align: center; color: #aaa; }
+.suggest-tbl td:first-child, .suggest-tbl th:first-child { text-align: left; }
+.suggest-apply { margin-left: 8px; }
+.viol-chip {
+  display: inline-block; background: #2a1520; color: #ff8080;
+  border-radius: 3px; padding: 1px 6px; font-size: 11px;
+  font-family: monospace; margin: 2px 3px 2px 0;
+}
+
 /* Toast */
 #toast {
   position: fixed; bottom: 20px; left: 50%;
@@ -331,6 +353,7 @@ td.row-actions {
   <button class="btn btn-blue" onclick="detectCrawls()">🔍 Find crawls</button>
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
+  <button id="clean-mode-btn" class="btn btn-blue" onclick="toggleCleanMode()" title="Click any row to get AI cleaning suggestions for violated constraints">🔧 Clean mode</button>
   <span id="status">No project loaded</span>
 </div>
 
@@ -428,6 +451,34 @@ td.row-actions {
 </div>
 
 <div id="toast"></div>
+
+<!-- Cleaning suggestions modal -->
+<div class="modal-bg" id="suggest-modal">
+  <div class="modal" style="min-width:560px;max-width:700px;">
+    <h3>🔧 Cleaning suggestions — <span id="suggest-row-label"></span></h3>
+
+    <!-- Violations summary -->
+    <div id="suggest-violations" style="margin-bottom:12px;"></div>
+
+    <!-- Best single fix -->
+    <div style="font-size:13px;font-weight:700;color:#e0e0e0;margin-bottom:6px;">
+      1 · Best single change
+      <span style="font-size:11px;font-weight:400;color:#888;">— the one edit that reduces violations the most</span>
+    </div>
+    <div id="suggest-single" style="margin-bottom:14px;"></div>
+
+    <!-- Minimum fix set -->
+    <div style="font-size:13px;font-weight:700;color:#e0e0e0;margin-bottom:6px;">
+      2 · Minimum fix set
+      <span style="font-size:11px;font-weight:400;color:#888;">— fewest changes that satisfy all rules</span>
+    </div>
+    <div id="suggest-minfix" style="margin-bottom:6px;"></div>
+
+    <div class="modal-btns">
+      <button class="btn btn-blue" onclick="closeSuggestModal()">Close</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
@@ -676,6 +727,13 @@ function renderTable() {
     if (!td) return;
     const tr = td.closest('tr[data-row-id]');
     if (!tr) return;
+
+    // Clean mode intercepts the click and opens the suggestion modal
+    if (cleanMode && !tr.classList.contains('deleted')) {
+      openSuggestModal(parseInt(tr.dataset.rowId));
+      return;
+    }
+
     const pi = parseInt(td.dataset.pageIndex || '0');
     let gs = [];
     try { gs = JSON.parse(tr.dataset.groupStems || '[]'); } catch (_) {}
@@ -1480,6 +1538,144 @@ function openPageView(stem) {
   style.textContent = ':root{' + style.textContent + '}';
   document.head.appendChild(style);
 })();
+
+// ── Clean mode ─────────────────────────────────────────────────────────────
+let cleanMode = false;
+
+function toggleCleanMode() {
+  cleanMode = !cleanMode;
+  const btn = document.getElementById('clean-mode-btn');
+  btn.classList.toggle('active', cleanMode);
+  document.body.classList.toggle('clean-mode', cleanMode);
+  toast(cleanMode
+    ? '🔧 Clean mode ON — click any row to get suggestions'
+    : 'Clean mode off');
+}
+
+async function openSuggestModal(rowId) {
+  const row = rows.find(r => r.row_id === rowId);
+  document.getElementById('suggest-row-label').textContent =
+    `row ${rowId}` + (row?.page_stem ? ` (${row.page_stem})` : '');
+  document.getElementById('suggest-violations').innerHTML =
+    '<span style="color:#888;font-size:12px;">Loading…</span>';
+  document.getElementById('suggest-single').innerHTML  = '';
+  document.getElementById('suggest-minfix').innerHTML  = '';
+  document.getElementById('suggest-modal').classList.add('show');
+
+  let data;
+  try {
+    const r = await fetch(
+      `${API}/api/validate/suggest?folder=${encodeURIComponent(folder)}&row_id=${rowId}`);
+    if (!r.ok) {
+      const txt = await r.text();
+      document.getElementById('suggest-violations').innerHTML =
+        `<span style="color:#e94560;">Error: ${_esc(txt.slice(0,200))}</span>`;
+      return;
+    }
+    data = await r.json();
+  } catch(err) {
+    document.getElementById('suggest-violations').innerHTML =
+      `<span style="color:#e94560;">Network error: ${_esc(err.message)}</span>`;
+    return;
+  }
+
+  // Violations summary
+  if (data.n_violations === 0) {
+    document.getElementById('suggest-violations').innerHTML =
+      '<span style="color:#4caf50;font-size:12px;">✓ No violations — this row satisfies all rules.</span>';
+    document.getElementById('suggest-single').innerHTML = '';
+    document.getElementById('suggest-minfix').innerHTML = '';
+    return;
+  }
+  const vHtml = data.violations.map(v =>
+    `<span class="viol-chip">${_esc(v.label)}: Δ=${v.delta}</span>`
+  ).join('');
+  document.getElementById('suggest-violations').innerHTML =
+    `<div style="margin-bottom:4px;font-size:12px;color:#aaa;">${data.n_violations} violated rule(s):</div>${vHtml}`;
+
+  // ── Best single fix ────────────────────────────────────────────────────────
+  if (!data.best_single.length) {
+    document.getElementById('suggest-single').innerHTML =
+      '<span style="color:#888;font-size:12px;">No single-column fix improves violations.</span>';
+  } else {
+    const rows_html = data.best_single.map((s, idx) => {
+      const applyBtn = `<button class="btn btn-blue btn-sm suggest-apply"
+        onclick="applySuggestion(${rowId},[{col_id:${s.col_id},value:'${_esc(s.proposed_value)}'}])">
+        Apply</button>`;
+      const rem = s.remaining_violations.length
+        ? `<span style="color:#888;">${s.remaining_violations.length} remaining</span>`
+        : `<span style="color:#4caf50;">✓ all fixed</span>`;
+      return `<tr${idx===0?' style="background:#1a2a1a"':''}>
+        <td>${_esc(s.col_name)}</td>
+        <td>${_esc(s.old_value)}</td>
+        <td style="color:#80ff80;font-weight:700;">${_esc(s.proposed_value)}</td>
+        <td>${s.constraints_fixed} / ${data.n_violations}</td>
+        <td>${rem}</td>
+        <td>${applyBtn}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('suggest-single').innerHTML = `
+      <table class="suggest-tbl">
+        <thead><tr>
+          <th>Column</th><th>From</th><th>To</th>
+          <th>Rules fixed</th><th>Remaining</th><th></th>
+        </tr></thead>
+        <tbody>${rows_html}</tbody>
+      </table>`;
+  }
+
+  // ── Minimum fix set ────────────────────────────────────────────────────────
+  const mf = data.min_fix;
+  if (!mf) {
+    document.getElementById('suggest-minfix').innerHTML =
+      '<span style="color:#888;font-size:12px;">No complete fix found within 4 column changes.</span>';
+  } else {
+    const changeList = mf.changes.map(c =>
+      `<tr>
+        <td>${_esc(c.col_name)}</td>
+        <td>${_esc(c.old_value)}</td>
+        <td style="color:#80ff80;font-weight:700;">${_esc(c.proposed_value)}</td>
+      </tr>`
+    ).join('');
+    const applyAll = `<button class="btn btn-red btn-sm suggest-apply"
+      onclick="applySuggestion(${rowId},${JSON.stringify(mf.changes.map(c=>({col_id:c.col_id,value:c.proposed_value})))})">
+      Apply all ${mf.n_changes} change${mf.n_changes>1?'s':''}</button>`;
+    document.getElementById('suggest-minfix').innerHTML = `
+      <table class="suggest-tbl">
+        <thead><tr><th>Column</th><th>From</th><th>To</th></tr></thead>
+        <tbody>${changeList}</tbody>
+      </table>
+      <div style="text-align:right;margin-top:4px;">${applyAll}</div>`;
+  }
+}
+
+async function applySuggestion(rowId, changes) {
+  for (const ch of changes) {
+    await fetch(`${API}/api/validate/cell`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        folder, row_id: rowId, col_id: ch.col_id,
+        value: ch.value, note: 'clean-mode suggestion',
+      }),
+    });
+    // Update local cell state
+    if (!cells[rowId]) cells[rowId] = {};
+    const old = cells[rowId][ch.col_id] || {};
+    cells[rowId][ch.col_id] = {
+      value: ch.value,
+      original_value: old.original_value || ch.value,
+      source: 'manual',
+    };
+  }
+  closeSuggestModal();
+  renderTable();
+  toast(`Applied ${changes.length} change${changes.length > 1 ? 's' : ''} — run ⚡ Check rules to refresh violations`);
+}
+
+function closeSuggestModal() {
+  document.getElementById('suggest-modal').classList.remove('show');
+}
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 init();
