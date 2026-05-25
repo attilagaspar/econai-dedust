@@ -354,6 +354,9 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
   <button id="clean-mode-btn" class="btn btn-blue" onclick="toggleCleanMode()" title="Click any row to get AI cleaning suggestions for violated constraints">🔧 Clean mode</button>
+  <label style="display:flex;align-items:center;gap:5px;font-size:12px;" title="Solver will not suggest negative values for any data column">
+    <input type="checkbox" id="non-negative-chk" onchange="saveNonNeg()"> Non-negative
+  </label>
   <span id="status">No project loaded</span>
 </div>
 
@@ -545,8 +548,23 @@ function showEmptyState() {
 
 async function loadAll() {
   if (!folder) return;
-  await Promise.all([loadTable(), loadConstraints()]);
+  await Promise.all([loadTable(), loadConstraints(), loadMeta()]);
   renderTab();
+}
+
+async function loadMeta() {
+  const r = await fetch(`${API}/api/validate/meta?folder=${encodeURIComponent(folder)}`);
+  if (!r.ok) return;
+  const meta = await r.json();
+  document.getElementById('non-negative-chk').checked = meta.non_negative === 'true';
+}
+
+async function saveNonNeg() {
+  const val = document.getElementById('non-negative-chk').checked;
+  await fetch(`${API}/api/validate/meta`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ folder, key: 'non_negative', value: String(val) }),
+  });
 }
 
 async function loadTable() {
@@ -1564,8 +1582,9 @@ async function openSuggestModal(rowId) {
 
   let data;
   try {
+    const nonNeg = document.getElementById('non-negative-chk').checked;
     const r = await fetch(
-      `${API}/api/validate/suggest?folder=${encodeURIComponent(folder)}&row_id=${rowId}`);
+      `${API}/api/validate/suggest?folder=${encodeURIComponent(folder)}&row_id=${rowId}&non_negative=${nonNeg}`);
     if (!r.ok) {
       const txt = await r.text();
       document.getElementById('suggest-violations').innerHTML =

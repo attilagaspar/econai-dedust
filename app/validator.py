@@ -1277,8 +1277,31 @@ def api_fix_batch(req: FixBatch):
 
 # ── Cleaning suggestions ─────────────────────────────────────────────────────
 
+@router.get("/meta")
+def api_meta_get(folder: str = Query(...)):
+    with _db(folder) as conn:
+        rows = conn.execute("SELECT key, value FROM meta").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+class MetaSet(BaseModel):
+    folder: str
+    key:    str
+    value:  str
+
+
+@router.post("/meta")
+def api_meta_set(req: MetaSet):
+    with _db(req.folder) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+            (req.key, req.value))
+    return {"ok": True}
+
+
 @router.get("/suggest")
-def api_suggest(folder: str = Query(...), row_id: int = Query(...)):
+def api_suggest(folder: str = Query(...), row_id: int = Query(...),
+                non_negative: bool = Query(False)):
     """
     For a given row return two cleaning suggestions:
 
@@ -1377,7 +1400,13 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...)):
         d_opt = -sum(a * d for a, d in zip(alphas, deltas)) / sum(a * a for a in alphas)
         cur   = parse_number(cell_vals.get(cid, "")) or 0
 
-        for proposed in _round_candidates(cur + d_opt):
+        candidates = _round_candidates(cur + d_opt)
+        if non_negative:
+            candidates = [v for v in candidates if v >= 0]
+        if not candidates:
+            continue
+
+        for proposed in candidates:
             ns_new    = make_ns({cid: str(proposed)})
             n_fixed   = 0
             new_abs   = 0.0
@@ -1437,6 +1466,8 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...)):
 
             # Try all floor/ceil combos for robustness with integer data
             for candidates in _round_combos(cur_vals, d_sol.tolist()):
+                if non_negative and any(v < 0 for v in candidates):
+                    continue
                 overrides = {col["col_id"]: str(v)
                              for col, v in zip(subset, candidates)}
                 ns_chk = make_ns(overrides)
