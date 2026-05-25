@@ -2301,17 +2301,38 @@ def api_perspective(body: PerspectiveRequest):
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
     img_np = np.array(img)
+    H_img, W_img = img_np.shape[:2]
 
-    # Warp the selected quadrilateral to a rectangle.
-    # cv2.warpPerspective takes the forward transform (src→dst) and
-    # inverts it internally for the pixel lookup — no manual inversion needed.
+    # H maps the user-selected quadrilateral to an upright rectangle.
+    # src points: TL, TR, BR, BL (image pixel coords, xy order)
+    # dst points: the corners of the target rectangle
     src_arr = np.float32([tl, tr, br, bl])
     dst_arr = np.float32([(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)])
-    H       = cv2.getPerspectiveTransform(src_arr, dst_arr)
-    out_w, out_h = dst_w, dst_h
+    H = cv2.getPerspectiveTransform(src_arr, dst_arr)
+
+    # Find where the four image corners land under H.
+    # perspectiveTransform expects shape (N,1,2).
+    img_corners = np.float32([
+        [0, 0], [W_img, 0], [W_img, H_img], [0, H_img]
+    ]).reshape(-1, 1, 2)
+    warped_corners = cv2.perspectiveTransform(img_corners, H).reshape(-1, 2)
+
+    min_x = float(warped_corners[:, 0].min())
+    min_y = float(warped_corners[:, 1].min())
+    max_x = float(warped_corners[:, 0].max())
+    max_y = float(warped_corners[:, 1].max())
+
+    # Translation to shift all warped pixels into non-negative coordinates.
+    T = np.array([[1, 0, -min_x],
+                  [0, 1, -min_y],
+                  [0, 0, 1    ]], dtype=np.float64)
+    H_eff = (T @ H.astype(np.float64)).astype(np.float32)
+
+    out_w = int(round(max_x - min_x))
+    out_h = int(round(max_y - min_y))
 
     try:
-        out_np = cv2.warpPerspective(img_np, H, (out_w, out_h),
+        out_np = cv2.warpPerspective(img_np, H_eff, (out_w, out_h),
                                      flags=cv2.INTER_CUBIC)
         out = Image.fromarray(out_np)
     except Exception:
