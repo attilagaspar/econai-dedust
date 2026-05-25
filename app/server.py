@@ -2348,11 +2348,16 @@ def api_perspective(body: PerspectiveRequest):
         raise HTTPException(status_code=500, detail=traceback.format_exc())
 
     if body.save:
+        # Parse JSON first — if it's corrupt we must not touch the image.
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Annotation JSON is corrupt and cannot be updated: {exc}")
         fmt = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG",
                "tif": "TIFF", "tiff": "TIFF"}.get(img_path.suffix.lstrip(".").lower(), "JPEG")
         save_kw = {"quality": 92} if fmt == "JPEG" else {}
         out.save(str(img_path), format=fmt, **save_kw)
-        data = json.loads(jf.read_text(encoding="utf-8"))
         data["shapes"] = []
         data["imageWidth"]  = out_w
         data["imageHeight"] = out_h
