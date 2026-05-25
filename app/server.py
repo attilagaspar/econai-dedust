@@ -2330,12 +2330,15 @@ def api_perspective(body: PerspectiveRequest):
     out_w = int(round(max(xs) - min_x))
     out_h = int(round(max(ys) - min_y))
 
-    # Shift dst_pts so the full warped image starts at (0, 0)
-    adj_dst = [(dx - min_x, dy - min_y) for (dx, dy) in dst_pts]
-
-    # PIL PERSPECTIVE needs the inverse (output pixel → source pixel).
-    # Reuse the same SVD approach: solve H_inv mapping adj_dst → src_pts.
-    H_inv = _solve_homography(adj_dst, src_pts)
+    # PIL PERSPECTIVE needs output→source mapping.
+    # H_fwd maps source→rect; compose with a shift T that moves the output
+    # bounding box to start at (0,0), then invert directly.
+    T = np.array([[1, 0, -min_x],
+                  [0, 1, -min_y],
+                  [0, 0,      1]], dtype=np.float64)
+    H_eff = T @ H_fwd                          # source → shifted-output
+    H_inv = np.linalg.inv(H_eff)              # shifted-output → source
+    H_inv = H_inv / H_inv[2, 2]               # normalise
     pil_coeffs = [
         H_inv[0,0], H_inv[0,1], H_inv[0,2],
         H_inv[1,0], H_inv[1,1], H_inv[1,2],
