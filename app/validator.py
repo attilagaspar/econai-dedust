@@ -119,8 +119,9 @@ def _db(folder: str):
     for stmt in [
         "ALTER TABLE columns ADD COLUMN page_stem  TEXT    DEFAULT ''",
         "ALTER TABLE columns ADD COLUMN page_index INTEGER DEFAULT 0",
-        "ALTER TABLE rows    ADD COLUMN group_stems   TEXT    DEFAULT '[]'",
-        "ALTER TABLE rows    ADD COLUMN page_row_idx  INTEGER",
+        "ALTER TABLE rows    ADD COLUMN group_stems     TEXT    DEFAULT '[]'",
+        "ALTER TABLE rows    ADD COLUMN page_row_idx    INTEGER",
+        "ALTER TABLE rows    ADD COLUMN hierarchy_level INTEGER",
     ]:
         try:
             conn.execute(stmt)
@@ -676,6 +677,20 @@ def api_row_restore(row_id: int, folder: str = Query(...), note: str = Query("")
     with _db(folder) as conn:
         conn.execute("UPDATE rows SET is_deleted=0 WHERE row_id=?", (row_id,))
         _log(conn, "row_restore", row_id=row_id, note=note)
+    return {"ok": True}
+
+
+@router.patch("/row/{row_id}/hierarchy")
+def api_row_hierarchy(row_id: int, folder: str = Query(...),
+                      level: Optional[int] = Query(None)):
+    """Set or clear the hierarchy level of a row (1=járás … 4=ország, None=regular)."""
+    if level is not None and level not in (1, 2, 3, 4):
+        raise HTTPException(status_code=400, detail="level must be 1–4 or absent")
+    with _db(folder) as conn:
+        conn.execute("UPDATE rows SET hierarchy_level=? WHERE row_id=?",
+                     (level, row_id))
+        _log(conn, "row_hierarchy", row_id=row_id,
+             new_value=str(level) if level is not None else "clear")
     return {"ok": True}
 
 
