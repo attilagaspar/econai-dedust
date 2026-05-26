@@ -1802,9 +1802,16 @@ async function openSuggestModal(rowId) {
   }
 
   // Violations summary
+  const hv = data.hier_violations || [];
   if (data.n_violations === 0) {
-    document.getElementById('suggest-violations').innerHTML =
-      '<span style="color:#4caf50;font-size:12px;">✓ No violations — this row satisfies all rules.</span>';
+    let msg = '<span style="color:#4caf50;font-size:12px;">✓ No horizontal constraint violations.</span>';
+    if (hv.length) {
+      const hvHtml = hv.map(v =>
+        `<span class="viol-chip" style="background:#1a2530;color:#80b4ff;">${_esc(v.label)}: Δ=${v.delta}</span>`
+      ).join('');
+      msg += `<div style="margin-top:6px;font-size:11px;color:#888;">Hierarchy checks (informational — not fixed by digit edits):</div>${hvHtml}`;
+    }
+    document.getElementById('suggest-violations').innerHTML = msg;
     document.getElementById('suggest-single').innerHTML = '';
     document.getElementById('suggest-minfix').innerHTML = '';
     return;
@@ -1812,8 +1819,14 @@ async function openSuggestModal(rowId) {
   const vHtml = data.violations.map(v =>
     `<span class="viol-chip">${_esc(v.label)}: Δ=${v.delta}</span>`
   ).join('');
-  document.getElementById('suggest-violations').innerHTML =
-    `<div style="margin-bottom:4px;font-size:12px;color:#aaa;">${data.n_violations} violated rule(s):</div>${vHtml}`;
+  let violSection = `<div style="margin-bottom:4px;font-size:12px;color:#aaa;">${data.n_violations} horizontal rule violation(s):</div>${vHtml}`;
+  if (hv.length) {
+    const hvHtml = hv.map(v =>
+      `<span class="viol-chip" style="background:#1a2530;color:#80b4ff;">${_esc(v.label)}: Δ=${v.delta}</span>`
+    ).join('');
+    violSection += `<div style="margin-top:6px;font-size:11px;color:#888;">Hierarchy checks (informational):</div>${hvHtml}`;
+  }
+  document.getElementById('suggest-violations').innerHTML = violSection;
 
   // ── Best single fix ────────────────────────────────────────────────────────
   if (!data.best_single.length) {

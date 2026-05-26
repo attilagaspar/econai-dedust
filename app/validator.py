@@ -1495,13 +1495,13 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         constrs_explicit = [dict(r) for r in conn.execute("SELECT * FROM constraints")]
         hier_constrs     = _build_hier_constraints(conn, row_id, cols_list)
 
-    all_constrs = constrs_explicit + hier_constrs
-    col_by_id   = {c["col_id"]: c for c in cols_list}
-    cell_vals   = {r["col_id"]: r["value"] for r in cell_rows}
+    col_by_id = {c["col_id"]: c for c in cols_list}
+    cell_vals = {r["col_id"]: r["value"] for r in cell_rows}
 
-    if not all_constrs:
+    if not constrs_explicit and not hier_constrs:
         return {"row_id": row_id, "n_violations": 0,
-                "violations": [], "best_single": [], "min_fix": None}
+                "violations": [], "hier_violations": [],
+                "best_single": [], "min_fix": None}
 
     data_cols = [c for c in cols_list if c["role"] == "data"]
 
@@ -1519,16 +1519,27 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         rv = _eval_expr(con["rhs"], ns)
         return (lv - rv) if (lv is not None and rv is not None) else None
 
-    # Identify violated constraints for this row
+    # Explicit (horizontal) violations drive Q1/Q2 scoring and BFS termination
     violated = []
-    for con in all_constrs:
+    for con in constrs_explicit:
         d = eval_delta(con, base_ns)
         if d is not None and abs(d) > con["tolerance"]:
             violated.append({"con": con, "delta": d})
 
+    # Hierarchy (vertical) violations are shown separately — not fixed by digit edits
+    hier_violated = []
+    for con in hier_constrs:
+        d = eval_delta(con, base_ns)
+        if d is not None and abs(d) > con["tolerance"]:
+            hier_violated.append({"con": con, "delta": d})
+
     if not violated:
         return {"row_id": row_id, "n_violations": 0,
-                "violations": [], "best_single": [], "min_fix": None}
+                "violations": [],
+                "hier_violations": [{"label": v["con"]["label"],
+                                     "delta": round(v["delta"], 4)}
+                                    for v in hier_violated],
+                "best_single": [], "min_fix": None}
 
     total_abs    = sum(abs(v["delta"]) for v in violated)
     violated_ids = {v["con"]["constraint_id"] for v in violated}
@@ -1551,7 +1562,7 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
             new_abs = 0.0
             broken_labels: list = []
             rem_labels:    list = []
-            for con in all_constrs:
+            for con in constrs_explicit:
                 nd = eval_delta(con, ns_new)
                 if nd is None:
                     continue
@@ -1604,8 +1615,9 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
     STATE_LIMIT = 15_000
 
     def check_all(overrides: dict) -> bool:
+        """True when all explicit (horizontal) constraints are satisfied."""
         ns = make_ns(overrides)
-        for con in all_constrs:
+        for con in constrs_explicit:
             d = eval_delta(con, ns)
             if d is None or abs(d) > con["tolerance"]:
                 return False
@@ -1676,12 +1688,14 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                 break
 
     return {
-        "row_id":       row_id,
-        "n_violations": len(violated),
-        "violations":   [{"label": v["con"]["label"],
-                           "delta": round(v["delta"], 4)} for v in violated],
-        "best_single":  best_single[:5],
-        "min_fix":      min_fix,
+        "row_id":          row_id,
+        "n_violations":    len(violated),
+        "violations":      [{"label": v["con"]["label"],
+                              "delta": round(v["delta"], 4)} for v in violated],
+        "hier_violations": [{"label": v["con"]["label"],
+                              "delta": round(v["delta"], 4)} for v in hier_violated],
+        "best_single":     best_single[:5],
+        "min_fix":         min_fix,
     }
 
 
