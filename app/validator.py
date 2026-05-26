@@ -869,6 +869,16 @@ def _eval_expr(expr: str, ns: dict):
         return None
 
 
+def _constraint_weight(con: dict) -> float:
+    """
+    Credibility weight for a constraint based on how many distinct variables
+    appear in its expression.  A 3-variable rule (X1+X2=X3) gets weight 1/3;
+    a 6-variable rule gets 1/6.  Used to up-rank fixes to simpler rules.
+    """
+    n = len(set(_VAR_RE.findall(con["lhs"])) | set(_VAR_RE.findall(con["rhs"])))
+    return 1.0 / max(n, 1)
+
+
 @router.get("/violations")
 def api_violations(folder: str):
     with _db(folder) as conn:
@@ -1519,6 +1529,10 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         rv = _eval_expr(con["rhs"], ns)
         return (lv - rv) if (lv is not None and rv is not None) else None
 
+    # Attach credibility weight (1/n_vars) to each explicit constraint once
+    for con in constrs_explicit:
+        con.setdefault("_weight", _constraint_weight(con))
+
     # Explicit (horizontal) violations drive Q1/Q2 scoring and BFS termination
     violated = []
     for con in constrs_explicit:
@@ -1541,7 +1555,8 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                                     for v in hier_violated],
                 "best_single": [], "min_fix": None}
 
-    total_abs    = sum(abs(v["delta"]) for v in violated)
+    # Weighted total: simpler constraints (fewer vars) count more
+    total_wabs   = sum(abs(v["delta"]) * v["con"]["_weight"] for v in violated)
     violated_ids = {v["con"]["constraint_id"] for v in violated}
 
     # ── Q1: best single-digit edit per column ─────────────────────────────────
@@ -1560,33 +1575,39 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
             abs(eval_delta(con, base_ns) or 0) for con in hier_constrs
         )
 
+        # Precompute hierarchy baseline for tiebreaking
+        hier_base_abs = sum(
+            abs(eval_delta(con, base_ns) or 0) for con in hier_constrs
+        )
+
         col_best = None
         for proposed in candidates:
             ns_new = make_ns({cid: str(proposed)})
             n_fixed, n_broken = 0, 0
-            new_abs = 0.0
+            new_wabs = 0.0          # weighted remaining + newly broken
             broken_labels: list = []
             rem_labels:    list = []
             for con in constrs_explicit:
-                nd = eval_delta(con, ns_new)
+                nd  = eval_delta(con, ns_new)
                 if nd is None:
                     continue
+                w     = con["_weight"]
                 was_v = con["constraint_id"] in violated_ids
                 now_v = abs(nd) > con["tolerance"]
                 if was_v and not now_v:
                     n_fixed += 1
                 elif was_v and now_v:
-                    new_abs += abs(nd)
+                    new_wabs += abs(nd) * w
                     rem_labels.append(con["label"])
                 elif not was_v and now_v:
                     n_broken += 1
                     broken_labels.append(con["label"])
-                    new_abs += abs(nd)
-            improvement = total_abs - new_abs
-            if improvement <= 1e-6 and n_fixed == 0:
+                    new_wabs += abs(nd) * w
+            w_improvement = total_wabs - new_wabs   # positive = net gain
+            if w_improvement <= 1e-9 and n_fixed == 0:
                 continue
 
-            # Hierarchy improvement as tiebreaker (not a target, just a bonus)
+            # Hierarchy improvement as final tiebreaker
             hier_new_abs = sum(
                 abs(eval_delta(con, ns_new) or 0) for con in hier_constrs
             )
@@ -1603,27 +1624,26 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                 "constraints_broken":   n_broken,
                 "broken_labels":        broken_labels,
                 "remaining_violations": rem_labels,
-                "violation_reduction":  round(improvement, 4),
+                "violation_reduction":  round(w_improvement, 4),
                 "hier_improvement":     hier_improvement,
             }
-            if col_best is None or (
-                entry["constraints_broken"] < col_best["constraints_broken"] or
-                (entry["constraints_broken"] == col_best["constraints_broken"] and
-                 entry["constraints_fixed"] > col_best["constraints_fixed"]) or
-                (entry["constraints_broken"] == col_best["constraints_broken"] and
-                 entry["constraints_fixed"] == col_best["constraints_fixed"] and
-                 entry["violation_reduction"] > col_best["violation_reduction"]) or
-                (entry["constraints_broken"] == col_best["constraints_broken"] and
-                 entry["constraints_fixed"] == col_best["constraints_fixed"] and
-                 entry["violation_reduction"] == col_best["violation_reduction"] and
-                 entry["hier_improvement"] > col_best["hier_improvement"])
-            ):
+            # Pick best candidate for this column
+            def _beats(a, b):
+                if a["constraints_broken"] != b["constraints_broken"]:
+                    return a["constraints_broken"] < b["constraints_broken"]
+                if a["constraints_fixed"] != b["constraints_fixed"]:
+                    return a["constraints_fixed"] > b["constraints_fixed"]
+                if abs(a["violation_reduction"] - b["violation_reduction"]) > 1e-9:
+                    return a["violation_reduction"] > b["violation_reduction"]
+                return a["hier_improvement"] > b["hier_improvement"]
+
+            if col_best is None or _beats(entry, col_best):
                 col_best = entry
 
         if col_best:
             best_single.append(col_best)
 
-    # Sort: fewer broken first, more fixed, larger reduction, then hierarchy bonus
+    # Sort: fewer broken → more fixed → higher weighted reduction → hierarchy bonus
     best_single.sort(key=lambda x: (x["constraints_broken"],
                                     -x["constraints_fixed"],
                                     -x["violation_reduction"],
