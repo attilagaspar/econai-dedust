@@ -1477,24 +1477,33 @@ async function renderHistoryTab() {
     return;
   }
   edits.forEach(entry => {
-    const colObj = columns.find(col => col.col_id === entry.col_id);
+    const colObj  = columns.find(col => col.col_id === entry.col_id);
     const colName = colObj ? colObj.name : `col #${entry.col_id}`;
     const label   = _rowLabel(entry.row_id);
     const ts      = entry.ts ? entry.ts.replace('T', ' ').slice(0, 16) : '';
     const ago     = _timeAgo(entry.ts);
-    const oldDisp = (entry.old_value === null || entry.old_value === undefined || entry.old_value === '')
-                    ? '—' : entry.old_value;
-    const newDisp = (entry.new_value === null || entry.new_value === undefined || entry.new_value === '')
-                    ? '—' : entry.new_value;
+    const oldVal  = (entry.old_value === null || entry.old_value === undefined) ? '' : String(entry.old_value);
+    const newVal  = (entry.new_value === null || entry.new_value === undefined) ? '' : String(entry.new_value);
+    const oldDisp = oldVal === '' ? '—' : oldVal;
+    const newDisp = newVal === '' ? '—' : newVal;
 
     const div = document.createElement('div');
     div.className = 'hist-item';
+
+    // Build HTML for everything except the button (avoids quoting/escaping issues in onclick)
     div.innerHTML = `
       <span class="hist-ts" title="${ts}">${ago}</span>
       <div class="hist-label">${label} · <span style="color:#e94560">${colName}</span></div>
       <div class="hist-vals"><s>${oldDisp}</s> → ${newDisp}</div>
-      <button class="btn btn-blue btn-sm" onclick="revertEdit(${entry.row_id}, ${entry.col_id}, ${JSON.stringify(String(entry.old_value ?? ''))}, ${JSON.stringify(colName)})">↩ Revert</button>
     `;
+
+    // Attach button via DOM to avoid HTML-attribute quoting issues with special chars
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-blue btn-sm';
+    btn.textContent = '↩ Revert';
+    btn.addEventListener('click', () => revertEdit(entry.row_id, entry.col_id, oldVal, colName));
+    div.appendChild(btn);
+
     c.appendChild(div);
   });
 }
