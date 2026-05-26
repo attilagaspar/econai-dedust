@@ -331,6 +331,20 @@ tr.hier-row-4 td { border-top: 2px solid rgba(233, 69, 96,.6) !important; }
 #hier-menu .hier-menu-item:hover { background: #0f3460; }
 #hier-menu .hier-menu-sep { border-top: 1px solid #333; margin: 3px 0; }
 
+/* History tab */
+.hist-item {
+  background: #16213e;
+  border: 1px solid #2a3a5e;
+  border-radius: 5px;
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.hist-item .hist-ts    { color: #555; font-size: 10px; float: right; }
+.hist-item .hist-label { color: #aaa; font-weight: 600; margin-bottom: 3px; }
+.hist-item .hist-vals  { color: #80b4ff; font-size: 11px; margin-bottom: 5px; }
+.hist-item .hist-vals s { color: #888; text-decoration: line-through; margin-right: 4px; }
+
 /* Hierarchy sum annotation */
 .hier-sum-ok  { color: #4cff8f; font-size: 10px; margin-left: 4px; }
 .hier-sum-err { color: #ff5555; font-size: 10px; margin-left: 4px; }
@@ -398,7 +412,6 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
     📝 Config ↑<input type="file" accept=".json" style="display:none" onchange="uploadConfig(this)">
   </label>
   <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
-  <button class="btn btn-blue" onclick="detectCrawls()">🔍 Find crawls</button>
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
   <button id="clean-mode-btn" class="btn btn-blue" onclick="toggleCleanMode()" title="Click any row to get AI cleaning suggestions for violated constraints">🔧 Clean mode</button>
@@ -428,7 +441,7 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
       <div class="side-tab active" onclick="showTab('columns')">Columns</div>
       <div class="side-tab" onclick="showTab('rules')">Rules</div>
       <div class="side-tab" onclick="showTab('violations')">Violations</div>
-      <div class="side-tab" onclick="showTab('crawls')">Crawls</div>
+      <div class="side-tab" onclick="showTab('history')">History</div>
       <div class="side-tab" onclick="showTab('log')">Log</div>
     </div>
     <div id="side-content"></div>
@@ -1075,7 +1088,7 @@ function showTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.side-tab').forEach((el, i) => {
     el.classList.toggle('active',
-      ['columns','rules','violations','crawls','log'][i] === tab);
+      ['columns','rules','violations','history','log'][i] === tab);
   });
   renderTab();
 }
@@ -1083,7 +1096,7 @@ function renderTab() {
   if      (activeTab === 'columns')    renderColumnsTab();
   else if (activeTab === 'rules')      renderRulesTab();
   else if (activeTab === 'violations') renderViolationsTab();
-  else if (activeTab === 'crawls')     renderCrawlsTab();
+  else if (activeTab === 'history')    renderHistoryTab();
   else if (activeTab === 'log')        renderLogTab();
 }
 
@@ -1422,6 +1435,88 @@ async function renderLogTab() {
 
 async function downloadAudit(fmt) {
   window.open(`${API}/api/validate/audit/export?folder=${encodeURIComponent(folder)}&format=${fmt}`);
+}
+
+// ── History tab ────────────────────────────────────────────────────────────
+function _timeAgo(isoTs) {
+  if (!isoTs) return '';
+  const diff = Date.now() - new Date(isoTs).getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60)    return `${s}s ago`;
+  if (s < 3600)  return `${Math.floor(s/60)}m ago`;
+  if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+  return `${Math.floor(s/86400)}d ago`;
+}
+
+function _rowLabel(rowId) {
+  // Try to find the index column value for this row
+  const idxCol = columns.find(c => c.role === 'index');
+  if (idxCol) {
+    const v = (cells[rowId] || {})[idxCol.col_id]?.value;
+    if (v !== undefined && v !== null && v !== '') return String(v);
+  }
+  // Fallback: row position
+  const idx = rows.findIndex(r => r.row_id === rowId);
+  return idx >= 0 ? `row ${idx + 1}` : `row #${rowId}`;
+}
+
+async function renderHistoryTab() {
+  const c = document.getElementById('side-content');
+  if (!folder) {
+    c.innerHTML = '<div style="color:#888;font-size:12px;margin-top:20px;text-align:center;">Load a project first.</div>';
+    return;
+  }
+  c.innerHTML = '<div style="color:#888;font-size:12px;margin:12px 0;">Loading…</div>';
+  const r = await fetch(`${API}/api/validate/audit?folder=${encodeURIComponent(folder)}&limit=500`);
+  if (!r.ok) { c.innerHTML = '<div style="color:#e94560">Failed to load history.</div>'; return; }
+  const log = await r.json();
+  const edits = log.filter(e => e.action === 'cell_edit');
+  c.innerHTML = '';
+  if (!edits.length) {
+    c.innerHTML = '<div style="color:#888;font-size:12px;text-align:center;margin-top:30px;">No edits recorded yet.</div>';
+    return;
+  }
+  edits.forEach(entry => {
+    const colObj = columns.find(col => col.col_id === entry.col_id);
+    const colName = colObj ? colObj.name : `col #${entry.col_id}`;
+    const label   = _rowLabel(entry.row_id);
+    const ts      = entry.ts ? entry.ts.replace('T', ' ').slice(0, 16) : '';
+    const ago     = _timeAgo(entry.ts);
+    const oldDisp = (entry.old_value === null || entry.old_value === undefined || entry.old_value === '')
+                    ? '—' : entry.old_value;
+    const newDisp = (entry.new_value === null || entry.new_value === undefined || entry.new_value === '')
+                    ? '—' : entry.new_value;
+
+    const div = document.createElement('div');
+    div.className = 'hist-item';
+    div.innerHTML = `
+      <span class="hist-ts" title="${ts}">${ago}</span>
+      <div class="hist-label">${label} · <span style="color:#e94560">${colName}</span></div>
+      <div class="hist-vals"><s>${oldDisp}</s> → ${newDisp}</div>
+      <button class="btn btn-blue btn-sm" onclick="revertEdit(${entry.row_id}, ${entry.col_id}, ${JSON.stringify(String(entry.old_value ?? ''))}, ${JSON.stringify(colName)})">↩ Revert</button>
+    `;
+    c.appendChild(div);
+  });
+}
+
+async function revertEdit(rowId, colId, oldValue, colName) {
+  if (!folder) return;
+  const current = (cells[rowId] || {})[colId]?.value;
+  if (String(current) === oldValue) { toast('Cell already has that value'); return; }
+  const r = await fetch(`${API}/api/validate/cell`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder, row_id: rowId, col_id: colId, value: oldValue }),
+  });
+  if (!r.ok) { toast('Revert failed'); return; }
+  // Update local state
+  if (!cells[rowId]) cells[rowId] = {};
+  if (!cells[rowId][colId]) cells[rowId][colId] = {};
+  cells[rowId][colId].value = oldValue;
+  _buildViolMaps();
+  renderTable();
+  renderHistoryTab();
+  toast(`Reverted ${colName} → ${oldValue || '—'}`);
 }
 
 // ── Export CSV ─────────────────────────────────────────────────────────────
