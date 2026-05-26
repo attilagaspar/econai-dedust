@@ -29,6 +29,8 @@ from pydantic import BaseModel
 # ── Router ────────────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/validate")
 
+_batch_stop: dict = {}   # job_id → bool
+
 PROJECTS_DIR = Path(__file__).parent.parent / "projects"
 
 
@@ -1772,6 +1774,231 @@ def api_audit(folder: str, limit: int = 1000):
     with _db(folder) as conn:
         return [dict(r) for r in conn.execute(
             "SELECT * FROM audit_log ORDER BY log_id DESC LIMIT ?", (limit,))]
+
+
+def _best_q1_for_batch(row_id, cols_list, cell_vals_by_row, constrs_explicit):
+    """
+    For a single row, find the best single-digit edit (across ALL data columns)
+    that fixes the most explicit constraints while breaking ZERO new ones.
+
+    Takes pre-loaded data — no DB access.
+    Returns dict {row_id, col_id, col_name, old_value, proposed_value,
+                  constraints_fixed, violation_reduction} or None.
+    """
+    cell_vals = cell_vals_by_row.get(row_id, {})
+
+    def make_ns(overrides=None):
+        ns = {}
+        for c in cols_list:
+            raw = (overrides or {}).get(c["col_id"], cell_vals.get(c["col_id"], ""))
+            ns[c["variable"]] = parse_number(raw) or 0.0
+        return ns
+
+    def eval_delta(con, ns):
+        lv = _eval_expr(con["lhs"], ns)
+        rv = _eval_expr(con["rhs"], ns)
+        return (lv - rv) if (lv is not None and rv is not None) else None
+
+    base_ns = make_ns()
+
+    # Pre-check which constraints are currently violated
+    violated_ids = set()
+    for con in constrs_explicit:
+        d  = eval_delta(con, base_ns)
+        op = con.get("operator") or "="
+        if d is not None and _is_violated(d, op, con["tolerance"]):
+            violated_ids.add(con["constraint_id"])
+
+    if not violated_ids:
+        return None
+
+    total_wabs = sum(
+        abs(eval_delta(con, base_ns) or 0) * con.get("_weight", 1.0)
+        for con in constrs_explicit
+        if con["constraint_id"] in violated_ids
+    )
+
+    data_cols = [c for c in cols_list if c["role"] == "data"]
+    global_best = None
+
+    for col in data_cols:
+        cid     = col["col_id"]
+        cur_str = str(cell_vals.get(cid) or "")
+        candidates = _digit_edits(cur_str)
+        if not candidates:
+            continue
+
+        col_best = None
+        for proposed in candidates:
+            ns_new = make_ns({cid: str(proposed)})
+            n_fixed, n_broken = 0, 0
+            new_wabs = 0.0
+            for con in constrs_explicit:
+                nd  = eval_delta(con, ns_new)
+                if nd is None:
+                    continue
+                w     = con.get("_weight", 1.0)
+                op    = con.get("operator") or "="
+                was_v = con["constraint_id"] in violated_ids
+                now_v = _is_violated(nd, op, con["tolerance"])
+                if was_v and not now_v:
+                    n_fixed += 1
+                elif was_v and now_v:
+                    new_wabs += abs(nd) * w
+                elif not was_v and now_v:
+                    n_broken += 1
+                    new_wabs += abs(nd) * w
+
+            if n_broken > 0:
+                continue
+            if n_fixed == 0:
+                continue
+
+            w_improvement = total_wabs - new_wabs
+
+            entry = {
+                "row_id":             row_id,
+                "col_id":             cid,
+                "col_name":           col["name"],
+                "old_value":          cur_str,
+                "proposed_value":     str(proposed),
+                "constraints_fixed":  n_fixed,
+                "violation_reduction": round(w_improvement, 4),
+            }
+
+            def _beats(a, b):
+                if a["constraints_fixed"] != b["constraints_fixed"]:
+                    return a["constraints_fixed"] > b["constraints_fixed"]
+                return a["violation_reduction"] > b["violation_reduction"]
+
+            if col_best is None or _beats(entry, col_best):
+                col_best = entry
+
+        if col_best is not None:
+            if global_best is None or col_best["constraints_fixed"] > global_best["constraints_fixed"] or (
+                col_best["constraints_fixed"] == global_best["constraints_fixed"] and
+                col_best["violation_reduction"] > global_best["violation_reduction"]
+            ):
+                global_best = col_best
+
+    return global_best
+
+
+@router.get("/batch-clean")
+def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
+    """SSE endpoint: iteratively apply the best zero-breaking digit edits."""
+
+    def generate():
+        total_applied = 0
+        iteration     = 0
+        try:
+            while True:
+                if _batch_stop.get(job_id):
+                    yield f"data: {json.dumps({'type': 'stopped', 'iteration': iteration, 'total_applied': total_applied})}\n\n"
+                    return
+
+                iteration += 1
+                yield f"data: {json.dumps({'type': 'scan_start', 'iteration': iteration})}\n\n"
+
+                # ── Load data (no yield inside with block) ────────────────────
+                with _db(folder) as conn:
+                    cols_list = [dict(r) for r in conn.execute(
+                        "SELECT * FROM columns ORDER BY position")]
+                    rows_db   = [dict(r) for r in conn.execute(
+                        "SELECT row_id FROM rows WHERE is_deleted=0 ORDER BY position")]
+                    constrs_explicit = [dict(r) for r in conn.execute(
+                        "SELECT * FROM constraints")]
+                    cell_vals_by_row: dict = {}
+                    for r in conn.execute(
+                            "SELECT c.row_id, c.col_id, c.value FROM cells c"
+                            " JOIN rows rv ON c.row_id=rv.row_id AND rv.is_deleted=0"):
+                        cell_vals_by_row.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
+
+                # Attach weights once
+                for con in constrs_explicit:
+                    con.setdefault("_weight", _constraint_weight(con))
+
+                # ── Scan all rows ─────────────────────────────────────────────
+                candidates = []
+                for row in rows_db:
+                    if _batch_stop.get(job_id):
+                        yield f"data: {json.dumps({'type': 'stopped', 'iteration': iteration, 'total_applied': total_applied})}\n\n"
+                        return
+                    best = _best_q1_for_batch(
+                        row["row_id"], cols_list, cell_vals_by_row, constrs_explicit)
+                    if best is not None:
+                        candidates.append(best)
+
+                yield f"data: {json.dumps({'type': 'scan_done', 'iteration': iteration, 'n_candidates': len(candidates)})}\n\n"
+
+                if not candidates:
+                    yield f"data: {json.dumps({'type': 'done', 'reason': 'no_candidates', 'max_fixed': 0, 'total_applied': total_applied})}\n\n"
+                    return
+
+                max_fixed = max(c["constraints_fixed"] for c in candidates)
+                if max_fixed <= 1:
+                    yield f"data: {json.dumps({'type': 'done', 'reason': 'max_fixed_1', 'max_fixed': max_fixed, 'total_applied': total_applied})}\n\n"
+                    return
+
+                to_apply = [c for c in candidates if c["constraints_fixed"] == max_fixed]
+                yield f"data: {json.dumps({'type': 'applying', 'iteration': iteration, 'count': len(to_apply), 'max_fixed': max_fixed})}\n\n"
+
+                # ── Apply all selected edits in one transaction ───────────────
+                applied_list = []
+                ts = datetime.now(timezone.utc).isoformat()
+                with _db(folder) as conn:
+                    for cand in to_apply:
+                        existing = conn.execute(
+                            "SELECT value, original_value FROM cells WHERE row_id=? AND col_id=?",
+                            (cand["row_id"], cand["col_id"]),
+                        ).fetchone()
+                        old_val  = existing["value"] if existing else None
+                        orig_val = existing["original_value"] if existing else cand["proposed_value"]
+                        conn.execute(
+                            "INSERT OR REPLACE INTO cells(row_id,col_id,value,original_value,source)"
+                            " VALUES(?,?,?,?,'batch_clean')",
+                            (cand["row_id"], cand["col_id"], cand["proposed_value"], orig_val),
+                        )
+                        conn.execute(
+                            "INSERT INTO audit_log"
+                            "(ts,action,row_id,col_id,old_value,new_value,note)"
+                            " VALUES(?,?,?,?,?,?,?)",
+                            (ts, "cell_edit",
+                             cand["row_id"], cand["col_id"],
+                             old_val, cand["proposed_value"],
+                             f"batch_clean iter={iteration}"),
+                        )
+                        applied_list.append({
+                            "row_id":            cand["row_id"],
+                            "col_id":            cand["col_id"],
+                            "col_name":          cand["col_name"],
+                            "old_value":         old_val,
+                            "new_value":         cand["proposed_value"],
+                            "constraints_fixed": cand["constraints_fixed"],
+                        })
+                # Transaction committed — now yield events
+                for ap in applied_list:
+                    yield f"data: {json.dumps({'type': 'applied', **ap})}\n\n"
+
+                total_applied += len(applied_list)
+                yield f"data: {json.dumps({'type': 'iter_done', 'iteration': iteration, 'applied': len(applied_list), 'total_applied': total_applied})}\n\n"
+
+        except GeneratorExit:
+            pass
+        finally:
+            _batch_stop.pop(job_id, None)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.delete("/batch-clean/{job_id}")
+def api_batch_clean_stop(job_id: str):
+    _batch_stop[job_id] = True
+    return {"ok": True}
 
 
 @router.get("/audit/export")

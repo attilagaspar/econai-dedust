@@ -336,9 +336,10 @@ tr.hier-row-4 td { border-top: 2px solid rgba(233, 69, 96,.6) !important; }
   background: #16213e;
   border: 1px solid #2a3a5e;
   border-radius: 5px;
-  padding: 7px 9px;
+  padding: 7px 9px 7px 28px;   /* left pad reserves space for checkbox */
   margin-bottom: 6px;
   font-size: 11px;
+  position: relative;
 }
 .hist-item .hist-ts    { color: #555; font-size: 10px; float: right; }
 .hist-item .hist-label { color: #aaa; font-weight: 600; margin-bottom: 3px; }
@@ -382,6 +383,41 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
   font-family: monospace; margin: 2px 3px 2px 0;
 }
 
+/* Batch clean console modal */
+#batch-modal {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,.7);
+  align-items: center; justify-content: center;
+}
+#batch-modal.show { display: flex; }
+#batch-box {
+  background: #16213e; border: 1px solid #e94560; border-radius: 8px;
+  width: 640px; max-height: 80vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#batch-box h3 { color: #e94560; padding: 12px 16px; font-size: 14px; border-bottom: 1px solid #333; margin:0; }
+#batch-console {
+  flex: 1; overflow-y: auto; font-family: monospace; font-size: 11px;
+  background: #080818; padding: 10px; min-height: 200px; max-height: 400px;
+  line-height: 1.6;
+}
+#batch-footer {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-top: 1px solid #333;
+}
+#batch-status-txt { font-size: 11px; color: #888; flex: 1; }
+
+/* History multi-select */
+.hist-check {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; cursor: pointer; accent-color: #e94560;
+}
+#hist-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0 8px; border-bottom: 1px solid #2a3a5e; margin-bottom: 8px;
+  font-size: 11px;
+}
+
 /* Toast */
 #toast {
   position: fixed; bottom: 20px; left: 50%;
@@ -411,6 +447,7 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
   <label class="btn btn-blue" title="Upload edited config JSON" style="cursor:pointer;">
     📝 Config ↑<input type="file" accept=".json" style="display:none" onchange="uploadConfig(this)">
   </label>
+  <button class="btn btn-red" onclick="startBatchClean()" title="Automatically apply digit edits that fix the most constraints">⚡ Batch Clean</button>
   <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
@@ -471,6 +508,19 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
     <div class="modal-btns">
       <button class="btn btn-blue" onclick="closeImportModal()">Cancel</button>
       <button class="btn btn-red" onclick="doImport()">Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- Batch clean console modal -->
+<div id="batch-modal">
+  <div id="batch-box">
+    <h3>⚡ Batch Cleaning</h3>
+    <div id="batch-console"></div>
+    <div id="batch-footer">
+      <span id="batch-status-txt">Idle</span>
+      <button id="batch-stop-btn" class="btn btn-red btn-sm" onclick="stopBatchClean()">■ Stop</button>
+      <button class="btn btn-blue btn-sm" onclick="closeBatchModal()">✕ Close</button>
     </div>
   </div>
 </div>
@@ -580,6 +630,13 @@ let crawlSortKey  = 'position';  // 'position' | 'confidence' | 'column'
 let crawlState    = 'idle';      // 'idle' | 'running' | 'done'
 let crawlLastRun  = null;        // Date of last completed scan
 let collapseLevel = 0;           // 0=all; N=only show rows with hierarchy_level>=N
+
+let batchJobId    = null;
+let batchEvtSrc   = null;
+let batchRunning  = false;
+
+let selectedHistoryIds = new Set();   // Set of log_id numbers
+let historyEntriesMap  = new Map();   // log_id → {row_id, col_id, old_value, col_name}
 
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
@@ -1472,10 +1529,58 @@ async function renderHistoryTab() {
   const log = await r.json();
   const edits = log.filter(e => e.action === 'cell_edit');
   c.innerHTML = '';
+
+  // Rebuild historyEntriesMap
+  historyEntriesMap.clear();
+  edits.forEach(entry => {
+    const colObj  = columns.find(col => col.col_id === entry.col_id);
+    const colName = colObj ? colObj.name : `col #${entry.col_id}`;
+    const oldVal  = (entry.old_value === null || entry.old_value === undefined) ? '' : String(entry.old_value);
+    historyEntriesMap.set(entry.log_id, {
+      row_id:    entry.row_id,
+      col_id:    entry.col_id,
+      old_value: oldVal,
+      col_name:  colName,
+    });
+  });
+
   if (!edits.length) {
     c.innerHTML = '<div style="color:#888;font-size:12px;text-align:center;margin-top:30px;">No edits recorded yet.</div>';
     return;
   }
+
+  // Toolbar
+  const toolbar = document.createElement('div');
+  toolbar.id = 'hist-toolbar';
+  const selAll = document.createElement('input');
+  selAll.type = 'checkbox';
+  selAll.id   = 'hist-sel-all';
+  selAll.onchange = () => {
+    if (selAll.checked) {
+      edits.forEach(e => selectedHistoryIds.add(e.log_id));
+    } else {
+      selectedHistoryIds.clear();
+    }
+    // Re-render checkboxes
+    document.querySelectorAll('.hist-check').forEach(chk => {
+      chk.checked = selectedHistoryIds.has(parseInt(chk.dataset.logId));
+    });
+    updateHistToolbar();
+  };
+  const selLabel = document.createElement('label');
+  selLabel.htmlFor = 'hist-sel-all';
+  selLabel.textContent = 'Select all';
+  const revertBtn = document.createElement('button');
+  revertBtn.id = 'hist-revert-btn';
+  revertBtn.className = 'btn btn-red btn-sm';
+  revertBtn.textContent = '↩ Revert Selected (0)';
+  revertBtn.disabled = true;
+  revertBtn.onclick = revertSelected;
+  toolbar.appendChild(selAll);
+  toolbar.appendChild(selLabel);
+  toolbar.appendChild(revertBtn);
+  c.appendChild(toolbar);
+
   edits.forEach(entry => {
     const colObj  = columns.find(col => col.col_id === entry.col_id);
     const colName = colObj ? colObj.name : `col #${entry.col_id}`;
@@ -1490,12 +1595,27 @@ async function renderHistoryTab() {
     const div = document.createElement('div');
     div.className = 'hist-item';
 
+    // Checkbox
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.className = 'hist-check';
+    chk.dataset.logId = entry.log_id;
+    chk.checked = selectedHistoryIds.has(entry.log_id);
+    chk.onchange = () => {
+      if (chk.checked) selectedHistoryIds.add(entry.log_id);
+      else selectedHistoryIds.delete(entry.log_id);
+      updateHistToolbar();
+    };
+    div.appendChild(chk);
+
     // Build HTML for everything except the button (avoids quoting/escaping issues in onclick)
-    div.innerHTML = `
+    const contentSpan = document.createElement('span');
+    contentSpan.innerHTML = `
       <span class="hist-ts" title="${ts}">${ago}</span>
       <div class="hist-label">${label} · <span style="color:#e94560">${colName}</span></div>
       <div class="hist-vals"><s>${oldDisp}</s> → ${newDisp}</div>
     `;
+    div.appendChild(contentSpan);
 
     // Attach button via DOM to avoid HTML-attribute quoting issues with special chars
     const btn = document.createElement('button');
@@ -1506,6 +1626,8 @@ async function renderHistoryTab() {
 
     c.appendChild(div);
   });
+
+  updateHistToolbar();
 }
 
 async function revertEdit(rowId, colId, oldValue, colName) {
@@ -1526,6 +1648,146 @@ async function revertEdit(rowId, colId, oldValue, colName) {
   renderTable();
   renderHistoryTab();
   toast(`Reverted ${colName} → ${oldValue || '—'}`);
+}
+
+function updateHistToolbar() {
+  const btn = document.getElementById('hist-revert-btn');
+  const selAll = document.getElementById('hist-sel-all');
+  if (!btn) return;
+  const n = selectedHistoryIds.size;
+  btn.textContent = `↩ Revert Selected (${n})`;
+  btn.disabled = n === 0;
+  // Update select-all checkbox state
+  const total = historyEntriesMap.size;
+  if (selAll) {
+    selAll.indeterminate = n > 0 && n < total;
+    selAll.checked = total > 0 && n === total;
+  }
+}
+
+async function revertSelected() {
+  if (selectedHistoryIds.size === 0) return;
+  const ids = [...selectedHistoryIds];
+  // Revert in order shown (reverse-chronological = newest first is correct for undo)
+  let done = 0;
+  for (const logId of ids) {
+    const entry = historyEntriesMap.get(logId);
+    if (!entry) continue;
+    const r = await fetch(`${API}/api/validate/cell`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, row_id: entry.row_id, col_id: entry.col_id, value: entry.old_value }),
+    });
+    if (r.ok) {
+      if (!cells[entry.row_id]) cells[entry.row_id] = {};
+      if (!cells[entry.row_id][entry.col_id]) cells[entry.row_id][entry.col_id] = {};
+      cells[entry.row_id][entry.col_id].value = entry.old_value;
+      done++;
+    }
+  }
+  selectedHistoryIds.clear();
+  _buildViolMaps();
+  renderTable();
+  renderHistoryTab();
+  toast(`Reverted ${done} edit(s)`);
+}
+
+// ── Batch cleaning ──────────────────────────────────────────────────────────
+function startBatchClean() {
+  if (!folder) { toast('Load a project first'); return; }
+  if (batchRunning) { document.getElementById('batch-modal').classList.add('show'); return; }
+
+  batchJobId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+
+  const cons = document.getElementById('batch-console');
+  cons.innerHTML = '';
+  document.getElementById('batch-status-txt').textContent = 'Starting…';
+  document.getElementById('batch-stop-btn').disabled = false;
+  document.getElementById('batch-modal').classList.add('show');
+
+  batchRunning = true;
+  batchEvtSrc = new EventSource(
+    `${API}/api/validate/batch-clean?folder=${encodeURIComponent(folder)}&job_id=${encodeURIComponent(batchJobId)}`
+  );
+  batchEvtSrc.onmessage = e => batchHandleMsg(JSON.parse(e.data));
+  batchEvtSrc.onerror   = () => {
+    if (batchRunning) {
+      batchLog('<span style="color:#e94560">⚠ Connection closed.</span>');
+      batchRunning = false;
+      batchEvtSrc.close();
+      document.getElementById('batch-stop-btn').disabled = true;
+    }
+  };
+}
+
+function batchLog(html) {
+  const c = document.getElementById('batch-console');
+  const d = document.createElement('div');
+  d.innerHTML = html;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+}
+
+function batchHandleMsg(msg) {
+  switch (msg.type) {
+    case 'scan_start':
+      batchLog(`<span style="color:#444">── Iteration ${msg.iteration} ──────────────────────</span>`);
+      document.getElementById('batch-status-txt').textContent = `Iter ${msg.iteration}: scanning…`;
+      break;
+    case 'scan_done':
+      batchLog(`  ${msg.n_candidates} candidate edit(s) found`);
+      break;
+    case 'applying':
+      batchLog(`  Applying <b>${msg.count}</b> edit(s) each fixing <b style="color:#4cff8f">${msg.max_fixed}</b> constraint(s)…`);
+      document.getElementById('batch-status-txt').textContent = `Iter ${msg.iteration}: applying ${msg.count} edit(s)…`;
+      break;
+    case 'applied':
+      batchLog(`  ✓ row&nbsp;${msg.row_id} <span style="color:#e94560">${msg.col_name}</span>: <s style="color:#666">${msg.old_value ?? '—'}</s> → <span style="color:#4cff8f">${msg.new_value}</span> <span style="color:#888">(fixes ${msg.constraints_fixed})</span>`);
+      if (!cells[msg.row_id]) cells[msg.row_id] = {};
+      if (!cells[msg.row_id][msg.col_id]) cells[msg.row_id][msg.col_id] = {};
+      cells[msg.row_id][msg.col_id].value = msg.new_value;
+      break;
+    case 'iter_done':
+      batchLog(`  → <b>${msg.applied}</b> applied. Running total: <b>${msg.total_applied}</b>`);
+      _buildViolMaps(); renderTable();
+      break;
+    case 'done': {
+      batchRunning = false; batchEvtSrc.close();
+      document.getElementById('batch-stop-btn').disabled = true;
+      const why = msg.reason === 'no_candidates'
+        ? 'No more improvable rows.'
+        : `Best available edit fixes only ${msg.max_fixed} constraint — stopping.`;
+      batchLog(`<span style="color:#4cff8f">✓ Done. ${why} Total edits applied: <b>${msg.total_applied}</b></span>`);
+      document.getElementById('batch-status-txt').textContent = `Complete — ${msg.total_applied} edits applied.`;
+      _buildViolMaps(); renderTable();
+      if (activeTab === 'history') renderHistoryTab();
+      break;
+    }
+    case 'stopped': {
+      batchRunning = false; batchEvtSrc.close();
+      document.getElementById('batch-stop-btn').disabled = true;
+      batchLog(`<span style="color:#ffaa44">⚠ Stopped. Total edits applied: <b>${msg.total_applied}</b></span>`);
+      document.getElementById('batch-status-txt').textContent = `Stopped — ${msg.total_applied} edits applied.`;
+      _buildViolMaps(); renderTable();
+      if (activeTab === 'history') renderHistoryTab();
+      break;
+    }
+  }
+}
+
+async function stopBatchClean() {
+  if (!batchJobId || !batchRunning) return;
+  document.getElementById('batch-stop-btn').disabled = true;
+  await fetch(`${API}/api/validate/batch-clean/${encodeURIComponent(batchJobId)}`, { method: 'DELETE' });
+}
+
+function closeBatchModal() {
+  if (batchRunning) {
+    if (!confirm('Batch cleaning is still running. Stop it and close?')) return;
+    stopBatchClean();
+  }
+  document.getElementById('batch-modal').classList.remove('show');
 }
 
 // ── Export CSV ─────────────────────────────────────────────────────────────
