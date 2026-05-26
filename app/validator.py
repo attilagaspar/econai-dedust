@@ -121,7 +121,8 @@ def _db(folder: str):
         "ALTER TABLE columns ADD COLUMN page_index INTEGER DEFAULT 0",
         "ALTER TABLE rows    ADD COLUMN group_stems     TEXT    DEFAULT '[]'",
         "ALTER TABLE rows    ADD COLUMN page_row_idx    INTEGER",
-        "ALTER TABLE rows    ADD COLUMN hierarchy_level INTEGER",
+        "ALTER TABLE rows        ADD COLUMN hierarchy_level INTEGER",
+        "ALTER TABLE constraints ADD COLUMN operator TEXT DEFAULT '='",
     ]:
         try:
             conn.execute(stmt)
@@ -802,11 +803,15 @@ def api_config_import(req: ConfigImport):
         # Replace all constraints
         conn.execute("DELETE FROM constraints")
         for con in req.constraints:
+            op = con.get("operator", "=")
+            if op not in ("=", ">=", "<="):
+                op = "="
             conn.execute(
-                "INSERT INTO constraints(label,lhs,rhs,tolerance,severity)"
-                " VALUES(?,?,?,?,?)",
+                "INSERT INTO constraints(label,lhs,operator,rhs,tolerance,severity)"
+                " VALUES(?,?,?,?,?,?)",
                 (con.get("label", ""),
                  con.get("lhs", ""),
+                 op,
                  con.get("rhs", ""),
                  float(con.get("tolerance", 0)),
                  con.get("severity", "error")),
@@ -823,6 +828,7 @@ class ConstraintIn(BaseModel):
     label: str
     lhs: str
     rhs: str
+    operator: str = "="
     tolerance: float = 0.0
     severity: str = "error"
 
@@ -837,14 +843,15 @@ def api_constraints(folder: str):
 @router.post("/constraint")
 def api_constraint_add(req: ConstraintIn):
     with _db(req.folder) as conn:
+        op = req.operator if req.operator in ("=", ">=", "<=") else "="
         cur = conn.execute(
-            "INSERT INTO constraints(label,lhs,rhs,tolerance,severity)"
-            " VALUES(?,?,?,?,?)",
-            (req.label, req.lhs, req.rhs, req.tolerance, req.severity),
+            "INSERT INTO constraints(label,lhs,operator,rhs,tolerance,severity)"
+            " VALUES(?,?,?,?,?,?)",
+            (req.label, req.lhs, op, req.rhs, req.tolerance, req.severity),
         )
         cid = cur.lastrowid
         _log(conn, "constraint_add", constraint_id=cid,
-             note=f"{req.label}: {req.lhs} == {req.rhs} ±{req.tolerance}")
+             note=f"{req.label}: {req.lhs} {op} {req.rhs} ±{req.tolerance}")
     return {"ok": True, "constraint_id": cid}
 
 
@@ -867,6 +874,18 @@ def _eval_expr(expr: str, ns: dict):
         return float(eval(expr, _SAFE_BUILTINS, ns))
     except Exception:
         return None
+
+
+def _is_violated(delta: float, operator: str, tolerance: float) -> bool:
+    """Return True when lhs − rhs (=delta) breaks the constraint."""
+    op = operator or "="
+    if op == "=":
+        return abs(delta) > tolerance
+    if op == ">=":
+        return delta < -tolerance   # lhs < rhs − tol
+    if op == "<=":
+        return delta > tolerance    # lhs > rhs + tol
+    return abs(delta) > tolerance   # fallback
 
 
 def _constraint_weight(con: dict) -> float:
@@ -925,7 +944,8 @@ def api_violations(folder: str):
                 continue
 
             delta = lv - rv
-            if abs(delta) > con["tolerance"]:
+            op    = con.get("operator") or "="
+            if _is_violated(delta, op, con["tolerance"]):
                 viols.append({
                     "row_id":  rid,
                     "delta":   round(delta, 6),
@@ -962,7 +982,9 @@ def _row_rule_viol(rid, pc, cells_raw, override=None):
         ns[var] = num
     lv = _eval_expr(pc["lhs"], ns)
     rv = _eval_expr(pc["rhs"], ns)
-    return lv is not None and rv is not None and abs(lv - rv) > pc["tol"]
+    if lv is None or rv is None:
+        return False
+    return _is_violated(lv - rv, pc.get("op", "="), pc["tol"])
 
 
 # ── Crawl detection ──────────────────────────────────────────────────────────
@@ -1049,7 +1071,9 @@ def api_detect_crawl(folder: str):
         used_cols = {var: var_to_col[var] for var in used_vars}
         if used_cols:
             parsed_cons.append({
-                "lhs": con["lhs"], "rhs": con["rhs"], "tol": con["tolerance"],
+                "lhs": con["lhs"], "rhs": con["rhs"],
+                "op":  con.get("operator") or "=",
+                "tol": con["tolerance"],
                 "used_cols": used_cols,
                 "col_id_set": set(used_cols.values()),
             })
@@ -1078,7 +1102,7 @@ def api_detect_crawl(folder: str):
                 continue
             lv = _eval_expr(pc["lhs"], ns)
             rv = _eval_expr(pc["rhs"], ns)
-            if lv is not None and rv is not None and abs(lv - rv) > pc["tol"]:
+            if lv is not None and rv is not None and _is_violated(lv - rv, pc["op"], pc["tol"]):
                 count += 1
         return count
 
@@ -1537,14 +1561,15 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
     violated = []
     for con in constrs_explicit:
         d = eval_delta(con, base_ns)
-        if d is not None and abs(d) > con["tolerance"]:
+        op = con.get("operator") or "="
+        if d is not None and _is_violated(d, op, con["tolerance"]):
             violated.append({"con": con, "delta": d})
 
     # Hierarchy (vertical) violations are shown separately — not fixed by digit edits
     hier_violated = []
     for con in hier_constrs:
         d = eval_delta(con, base_ns)
-        if d is not None and abs(d) > con["tolerance"]:
+        if d is not None and _is_violated(d, "=", con["tolerance"]):
             hier_violated.append({"con": con, "delta": d})
 
     if not violated:
@@ -1592,8 +1617,9 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                 if nd is None:
                     continue
                 w     = con["_weight"]
+                op    = con.get("operator") or "="
                 was_v = con["constraint_id"] in violated_ids
-                now_v = abs(nd) > con["tolerance"]
+                now_v = _is_violated(nd, op, con["tolerance"])
                 if was_v and not now_v:
                     n_fixed += 1
                 elif was_v and now_v:
@@ -1657,8 +1683,9 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         """True when all explicit (horizontal) constraints are satisfied."""
         ns = make_ns(overrides)
         for con in constrs_explicit:
-            d = eval_delta(con, ns)
-            if d is None or abs(d) > con["tolerance"]:
+            d  = eval_delta(con, ns)
+            op = con.get("operator") or "="
+            if d is None or _is_violated(d, op, con["tolerance"]):
                 return False
         return True
 

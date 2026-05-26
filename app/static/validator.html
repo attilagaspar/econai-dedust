@@ -1119,7 +1119,7 @@ function renderRulesTab() {
       <div class="constraint-label">${dot}${con.label}
         <button class="btn btn-blue btn-sm" style="float:right;" onclick="deleteConstraint(${con.constraint_id})">✕</button>
       </div>
-      <div class="constraint-expr">${con.lhs} == ${con.rhs}</div>
+      <div class="constraint-expr">${_esc(con.lhs)} ${_esc(con.operator||'=')} ${_esc(con.rhs)}</div>
       <div class="constraint-meta">tolerance ±${con.tolerance} · severity: ${con.severity}</div>`;
     c.appendChild(div);
   });
@@ -1140,6 +1140,12 @@ function renderRulesTab() {
     <input type="text" id="new-con-label" placeholder="e.g. Small + Large = Total">
     <label>Left-hand side</label>
     <input type="text" id="new-con-lhs" placeholder="e.g. small_emp + large_emp">
+    <label>Operator</label>
+    <select id="new-con-op" style="font-size:13px;font-weight:700;">
+      <option value="=">=&nbsp;&nbsp;(equals)</option>
+      <option value=">=">&gt;= (at least)</option>
+      <option value="<=">&lt;= (at most)</option>
+    </select>
     <label>Right-hand side</label>
     <input type="text" id="new-con-rhs" placeholder="e.g. total_emp">
     <label>Tolerance</label>
@@ -1158,13 +1164,14 @@ function renderRulesTab() {
 async function addConstraint() {
   const label = document.getElementById('new-con-label').value.trim();
   const lhs   = document.getElementById('new-con-lhs').value.trim();
+  const op    = document.getElementById('new-con-op').value;
   const rhs   = document.getElementById('new-con-rhs').value.trim();
   const tol   = parseFloat(document.getElementById('new-con-tol').value) || 0;
   const sev   = document.getElementById('new-con-sev').value;
   if (!label || !lhs || !rhs) { toast('Fill in label, LHS and RHS'); return; }
   const r = await fetch(`${API}/api/validate/constraint`, {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ folder, label, lhs, rhs, tolerance: tol, severity: sev }),
+    body: JSON.stringify({ folder, label, lhs, operator: op, rhs, tolerance: tol, severity: sev }),
   });
   if (!r.ok) { toast('Error adding rule'); return; }
   await loadConstraints();
@@ -1214,10 +1221,12 @@ function renderViolationsTab() {
       const dpos = v.delta > 0;
       const item = document.createElement('div');
       item.className = 'viol-row-item';
+      const op = vg.constraint.operator || '=';
+      const opLabel = op === '>=' ? '≥' : op === '<=' ? '≤' : '=';
       item.innerHTML = `
         <span style="color:#888;min-width:28px;">r${pos}</span>
         <span class="delta-badge ${dpos ? 'delta-pos' : ''}">Δ${v.delta > 0 ? '+' : ''}${v.delta}</span>
-        <span style="flex:1;color:#aaa;font-size:10px;">${v.lhs_val} vs ${v.rhs_val}</span>
+        <span style="flex:1;color:#aaa;font-size:10px;">${v.lhs_val} ${opLabel} ${v.rhs_val}</span>
         <button class="btn btn-blue btn-sm" onclick="openFixModal(${cid}, ${v.row_id})">Fix</button>`;
       body.appendChild(item);
     });
