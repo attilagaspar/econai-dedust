@@ -1919,8 +1919,9 @@ def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
                     con.setdefault("_weight", _constraint_weight(con))
 
                 # ── Scan all rows ─────────────────────────────────────────────
+                n_rows = len(rows_db)
                 candidates = []
-                for row in rows_db:
+                for row_idx, row in enumerate(rows_db):
                     if _batch_stop.get(job_id):
                         yield f"data: {json.dumps({'type': 'stopped', 'iteration': iteration, 'total_applied': total_applied})}\n\n"
                         return
@@ -1928,6 +1929,7 @@ def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
                         row["row_id"], cols_list, cell_vals_by_row, constrs_explicit)
                     if best is not None:
                         candidates.append(best)
+                    yield f"data: {json.dumps({'type': 'row_progress', 'row_idx': row_idx + 1, 'n_rows': n_rows})}\n\n"
 
                 yield f"data: {json.dumps({'type': 'scan_done', 'iteration': iteration, 'n_candidates': len(candidates)})}\n\n"
 

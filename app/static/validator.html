@@ -1731,10 +1731,25 @@ function batchLog(html) {
 
 function batchHandleMsg(msg) {
   switch (msg.type) {
-    case 'scan_start':
+    case 'scan_start': {
       batchLog(`<span style="color:#444">── Iteration ${msg.iteration} ──────────────────────</span>`);
+      // Insert a dedicated progress line that will be updated in place
+      const prog = document.createElement('div');
+      prog.id = 'batch-row-progress';
+      prog.style.cssText = 'color:#666;padding-left:4px;';
+      prog.textContent = '  Scanning row 0 / …';
+      document.getElementById('batch-console').appendChild(prog);
       document.getElementById('batch-status-txt').textContent = `Iter ${msg.iteration}: scanning…`;
       break;
+    }
+    case 'row_progress': {
+      const prog = document.getElementById('batch-row-progress');
+      const pct  = Math.round(msg.row_idx / msg.n_rows * 100);
+      const bar  = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
+      if (prog) prog.textContent = `  ${bar} ${msg.row_idx} / ${msg.n_rows} rows`;
+      document.getElementById('batch-status-txt').textContent = `Scanning row ${msg.row_idx} / ${msg.n_rows}…`;
+      break;
+    }
     case 'scan_done':
       batchLog(`  ${msg.n_candidates} candidate edit(s) found`);
       break;
