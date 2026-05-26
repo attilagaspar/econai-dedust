@@ -1555,6 +1555,11 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
         if not candidates:
             continue
 
+        # Precompute hierarchy baseline for tiebreaking
+        hier_base_abs = sum(
+            abs(eval_delta(con, base_ns) or 0) for con in hier_constrs
+        )
+
         col_best = None
         for proposed in candidates:
             ns_new = make_ns({cid: str(proposed)})
@@ -1580,6 +1585,13 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
             improvement = total_abs - new_abs
             if improvement <= 1e-6 and n_fixed == 0:
                 continue
+
+            # Hierarchy improvement as tiebreaker (not a target, just a bonus)
+            hier_new_abs = sum(
+                abs(eval_delta(con, ns_new) or 0) for con in hier_constrs
+            )
+            hier_improvement = round(hier_base_abs - hier_new_abs, 4)
+
             entry = {
                 "col_id":               cid,
                 "col_name":             col["name"],
@@ -1592,6 +1604,7 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                 "broken_labels":        broken_labels,
                 "remaining_violations": rem_labels,
                 "violation_reduction":  round(improvement, 4),
+                "hier_improvement":     hier_improvement,
             }
             if col_best is None or (
                 entry["constraints_broken"] < col_best["constraints_broken"] or
@@ -1599,16 +1612,22 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                  entry["constraints_fixed"] > col_best["constraints_fixed"]) or
                 (entry["constraints_broken"] == col_best["constraints_broken"] and
                  entry["constraints_fixed"] == col_best["constraints_fixed"] and
-                 entry["violation_reduction"] > col_best["violation_reduction"])
+                 entry["violation_reduction"] > col_best["violation_reduction"]) or
+                (entry["constraints_broken"] == col_best["constraints_broken"] and
+                 entry["constraints_fixed"] == col_best["constraints_fixed"] and
+                 entry["violation_reduction"] == col_best["violation_reduction"] and
+                 entry["hier_improvement"] > col_best["hier_improvement"])
             ):
                 col_best = entry
 
         if col_best:
             best_single.append(col_best)
 
+    # Sort: fewer broken first, more fixed, larger reduction, then hierarchy bonus
     best_single.sort(key=lambda x: (x["constraints_broken"],
                                     -x["constraints_fixed"],
-                                    -x["violation_reduction"]))
+                                    -x["violation_reduction"],
+                                    -x.get("hier_improvement", 0)))
 
     # ── Q2: BFS — minimum total digit edits that fixes everything ─────────────
     MAX_DEPTH   = 4
@@ -1694,7 +1713,7 @@ def api_suggest(folder: str = Query(...), row_id: int = Query(...),
                               "delta": round(v["delta"], 4)} for v in violated],
         "hier_violations": [{"label": v["con"]["label"],
                               "delta": round(v["delta"], 4)} for v in hier_violated],
-        "best_single":     best_single[:5],
+        "best_single":     best_single[:8],
         "min_fix":         min_fix,
     }
 
