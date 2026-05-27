@@ -948,6 +948,7 @@
       <select id="batch-op" onchange="onBatchOpChange()">
         <option value="clear">Clear annotations</option>
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
+        <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice correction + snap + trim</option>
         <option value="ocr_tesseract">OCR — Tesseract</option>
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
         <option value="llm">LLM</option>
@@ -1716,6 +1717,70 @@ async function trimOverlaps() {
   drawOverlay(); updatePanel();
   await replaceAllShapes();
   showToast(`Trimmed ${trimmed} overlapping pair${trimmed !== 1 ? 's' : ''}`);
+}
+
+// ── Pure (no-UI) helpers for batch use ───────────────────────────────────────
+
+/** Snap all lattice shapes in `shapes` in-place to their row/col band medians. */
+function _snapShapesToGrid(shapes) {
+  const sShapes = shapes.filter(s => s.super_row != null && s.super_column != null && s.points?.length >= 2);
+  if (!sShapes.length) return;
+  const rowData = {}, colData = {};
+  sShapes.forEach(s => {
+    const xs = s.points.map(p => p[0]), ys = s.points.map(p => p[1]);
+    const r = s.super_row, c = s.super_column;
+    (rowData[r] ??= { tops: [], bots: [] }).tops.push(Math.min(...ys));
+    rowData[r].bots.push(Math.max(...ys));
+    (colData[c] ??= { lefts: [], rights: [] }).lefts.push(Math.min(...xs));
+    colData[c].rights.push(Math.max(...xs));
+  });
+  const rowBands = {}, colBands = {};
+  Object.entries(rowData).forEach(([r, d]) => rowBands[+r] = {
+    top: Math.round(_median(d.tops)), bot: Math.round(_median(d.bots))
+  });
+  Object.entries(colData).forEach(([c, d]) => colBands[+c] = {
+    left: Math.round(_median(d.lefts)), right: Math.round(_median(d.rights))
+  });
+  const sortedCols = Object.keys(colBands).map(Number).sort((a, b) => colBands[a].left - colBands[b].left);
+  for (let i = 0; i < sortedCols.length - 1; i++)
+    colBands[sortedCols[i]].right = colBands[sortedCols[i + 1]].left;
+  const sortedRows = Object.keys(rowBands).map(Number).sort((a, b) => rowBands[a].top - rowBands[b].top);
+  for (let i = 0; i < sortedRows.length - 1; i++)
+    rowBands[sortedRows[i]].bot = rowBands[sortedRows[i + 1]].top;
+  sShapes.forEach(s => {
+    const rb = rowBands[s.super_row], cb = colBands[s.super_column];
+    if (!rb || !cb) return;
+    s.points = [[cb.left, rb.top], [cb.right, rb.bot]];
+  });
+}
+
+/** Trim overlapping shape pairs in `shapes` in-place. Returns number of pairs trimmed. */
+function _trimShapesOverlaps(shapes) {
+  const rects = shapes.map(_shapeRect);
+  let trimmed = 0;
+  for (let i = 0; i < shapes.length; i++) {
+    if (rects[i].x2 <= rects[i].x1 || rects[i].y2 <= rects[i].y1) continue;
+    for (let j = i + 1; j < shapes.length; j++) {
+      if (rects[j].x2 <= rects[j].x1 || rects[j].y2 <= rects[j].y1) continue;
+      const a = rects[i], b = rects[j];
+      const ix1 = Math.max(a.x1, b.x1), iy1 = Math.max(a.y1, b.y1);
+      const ix2 = Math.min(a.x2, b.x2), iy2 = Math.min(a.y2, b.y2);
+      if (ix1 >= ix2 || iy1 >= iy2) continue;
+      const overlapW = ix2 - ix1, overlapH = iy2 - iy1;
+      if (overlapW <= overlapH) {
+        const mid = Math.round((ix1 + ix2) / 2);
+        if (a.x1 <= b.x1) { a.x2 = Math.min(a.x2, mid); b.x1 = Math.max(b.x1, mid); }
+        else               { b.x2 = Math.min(b.x2, mid); a.x1 = Math.max(a.x1, mid); }
+      } else {
+        const mid = Math.round((iy1 + iy2) / 2);
+        if (a.y1 <= b.y1) { a.y2 = Math.min(a.y2, mid); b.y1 = Math.max(b.y1, mid); }
+        else               { b.y2 = Math.min(b.y2, mid); a.y1 = Math.max(a.y1, mid); }
+      }
+      trimmed++;
+    }
+  }
+  if (trimmed) rects.forEach((r, i) => { shapes[i].points = [[r.x1, r.y1], [r.x2, r.y2]]; });
+  return trimmed;
 }
 
 // ── Diagnostic highlighting ───────────────────────────────────────────────────
@@ -2555,7 +2620,7 @@ function drawOverlay() {
           l.setAttribute('x1',p1.x); l.setAttribute('y1',p1.y);
           l.setAttribute('x2',p2.x); l.setAttribute('y2',p2.y);
           l.setAttribute('stroke', inDelMode ? '#ff4466' : '#00e5ff');
-          l.setAttribute('stroke-width', inDelMode ? '2.5' : '1.5');
+          l.setAttribute('stroke-width', inDelMode ? '3' : '2.5');
           l.setAttribute('stroke-opacity','0.75'); l.style.pointerEvents='none';
           svgOverlay.appendChild(l);
         };
@@ -3319,7 +3384,7 @@ function closeBatchModal() {
 
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
-  document.getElementById('batch-ol-opts').style.display        = op === 'overlaps_lattice' ? 'flex' : 'none';
+  document.getElementById('batch-ol-opts').style.display        = (op === 'overlaps_lattice' || op === 'overlaps_lattice_snap_trim') ? 'flex' : 'none';
   const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
   document.getElementById('batch-ocr-opts').style.display       = isOcr            ? 'flex' : 'none';
   document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
@@ -3397,6 +3462,8 @@ async function runBatch() {
     if (!confirm(`Clear annotations on ${sorted.length} page(s)? This cannot be undone.`)) return;
   } else if (op === 'overlaps_lattice') {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'overlaps_lattice_snap_trim') {
+    if (!confirm(`Run overlap removal + lattice correction + snap + trim on ${sorted.length} page(s)?`)) return;
   } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
     if (!confirm(`Run OCR on ${sorted.length} page(s)?`)) return;
   } else if (op === 'llm') {
@@ -3461,6 +3528,44 @@ async function runBatch() {
         shapes = pageData.shapes;
         pageData = savedPageData;
       }
+
+      // Save
+      await fetch(`${API}/api/page/shapes?${params}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shapes }),
+      });
+
+    } else if (op === 'overlaps_lattice_snap_trim') {
+      // Load page
+      const res  = await fetch(`${API}/api/page?${params}`);
+      const data = await res.json();
+      let shapes = data.shapes || [];
+
+      // Step 1: remove overlaps
+      const threshold = parseFloat(document.getElementById('batch-overlap-thresh').value) / 100 || 0.5;
+      const toDelete  = _computeOverlapsOnShapes(shapes, threshold);
+      shapes = shapes.filter((_, i) => !toDelete.has(i));
+
+      // Step 2: lattice detection
+      const checks = document.querySelectorAll('#batch-label-checks input[type=checkbox]');
+      const remembered = {};
+      const selectedLabels = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selectedLabels.push(cb.value); });
+      localStorage.setItem('latticeLabels', JSON.stringify(remembered));
+
+      if (selectedLabels.length) {
+        const savedPageData = pageData;
+        pageData = { shapes };
+        _latticeDetect(selectedLabels);
+        shapes = pageData.shapes;
+        pageData = savedPageData;
+      }
+
+      // Step 3: snap to grid
+      _snapShapesToGrid(shapes);
+
+      // Step 4: trim remaining overlaps
+      _trimShapesOverlaps(shapes);
 
       // Save
       await fetch(`${API}/api/page/shapes?${params}`, {
