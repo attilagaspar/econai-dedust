@@ -401,6 +401,24 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
   background: #080818; padding: 10px; min-height: 200px; max-height: 400px;
   line-height: 1.6;
 }
+#batch-settings {
+  padding: 10px 14px; border-bottom: 1px solid #2a3a5e;
+  display: flex; flex-direction: column; gap: 7px;
+  background: #0f1c36;
+}
+.batch-set-lbl {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #aaa; flex-wrap: wrap;
+}
+.batch-set-lbl input[type=number] {
+  width: 54px; background: #0f3460; color: #e0e0e0;
+  border: 1px solid #555; border-radius: 4px; padding: 3px 6px; font-size: 12px;
+}
+.batch-set-lbl select {
+  background: #0f3460; color: #e0e0e0;
+  border: 1px solid #555; border-radius: 4px; padding: 3px 6px; font-size: 12px;
+}
+.batch-set-hint { font-size: 10px; color: #555; font-style: italic; }
 #batch-footer {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; border-top: 1px solid #333;
@@ -516,6 +534,29 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
 <div id="batch-modal">
   <div id="batch-box">
     <h3>⚡ Batch Cleaning</h3>
+
+    <!-- Settings bar -->
+    <div id="batch-settings">
+      <label class="batch-set-lbl">
+        Min constraints fixed to apply:
+        <input type="number" id="batch-min-fix" value="2" min="1" max="20">
+        <span class="batch-set-hint">stop when best available fixes fewer than this</span>
+      </label>
+      <label class="batch-set-lbl">
+        Only fix constraints with ≤ N variables:
+        <select id="batch-max-vars">
+          <option value="0">Any</option>
+          <option value="2">≤ 2</option>
+          <option value="3">≤ 3</option>
+          <option value="4">≤ 4</option>
+          <option value="5">≤ 5</option>
+          <option value="6">≤ 6</option>
+          <option value="7">≤ 7</option>
+        </select>
+        <span class="batch-set-hint">e.g. ≤3 means only A+B=C rules, not A+B+C+D+E=F</span>
+      </label>
+    </div>
+
     <div id="batch-console"></div>
     <div id="batch-footer">
       <span id="batch-status-txt">Idle</span>
@@ -1706,9 +1747,14 @@ function startBatchClean() {
   document.getElementById('batch-stop-btn').disabled = false;
   document.getElementById('batch-modal').classList.add('show');
 
+  const minFix  = parseInt(document.getElementById('batch-min-fix').value)  || 2;
+  const maxVars = parseInt(document.getElementById('batch-max-vars').value) || 0;
+  const varsLbl = maxVars ? `≤${maxVars} vars` : 'any vars';
+  batchLog(`<span style="color:#80b4ff">Settings: min_fix=${minFix}, constraints with ${varsLbl}</span>`);
+
   batchRunning = true;
   batchEvtSrc = new EventSource(
-    `${API}/api/validate/batch-clean?folder=${encodeURIComponent(folder)}&job_id=${encodeURIComponent(batchJobId)}`
+    `${API}/api/validate/batch-clean?folder=${encodeURIComponent(folder)}&job_id=${encodeURIComponent(batchJobId)}&min_fix=${minFix}&max_vars=${maxVars}`
   );
   batchEvtSrc.onmessage = e => batchHandleMsg(JSON.parse(e.data));
   batchEvtSrc.onerror   = () => {
@@ -1772,7 +1818,7 @@ function batchHandleMsg(msg) {
       document.getElementById('batch-stop-btn').disabled = true;
       const why = msg.reason === 'no_candidates'
         ? 'No more improvable rows.'
-        : `Best available edit fixes only ${msg.max_fixed} constraint — stopping.`;
+        : `Best available edit fixes only ${msg.max_fixed} constraint(s), below min_fix=${msg.min_fix} — stopping.`;
       batchLog(`<span style="color:#4cff8f">✓ Done. ${why} Total edits applied: <b>${msg.total_applied}</b></span>`);
       document.getElementById('batch-status-txt').textContent = `Complete — ${msg.total_applied} edits applied.`;
       _buildViolMaps(); renderTable();

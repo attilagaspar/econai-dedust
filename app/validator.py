@@ -1776,10 +1776,15 @@ def api_audit(folder: str, limit: int = 1000):
             "SELECT * FROM audit_log ORDER BY log_id DESC LIMIT ?", (limit,))]
 
 
-def _best_q1_for_batch(row_id, cols_list, cell_vals_by_row, constrs_explicit):
+def _best_q1_for_batch(row_id, cols_list, cell_vals_by_row, constrs_explicit,
+                       max_constraint_vars: int = 0):
     """
     For a single row, find the best single-digit edit (across ALL data columns)
     that fixes the most explicit constraints while breaking ZERO new ones.
+
+    max_constraint_vars — if > 0, only count a fixed constraint toward n_fixed when
+        it has ≤ max_constraint_vars distinct variable names (lhs + rhs combined).
+        Breaking any constraint is still penalised regardless of complexity.
 
     Takes pre-loaded data — no DB access.
     Returns dict {row_id, col_id, col_name, old_value, proposed_value,
@@ -1842,11 +1847,13 @@ def _best_q1_for_batch(row_id, cols_list, cell_vals_by_row, constrs_explicit):
                 was_v = con["constraint_id"] in violated_ids
                 now_v = _is_violated(nd, op, con["tolerance"])
                 if was_v and not now_v:
-                    n_fixed += 1
+                    # Only count toward n_fixed if within complexity limit
+                    if max_constraint_vars == 0 or con.get("_n_vars", 0) <= max_constraint_vars:
+                        n_fixed += 1
                 elif was_v and now_v:
                     new_wabs += abs(nd) * w
                 elif not was_v and now_v:
-                    n_broken += 1
+                    n_broken += 1   # always penalise breaking, regardless of complexity
                     new_wabs += abs(nd) * w
 
             if n_broken > 0:
@@ -1885,8 +1892,14 @@ def _best_q1_for_batch(row_id, cols_list, cell_vals_by_row, constrs_explicit):
 
 
 @router.get("/batch-clean")
-def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
-    """SSE endpoint: iteratively apply the best zero-breaking digit edits."""
+def api_batch_clean(folder: str = Query(...), job_id: str = Query(...),
+                    min_fix: int = Query(2), max_vars: int = Query(0)):
+    """SSE endpoint: iteratively apply the best zero-breaking digit edits.
+
+    min_fix  — stop when the globally best edit fixes fewer than this many constraints.
+    max_vars — if > 0, only count fixes on constraints with ≤ max_vars distinct variables
+               (still avoids breaking any constraint regardless of complexity).
+    """
 
     def generate():
         total_applied = 0
@@ -1914,9 +1927,13 @@ def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
                             " JOIN rows rv ON c.row_id=rv.row_id AND rv.is_deleted=0"):
                         cell_vals_by_row.setdefault(r["row_id"], {})[r["col_id"]] = r["value"]
 
-                # Attach weights once
+                # Attach weights and variable counts once
                 for con in constrs_explicit:
                     con.setdefault("_weight", _constraint_weight(con))
+                    if "_n_vars" not in con:
+                        con["_n_vars"] = len(
+                            set(_VAR_RE.findall(con["lhs"])) | set(_VAR_RE.findall(con["rhs"]))
+                        )
 
                 # ── Scan all rows ─────────────────────────────────────────────
                 n_rows = len(rows_db)
@@ -1926,7 +1943,8 @@ def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
                         yield f"data: {json.dumps({'type': 'stopped', 'iteration': iteration, 'total_applied': total_applied})}\n\n"
                         return
                     best = _best_q1_for_batch(
-                        row["row_id"], cols_list, cell_vals_by_row, constrs_explicit)
+                        row["row_id"], cols_list, cell_vals_by_row, constrs_explicit,
+                        max_constraint_vars=max_vars)
                     if best is not None:
                         candidates.append(best)
                     yield f"data: {json.dumps({'type': 'row_progress', 'row_idx': row_idx + 1, 'n_rows': n_rows})}\n\n"
@@ -1938,8 +1956,8 @@ def api_batch_clean(folder: str = Query(...), job_id: str = Query(...)):
                     return
 
                 max_fixed = max(c["constraints_fixed"] for c in candidates)
-                if max_fixed <= 1:
-                    yield f"data: {json.dumps({'type': 'done', 'reason': 'max_fixed_1', 'max_fixed': max_fixed, 'total_applied': total_applied})}\n\n"
+                if max_fixed < min_fix:
+                    yield f"data: {json.dumps({'type': 'done', 'reason': 'below_min_fix', 'max_fixed': max_fixed, 'min_fix': min_fix, 'total_applied': total_applied})}\n\n"
                     return
 
                 to_apply = [c for c in candidates if c["constraints_fixed"] == max_fixed]
