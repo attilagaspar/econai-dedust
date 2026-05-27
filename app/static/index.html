@@ -1860,10 +1860,18 @@ function toggleLatticeSepMode(type) {
   drawOverlay();
 }
 
+// Red crosshair cursor for separator insertion modes
+const _SEP_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cline x1='12' y1='2' x2='12' y2='22' stroke='%23e94560' stroke-width='2.5' stroke-linecap='round'/%3E%3Cline x1='2' y1='12' x2='22' y2='12' stroke='%23e94560' stroke-width='2.5' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='12' r='2.5' fill='%23e94560'/%3E%3C/svg%3E\") 12 12, crosshair";
+
 function _updateLatticeSepBtns() {
   document.getElementById('lattice-col-sep-btn').classList.toggle('active', latticeSepMode === 'col');
   document.getElementById('lattice-row-sep-btn').classList.toggle('active', latticeSepMode === 'row');
   document.getElementById('lattice-del-sep-btn').classList.toggle('active', latticeSepMode === 'delete');
+  // Red crosshair cursor while in insertion mode; restore default when off
+  const container = document.getElementById('osd-container');
+  if (container) {
+    container.style.cursor = (latticeSepMode === 'row' || latticeSepMode === 'col') ? _SEP_CURSOR : '';
+  }
 }
 
 async function handleLatticeSepClick(e, rowBands, colBands) {
@@ -1885,9 +1893,8 @@ async function handleLatticeSepClick(e, rowBands, colBands) {
       const xs = s.points.map(q => q[0]), ys = s.points.map(q => q[1]);
       const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
       if (x <= x1 || x >= x2) return;
-      // Clip original shape to left part
-      const [p1, p2] = s.points;
-      if (p1[0] <= p2[0]) p2[0] = x; else p1[0] = x;
+      // Replace points entirely — avoids 4-point rect mutation ambiguity
+      s.points = [[x1, y1], [x, y2]];
       // New right part
       toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null, points: [[x, y1], [x2, y2]] });
     });
@@ -1902,9 +1909,8 @@ async function handleLatticeSepClick(e, rowBands, colBands) {
       const xs = s.points.map(q => q[0]), ys = s.points.map(q => q[1]);
       const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
       if (y <= y1 || y >= y2) return;
-      // Clip original shape to top part
-      const [p1, p2] = s.points;
-      if (p1[1] <= p2[1]) p2[1] = y; else p1[1] = y;
+      // Replace points entirely — avoids 4-point rect mutation ambiguity
+      s.points = [[x1, y1], [x2, y]];
       // New bottom part
       toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null, points: [[x1, y], [x2, y2]] });
     });
@@ -2623,7 +2629,7 @@ function drawOverlay() {
             catcher.setAttribute('height',Math.max(0,pbr.y-ptl.y));
             catcher.setAttribute('fill','none'); catcher.setAttribute('stroke','none');
             catcher.style.pointerEvents='all';
-            catcher.style.cursor=latticeSepMode==='col'?'col-resize':'row-resize';
+            catcher.style.cursor=_SEP_CURSOR;
             catcher.addEventListener('mousedown',e=>{e.stopPropagation();e.preventDefault();handleLatticeSepClick(e,rowBands,colBands);});
             svgOverlay.appendChild(catcher);
           }
