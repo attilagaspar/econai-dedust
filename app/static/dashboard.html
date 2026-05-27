@@ -296,6 +296,13 @@ async function loadProjects() {
   const data = await res.json();
   projects   = data.projects || [];
   renderProjectList();
+  // Auto-restore the last selected project
+  const last = localStorage.getItem('lastProject');
+  if (last && projects.find(p => p.name === last)) {
+    selectProject(last);
+  } else if (projects.length === 1) {
+    selectProject(projects[0].name);
+  }
 }
 
 // ============================================================
@@ -332,6 +339,7 @@ async function selectProject(name) {
   const res  = await fetch(`/api/project/${name}`);
   const data = await res.json();
   activeProj = { name, ...data };
+  localStorage.setItem('lastProject', name);
   renderProjectList(); // re-render sidebar to update active highlight
   renderDetail();
   // Populate "infer from" source dropdown with all OTHER projects
