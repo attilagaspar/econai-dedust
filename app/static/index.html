@@ -948,7 +948,7 @@
       <select id="batch-op" onchange="onBatchOpChange()">
         <option value="clear">Clear annotations</option>
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
-        <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice correction + snap + trim</option>
+        <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice correction + snap</option>
         <option value="ocr_tesseract">OCR — Tesseract</option>
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
         <option value="llm">LLM</option>
@@ -3463,7 +3463,7 @@ async function runBatch() {
   } else if (op === 'overlaps_lattice') {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
   } else if (op === 'overlaps_lattice_snap_trim') {
-    if (!confirm(`Run overlap removal + lattice correction + snap + trim on ${sorted.length} page(s)?`)) return;
+    if (!confirm(`Run overlap removal + lattice correction + snap on ${sorted.length} page(s)?`)) return;
   } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
     if (!confirm(`Run OCR on ${sorted.length} page(s)?`)) return;
   } else if (op === 'llm') {
@@ -3563,9 +3563,6 @@ async function runBatch() {
 
       // Step 3: snap to grid
       _snapShapesToGrid(shapes);
-
-      // Step 4: trim remaining overlaps
-      _trimShapesOverlaps(shapes);
 
       // Save
       await fetch(`${API}/api/page/shapes?${params}`, {
