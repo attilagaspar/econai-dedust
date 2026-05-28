@@ -2009,24 +2009,25 @@ async function handleLatticeMergeCol(colLeft, colRight, rowBands, colBands) {
     if (sL && sR) {
       // Extend left shape rightward to cover right shape, then delete right shape
       const newX2 = Math.max(...sR.points.map(p => p[0]));
-      const [p1, p2] = sL.points;
-      if (p1[0] <= p2[0]) p2[0] = newX2; else p1[0] = newX2;
+      sL.points = [[Math.min(...sL.points.map(p=>p[0])), Math.min(...sL.points.map(p=>p[1]))],
+                   [newX2,                                Math.max(...sL.points.map(p=>p[1]))]];
       toDelete.add(sR);
     } else if (!sL && sR) {
       // Only right shape: extend its left edge to cover left column band
       const newX1 = colBands[colLeft]?.left ?? Math.min(...sR.points.map(p => p[0]));
-      const [p1, p2] = sR.points;
-      if (p1[0] <= p2[0]) p1[0] = newX1; else p2[0] = newX1;
+      const newX2 = Math.max(...sR.points.map(p => p[0]));
+      sR.points = [[newX1, Math.min(...sR.points.map(p=>p[1]))], [newX2, Math.max(...sR.points.map(p=>p[1]))]];
+      sR.super_column = colLeft;
     } else if (sL && !sR) {
       // Only left shape: extend its right edge to cover right column band
       const newX2 = colBands[colRight]?.right ?? Math.max(...sL.points.map(p => p[0]));
-      const [p1, p2] = sL.points;
-      if (p1[0] <= p2[0]) p2[0] = newX2; else p1[0] = newX2;
+      sL.points = [[Math.min(...sL.points.map(p=>p[0])), Math.min(...sL.points.map(p=>p[1]))],
+                   [newX2,                                Math.max(...sL.points.map(p=>p[1]))]];
     }
   });
   pageData.shapes = pageData.shapes.filter(s => !toDelete.has(s));
-  const prevLabels = [...new Set(latticeShapes.map(s => s.label))];
-  _latticeDetect(prevLabels);
+  // Close the gap: shapes with super_column > colRight shift down by 1
+  pageData.shapes.forEach(s => { if (s.super_column != null && s.super_column > colRight) s.super_column--; });
   await replaceAllShapes();
   drawOverlay(); updatePanel();
   showToast('Columns merged');
@@ -2042,22 +2043,23 @@ async function handleLatticeMergeRow(rowAbove, rowBelow, rowBands, colBands) {
     const sB = latticeShapes.find(s => s.super_column === c && s.super_row === rowBelow);
     if (sT && sB) {
       const newY2 = Math.max(...sB.points.map(p => p[1]));
-      const [p1, p2] = sT.points;
-      if (p1[1] <= p2[1]) p2[1] = newY2; else p1[1] = newY2;
+      sT.points = [[Math.min(...sT.points.map(p=>p[0])), Math.min(...sT.points.map(p=>p[1]))],
+                   [Math.max(...sT.points.map(p=>p[0])), newY2]];
       toDelete.add(sB);
     } else if (!sT && sB) {
       const newY1 = rowBands[rowAbove]?.top ?? Math.min(...sB.points.map(p => p[1]));
-      const [p1, p2] = sB.points;
-      if (p1[1] <= p2[1]) p1[1] = newY1; else p2[1] = newY1;
+      const newY2 = Math.max(...sB.points.map(p => p[1]));
+      sB.points = [[Math.min(...sB.points.map(p=>p[0])), newY1], [Math.max(...sB.points.map(p=>p[0])), newY2]];
+      sB.super_row = rowAbove;
     } else if (sT && !sB) {
       const newY2 = rowBands[rowBelow]?.bot ?? Math.max(...sT.points.map(p => p[1]));
-      const [p1, p2] = sT.points;
-      if (p1[1] <= p2[1]) p2[1] = newY2; else p1[1] = newY2;
+      sT.points = [[Math.min(...sT.points.map(p=>p[0])), Math.min(...sT.points.map(p=>p[1]))],
+                   [Math.max(...sT.points.map(p=>p[0])), newY2]];
     }
   });
   pageData.shapes = pageData.shapes.filter(s => !toDelete.has(s));
-  const prevLabels = [...new Set(latticeShapes.map(s => s.label))];
-  _latticeDetect(prevLabels);
+  // Close the gap: shapes with super_row > rowBelow shift down by 1
+  pageData.shapes.forEach(s => { if (s.super_row != null && s.super_row > rowBelow) s.super_row--; });
   await replaceAllShapes();
   drawOverlay(); updatePanel();
   showToast('Rows merged');
