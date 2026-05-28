@@ -465,7 +465,7 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
   <label class="btn btn-blue" title="Upload edited config JSON" style="cursor:pointer;">
     📝 Config ↑<input type="file" accept=".json" style="display:none" onchange="uploadConfig(this)">
   </label>
-  <button class="btn btn-red" onclick="startBatchClean()" title="Automatically apply digit edits that fix the most constraints">⚡ Batch Clean</button>
+  <button class="btn btn-red" onclick="openBatchModal()" title="Automatically apply digit edits that fix the most constraints">⚡ Batch Clean</button>
   <button class="btn btn-blue" onclick="refreshViolations()">⚡ Check rules</button>
   <button class="btn btn-blue" onclick="openPageView()" title="View source page image">🖼 Page view</button>
   <button class="btn btn-green" onclick="exportData()">⬆ Export CSV</button>
@@ -560,7 +560,8 @@ body.clean-mode #tbl tbody tr:not(.deleted):hover td:not(.row-num) {
     <div id="batch-console"></div>
     <div id="batch-footer">
       <span id="batch-status-txt">Idle</span>
-      <button id="batch-stop-btn" class="btn btn-red btn-sm" onclick="stopBatchClean()">■ Stop</button>
+      <button id="batch-run-btn" class="btn btn-green btn-sm" onclick="runBatchClean()">▶ Run</button>
+      <button id="batch-stop-btn" class="btn btn-red btn-sm" onclick="stopBatchClean()" disabled>■ Stop</button>
       <button class="btn btn-blue btn-sm" onclick="closeBatchModal()">✕ Close</button>
     </div>
   </div>
@@ -1734,9 +1735,20 @@ async function revertSelected() {
 }
 
 // ── Batch cleaning ──────────────────────────────────────────────────────────
-function startBatchClean() {
+function openBatchModal() {
   if (!folder) { toast('Load a project first'); return; }
-  if (batchRunning) { document.getElementById('batch-modal').classList.add('show'); return; }
+  document.getElementById('batch-modal').classList.add('show');
+  // If not already running, reset to idle state
+  if (!batchRunning) {
+    document.getElementById('batch-status-txt').textContent = 'Idle';
+    document.getElementById('batch-run-btn').disabled = false;
+    document.getElementById('batch-stop-btn').disabled = true;
+  }
+}
+
+function runBatchClean() {
+  if (!folder) { toast('Load a project first'); return; }
+  if (batchRunning) return;
 
   batchJobId = (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -1744,8 +1756,8 @@ function startBatchClean() {
   const cons = document.getElementById('batch-console');
   cons.innerHTML = '';
   document.getElementById('batch-status-txt').textContent = 'Starting…';
+  document.getElementById('batch-run-btn').disabled = true;
   document.getElementById('batch-stop-btn').disabled = false;
-  document.getElementById('batch-modal').classList.add('show');
 
   const minFix  = parseInt(document.getElementById('batch-min-fix').value)  || 2;
   const maxVars = parseInt(document.getElementById('batch-max-vars').value) || 0;
@@ -1763,6 +1775,7 @@ function startBatchClean() {
       batchRunning = false;
       batchEvtSrc.close();
       document.getElementById('batch-stop-btn').disabled = true;
+      document.getElementById('batch-run-btn').disabled = false;
     }
   };
 }
@@ -1816,6 +1829,7 @@ function batchHandleMsg(msg) {
     case 'done': {
       batchRunning = false; batchEvtSrc.close();
       document.getElementById('batch-stop-btn').disabled = true;
+      document.getElementById('batch-run-btn').disabled = false;
       const why = msg.reason === 'no_candidates'
         ? 'No more improvable rows.'
         : `Best available edit fixes only ${msg.max_fixed} constraint(s), below min_fix=${msg.min_fix} — stopping.`;
@@ -1828,6 +1842,7 @@ function batchHandleMsg(msg) {
     case 'stopped': {
       batchRunning = false; batchEvtSrc.close();
       document.getElementById('batch-stop-btn').disabled = true;
+      document.getElementById('batch-run-btn').disabled = false;
       batchLog(`<span style="color:#ffaa44">⚠ Stopped. Total edits applied: <b>${msg.total_applied}</b></span>`);
       document.getElementById('batch-status-txt').textContent = `Stopped — ${msg.total_applied} edits applied.`;
       _buildViolMaps(); renderTable();
