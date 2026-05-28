@@ -733,7 +733,16 @@
           </div>
           <input type="range" id="ocr-opt-line-frac" min="1" max="90" value="22" step="1"
             style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
-          <div style="font-size:10px;color:#555;">A dark run spanning at least this % of the page is treated as a table rule and painted white. Lower = shorter rules also erased. Higher = only full-width/height rules removed.</div>
+          <div style="font-size:10px;color:#555;">Minimum horizontal run length to erase (% of page width). Lower = shorter rules also erased.</div>
+        </div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Min vertical rule length</span>
+            <span id="ocr-opt-vfrac-val" style="font-size:11px;color:#ccc;">same</span>
+          </div>
+          <input type="range" id="ocr-opt-vfrac" min="0" max="90" value="0" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">Minimum vertical run length to erase (% of page height). Set lower than horizontal if column separators don't span the full page. 0 = same as horizontal.</div>
         </div>
 
         <div class="field-group">
@@ -1321,6 +1330,10 @@ function _ocrSettingsToUI() {
   document.getElementById('ocr-opt-line-frac').value = pct;
   document.getElementById('ocr-opt-line-frac-val').textContent = pct + '%';
 
+  const vpct = Math.round((ocrSettings.v_line_fraction ?? 0) * 100);
+  document.getElementById('ocr-opt-vfrac').value = vpct;
+  document.getElementById('ocr-opt-vfrac-val').textContent = vpct === 0 ? 'same' : vpct + '%';
+
   const useThresh = ocrSettings.use_adaptive_threshold;
   document.getElementById('ocr-opt-use-thresh').checked = useThresh;
   document.getElementById('ocr-thresh-params').style.display = useThresh ? '' : 'none';
@@ -1358,6 +1371,9 @@ function ocrOptLiveUpdate() {
   const pct = parseInt(document.getElementById('ocr-opt-line-frac').value);
   document.getElementById('ocr-opt-line-frac-val').textContent = pct + '%';
 
+  const vpct = parseInt(document.getElementById('ocr-opt-vfrac').value);
+  document.getElementById('ocr-opt-vfrac-val').textContent = vpct === 0 ? 'same' : vpct + '%';
+
   const block = parseInt(document.getElementById('ocr-opt-block').value);
   document.getElementById('ocr-opt-block-val').textContent = block;
 
@@ -1386,6 +1402,7 @@ function ocrOptLiveUpdate() {
 function _ocrSettingsFromUI() {
   return {
     line_removal_fraction:  parseInt(document.getElementById('ocr-opt-line-frac').value) / 100,
+    v_line_fraction:        parseInt(document.getElementById('ocr-opt-vfrac').value) / 100,
     use_adaptive_threshold: document.getElementById('ocr-opt-use-thresh').checked,
     adaptive_block_size:    parseInt(document.getElementById('ocr-opt-block').value),
     adaptive_c:             parseInt(document.getElementById('ocr-opt-c').value),

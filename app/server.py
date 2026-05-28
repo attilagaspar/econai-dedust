@@ -446,6 +446,7 @@ _OCR_SETTINGS_PATH = Path(__file__).parent / "ocr_settings.json"
 
 _OCR_SETTINGS_DEFAULTS: dict = {
     "line_removal_fraction":  0.22,
+    "v_line_fraction":        0.0,   # vertical line min-length override (0 = use line_removal_fraction)
     "use_adaptive_threshold": True,
     "adaptive_block_size":    15,
     "adaptive_c":             10,
@@ -479,6 +480,7 @@ class OcrSettingsBody(BaseModel):
     adaptive_block_size:    Optional[int]   = None
     adaptive_c:             Optional[int]   = None
     morph_open_kernel:      Optional[int]   = None
+    v_line_fraction:        Optional[float] = None
     line_close_kernel:      Optional[int]   = None
     line_dilate_thickness:  Optional[int]   = None
     blur_sigma:             Optional[int]   = None
@@ -506,6 +508,8 @@ def api_set_ocr_settings(body: OcrSettingsBody, save: bool = Query(False)):
         _ocr_settings["adaptive_c"] = max(0, min(50, body.adaptive_c))
     if body.morph_open_kernel is not None:
         _ocr_settings["morph_open_kernel"] = max(0, min(10, body.morph_open_kernel))
+    if body.v_line_fraction is not None:
+        _ocr_settings["v_line_fraction"] = max(0.0, min(0.9, body.v_line_fraction))
     if body.line_close_kernel is not None:
         _ocr_settings["line_close_kernel"] = max(0, min(30, body.line_close_kernel))
     if body.line_dilate_thickness is not None:
@@ -566,20 +570,20 @@ def _build_shadow_page(pil_image, settings: dict):
         _, morph_in = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     # ── Step 2: detect long lines in the binarised image ─────────────────────
-    frac     = settings.get("line_removal_fraction", 0.22)
+    frac   = settings.get("line_removal_fraction", 0.22)
+    v_frac = settings.get("v_line_fraction", 0.0) or frac  # 0 means "use same as horizontal"
 
     # Optional: close gaps in dashed/dotted lines before detection
     close_k = settings.get("line_close_kernel", 0)
     detect_in = morph_in
     if close_k > 0:
-        # Horizontal close bridges gaps between dashes
         hc = cv2.getStructuringElement(cv2.MORPH_RECT, (close_k, 1))
         vc = cv2.getStructuringElement(cv2.MORPH_RECT, (1, close_k))
         detect_in = cv2.morphologyEx(detect_in, cv2.MORPH_CLOSE, hc)
         detect_in = cv2.morphologyEx(detect_in, cv2.MORPH_CLOSE, vc)
 
-    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * frac)), 1))
-    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * frac))))
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * frac)),  1))
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * v_frac))))
 
     dilate_t = settings.get("line_dilate_thickness", 3)
     mask = cv2.dilate(
@@ -627,6 +631,7 @@ def _get_shadow_page(folder: str, stem: str, img_path):
     key = (
         folder, stem,
         s["line_removal_fraction"],
+        s.get("v_line_fraction", 0.0),
         s["use_adaptive_threshold"],
         s["adaptive_block_size"],
         s["adaptive_c"],
