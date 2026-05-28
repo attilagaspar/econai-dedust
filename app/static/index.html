@@ -1319,6 +1319,17 @@ function _ocrSettingsFromUI() {
   };
 }
 
+async function _syncOcrSettings() {
+  // Silently push the current slider values to the server before any OCR run,
+  // so the user doesn't have to remember to click Apply first.
+  try {
+    await fetch(`${API}/api/ocr-settings`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(_ocrSettingsFromUI()),
+    });
+  } catch(e) {}
+}
+
 async function applyOcrSettings() {
   const status = document.getElementById('ocr-opts-status');
   status.style.color = '#888';
@@ -3461,6 +3472,7 @@ async function runBatch() {
   const indices  = _parsePageRange(rawPages);
   if (!indices) return;
   if (!indices.size) { showToast('No valid pages in range'); return; }
+  if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') await _syncOcrSettings();
 
   const sorted = [...indices].sort((a, b) => a - b);
 
@@ -4233,6 +4245,7 @@ function updateOcrMode() {
 
 async function runOcr() {
   if (selIdx < 0 || !pages.length) return;
+  await _syncOcrSettings();
   const mode = document.getElementById('ocr-mode').value;
 
   // Multi-select: run on every selected shape
@@ -5134,6 +5147,7 @@ function _batchEnd(allBtn, stopBtn, done, total, label, ...enableBtns) {
 }
 
 async function runOcrAll() {
+  await _syncOcrSettings();
   // "All" = every shape on the page with the same label as the selected shape
   if (selIdx < 0 || !pages.length) return;
   const targets = _batchTargets();
