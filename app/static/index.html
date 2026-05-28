@@ -2286,31 +2286,28 @@ function _latticeMergeRegions(regions) {
 }
 
 function _latticeAssignCoords(regionShapes, tol=10) {
-  // ── Columns: sort by left-x, group by centroid-x within avg column range ──
+  // ── Columns: sort by left-x, group shapes whose left edge is within tol of the column's avg left ──
+  // Using left-edge grouping (not centroid) so adjacent cells sharing borders don't bleed into each other.
   const byX = [...regionShapes].sort((a,b)=>Math.min(...a.points.map(p=>p[0]))-Math.min(...b.points.map(p=>p[0])));
   const columns = [];
   for (const s of byX) {
-    const cx = (Math.min(...s.points.map(p=>p[0]))+Math.max(...s.points.map(p=>p[0])))/2;
+    const left = Math.min(...s.points.map(p=>p[0]));
     let placed = false;
     for (let ci=0; ci<columns.length; ci++) {
-      const col = columns[ci];
-      const avgL = col.reduce((acc,s2)=>acc+Math.min(...s2.points.map(p=>p[0])),0)/col.length;
-      const avgR = col.reduce((acc,s2)=>acc+Math.max(...s2.points.map(p=>p[0])),0)/col.length;
-      if (cx >= avgL-tol && cx <= avgR+tol) { col.push(s); s.super_column=ci+1; placed=true; break; }
+      const avgL = columns[ci].reduce((acc,s2)=>acc+Math.min(...s2.points.map(p=>p[0])),0)/columns[ci].length;
+      if (Math.abs(left - avgL) <= tol) { columns[ci].push(s); s.super_column=ci+1; placed=true; break; }
     }
     if (!placed) { columns.push([s]); s.super_column=columns.length; }
   }
-  // ── Rows: sort by top-y, group by centroid-y within avg row range ──
+  // ── Rows: sort by top-y, group shapes whose top edge is within tol of the row's avg top ──
   const byY = [...regionShapes].sort((a,b)=>Math.min(...a.points.map(p=>p[1]))-Math.min(...b.points.map(p=>p[1])));
   const rows = [];
   for (const s of byY) {
-    const cy = (Math.min(...s.points.map(p=>p[1]))+Math.max(...s.points.map(p=>p[1])))/2;
+    const top = Math.min(...s.points.map(p=>p[1]));
     let placed = false;
     for (let ri=0; ri<rows.length; ri++) {
-      const row = rows[ri];
-      const avgT = row.reduce((acc,s2)=>acc+Math.min(...s2.points.map(p=>p[1])),0)/row.length;
-      const avgB = row.reduce((acc,s2)=>acc+Math.max(...s2.points.map(p=>p[1])),0)/row.length;
-      if (cy >= avgT-tol && cy <= avgB+tol) { row.push(s); s.super_row=ri+1; placed=true; break; }
+      const avgT = rows[ri].reduce((acc,s2)=>acc+Math.min(...s2.points.map(p=>p[1])),0)/rows[ri].length;
+      if (Math.abs(top - avgT) <= tol) { rows[ri].push(s); s.super_row=ri+1; placed=true; break; }
     }
     if (!placed) { rows.push([s]); s.super_row=rows.length; }
   }
