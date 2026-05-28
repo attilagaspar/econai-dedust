@@ -450,6 +450,9 @@ _OCR_SETTINGS_DEFAULTS: dict = {
     "adaptive_block_size":    15,
     "adaptive_c":             10,
     "morph_open_kernel":      2,
+    # Line detection tuning
+    "line_close_kernel":      0,     # horizontal close before detection (bridges dashes, 0=off)
+    "line_dilate_thickness":  3,     # dilation after detection to cover line thickness
     # Post-line-removal output processing
     "blur_sigma":             0,     # Gaussian blur σ applied to output (0 = off)
     "output_binarize":        False, # binarize the final output image
@@ -476,6 +479,8 @@ class OcrSettingsBody(BaseModel):
     adaptive_block_size:    Optional[int]   = None
     adaptive_c:             Optional[int]   = None
     morph_open_kernel:      Optional[int]   = None
+    line_close_kernel:      Optional[int]   = None
+    line_dilate_thickness:  Optional[int]   = None
     blur_sigma:             Optional[int]   = None
     output_binarize:        Optional[bool]  = None
     output_open_kernel:     Optional[int]   = None
@@ -501,6 +506,10 @@ def api_set_ocr_settings(body: OcrSettingsBody, save: bool = Query(False)):
         _ocr_settings["adaptive_c"] = max(0, min(50, body.adaptive_c))
     if body.morph_open_kernel is not None:
         _ocr_settings["morph_open_kernel"] = max(0, min(10, body.morph_open_kernel))
+    if body.line_close_kernel is not None:
+        _ocr_settings["line_close_kernel"] = max(0, min(30, body.line_close_kernel))
+    if body.line_dilate_thickness is not None:
+        _ocr_settings["line_dilate_thickness"] = max(1, min(15, body.line_dilate_thickness))
     if body.blur_sigma is not None:
         _ocr_settings["blur_sigma"] = max(0, min(10, body.blur_sigma))
     if body.output_binarize is not None:
@@ -558,15 +567,27 @@ def _build_shadow_page(pil_image, settings: dict):
 
     # ── Step 2: detect long lines in the binarised image ─────────────────────
     frac     = settings.get("line_removal_fraction", 0.22)
+
+    # Optional: close gaps in dashed/dotted lines before detection
+    close_k = settings.get("line_close_kernel", 0)
+    detect_in = morph_in
+    if close_k > 0:
+        # Horizontal close bridges gaps between dashes
+        hc = cv2.getStructuringElement(cv2.MORPH_RECT, (close_k, 1))
+        vc = cv2.getStructuringElement(cv2.MORPH_RECT, (1, close_k))
+        detect_in = cv2.morphologyEx(detect_in, cv2.MORPH_CLOSE, hc)
+        detect_in = cv2.morphologyEx(detect_in, cv2.MORPH_CLOSE, vc)
+
     h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * frac)), 1))
     v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * frac))))
 
+    dilate_t = settings.get("line_dilate_thickness", 3)
     mask = cv2.dilate(
         cv2.bitwise_or(
-            cv2.morphologyEx(morph_in, cv2.MORPH_OPEN, h_kernel),
-            cv2.morphologyEx(morph_in, cv2.MORPH_OPEN, v_kernel),
+            cv2.morphologyEx(detect_in, cv2.MORPH_OPEN, h_kernel),
+            cv2.morphologyEx(detect_in, cv2.MORPH_OPEN, v_kernel),
         ),
-        np.ones((3, 3), np.uint8),
+        np.ones((dilate_t, dilate_t), np.uint8),
     )
 
     # ── Step 3: revert to original grayscale, paint line pixels white ─────────
@@ -610,6 +631,8 @@ def _get_shadow_page(folder: str, stem: str, img_path):
         s["adaptive_block_size"],
         s["adaptive_c"],
         s["morph_open_kernel"],
+        s.get("line_close_kernel", 0),
+        s.get("line_dilate_thickness", 3),
         s.get("blur_sigma", 0),
         s.get("output_binarize", False),
         s.get("output_open_kernel", 0),

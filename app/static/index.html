@@ -736,6 +736,25 @@
           <div style="font-size:10px;color:#555;">A dark run spanning at least this % of the page is treated as a table rule and painted white. Lower = shorter rules also erased. Higher = only full-width/height rules removed.</div>
         </div>
 
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Bridge dashes (px)</span>
+            <span id="ocr-opt-close-val" style="font-size:11px;color:#ccc;">0 (off)</span>
+          </div>
+          <input type="range" id="ocr-opt-close" min="0" max="30" value="0" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">Before detection, closes gaps up to this many pixels in dashed/dotted lines so they are recognised as solid lines. 0 = off. Try 5–15 for dotted separators.</div>
+        </div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Erase thickness (px)</span>
+            <span id="ocr-opt-dilate-val" style="font-size:11px;color:#ccc;">3</span>
+          </div>
+          <input type="range" id="ocr-opt-dilate" min="1" max="15" value="3" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">How many pixels around each detected line are painted white. Increase if thick borders leave remnants. Default 3.</div>
+        </div>
+
         <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;margin-top:4px;">Step 2 · binarise (paper → white, ink → black)</div>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
           <input type="checkbox" id="ocr-opt-use-thresh" checked style="accent-color:#e94560;width:13px;height:13px;">
@@ -1316,6 +1335,14 @@ function _ocrSettingsToUI() {
   document.getElementById('ocr-opt-morph').value = m;
   document.getElementById('ocr-opt-morph-val').textContent = m === 0 ? '0 (off)' : m;
 
+  const lc = ocrSettings.line_close_kernel ?? 0;
+  document.getElementById('ocr-opt-close').value = lc;
+  document.getElementById('ocr-opt-close-val').textContent = lc === 0 ? '0 (off)' : lc;
+
+  const ld = ocrSettings.line_dilate_thickness ?? 3;
+  document.getElementById('ocr-opt-dilate').value = ld;
+  document.getElementById('ocr-opt-dilate-val').textContent = ld;
+
   const b = ocrSettings.blur_sigma ?? 0;
   document.getElementById('ocr-opt-blur').value = b;
   document.getElementById('ocr-opt-blur-val').textContent = b === 0 ? '0 (off)' : b;
@@ -1343,6 +1370,12 @@ function ocrOptLiveUpdate() {
   const useThresh = document.getElementById('ocr-opt-use-thresh').checked;
   document.getElementById('ocr-thresh-params').style.display = useThresh ? '' : 'none';
 
+  const lc2 = parseInt(document.getElementById('ocr-opt-close').value);
+  document.getElementById('ocr-opt-close-val').textContent = lc2 === 0 ? '0 (off)' : lc2;
+
+  const ld2 = parseInt(document.getElementById('ocr-opt-dilate').value);
+  document.getElementById('ocr-opt-dilate-val').textContent = ld2;
+
   const bl = parseInt(document.getElementById('ocr-opt-blur').value);
   document.getElementById('ocr-opt-blur-val').textContent = bl === 0 ? '0 (off)' : bl;
 
@@ -1357,6 +1390,8 @@ function _ocrSettingsFromUI() {
     adaptive_block_size:    parseInt(document.getElementById('ocr-opt-block').value),
     adaptive_c:             parseInt(document.getElementById('ocr-opt-c').value),
     morph_open_kernel:      parseInt(document.getElementById('ocr-opt-morph').value),
+    line_close_kernel:      parseInt(document.getElementById('ocr-opt-close').value),
+    line_dilate_thickness:  parseInt(document.getElementById('ocr-opt-dilate').value),
     blur_sigma:             parseInt(document.getElementById('ocr-opt-blur').value),
     output_binarize:        document.getElementById('ocr-opt-output-binarize').checked,
     output_open_kernel:     parseInt(document.getElementById('ocr-opt-out-open').value),
