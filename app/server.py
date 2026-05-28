@@ -363,7 +363,7 @@ def api_ocr_cell(
 ):
     """Run Tesseract OCR on a single cell and store the result in the page JSON."""
     import pytesseract
-    from PIL import Image, ImageOps
+    from PIL import Image
     # Ensure Tesseract binary is found on Windows even if not on PATH
     import shutil
     if not shutil.which("tesseract"):
@@ -388,16 +388,13 @@ def api_ocr_cell(
     ys  = [p[1] for p in pts]
     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
 
-    img = Image.open(str(img_path)).convert("RGB")
-    w, h = img.size
-    pad  = 4
-    crop = img.crop((
+    shadow     = _get_shadow_page(folder, stem, img_path)
+    sw, sh     = shadow.size
+    pad        = 4
+    crop_grey  = shadow.crop((
         max(0, int(x1) - pad), max(0, int(y1) - pad),
-        min(w, int(x2) + pad), min(h, int(y2) + pad),
-    ))
-
-    # Light preprocessing: greyscale + auto-contrast
-    crop_grey = ImageOps.autocontrast(crop.convert("L"))
+        min(sw, int(x2) + pad), min(sh, int(y2) + pad),
+    )).convert("L")
 
     tess = pytesseract.image_to_data(
         crop_grey, lang=lang,
@@ -636,7 +633,7 @@ def api_ocr_easyocr(
 ):
     """Run EasyOCR on a single cell and store the result in the page JSON."""
     import numpy as np
-    from PIL import Image as PILImage, ImageOps
+    from PIL import Image as PILImage
 
     d        = _resolve_folder(folder)
     jf       = d / f"{stem}.json"
@@ -656,15 +653,13 @@ def api_ocr_easyocr(
     xs  = [p[0] for p in pts]; ys = [p[1] for p in pts]
     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
 
-    img = PILImage.open(str(img_path)).convert("RGB")
-    w, h = img.size
-    pad  = 4
-    crop = img.crop((
+    shadow = _get_shadow_page(folder, stem, img_path)
+    iw, ih = shadow.size
+    pad    = 4
+    crop   = shadow.crop((
         max(0, int(x1) - pad), max(0, int(y1) - pad),
-        min(w,  int(x2) + pad), min(h, int(y2) + pad),
-    ))
-    # Light preprocessing: autocontrast on greyscale, then back to RGB for EasyOCR
-    crop = ImageOps.autocontrast(crop.convert("L")).convert("RGB")
+        min(iw, int(x2) + pad), min(ih, int(y2) + pad),
+    )).convert("RGB")
 
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
