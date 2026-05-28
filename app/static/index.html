@@ -763,7 +763,7 @@
           </div>
         </div>
 
-        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;margin-top:4px;">Step 3 · remove speckle noise</div>
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;margin-top:4px;">Step 3 · remove speckle noise (line detection)</div>
         <div class="field-group">
           <div class="field-label-row">
             <span class="field-label">Noise removal radius</span>
@@ -771,7 +771,32 @@
           </div>
           <input type="range" id="ocr-opt-morph" min="0" max="7" value="2" step="1"
             style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
-          <div style="font-size:10px;color:#555;">Erases isolated black specks smaller than this radius (paper grain, dust). 0 = off. Too large = thin digit strokes disappear.</div>
+          <div style="font-size:10px;color:#555;">Erases isolated black specks during line detection. 0 = off.</div>
+        </div>
+
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #1a3a6e;padding-bottom:4px;margin-top:4px;">Step 4 · output image quality</div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Blur (σ)</span>
+            <span id="ocr-opt-blur-val" style="font-size:11px;color:#ccc;">0 (off)</span>
+          </div>
+          <input type="range" id="ocr-opt-blur" min="0" max="5" value="0" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">Gaussian blur applied to the output image before OCR. Smooths salt-and-pepper noise. 0 = off.</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="ocr-opt-output-binarize" style="accent-color:#e94560;width:13px;height:13px;" onchange="ocrOptLiveUpdate()">
+          <span style="font-size:12px;color:#ccc;">Binarize output</span>
+        </label>
+        <div style="font-size:10px;color:#555;margin-top:-4px;">Apply adaptive threshold to the final image fed to OCR. Gives clean black/white instead of grayscale — helps when background is uneven.</div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <span class="field-label">Output noise removal</span>
+            <span id="ocr-opt-out-open-val" style="font-size:11px;color:#ccc;">0 (off)</span>
+          </div>
+          <input type="range" id="ocr-opt-out-open" min="0" max="7" value="0" step="1"
+            style="width:100%;accent-color:#e94560;" oninput="ocrOptLiveUpdate()">
+          <div style="font-size:10px;color:#555;">Morphological opening on the final OCR image — removes remaining speckle noise. Works best after Binarize output is on. 0 = off.</div>
         </div>
 
         <div style="display:flex;gap:6px;margin-top:6px;">
@@ -1290,6 +1315,16 @@ function _ocrSettingsToUI() {
   const m = ocrSettings.morph_open_kernel;
   document.getElementById('ocr-opt-morph').value = m;
   document.getElementById('ocr-opt-morph-val').textContent = m === 0 ? '0 (off)' : m;
+
+  const b = ocrSettings.blur_sigma ?? 0;
+  document.getElementById('ocr-opt-blur').value = b;
+  document.getElementById('ocr-opt-blur-val').textContent = b === 0 ? '0 (off)' : b;
+
+  document.getElementById('ocr-opt-output-binarize').checked = ocrSettings.output_binarize ?? false;
+
+  const oo = ocrSettings.output_open_kernel ?? 0;
+  document.getElementById('ocr-opt-out-open').value = oo;
+  document.getElementById('ocr-opt-out-open-val').textContent = oo === 0 ? '0 (off)' : oo;
 }
 
 function ocrOptLiveUpdate() {
@@ -1307,6 +1342,12 @@ function ocrOptLiveUpdate() {
 
   const useThresh = document.getElementById('ocr-opt-use-thresh').checked;
   document.getElementById('ocr-thresh-params').style.display = useThresh ? '' : 'none';
+
+  const bl = parseInt(document.getElementById('ocr-opt-blur').value);
+  document.getElementById('ocr-opt-blur-val').textContent = bl === 0 ? '0 (off)' : bl;
+
+  const oo = parseInt(document.getElementById('ocr-opt-out-open').value);
+  document.getElementById('ocr-opt-out-open-val').textContent = oo === 0 ? '0 (off)' : oo;
 }
 
 function _ocrSettingsFromUI() {
@@ -1316,6 +1357,9 @@ function _ocrSettingsFromUI() {
     adaptive_block_size:    parseInt(document.getElementById('ocr-opt-block').value),
     adaptive_c:             parseInt(document.getElementById('ocr-opt-c').value),
     morph_open_kernel:      parseInt(document.getElementById('ocr-opt-morph').value),
+    blur_sigma:             parseInt(document.getElementById('ocr-opt-blur').value),
+    output_binarize:        document.getElementById('ocr-opt-output-binarize').checked,
+    output_open_kernel:     parseInt(document.getElementById('ocr-opt-out-open').value),
   };
 }
 

@@ -450,6 +450,10 @@ _OCR_SETTINGS_DEFAULTS: dict = {
     "adaptive_block_size":    15,
     "adaptive_c":             10,
     "morph_open_kernel":      2,
+    # Post-line-removal output processing
+    "blur_sigma":             0,     # Gaussian blur σ applied to output (0 = off)
+    "output_binarize":        False, # binarize the final output image
+    "output_open_kernel":     0,     # morphological opening on output (0 = off)
 }
 
 
@@ -472,6 +476,9 @@ class OcrSettingsBody(BaseModel):
     adaptive_block_size:    Optional[int]   = None
     adaptive_c:             Optional[int]   = None
     morph_open_kernel:      Optional[int]   = None
+    blur_sigma:             Optional[int]   = None
+    output_binarize:        Optional[bool]  = None
+    output_open_kernel:     Optional[int]   = None
 
 
 @app.get("/api/ocr-settings")
@@ -494,6 +501,12 @@ def api_set_ocr_settings(body: OcrSettingsBody, save: bool = Query(False)):
         _ocr_settings["adaptive_c"] = max(0, min(50, body.adaptive_c))
     if body.morph_open_kernel is not None:
         _ocr_settings["morph_open_kernel"] = max(0, min(10, body.morph_open_kernel))
+    if body.blur_sigma is not None:
+        _ocr_settings["blur_sigma"] = max(0, min(10, body.blur_sigma))
+    if body.output_binarize is not None:
+        _ocr_settings["output_binarize"] = body.output_binarize
+    if body.output_open_kernel is not None:
+        _ocr_settings["output_open_kernel"] = max(0, min(10, body.output_open_kernel))
     _shadow_page_cache.clear()
     if save:
         _OCR_SETTINGS_PATH.write_text(
@@ -559,6 +572,29 @@ def _build_shadow_page(pil_image, settings: dict):
     # ── Step 3: revert to original grayscale, paint line pixels white ─────────
     result = img.copy()
     result[mask > 0] = 255
+
+    # ── Step 4 (optional): Gaussian blur to smooth noise ─────────────────────
+    blur_sigma = settings.get("blur_sigma", 0)
+    if blur_sigma > 0:
+        result = cv2.GaussianBlur(result, (0, 0), blur_sigma)
+
+    # ── Step 5 (optional): binarize the output image ──────────────────────────
+    if settings.get("output_binarize", False):
+        block = settings.get("adaptive_block_size", 15)
+        if block % 2 == 0:
+            block += 1
+        result = cv2.adaptiveThreshold(
+            result, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,
+            block, settings.get("adaptive_c", 10),
+        )
+
+    # ── Step 6 (optional): morphological opening on output (speckle removal) ─
+    out_open = settings.get("output_open_kernel", 0)
+    if out_open > 0:
+        _k = cv2.getStructuringElement(cv2.MORPH_RECT, (out_open, out_open))
+        result = cv2.morphologyEx(result, cv2.MORPH_OPEN, _k)
+
     return _PIL.fromarray(result).convert("RGB")
 
 
@@ -574,6 +610,9 @@ def _get_shadow_page(folder: str, stem: str, img_path):
         s["adaptive_block_size"],
         s["adaptive_c"],
         s["morph_open_kernel"],
+        s.get("blur_sigma", 0),
+        s.get("output_binarize", False),
+        s.get("output_open_kernel", 0),
     )
     if key not in _shadow_page_cache:
         if len(_shadow_page_cache) >= 10:
