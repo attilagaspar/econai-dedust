@@ -1953,15 +1953,20 @@ async function handleLatticeSepClick(e, rowBands, colBands) {
     const targetCol = sortedCols.find(c => p.x >= colBands[c].left && p.x <= colBands[c].right);
     if (targetCol == null) { undoStack.pop(); return; }
     const x = Math.round(p.x);
+
+    // Make room: shift all shapes with super_column > targetCol up by 1
+    latticeShapes.forEach(s => { if (s.super_column > targetCol) s.super_column++; });
+
+    // Split shapes in the target column
     latticeShapes.forEach(s => {
       if (s.super_column !== targetCol) return;
       const xs = s.points.map(q => q[0]), ys = s.points.map(q => q[1]);
       const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
       if (x <= x1 || x >= x2) return;
-      // Replace points entirely — avoids 4-point rect mutation ambiguity
       s.points = [[x1, y1], [x, y2]];
-      // New right part
-      toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null, points: [[x, y1], [x2, y2]] });
+      // New right part gets targetCol+1, same super_row
+      toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null,
+                   points: [[x, y1], [x2, y2]], super_row: s.super_row, super_column: targetCol + 1 });
     });
 
   } else { // 'row'
@@ -1969,21 +1974,25 @@ async function handleLatticeSepClick(e, rowBands, colBands) {
     const targetRow = sortedRows.find(r => p.y >= rowBands[r].top && p.y <= rowBands[r].bot);
     if (targetRow == null) { undoStack.pop(); return; }
     const y = Math.round(p.y);
+
+    // Make room: shift all shapes with super_row > targetRow up by 1
+    latticeShapes.forEach(s => { if (s.super_row > targetRow) s.super_row++; });
+
+    // Split shapes in the target row
     latticeShapes.forEach(s => {
       if (s.super_row !== targetRow) return;
       const xs = s.points.map(q => q[0]), ys = s.points.map(q => q[1]);
       const x1 = Math.min(...xs), x2 = Math.max(...xs), y1 = Math.min(...ys), y2 = Math.max(...ys);
       if (y <= y1 || y >= y2) return;
-      // Replace points entirely — avoids 4-point rect mutation ambiguity
       s.points = [[x1, y1], [x2, y]];
-      // New bottom part
-      toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null, points: [[x1, y], [x2, y2]] });
+      // New bottom part gets targetRow+1, same super_column
+      toAdd.push({ label: s.label, shape_type: 'rectangle', flags: {}, group_id: null,
+                   points: [[x1, y], [x2, y2]], super_row: targetRow + 1, super_column: s.super_column });
     });
   }
 
   toAdd.forEach(s => pageData.shapes.push(s));
-  const prevLabels = [...new Set(latticeShapes.map(s => s.label))];
-  _latticeDetect(prevLabels);
+  // No _latticeDetect re-run needed — we assigned super_row/super_column directly
   await replaceAllShapes();
   drawOverlay(); updatePanel();
   showToast(`${latticeSepMode === 'col' ? 'Column' : 'Row'} separator added`);
