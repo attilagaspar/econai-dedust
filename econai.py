@@ -242,14 +242,24 @@ def cmd_serve(args):
     # Kill anything already on the port
     try:
         import psutil
-        for proc in psutil.process_iter(['pid', 'connections']):
-            try:
-                for conn in proc.info.get('connections') or []:
-                    if conn.laddr.port == port:
-                        proc.kill()
-                        time.sleep(0.5)
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                pass
+        try:
+            # psutil 6+: net_connections() is a module-level function
+            conns = psutil.net_connections(kind='inet')
+        except AttributeError:
+            # older psutil fallback
+            conns = []
+            for proc in psutil.process_iter(['pid']):
+                try:
+                    conns.extend(proc.connections(kind='inet'))
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    pass
+        for conn in conns:
+            if getattr(conn.laddr, 'port', None) == port and conn.pid:
+                try:
+                    psutil.Process(conn.pid).kill()
+                    time.sleep(0.5)
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    pass
     except ImportError:
         pass  # psutil not installed — user may need to kill manually
 
