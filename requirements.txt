@@ -1,14 +1,31 @@
-# Core web server
+# ── Web server ────────────────────────────────────────────────────────────────
 fastapi
 uvicorn[standard]
 python-multipart
-pillow
-psutil
 
-# SSH / SFTP for GPU server operations
+# ── Image processing ─────────────────────────────────────────────────────────
+pillow
+opencv-python
+numpy
+
+# ── OCR engines ──────────────────────────────────────────────────────────────
+pytesseract          # also requires Tesseract binary: https://github.com/UB-Mannheim/tesseract/wiki
+easyocr
+
+# ── LLM / OpenAI ─────────────────────────────────────────────────────────────
+openai
+
+# ── PDF import ───────────────────────────────────────────────────────────────
+pymupdf              # imported as fitz
+
+# ── SSH / SFTP for GPU server operations ─────────────────────────────────────
 paramiko
 
+# ── Spreadsheet export ───────────────────────────────────────────────────────
 openpyxl
 
-# Already in your environment from econai-llmocr:
-# openai pandas pytesseract opencv-python pillow PyQt5
+# ── System utilities ─────────────────────────────────────────────────────────
+psutil
+
+# ── GPU server container only (not installed locally) ────────────────────────
+# detectron2   — installed inside the Docker container via Dockerfile

@@ -163,6 +163,17 @@ header span { color: #888; font-size: 0.85rem; }
   font-size: 0.8rem; color: #888;
 }
 
+/* Docker container status badge */
+.dc-badge {
+  font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+  flex-shrink: 0; white-space: nowrap;
+  background: #1a1a2e; border: 1px solid #444; color: #888;
+}
+.dc-badge.ok      { background: #1a3a1a; border-color: #4caf50; color: #4caf50; }
+.dc-badge.running { background: #1a3a1a; border-color: #8bc34a; color: #8bc34a; }
+.dc-badge.missing { background: #3a1a1a; border-color: #e94560; color: #e94560; }
+.dc-badge.err     { background: #3a2a00; border-color: #ff9800; color: #ff9800; }
+
 /* Import result list */
 .import-results {
   margin-top: 12px; max-height: 140px; overflow-y: auto;
@@ -483,6 +494,36 @@ function renderDetail() {
       </div>
     </div>
 
+    <!-- Docker container config -->
+    <div class="card" id="docker-cfg-card">
+      <h3>🐳 Docker Containers</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:12px">
+        Names of the Docker containers on the GPU server. If a name doesn't exist yet,
+        click <b>Build</b> to compile and create it from the Dockerfile.
+      </p>
+      <div class="field-row">
+        <label>Predict container</label>
+        <input id="dc-predict" placeholder="detectron_predicting_container" />
+        <span id="dc-predict-badge" class="dc-badge">?</span>
+      </div>
+      <div class="field-row">
+        <label>Train container</label>
+        <input id="dc-train" placeholder="detectron_training_container" />
+        <span id="dc-train-badge" class="dc-badge">?</span>
+      </div>
+      <div class="field-row">
+        <label>Image name</label>
+        <input id="dc-image" placeholder="econai-layout" />
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="dockerSave()">💾 Apply</button>
+        <button class="btn btn-secondary" onclick="dockerCheckStatus()">🔌 Check status</button>
+        <button class="btn btn-warning"   onclick="dockerBuild('predict')">🔨 Build predict</button>
+        <button class="btn btn-warning"   onclick="dockerBuild('train')">🔨 Build train</button>
+        <button class="btn btn-warning"   onclick="dockerBuild('both')">🔨 Build both</button>
+      </div>
+    </div>
+
     <!-- Quality Audit + Data Lab -->
 
     <div class="card">
@@ -516,6 +557,9 @@ function renderDetail() {
       </div>
     </div>
   `;
+
+  // Load docker config into the card
+  dockerLoad();
 
   // If there's a running job, start polling
   if (pl.job) {
@@ -1096,6 +1140,134 @@ document.addEventListener('keydown', e => {
 // Prevent browser from opening dropped files anywhere on the page
 document.addEventListener('dragover',  e => e.preventDefault());
 document.addEventListener('drop', e => { e.preventDefault(); });
+
+// ============================================================
+// Docker container config
+// ============================================================
+async function dockerLoad() {
+  try {
+    const r = await fetch('/api/docker-config');
+    const d = await r.json();
+    const pi = document.getElementById('dc-predict');
+    const ti = document.getElementById('dc-train');
+    const ii = document.getElementById('dc-image');
+    if (pi) pi.value = d.predict_container || '';
+    if (ti) ti.value = d.train_container   || '';
+    if (ii) ii.value = d.image_name        || '';
+  } catch (e) { /* ignore if card not rendered yet */ }
+}
+
+async function dockerSave() {
+  const pi = document.getElementById('dc-predict');
+  const ti = document.getElementById('dc-train');
+  const ii = document.getElementById('dc-image');
+  if (!pi) return;
+  const body = {
+    predict_container: pi.value.trim() || undefined,
+    train_container:   ti.value.trim() || undefined,
+    image_name:        ii.value.trim() || undefined,
+  };
+  const r = await fetch('/api/docker-config', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body),
+  });
+  const d = await r.json();
+  if (d.predict_container) showToast('Docker config saved.');
+  else showToast('Error saving docker config', 3000, 'red');
+}
+
+async function dockerCheckStatus() {
+  const pb = document.getElementById('dc-predict-badge');
+  const tb = document.getElementById('dc-train-badge');
+  if (!pb) return;
+  pb.textContent = tb.textContent = '…';
+  pb.className = tb.className = 'dc-badge';
+  const pass = encodeURIComponent(getPassphrase());
+  try {
+    const r = await fetch(`/api/docker-config/status?passphrase=${pass}`);
+    const d = await r.json();
+    function applyBadge(el, info) {
+      if (!el || !info) return;
+      if (info.error) {
+        el.textContent = 'error'; el.className = 'dc-badge err';
+      } else if (!info.exists) {
+        el.textContent = 'missing'; el.className = 'dc-badge missing';
+      } else if (info.running) {
+        el.textContent = 'running'; el.className = 'dc-badge running';
+      } else {
+        el.textContent = 'exists'; el.className = 'dc-badge ok';
+      }
+    }
+    applyBadge(pb, d.predict);
+    applyBadge(tb, d.train);
+  } catch(e) {
+    pb.textContent = tb.textContent = 'error';
+    pb.className = tb.className = 'dc-badge err';
+  }
+}
+
+async function dockerBuild(role) {
+  await dockerSave();
+  const label = role === 'both' ? 'predict + train' : role;
+  openLogModal(`🔨 Building Docker container (${label})`);
+  const body_el = document.getElementById('log-modal-body');
+  const info    = document.getElementById('log-modal-info');
+  const status  = document.getElementById('log-modal-status');
+  const pass    = encodeURIComponent(getPassphrase());
+  const ctrl    = new AbortController();
+  activeSSE     = ctrl;
+  try {
+    const r = await fetch(`/api/docker-config/build?role=${role}&passphrase=${pass}`, {
+      method: 'POST', signal: ctrl.signal,
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      body_el.textContent += '\nError: ' + (err.detail || r.statusText);
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const match = part.match(/^data: (.+)$/m);
+        if (!match) continue;
+        try {
+          const msg = JSON.parse(match[1]);
+          if (msg.done) {
+            status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+            info.textContent = 'Build complete.';
+            await dockerCheckStatus();
+            return;
+          }
+          if (msg.error) {
+            body_el.textContent += '\nError: ' + msg.error;
+            status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+            return;
+          }
+          if (msg.line !== undefined) {
+            body_el.textContent += msg.line + '\n';
+            body_el.scrollTop    = body_el.scrollHeight;
+          }
+        } catch {}
+      }
+    }
+    status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+    info.textContent = 'Stream ended.';
+    await dockerCheckStatus();
+  } catch(err) {
+    if (err.name !== 'AbortError') {
+      body_el.textContent += '\nConnection error: ' + err.message;
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+    }
+  }
+}
 
 // ============================================================
 // Quality Audit

@@ -1474,6 +1474,179 @@ def api_set_stage(name: str, stage: str = Query(...)):
 
 
 # ---------------------------------------------------------------------------
+# Docker container configuration
+# ---------------------------------------------------------------------------
+from app import docker_config as _docker_cfg_mod
+
+def _docker_cfg() -> dict:
+    return _docker_cfg_mod.load()
+
+def _predict_container() -> str:
+    return _docker_cfg()["predict_container"]
+
+def _train_container() -> str:
+    return _docker_cfg()["train_container"]
+
+
+class DockerConfigBody(BaseModel):
+    predict_container: Optional[str] = None
+    train_container:   Optional[str] = None
+    image_name:        Optional[str] = None
+
+
+@app.get("/api/docker-config")
+def api_get_docker_config():
+    return _docker_cfg()
+
+
+@app.post("/api/docker-config")
+def api_set_docker_config(body: DockerConfigBody):
+    update = {k: v for k, v in body.dict().items() if v is not None}
+    return _docker_cfg_mod.save(update)
+
+
+@app.get("/api/docker-config/status")
+def api_docker_container_status(body: SshRequest = None,
+                                passphrase: Optional[str] = Query(None)):
+    """Check whether predict/train containers exist on the GPU server.
+    Returns exists/running status for each. Requires a project with server cfg."""
+    # Use the first available project's server config
+    from app import ssh_ops
+    projects = list_projects()
+    if not projects:
+        raise HTTPException(status_code=400, detail="No projects configured")
+    try:
+        srv = _server_cfg(projects[0])
+    except HTTPException:
+        raise HTTPException(status_code=400, detail="Server not configured on any project")
+
+    pw = passphrase or ""
+    cfg = _docker_cfg()
+    result = {}
+    for role, cname in [("predict", cfg["predict_container"]),
+                        ("train",   cfg["train_container"])]:
+        try:
+            c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], pw)
+            _, out, _ = c.exec_command(
+                f"docker ps -a --filter name=^{cname}$ --format '{{{{.Status}}}}'"
+            )
+            status_str = out.read().decode().strip()
+            c.close()
+            if not status_str:
+                result[role] = {"name": cname, "exists": False, "running": False}
+            else:
+                result[role] = {"name": cname, "exists": True,
+                                "running": status_str.lower().startswith("up")}
+        except Exception as e:
+            result[role] = {"name": cname, "exists": None, "error": str(e)}
+    return result
+
+
+@app.post("/api/docker-config/build")
+async def api_docker_build(passphrase: Optional[str] = Query(None),
+                           role: str = Query("predict")):
+    """Build the econai-layout image on the GPU server and create the named container.
+    role: 'predict' | 'train' | 'both'
+    Streams SSE log lines."""
+    from app import ssh_ops
+    import posixpath as pp
+
+    projects = list_projects()
+    if not projects:
+        raise HTTPException(status_code=400, detail="No projects configured")
+    try:
+        srv = _server_cfg(projects[0])
+    except HTTPException:
+        raise HTTPException(status_code=400, detail="Server not configured")
+
+    cfg      = _docker_cfg()
+    image    = cfg["image_name"]
+    pw       = passphrase or ""
+
+    # Read the local Dockerfile and upload it
+    dockerfile_path = Path(__file__).parent.parent / "Dockerfile"
+    if not dockerfile_path.exists():
+        raise HTTPException(status_code=500, detail="Dockerfile not found in repo root")
+    dockerfile_content = dockerfile_path.read_text(encoding="utf-8")
+
+    # Determine which containers to create
+    roles_to_build = []
+    if role in ("predict", "both"):
+        roles_to_build.append(("predict", cfg["predict_container"]))
+    if role in ("train", "both"):
+        roles_to_build.append(("train", cfg["train_container"]))
+    # Deduplicate — same name = only create once
+    seen = set()
+    roles_unique = []
+    for r, n in roles_to_build:
+        if n not in seen:
+            seen.add(n)
+            roles_unique.append((r, n))
+
+    def build_gen():
+        c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], pw)
+        sftp = c.open_sftp()
+        try:
+            # Upload Dockerfile to server
+            remote_df = "/tmp/econai_Dockerfile"
+            yield f"[docker] Uploading Dockerfile to {remote_df}..."
+            with sftp.open(remote_df, "w") as f:
+                f.write(dockerfile_content)
+            sftp.close()
+
+            # Build image
+            yield f"[docker] Building image '{image}' (this can take 10-30 min)..."
+            build_cmd = f"docker build -t {image} -f {remote_df} /tmp"
+            yield from ssh_ops.stream_command(
+                srv["host"], srv["user"], srv["key_path"], build_cmd, pw)
+
+            # Detect workspace bind from existing predict container (if any)
+            _, _out, _ = c.exec_command(
+                f"docker inspect {cfg['predict_container']} "
+                "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}' 2>/dev/null"
+            )
+            workspace_host = None
+            for _bind in _out.read().decode().strip().splitlines():
+                _parts = _bind.strip().split(":")
+                if len(_parts) >= 2 and _parts[1].rstrip("/") == "/workspace":
+                    workspace_host = _parts[0].rstrip("/")
+                    break
+            if not workspace_host:
+                workspace_host = srv.get("remote_path", "").rstrip("/")
+            yield f"[docker] workspace host path: {workspace_host}"
+
+            # Create each new container
+            for _role, cname in roles_unique:
+                _, chk, _ = c.exec_command(
+                    f"docker ps -a --filter name=^{cname}$ --format '{{{{.Names}}}}'"
+                )
+                if chk.read().decode().strip():
+                    yield f"[docker] Container '{cname}' already exists — skipping create."
+                    continue
+                yield f"[docker] Creating container '{cname}'..."
+                create_cmd = (
+                    f"docker create --name {cname} --gpus all --shm-size=8g "
+                    f"-v {workspace_host}:/workspace {image}"
+                )
+                _, co, ce = c.exec_command(create_cmd)
+                out_txt = co.read().decode().strip()
+                err_txt = ce.read().decode().strip()
+                if out_txt:
+                    yield f"[docker] Created: {out_txt[:64]}"
+                if err_txt:
+                    yield f"[docker] {err_txt}"
+
+            yield "[docker] Done."
+        finally:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+    return await _sse_stream(build_gen())
+
+
+# ---------------------------------------------------------------------------
 # Routes — SSH / server operations
 # ---------------------------------------------------------------------------
 
@@ -1853,7 +2026,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             already_running = False
             try:
                 status = _quick(
-                    f"docker exec detectron_training_container bash -c "
+                    f"docker exec {_train_container()} bash -c "
                     f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
                     f"kill -0 $pid 2>/dev/null && echo RUNNING || echo STOPPED'"
                     f" 2>/dev/null || echo STOPPED"
@@ -1874,8 +2047,8 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 # ── Launch detached training ──────────────────────────────────
                 yield "[train] Launching detached training (safe to close browser)..."
                 launch_result = _quick(
-                    f"docker start detectron_training_container && "
-                    f"docker exec detectron_training_container bash -c "
+                    f"docker start {_train_container()} && "
+                    f"docker exec {_train_container()} bash -c "
                     f"'mkdir -p /workspace/layout-model-training/logs && "
                     f"nohup bash {script_path} >{log_path} 2>&1 & echo $! >{pid_path}; "
                     f"echo LAUNCHED:$(cat {pid_path})'"
@@ -1885,7 +2058,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # ── Stream log, stop when process exits ───────────────────────────
             yield "[train] Streaming log — closing browser won't stop training..."
             tail_cmd = (
-                f"docker exec detectron_training_container bash -c '"
+                f"docker exec {_train_container()} bash -c '"
                 f"tail -n 0 -f {log_path} & TAIL=$!; "
                 f"pid=$(cat {pid_path} 2>/dev/null); "
                 f"[ -n \"$pid\" ] && while kill -0 $pid 2>/dev/null; do sleep 5; done; "
@@ -1926,7 +2099,7 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
     # Detect the actual bind mount so we get the correct ws_prefix regardless
     # of how remote_path / predict_remote_path are configured.
     _, _out, _ = c.exec_command(
-        "docker inspect detectron_predicting_container "
+        f"docker inspect {_predict_container()} "
         "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
     )
     container_ws_host = predict_root
@@ -2027,7 +2200,7 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
             try:
                 c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
                 _, _out, _ = c.exec_command(
-                    "docker inspect detectron_predicting_container "
+                    f"docker inspect {_predict_container()} "
                     "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
                 )
                 container_ws_host = predict_root
@@ -2050,8 +2223,8 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
                                             skip_images=body.skip_image_upload)
             script_path = _detect_script_path()
             docker_cmd = (
-                f"docker start detectron_predicting_container && "
-                f"docker exec detectron_predicting_container "
+                f"docker start {_predict_container()} && "
+                f"docker exec {_predict_container()} "
                 f"bash {script_path}"
             )
             yield f"[push] Starting Docker inference (script: {script_path})..."
@@ -2115,7 +2288,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         # Determine the actual host directory that the predicting container mounts as /workspace.
         # This may differ from predict_root/remote if predict_remote_path isn't configured.
         _, _out, _ = c.exec_command(
-            "docker inspect detectron_predicting_container "
+            f"docker inspect {_predict_container()} "
             "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
         )
         container_ws_host = predict_root  # fallback
@@ -2242,8 +2415,8 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                 container_script = docker_cmd
                 yield "[infer-from] Starting Docker inference..."
                 cmd = (
-                    f"docker start detectron_predicting_container && "
-                    f"docker exec detectron_predicting_container bash {container_script}"
+                    f"docker start {_predict_container()} && "
+                    f"docker exec {_predict_container()} bash {container_script}"
                 )
                 yield from ssh_ops.stream_command(
                     srv["host"], srv["user"], srv["key_path"], cmd, body.passphrase)
