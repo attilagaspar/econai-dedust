@@ -5252,7 +5252,7 @@ async function runPdfTextLayer() {
   btn.disabled = true; btn.textContent = '…';
   try {
     const p = pages[pageIdx];
-    const params = new URLSearchParams({ folder: currentFolder, stem: p.stem });
+    const params = new URLSearchParams({ folder, stem: p.stem });
     const r = await fetch(`/api/page/pdf-text-layer?${params}`, { method: 'POST' });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
