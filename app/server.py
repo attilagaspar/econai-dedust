@@ -1853,25 +1853,29 @@ async def api_upload_pages(name: str, files: List[UploadFile] = File(...)):
         ann_dir = pdir / "annotations"
         ann_dir.mkdir(parents=True, exist_ok=True)
 
+        src_dir = pdir / "sources"
+        src_dir.mkdir(exist_ok=True)
+
         results = []
         for uf in files:
             filename  = uf.filename or "upload"
             orig_stem = Path(filename).stem
             ext       = Path(filename).suffix.lower()
 
-            # Read file content and write to a temp file
-            content = await uf.read()
+            content  = await uf.read()
             tmp_path = None
             try:
-                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = Path(tmp.name)
-
                 if ext == ".pdf":
+                    # Save PDF permanently so pdf_source stays valid for text-layer extraction
+                    saved_pdf = src_dir / filename
+                    saved_pdf.write_bytes(content)
                     base  = _sanitize(orig_stem)
-                    pages = _import_pdf(tmp_path, ann_dir, base=base)
+                    pages = _import_pdf(saved_pdf, ann_dir, base=base)
                     results.extend(pages)
                 elif ext in IMAGE_EXTS:
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                        tmp.write(content)
+                        tmp_path = Path(tmp.name)
                     stem = _sanitize(orig_stem)
                     info = _save_image_file(tmp_path, ann_dir, stem)
                     results.append(info)

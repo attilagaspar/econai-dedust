@@ -12,6 +12,7 @@ projects/*/annotations/
 projects/*/intermediate/
 projects/*/output/
 projects/*/predictions/
+projects/*/sources/
 
 # Sample data images (keep JSONs if you want, but images are large)
 samples/**/*.jpg
