@@ -239,20 +239,13 @@ def cmd_serve(args):
     import socket, subprocess, webbrowser, time
     port = args.port
 
-    # Kill anything already on the port
+    # Best-effort: kill anything already on the port (may be skipped on macOS without root)
     try:
         import psutil
         try:
-            # psutil 6+: net_connections() is a module-level function
             conns = psutil.net_connections(kind='inet')
-        except AttributeError:
-            # older psutil fallback
+        except (psutil.AccessDenied, AttributeError, OSError):
             conns = []
-            for proc in psutil.process_iter(['pid']):
-                try:
-                    conns.extend(proc.connections(kind='inet'))
-                except (psutil.AccessDenied, psutil.NoSuchProcess):
-                    pass
         for conn in conns:
             if getattr(conn.laddr, 'port', None) == port and conn.pid:
                 try:
@@ -260,8 +253,8 @@ def cmd_serve(args):
                     time.sleep(0.5)
                 except (psutil.AccessDenied, psutil.NoSuchProcess):
                     pass
-    except ImportError:
-        pass  # psutil not installed — user may need to kill manually
+    except Exception:
+        pass  # non-critical — uvicorn will report a clear error if port is busy
 
     url = f"http://localhost:{port}"
     print(f"Starting EconAI server at {url}")
