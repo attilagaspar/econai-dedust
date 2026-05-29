@@ -944,6 +944,26 @@
           </div>
           <div id="llm-batch-status" class="batch-status-line"></div>
         </div>
+
+        <!-- PDF text layer -->
+        <div class="field-group" id="fg-pdf" style="display:none">
+          <div class="field-label-row">
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-pdf-toggle" onclick="toggleFg('fg-pdf')" title="Collapse/expand">▾</button>
+              <span class="field-label">PDF Text Layer</span>
+            </div>
+            <div style="display:flex;gap:3px;align-items:center;">
+              <button id="pdf-layer-btn" class="field-run-btn" onclick="runPdfTextLayer()">▶ Extract page</button>
+            </div>
+          </div>
+          <div id="fg-pdf-body">
+            <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
+              <div class="line-nums" id="f-pdf-lines">1</div>
+              <textarea id="f-pdf" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+            </div>
+            <div id="f-pdf-meta" style="font-size:10px;color:#666;margin-top:1px;"></div>
+          </div>
+        </div>
         <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;">
           <input type="checkbox" id="overwrite-cb" style="accent-color:#e94560;cursor:pointer;">
           Overwrite existing OCR / LLM results
@@ -4323,6 +4343,13 @@ function updatePanel() {
   }
 
   document.getElementById('human-input').value=shape.human_output?.human_corrected_text||'';
+
+  // PDF text layer
+  document.getElementById('fg-pdf').style.display='flex';
+  document.getElementById('f-pdf').value = shape.pdf_text ?? '—';
+  document.getElementById('f-pdf-meta').textContent =
+    shape.pdf_text != null ? 'from PDF text layer' : 'not yet extracted';
+
   refreshAllLineNums();
 
   const pts=shape.points||[], xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
@@ -4795,6 +4822,7 @@ function syncLineNumScroll(taId, numsId) {
 function refreshAllLineNums() {
   updateLineNums('f-ocr',        'f-ocr-lines');
   updateLineNums('f-llm-result', 'f-llm-result-lines');
+  updateLineNums('f-pdf',        'f-pdf-lines');
   updateLineNums('human-input',  'human-input-lines');
 }
 
@@ -5214,6 +5242,40 @@ async function clearLlmPage() {
   updatePanel(); drawOverlay();
   await replaceAllShapes();
   showToast(`LLM cleared for ${n} shape${n !== 1 ? 's' : ''} on this page`);
+}
+
+// ── PDF text layer ────────────────────────────────────────────────────────────
+
+async function runPdfTextLayer() {
+  if (!pages.length) return;
+  const btn = document.getElementById('pdf-layer-btn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const p = pages[pageIdx];
+    const params = new URLSearchParams({ folder: currentFolder, stem: p.stem });
+    const r = await fetch(`/api/page/pdf-text-layer?${params}`, { method: 'POST' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      const msg = err.detail || r.statusText;
+      showToast('PDF layer: ' + msg, 4000, 'red');
+      // If no PDF source recorded, show a helpful hint
+      if (r.status === 400) {
+        document.getElementById('f-pdf-meta').textContent = msg;
+      }
+      return;
+    }
+    const data = await r.json();
+    // Merge pdf_text back into local pageData without a full reload
+    data.shapes.forEach((s, i) => {
+      if (pageData.shapes[i] !== undefined) {
+        pageData.shapes[i].pdf_text = s.pdf_text;
+      }
+    });
+    updatePanel();
+    showToast(`PDF text extracted for ${data.updated} shape(s)`);
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Extract page';
+  }
 }
 
 // ── Batch helpers (shared by runOcrAll / runLlmAll) ───────────────────────────

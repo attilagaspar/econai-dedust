@@ -49,16 +49,21 @@ def _import_pdf(pdf_path: Path, ann_dir: Path, base: str | None = None) -> list[
     if base is None:
         base = _sanitize(pdf_path.stem)
     pages = []
-    doc   = fitz.open(str(pdf_path))
+    scale    = 2.0
+    matrix   = fitz.Matrix(scale, scale)
+    doc      = fitz.open(str(pdf_path))
     n_digits = len(str(len(doc)))   # zero-pad to keep natural sort
     for i, page in enumerate(doc):
-        pix  = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+        pix  = page.get_pixmap(matrix=matrix)
         stem = f"{base}_{str(i + 1).zfill(n_digits)}"
         dest = ann_dir / f"{stem}.jpg"
         pix.save(str(dest))
         w, h = pix.width, pix.height
         meta = {**EMPTY_LABELME, "imagePath": dest.name,
-                "imageHeight": h, "imageWidth": w}
+                "imageHeight": h, "imageWidth": w,
+                "pdf_source": str(pdf_path.resolve()),
+                "pdf_page":   i,
+                "pdf_scale":  scale}
         (ann_dir / f"{stem}.json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
         )

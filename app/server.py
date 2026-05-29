@@ -281,6 +281,76 @@ def delete_shape(
 
 
 # ---------------------------------------------------------------------------
+# Routes — PDF text layer extraction
+# ---------------------------------------------------------------------------
+
+@app.post("/api/page/pdf-text-layer")
+def api_pdf_text_layer(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+):
+    """Extract text from the PDF text layer for every shape on a page.
+
+    Requires the page JSON to have pdf_source / pdf_page / pdf_scale fields,
+    which are written automatically when importing from a PDF.
+    Saves pdf_text on each shape and returns the updated shapes list.
+    """
+    import fitz
+
+    d   = _resolve_folder(folder)
+    jf  = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+
+    data = json.loads(jf.read_text(encoding="utf-8"))
+
+    pdf_path  = data.get("pdf_source")
+    pdf_page  = data.get("pdf_page")
+    pdf_scale = data.get("pdf_scale", 2.0)
+
+    if not pdf_path or pdf_page is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No PDF source recorded for this page. "
+                   "Only pages imported from a PDF with the current version "
+                   "of the app have this information."
+        )
+
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source PDF not found at: {pdf_path}\n"
+                   "It may have been moved or deleted."
+        )
+
+    doc  = fitz.open(str(pdf_path))
+    page = doc[int(pdf_page)]
+
+    shapes  = data.get("shapes", [])
+    updated = 0
+
+    for shape in shapes:
+        pts = shape.get("points", [])
+        if len(pts) < 2:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        # Convert image pixel coords → PDF point coords
+        x0, y0 = min(xs) / pdf_scale, min(ys) / pdf_scale
+        x1, y1 = max(xs) / pdf_scale, max(ys) / pdf_scale
+        rect = fitz.Rect(x0, y0, x1, y1)
+        text = page.get_text("text", clip=rect).strip()
+        shape["pdf_text"] = text
+        updated += 1
+
+    doc.close()
+
+    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "updated": updated, "shapes": shapes}
+
+
+# ---------------------------------------------------------------------------
 # Routes — cell image crop
 # ---------------------------------------------------------------------------
 
