@@ -1,12 +1,11 @@
 # EconAI — Historical Document Digitization Pipeline
 
-A browser-based tool for digitizing historical economic documents at scale using layout detection, OCR, and LLM cleaning. Built for researchers who need to turn large collections of scanned statistical tables and registers into structured data.
+A browser-based tool for turning large collections of scanned historical documents (statistical tables, company registers, census pages) into clean, structured data. It combines layout detection, OCR, and LLM-based cleaning, with human-in-the-loop correction at every step.
 
-The pipeline takes you from raw scanned pages all the way to Excel/CSV, with human-in-the-loop correction at every stage.
-
-What is needed:
-- API key, if commercial LLM is preferred
-- GPU server access (where Detectron2 and locally run LLM run in Docker containers)
+**What you need:**
+- A Windows/Mac/Linux laptop to run the web app
+- A GPU server with SSH access (for training the layout model and running inference)
+- An OpenAI API key (optional — only for LLM cleaning step)
 
 ---
 
@@ -16,141 +15,210 @@ What is needed:
 
 ![Dashboard — project list and pipeline](illustrations/1.png)
 
-All projects are listed in the sidebar with their type, page count, and current pipeline stage. Selecting a project shows the full pipeline as a progress indicator, with one-click actions to open the editor, import pages, or advance to the next stage.
-
 ![Dashboard — GPU training and server settings](illustrations/2.png)
-
-The dashboard also handles the GPU training workflow: prepare training data, push to a remote GPU server, run Detectron2 training or inference inside Docker, and pull predictions back — all with a live streaming log. SSH connection settings are configured here.
 
 ### Annotation editor
 
 ![Annotation editor](illustrations/3.png)
 
-The editor is a full-featured browser-based annotation tool built on OpenSeadragon. It servers for training data generation, inference evaluation and correction, structured data export.
+---
 
-It shows the scanned page at full resolution with zoomable pan, and overlays bounding box annotations with label colors. The right panel shows the selected cell's OCR, LLM-cleaned, and human-validated text side by side. The toolbar provides tools for layout detection, lattice grid editing, row/column fill, and diagnostics.
+## How it works
 
+The pipeline takes you from raw scanned pages to a clean Excel/CSV file:
 
+```
+(1) Import pages → (2) Annotate layout → (3) Train GPU model → (4) Run inference
+→ (5) Correct predictions → (6) Detect table structure → (7) OCR cells
+→ (8) LLM cleaning → (9) Validate → (10) Export
+```
+
+Two document types are supported:
+- **Type A** — tables (statistical yearbooks, census counts): the tool detects a grid layout
+- **Type B** — structured text (company registers, directories): the tool extracts fields via LLM
 
 ---
 
-## What it does
+## Setup
 
-Provides a full pipeline from raw scanned pages to structured Excel/CSV:
+### 1. Install Python
 
+You need Python 3.10 or later. Check with:
+```bash
+python --version
 ```
-(1) annotate layout → (2) train GPU model → (3) run inference → (4) correct predictions
-→ (5) detect superstructure → (6) OCR cells → (7) LLM cleaning → validate → export
-```
+If you don't have it, download from [python.org](https://www.python.org/downloads/).
 
-Steps (2) to (4) can be made a loop to improve the vision model.
-
-Two document types:
-- **Type A** — tables (e.g., statistical yearbooks, census data): grid/layout detection
-- **Type B** — structured text (e.g., company registers, newspapers): LLM field extraction
-
----
-
-## How to start
+### 2. Clone the repository
 
 ```bash
-# From the econai-dedust/ directory:
-python econai.py serve
-
-# Opens http://localhost:8000 in your browser automatically.
+git clone https://github.com/attilagaspar/econai-dedust.git
+cd econai-dedust
 ```
 
-Dependencies: `pip install fastapi uvicorn pillow psutil pymupdf paramiko`
+### 3. Install Python dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+This installs the web server, image processing libraries, OCR engines, and SSH tools.
+
+> **Tip:** If you want an isolated environment (recommended), create a virtual environment first:
+> ```bash
+> python -m venv .venv
+> .venv\Scripts\activate      # Windows
+> source .venv/bin/activate   # Mac/Linux
+> pip install -r requirements.txt
+> ```
+
+### 4. Install Tesseract (OCR binary)
+
+Tesseract is an OCR engine that needs to be installed separately from Python.
+
+- **Windows:** Download and run the installer from [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki). During install, tick "Add to PATH".
+- **Mac:** `brew install tesseract`
+- **Linux:** `sudo apt install tesseract-ocr`
+
+### 5. Start the app
+
+```bash
+python econai.py serve
+```
+
+This starts a local web server and prints a URL. Open it in your browser (usually `http://localhost:8000`). Keep this terminal open while you work — closing it stops the server.
 
 ---
 
-## Project dashboard (`/static/dashboard.html`)
+## First-time workflow
 
-Landing page listing all projects with their current pipeline stage and page count.
+### Step 1: Create a project
 
-- **New project** — choose name, type (A/B), and label set
-- **Open editor** — jump into the annotation editor for a project
-- **Import pages** — load PDFs or images from a local folder; converts PDF pages to JPEG automatically
-- **Server settings** — configure SSH host, user, key file, and remote path for GPU training
-- **Prepare training data** — converts LabelMe annotations to COCO JSON format
-- **Train model** — pushes data to the GPU server and runs Detectron2 training inside Docker, streaming all output live
-- **Run inference** — pushes updated scripts and runs inference on the GPU server, streaming output live
-- **Pull predictions** — downloads predicted layout JSONs back to the local annotations folder
-- All server operations show real-time progress in a popup log (SSE stream)
+On the dashboard, click **+ New**. Give it a name (e.g., `machines1935`), choose the document type (A for tables, B for text), and enter the label names that describe what's on the page (e.g., `table header figure`).
+
+### Step 2: Import pages
+
+In the project detail panel, click **Select & Import files…** and choose your PDF or image files. PDFs are automatically split into individual pages. Pages are stored in the project's `annotations/` folder.
+
+### Step 3: Annotate a sample
+
+Click **Open Editor** to open the annotation editor. Draw bounding boxes around the regions you care about (tables, headers, figures) and assign labels. You only need to annotate a sample — typically 20–50 pages is enough to train a good model.
+
+See the [Editor section](#annotation-editor) below for keyboard shortcuts.
+
+### Step 4: Configure the GPU server
+
+In the **GPU Server** card on the dashboard, fill in:
+- **Host** — the server's address (e.g., `gpu.university.edu`)
+- **User** — your SSH username
+- **Key file** — the full path to your SSH private key (e.g., `C:\Users\you\.ssh\id_rsa`)
+- **Remote path** — a folder on the server where data will be stored (e.g., `/home/you/econai`)
+
+Click **Save**, then **Test connection** to verify it works.
+
+### Step 5: Set up Docker containers on the server
+
+In the **Docker Containers** card, enter names for the predict and train containers (or leave the defaults). Click **Check status** to see if they already exist. If not, click **Build** — this uploads the Dockerfile and compiles everything on the server (takes 10–30 minutes the first time).
+
+### Step 6: Train the layout model
+
+Click **Prepare training data** (converts your annotations to the format Detectron2 expects), then **Train model**. A live log will stream in a popup. Training typically takes 30–90 minutes.
+
+### Step 7: Run inference
+
+Click **Run inference** to apply the trained model to all your pages. This uploads the images and runs the model in Docker on the GPU server. When done, click **Pull predictions** to download the results.
+
+### Step 8: Correct predictions
+
+Open the editor and check the predicted boxes. Fix any mistakes, adjust boundaries, and assign correct labels. Use **Apply to empty pages** on the dashboard to seed uncorrected pages with the model's predictions before you start.
+
+### Step 9: OCR and LLM cleaning
+
+Once the layout is correct, use the toolbar in the editor to run OCR on each cell (or batch-process all pages). The LLM cleaning step uses the OpenAI API to normalize numbers, fix OCR errors, and extract structured fields. Your OpenAI key goes in the settings panel in the editor.
+
+### Step 10: Export
+
+Click **Export** in the editor toolbar. This generates an `.xlsx` file preserving the table structure, one row per text line in each cell.
 
 ---
 
-## Annotation editor (`/static/index.html`)
+## Annotation editor
 
-Single-page app with OpenSeadragon viewer and SVG overlay.
+Open with **Open Editor** on the dashboard, or navigate directly to `/static/index.html`.
 
 ### Navigation
-- **Arrow keys** — previous / next page
-- **Pan and zoom** — mouse drag / scroll wheel (when not in edit mode)
-- **E** — toggle edit mode on/off
+| Action | How |
+|---|---|
+| Pan | Click-drag on empty canvas (when not in draw mode) |
+| Zoom | Scroll wheel |
+| Previous / next page | ← → arrow keys |
+| Toggle draw mode | **E** |
 
-### Drawing (edit mode)
-- **Click-drag on empty canvas** — draw a new bounding box
-- **Ctrl+drag on empty canvas** — rubber-band select: selects all boxes that overlap the drawn rectangle
-- **Table draw** — draw whole table by drawing outline, then column and row separators
+### Drawing boxes
+| Action | How |
+|---|---|
+| Draw a box | Click-drag on empty canvas (in draw mode) |
+| Draw a full table | Draw the outline, then add column and row separators using the toolbar |
+| Select a box | Click it |
+| Rubber-band select | Ctrl+drag on empty canvas — selects all boxes in the rectangle |
+| Add to selection | Ctrl+click |
 
-### Single selection
-- **Click a box** — select it; right panel shows label, cell image crop, OCR/LLM/human text
-- **Delete / Del key** — delete selected box
-- **Left-drag a box** — move it
-- **Right-drag a box** — drag out a copy at the new position
-- **Ctrl+Arrow keys** — clone the selected box flush-adjacent in that direction (for filling table grids)
+### Editing boxes
+| Action | How |
+|---|---|
+| Move | Drag the box |
+| Copy to a new position | Right-drag |
+| Clone flush-adjacent | Ctrl + arrow key (fills a grid fast) |
+| Delete | Delete key |
+| Change label | Use the dropdown in the right panel |
+| Undo | Ctrl+Z (up to 50 steps) |
 
-### Multi-selection
-- **Ctrl+click** — add/remove a box from the selection
-- **Ctrl+drag on empty canvas** — rubber-band: select all boxes inside the rectangle (additive)
-- All operations (move, copy-drag, Ctrl+Arrow clone, delete, label change, N/P stamp) apply to the entire selection
+### Copy-pasting across pages
+| Action | How |
+|---|---|
+| Copy selection | Ctrl+C |
+| Paste (offset by 10px) | Ctrl+V |
+| Stamp onto next page | **N** |
+| Stamp onto previous page | **P** |
 
-### Clipboard
-- **Ctrl+C** — copy selected box(es) to clipboard
-- **Ctrl+V** — paste clipboard boxes offset by 10 px
+Stamping (N/P) is useful when many pages share the same table structure — annotate one page fully, then stamp to all neighbors.
 
-### Cross-page stamping
-- **N** — copy current selection to the same coordinates on the next page
-- **P** — copy current selection to the same coordinates on the previous page
-  (useful for propagating a table grid structure across many identical pages)
+### Lattice (table grid) tools
 
-### Labels
-- Label dropdown in the right panel is pre-populated with the project's configured labels
-- Changing the label in the panel updates all selected boxes simultaneously
+Once you have a rough layout, the lattice tools let you define the precise grid:
 
-### Undo
-- **Ctrl+Z** — undo up to 50 steps (snapshots full shapes array per step)
+| Tool | What it does |
+|---|---|
+| **Lattice** | Auto-detect the row/column grid from existing boxes |
+| **Show Grid** | Toggle the blue grid overlay |
+| **Col sep / Row sep** | Click inside the grid to split a column or row |
+| **Del sep** | Click a separator to merge the adjacent columns/rows |
+| **Snap** | Snap all cells to the exact grid boundaries |
+| **Row fill / Col fill** | Propagate a label across a whole row or column |
 
-### Lattice grid tools
-- **Lattice** — auto-detect the table superstructure (row/column grid) from existing annotations
-- **Show Grid** — toggle the blue lattice overlay showing detected grid lines
-- **Col sep / Row sep** — click inside the grid to insert a new column or row separator, splitting existing cells
-- **Del sep** — click a separator line to merge the two adjacent rows or columns
-- **Snap** — snap all lattice cell annotations to the exact detected grid boundaries
-- **Row fill / Col fill** — propagate cell labels across an entire row or column
+### Batch operations
+
+The toolbar has a **Batch** button that lets you run operations (overlap removal, lattice correction, OCR, LLM cleaning) across all pages at once with a live progress log.
 
 ---
 
-## GPU training pipeline
+## GPU server — what actually happens
 
-Training and inference run on a remote GPU server via SSH/SFTP. The entire flow — file transfer, Docker container startup, training output — is visible in a live popup log.
+When you click **Train** or **Infer**, the app:
+1. Converts your annotations to COCO JSON format
+2. Uploads images, config, and shell scripts to the server via SFTP
+3. SSH's into the server, starts the Docker container, and runs the script inside it
+4. Streams the live log back to your browser
 
-### What gets pushed to the server
-| Local path | Remote path |
-|---|---|
-| `annotations/*.jpg` | `<remote_path>/<project>/images/` |
-| `intermediate/annotations.json` | `<remote_path>/<project>/annotations.json` |
-| `intermediate/configs/<project>/fast_rcnn_R_50_FPN_3x.yaml` | `<remote_path>/layout-model-training/configs/<project>/` |
-| `app/infer_layout.py` | `<remote_path>/layout-model-training/tools/` |
-| `intermediate/train.sh` | `<remote_path>/layout-model-training/scripts/<project>.sh` |
-| `intermediate/infer.sh` | `<remote_path>/layout-model-training/scripts/<project>_infer.sh` |
+Training runs detached (with `nohup`), so you can close the browser and it keeps going. Clicking **Train** again while training is running re-attaches to the live log.
 
-Shell scripts are uploaded with Unix line endings (CRLF stripped) regardless of the local OS.
+### Docker setup
 
-### Docker setup expected on the server
-- Container named `detectron_training_container` with `/home/<user>/econai/koren` mounted as `/workspace`
-- Container named `detectron_predicting_container` with the same mount
+The `Dockerfile` at the repo root defines the GPU container:
+- Base: NVIDIA CUDA 12.1 + Ubuntu 22.04
+- Includes: PyTorch (cu121), Detectron2 (from source), pdf2image, pymupdf, layoutparser
+
+If the container doesn't exist yet, the **Build** button in the Docker card handles everything: uploads the Dockerfile, builds the image, and creates the container with the right GPU and volume settings.
 
 ---
 
@@ -158,26 +226,29 @@ Shell scripts are uploaded with Unix line endings (CRLF stripped) regardless of 
 
 ```
 econai-dedust/
-  econai.py                  # CLI entry point (serve, new-project, list, status, advance)
-  requirements.txt
+  econai.py              — CLI entry point
+  requirements.txt       — Python dependencies for the web app
+  Dockerfile             — GPU container definition (for the server)
   app/
-    server.py                # FastAPI backend
-    pipeline.py              # pipeline state machine
-    page_import.py           # PDF/image import to annotations/
-    coco_convert.py          # LabelMe → COCO JSON conversion
-    infer_layout.py          # inference helper (runs on GPU server)
-    ssh_ops.py               # paramiko SSH/SFTP helpers + stream_command
+    server.py            — FastAPI backend (all API routes)
+    docker_config.py     — Docker container name config (saved to docker_config.json)
+    pipeline.py          — Pipeline stage machine
+    page_import.py       — PDF/image import
+    coco_convert.py      — LabelMe → COCO JSON
+    infer_layout.py      — Runs on the GPU server
+    ssh_ops.py           — SSH/SFTP helpers
     static/
-      dashboard.html         # project dashboard
-      index.html             # annotation editor
+      dashboard.html     — Project dashboard
+      index.html         — Annotation editor
+      validator.html     — Data lab / batch cleaning
   projects/
     <name>/
-      config.json            # type, labels, server SSH settings
-      pipeline.json          # current stage + timestamps
-      annotations/           # LabelMe JSONs + page images
-      intermediate/          # COCO JSON, train/infer scripts, configs
-      output/                # final Excel/CSV exports
-  samples/                   # sample pages for testing
+      config.json        — Project type, labels, server settings
+      pipeline.json      — Current stage
+      annotations/       — Page images + LabelMe JSONs  [not in git]
+      intermediate/      — COCO JSON, training scripts  [not in git]
+      predictions/       — Model output JSONs           [not in git]
+      output/            — Exported Excel/CSV files     [not in git]
 ```
 
 ---
@@ -185,12 +256,12 @@ econai-dedust/
 ## CLI reference
 
 ```bash
-python econai.py serve [--port 8000]        # start the web app
-python econai.py new-project <name> --type A --labels label1 label2
-python econai.py list                        # all projects with stage and page count
-python econai.py status <name>               # full pipeline view
-python econai.py advance <name>              # move to next stage
-python econai.py set-stage <name> <stage>   # set stage explicitly
+python econai.py serve [--port 8000]                          # start the web app
+python econai.py new-project <name> --type A --labels l1 l2  # create a project
+python econai.py list                                          # list all projects
+python econai.py status <name>                                 # show pipeline state
+python econai.py advance <name>                               # move to next stage
+python econai.py set-stage <name> <stage>                     # set stage manually
 ```
 
 ---
@@ -201,4 +272,4 @@ python econai.py set-stage <name> <stage>   # set stage explicitly
 `raw → annotating → training → predicting → correcting → superstructure → ocr → llm_cleaning → validating → exporting → done`
 
 **Type B (structured text):**
-same, minus `superstructure`
+same, without the `superstructure` step
