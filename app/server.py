@@ -57,30 +57,7 @@ app = FastAPI(title="EconAI", version="0.1.0", lifespan=lifespan)
 from app.validator import router as _validator_router
 app.include_router(_validator_router)
 
-# Module-level probe — fires when server.py is imported
 import os as _os
-try:
-    _probe_msg = f"server.py loaded OK  PID={_os.getpid()}\n"
-    open(r"C:\Users\agaspar\Downloads\server_loaded.txt", "a").write(_probe_msg)
-except Exception:
-    pass
-
-# Request probe middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as _Req
-
-class _ProbeMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: _Req, call_next):
-        try:
-            with open(r"C:\Users\agaspar\Downloads\requests.log", "a") as _f:
-                _f.write(f"PID={_os.getpid()} {request.method} {request.url.path}?{request.url.query}\n")
-        except Exception:
-            pass
-        response = await call_next(request)
-        response.headers["X-EconAI-Worker"] = str(_os.getpid())
-        return response
-
-app.add_middleware(_ProbeMiddleware)
 
 # Allow the browser (same host, any port) to call the API
 app.add_middleware(
@@ -2852,19 +2829,6 @@ def api_export_excel(
     When cells in the same lattice row have different line counts, the
     shorter ones are padded with blank cells coloured light-red.
     """
-    # ── Probe: confirm this code version is running ──────────────────────────
-    _PROBE = r"C:\Users\agaspar\Downloads\excel_debug.log"
-    try:
-        with open(_PROBE, "a", encoding="utf-8") as _pf:
-            _pf.write(f"ENDPOINT HIT: folder={folder!r} scope={scope!r} stem={stem!r}\n")
-    except Exception as _pe:
-        try:
-            with open(_PROBE + ".err", "w") as _ef:
-                _ef.write(repr(_pe))
-        except Exception:
-            pass
-    # ── End probe ─────────────────────────────────────────────────────────────
-
     try:
         import openpyxl
         from openpyxl.styles import Alignment, PatternFill
@@ -3026,18 +2990,6 @@ def api_export_excel(
                       lines=text_to_lines(c["text"]),
                       w_px=c["w"])
                  for c in winner.values()]
-        # Write debug log to a file (stdout unreachable from uvicorn worker)
-        _LOG_PATH = r"C:\Users\agaspar\Downloads\excel_debug.log"
-        try:
-            with open(_LOG_PATH, "a", encoding="utf-8") as _f:
-                _f.write(f"--- shapes_to_cells: {len(raw)} raw -> {len(cells)} cells ---\n")
-                for line in _dbg:
-                    _f.write(line + "\n")
-                for c in cells:
-                    _f.write(f"  cell row={c['row_idx']} col={c['col_idx']} lines={len(c['lines'])} first={c['lines'][0][:30]!r}\n")
-        except Exception as _e:
-            with open(_LOG_PATH + ".err", "w") as _ef:
-                _ef.write(str(_e))
         return cells
 
     # ── Helpers for stacking / dual-page alignment ───────────────────────────
