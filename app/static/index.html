@@ -1138,6 +1138,11 @@
                style="accent-color:#e94560;width:13px;height:13px;">
         <span>Overwrite existing LLM results</span>
       </label>
+      <label class="row">
+        <input type="checkbox" id="batch-llm-require-ocr-numbers"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Only run if OCR contains numbers</span>
+      </label>
     </div>
 
     <!-- Score threshold options -->
@@ -3877,9 +3882,10 @@ async function runBatch() {
       const mode       = document.getElementById('batch-llm-mode').value;
       const prompt     = document.getElementById('batch-llm-prompt').value.trim();
       const cellHeight = parseInt(document.getElementById('batch-llm-cellheight').value) || 26;
-      const useShadow  = document.getElementById('batch-llm-use-shadow').checked;
-      const overwrite  = document.getElementById('batch-llm-overwrite').checked;
-      const labelSet   = new Set(selLabels);
+      const useShadow      = document.getElementById('batch-llm-use-shadow').checked;
+      const overwrite      = document.getElementById('batch-llm-overwrite').checked;
+      const requireOcrNums = document.getElementById('batch-llm-require-ocr-numbers').checked;
+      const labelSet       = new Set(selLabels);
 
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
@@ -3894,6 +3900,7 @@ async function runBatch() {
         if (condFilter !== null && !condFilter.has(si)) continue;
         if (colFilter  !== null && !colFilter.has(si))  continue;
         if (!overwrite && sh.openai_output?.response) continue;
+        if (requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
         try {
           await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow);
