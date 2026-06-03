@@ -7,12 +7,8 @@ venv/
 dist/
 build/
 
-# Project data (large files / generated — not for version control)
-projects/*/annotations/
-projects/*/intermediate/
-projects/*/output/
-projects/*/predictions/
-projects/*/sources/
+# Project data — entire projects/ folder is local only
+projects/
 
 # Sample data images (keep JSONs if you want, but images are large)
 samples/**/*.jpg

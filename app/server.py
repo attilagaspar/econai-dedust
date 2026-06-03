@@ -2890,12 +2890,13 @@ async def api_audit_update_stats(folder: str = Query(...), request: Request = No
 
 @app.get("/api/export/excel")
 def api_export_excel(
-    folder: str = Query(...),
-    scope:  str = Query("page"),       # "page" | "document"
-    stem:   str = Query(None),         # required when scope="page"
-    dual:   bool = Query(False),       # dual-page layout (odd left, even right)
-    layer:  str = Query("best_llm"),   # "ocr"|"llm"|"human"|"best_ocr"|"best_llm"
-    types:  str = Query(""),           # comma-sep label types; empty = all
+    folder:      str  = Query(...),
+    scope:       str  = Query("page"),      # "page" | "document"
+    stem:        str  = Query(None),        # required when scope="page"
+    dual:        bool = Query(False),       # dual-page layout (odd left, even right)
+    layer:       str  = Query("best_llm"), # "ocr"|"llm"|"human"|"best_ocr"|"best_llm"
+    types:       str  = Query(""),         # comma-sep label types; empty = all
+    col_headers: str  = Query(""),         # comma-sep column header labels; empty = no header row
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -3187,6 +3188,26 @@ def api_export_excel(
     def max_col_of(cells):
         return max((c["col_idx"] for c in cells), default=-1)
 
+    # ── Column-header support ────────────────────────────────────────────────
+    hdr_list = [h.strip() for h in col_headers.split(",") if h.strip()] \
+               if col_headers.strip() else []
+    _hdr_font = Font(bold=True)
+    _hdr_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    _hdr_font_white = Font(bold=True, color="FFFFFF")
+
+    def write_header_row(ws, col_offset=0):
+        """Write hdr_list as a bold row at row 1, starting at col_offset+1."""
+        if not hdr_list:
+            return
+        for i, label in enumerate(hdr_list):
+            cell = ws.cell(row=1, column=i + 1 + col_offset)
+            cell.value     = label
+            cell.font      = _hdr_font_white
+            cell.fill      = _hdr_fill
+            cell.alignment = _align
+
+    data_start = 2 if hdr_list else 1   # row where data cells begin
+
     def load_shapes(jf):
         try:
             return json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
@@ -3208,12 +3229,14 @@ def api_export_excel(
         # ── Single page: one sheet (no source row needed) ─────────────────
         print(f"[EXCEL] processing page {jfiles[0].name}", flush=True)
         ws = wb.create_sheet(title=stem[:31])
-        write_cells(ws, shapes_to_cells(load_shapes(jfiles[0])))
+        write_header_row(ws)
+        write_cells(ws, shapes_to_cells(load_shapes(jfiles[0])), base_row=data_start)
 
     elif not dual:
         # ── Whole document, single layout: all pages on one sheet ─────────
         ws      = wb.create_sheet(title="Export")
-        cur_row = 1
+        write_header_row(ws)
+        cur_row = data_start
         for jf in jfiles:
             print(f"[EXCEL] processing {jf.name}", flush=True)
             cells = shapes_to_cells(load_shapes(jf))
@@ -3230,7 +3253,8 @@ def api_export_excel(
     else:
         # ── Whole document, dual layout: paired pages side-by-side ────────
         ws      = wb.create_sheet(title="Export")
-        cur_row = 1
+        cur_row = data_start
+        dual_headers_written = False
         i = 0
         while i < len(jfiles):
             left_jf  = jfiles[i]
@@ -3247,6 +3271,12 @@ def api_export_excel(
             right_pad  = max(0, left_latt  - right_latt)
 
             right_col  = max_col_of(left_cells) + 2          # 1-column gap
+
+            # Write column headers once (row 1) across both column groups
+            if hdr_list and not dual_headers_written:
+                write_header_row(ws, col_offset=0)
+                write_header_row(ws, col_offset=right_col)
+                dual_headers_written = True
 
             write_cells(ws, left_cells,  col_offset=0,
                         base_row=cur_row, align_pad=left_pad)

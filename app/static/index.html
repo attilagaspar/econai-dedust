@@ -850,11 +850,32 @@
           <div class="field-label">Row / Column</div>
           <div id="f-super" class="field-value">—</div>
         </div>
+        <!-- PDF text layer — shown above OCR -->
+        <div class="field-group" id="fg-pdf" style="display:none">
+          <div class="field-label-row">
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-pdf-toggle" onclick="toggleFg('fg-pdf')" title="Collapse/expand">▾</button>
+              <span class="field-label">PDF Text Layer</span>
+            </div>
+            <div style="display:flex;gap:3px;align-items:center;">
+              <button id="pdf-layer-btn"     class="field-run-btn" onclick="runPdfTextLayer()">▶ Extract page</button>
+              <button id="pdf-layer-all-btn" class="field-run-btn" onclick="runPdfTextLayerAll()">▶ All pages</button>
+            </div>
+          </div>
+          <div id="fg-pdf-body">
+            <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
+              <div class="line-nums" id="f-pdf-lines">1</div>
+              <textarea id="f-pdf" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
+            </div>
+            <div id="f-pdf-meta" style="font-size:10px;color:#666;margin-top:1px;"></div>
+          </div>
+        </div>
+
         <div class="field-group" id="fg-ocr" style="display:none">
           <div class="field-label-row">
             <div style="display:flex;align-items:center;gap:3px;">
               <button class="fg-toggle-btn" id="fg-ocr-toggle" onclick="toggleFg('fg-ocr')" title="Collapse/expand">▾</button>
-              <span class="field-label">OCR (Tesseract)</span>
+              <span class="field-label">OCR</span>
             </div>
             <div style="display:flex;gap:3px;align-items:center;">
               <select id="ocr-mode" class="llm-select" style="flex:none;" onchange="updateOcrMode()">
@@ -944,26 +965,6 @@
           </div>
           <div id="llm-batch-status" class="batch-status-line"></div>
         </div>
-
-        <!-- PDF text layer -->
-        <div class="field-group" id="fg-pdf" style="display:none">
-          <div class="field-label-row">
-            <div style="display:flex;align-items:center;gap:3px;">
-              <button class="fg-toggle-btn" id="fg-pdf-toggle" onclick="toggleFg('fg-pdf')" title="Collapse/expand">▾</button>
-              <span class="field-label">PDF Text Layer</span>
-            </div>
-            <div style="display:flex;gap:3px;align-items:center;">
-              <button id="pdf-layer-btn" class="field-run-btn" onclick="runPdfTextLayer()">▶ Extract page</button>
-            </div>
-          </div>
-          <div id="fg-pdf-body">
-            <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
-              <div class="line-nums" id="f-pdf-lines">1</div>
-              <textarea id="f-pdf" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
-            </div>
-            <div id="f-pdf-meta" style="font-size:10px;color:#666;margin-top:1px;"></div>
-          </div>
-        </div>
         <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;">
           <input type="checkbox" id="overwrite-cb" style="accent-color:#e94560;cursor:pointer;">
           Overwrite existing OCR / LLM results
@@ -1027,7 +1028,9 @@
         <option value="llm">LLM</option>
         <option value="score_delete">Delete shapes below score threshold</option>
         <option value="clear_ocr">✕ Remove OCR results</option>
+        <option value="pdf_text_layer">PDF text layer extraction</option>
         <option value="clear_llm">✕ Remove LLM results</option>
+        <option value="strip_short_lines">✂ Remove short lines from text</option>
         <option value="trim_overlaps">✂ Trim overlaps</option>
       </select>
     </div>
@@ -1037,6 +1040,11 @@
         <option value="none">— all shapes —</option>
         <option value="ocr_row_minority">OCR row mismatch — minority only (red in diagnostic)</option>
       </select>
+    </div>
+    <div>
+      <label class="row" style="margin-bottom:4px;">Column filter <span style="font-size:10px;color:#555;font-weight:400;">(lattice super_columns to process)</span></label>
+      <input type="text" id="batch-col-filter" placeholder="e.g. 1, 3, 5  (blank = all columns)" />
+      <div style="font-size:10px;color:#555;margin-top:3px;">Comma-separated lattice column numbers. Shapes without a super_column are excluded when a filter is set.</div>
     </div>
     <div>
       <label class="row" style="margin-bottom:4px;">Pages</label>
@@ -1151,6 +1159,23 @@
       </div>
     </div>
 
+    <!-- Strip short lines options -->
+    <div id="batch-strip-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Text field to clean:</div>
+        <select id="batch-strip-field" style="width:100%;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="ocr">OCR</option>
+          <option value="llm">LLM</option>
+          <option value="human">Human</option>
+          <option value="pdf">PDF text layer</option>
+        </select>
+      </div>
+      <div style="font-size:10px;color:#555;line-height:1.5;">
+        Removes every line shorter than 3 characters (dashes, dots, single letters…)<br>
+        except 1- or 2-digit numbers which are always kept.
+      </div>
+    </div>
+
     <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
     <div id="batch-progress"></div>
 
@@ -1241,6 +1266,15 @@
       <div id="xls-types-wrap" style="display:flex;flex-wrap:wrap;gap:6px 14px;max-height:140px;overflow-y:auto;padding:2px 0;">
         <!-- populated by JS -->
       </div>
+    </div>
+
+    <!-- Column headers -->
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Column headers <span style="text-transform:none;font-size:0.7rem;color:#555;">(optional)</span></div>
+      <input type="text" id="xls-col-headers"
+        placeholder="e.g.  County, Ploughs, Harvesters, Threshers"
+        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
+      <div style="font-size:0.7rem;color:#555;">Comma-separated, one per lattice column left to right. Leave blank to export without a header row.</div>
     </div>
 
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
@@ -3523,8 +3557,9 @@ function onBatchOpChange() {
   document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
   document.getElementById('batch-llm-opts').style.display       = op === 'llm'          ? 'flex' : 'none';
   document.getElementById('batch-score-opts').style.display     = op === 'score_delete' ? 'flex' : 'none';
-  document.getElementById('batch-clear-ocr-opts').style.display = op === 'clear_ocr'    ? 'flex' : 'none';
-  document.getElementById('batch-clear-llm-opts').style.display = op === 'clear_llm'    ? 'flex' : 'none';
+  document.getElementById('batch-clear-ocr-opts').style.display = op === 'clear_ocr'         ? 'flex' : 'none';
+  document.getElementById('batch-clear-llm-opts').style.display = op === 'clear_llm'         ? 'flex' : 'none';
+  document.getElementById('batch-strip-opts').style.display     = op === 'strip_short_lines'  ? 'flex' : 'none';
 }
 
 function onBatchLlmModeChange() {
@@ -3582,6 +3617,54 @@ function _computeConditionFilter(shapes) {
   return null;
 }
 
+// Returns null (no filter) or a Set of shape indices whose super_column matches the user input.
+function _computeColumnFilter(shapes) {
+  const raw = document.getElementById('batch-col-filter').value.trim();
+  if (!raw) return null;
+  const cols = new Set(
+    raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+  );
+  if (!cols.size) return null;
+  const result = new Set();
+  shapes.forEach((s, i) => { if (cols.has(s.super_column)) result.add(i); });
+  return result;
+}
+
+// ── Strip short lines helpers ─────────────────────────────────────────────────
+
+function _stripShortLines(text) {
+  if (!text) return text;
+  return text.split('\n').filter(line => {
+    const t = line.trim();
+    if (!t) return false;                    // blank line → drop
+    if (/^\d{1,2}$/.test(t)) return true;   // 1-2 digit number → keep
+    return t.length >= 3;                    // short non-number → drop
+  }).join('\n');
+}
+
+function _getTextField(shape, field) {
+  if (field === 'ocr')   return shape.tesseract_output?.ocr_text   ?? null;
+  if (field === 'llm')   return shape.openai_output?.response       ?? null;
+  if (field === 'human') return shape.human_output?.human_corrected_text ?? null;
+  if (field === 'pdf')   return shape.pdf_text                      ?? null;
+  return null;
+}
+
+function _setTextField(shape, field, text) {
+  if (field === 'ocr') {
+    if (!shape.tesseract_output) shape.tesseract_output = {};
+    shape.tesseract_output.ocr_text = text;
+  } else if (field === 'llm') {
+    if (!shape.openai_output) shape.openai_output = {};
+    shape.openai_output.response = text;
+  } else if (field === 'human') {
+    if (!shape.human_output) shape.human_output = {};
+    shape.human_output.human_corrected_text = text;
+  } else if (field === 'pdf') {
+    shape.pdf_text = text;
+  }
+}
+
 async function runBatch() {
   const op       = document.getElementById('batch-op').value;
   const rawPages = document.getElementById('batch-pages').value;
@@ -3610,6 +3693,10 @@ async function runBatch() {
     if (!confirm(`Remove OCR results on ${sorted.length} page(s)?`)) return;
   } else if (op === 'clear_llm') {
     if (!confirm(`Remove LLM results on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'strip_short_lines') {
+    const field = document.getElementById('batch-strip-field').value;
+    const fieldLabel = { ocr: 'OCR', llm: 'LLM', human: 'Human', pdf: 'PDF' }[field] || field;
+    if (!confirm(`Strip short lines from ${fieldLabel} text on ${sorted.length} page(s)?`)) return;
   } else if (op === 'trim_overlaps') {
     if (!confirm(`Trim overlapping annotation pairs on ${sorted.length} page(s)?`)) return;
   }
@@ -3727,14 +3814,16 @@ async function runBatch() {
       const pdata  = await res.json();
       const shapes = pdata.shapes || [];
       const condFilter = _computeConditionFilter(shapes);
+      const colFilter  = _computeColumnFilter(shapes);
 
       for (let si = 0; si < shapes.length; si++) {
         if (_batchStop) break;
         const sh = shapes[si];
         if (!labelSet.has(sh.label)) continue;
         if (condFilter !== null && !condFilter.has(si)) continue;
+        if (colFilter  !== null && !colFilter.has(si))  continue;
         if (!overwrite && sh.openai_output?.response) continue;
-        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}`;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
         try {
           await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow);
         } catch(e) { if (_batchStop) break; }
@@ -3755,6 +3844,7 @@ async function runBatch() {
       const pdata  = await res.json();
       const shapes = pdata.shapes || [];
       const condFilter = _computeConditionFilter(shapes);
+      const colFilter  = _computeColumnFilter(shapes);
       let shapeDone = 0;
 
       for (let si = 0; si < shapes.length; si++) {
@@ -3762,8 +3852,9 @@ async function runBatch() {
         const sh = shapes[si];
         if (!labelSet.has(sh.label)) continue;
         if (condFilter !== null && !condFilter.has(si)) continue;
+        if (colFilter  !== null && !colFilter.has(si))  continue;
         if (!overwrite && sh.tesseract_output?.ocr_text) continue;
-        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}`;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
         try {
           await _batchOcrShape(stem, si, op, cellHeight);
           shapeDone++;
@@ -3783,8 +3874,10 @@ async function runBatch() {
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
       const before = pdata.shapes || [];
-      const after  = before.filter(s => {
+      const colFilter = _computeColumnFilter(before);
+      const after  = before.filter((s, i) => {
         if (filterByLabel && !labelSet.has(s.label)) return true; // keep if not in filter
+        if (colFilter !== null && !colFilter.has(i)) return true; // keep if outside column filter
         return (s.score == null) || (s.score >= thresh);
       });
       const deleted = before.length - after.length;
@@ -3806,8 +3899,13 @@ async function runBatch() {
       const res = await fetch(`${API}/api/page?${params}`);
       const pdata = await res.json();
       const shapes = pdata.shapes || [];
+      const colFilter = _computeColumnFilter(shapes);
       let n = 0;
-      shapes.forEach(s => { if (labelSet.has(s.label) && s.tesseract_output) { s.tesseract_output = null; n++; } });
+      shapes.forEach((s, i) => {
+        if (!labelSet.has(s.label)) return;
+        if (colFilter !== null && !colFilter.has(i)) return;
+        if (s.tesseract_output) { s.tesseract_output = null; n++; }
+      });
       if (n > 0) {
         await fetch(`${API}/api/page/shapes?${params}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -3826,8 +3924,13 @@ async function runBatch() {
       const res = await fetch(`${API}/api/page?${params}`);
       const pdata = await res.json();
       const shapes = pdata.shapes || [];
+      const colFilter = _computeColumnFilter(shapes);
       let n = 0;
-      shapes.forEach(s => { if (labelSet.has(s.label) && s.openai_output) { s.openai_output = null; n++; } });
+      shapes.forEach((s, i) => {
+        if (!labelSet.has(s.label)) return;
+        if (colFilter !== null && !colFilter.has(i)) return;
+        if (s.openai_output) { s.openai_output = null; n++; }
+      });
       if (n > 0) {
         await fetch(`${API}/api/page/shapes?${params}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -3835,6 +3938,43 @@ async function runBatch() {
         });
       }
       progText.textContent = `Page ${idx + 1}/${pages.length} — cleared LLM from ${n} shape(s)`;
+
+    } else if (op === 'pdf_text_layer') {
+      const r2 = await fetch(`/api/page/pdf-text-layer?${params}`, { method: 'POST' });
+      if (r2.ok) {
+        const data = await r2.json();
+        if (idx === pageIdx) {
+          data.shapes.forEach((s, si) => {
+            if (pageData.shapes[si] !== undefined) pageData.shapes[si].pdf_text = s.pdf_text;
+          });
+          updatePanel();
+        }
+        progText.textContent = `Page ${idx + 1}/${pages.length} — extracted ${data.updated} shape(s)`;
+      } else {
+        progText.textContent = `Page ${idx + 1}/${pages.length} — no PDF source (skipped)`;
+      }
+
+    } else if (op === 'strip_short_lines') {
+      const field     = document.getElementById('batch-strip-field').value;
+      const res       = await fetch(`${API}/api/page?${params}`);
+      const pdata     = await res.json();
+      const shapes    = pdata.shapes || [];
+      const colFilter = _computeColumnFilter(shapes);
+      let changed = 0;
+      shapes.forEach((s, i) => {
+        if (colFilter !== null && !colFilter.has(i)) return;
+        const orig = _getTextField(s, field);
+        if (orig == null) return;
+        const cleaned = _stripShortLines(orig);
+        if (cleaned !== orig) { _setTextField(s, field, cleaned); changed++; }
+      });
+      if (changed > 0) {
+        await fetch(`${API}/api/page/shapes?${params}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shapes }),
+        });
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — cleaned ${changed} shape(s)`;
 
     } else if (op === 'trim_overlaps') {
       const res = await fetch(`${API}/api/page?${params}`);
@@ -4134,12 +4274,14 @@ async function doExcelExport() {
                     .map(cb => cb.value);
   const types  = checked.join(',');
 
+  const colHeaders = document.getElementById('xls-col-headers').value.trim();
   const params = new URLSearchParams({
     folder: folder,
     scope,
     layer,
     types,
     dual: dual ? 'true' : 'false',
+    ...(colHeaders ? { col_headers: colHeaders } : {}),
   });
   if (scope === 'page') {
     const stem = pages[pageIdx]?.stem;
@@ -5278,6 +5420,41 @@ async function runPdfTextLayer() {
   }
 }
 
+async function runPdfTextLayerAll() {
+  if (!pages.length) return;
+  const allBtn  = document.getElementById('pdf-layer-all-btn');
+  const pageBtn = document.getElementById('pdf-layer-btn');
+  allBtn.disabled = true; allBtn.textContent = '…';
+  pageBtn.disabled = true;
+  let done = 0, errors = 0;
+  try {
+    for (let i = 0; i < pages.length; i++) {
+      if (batchAbort) break;
+      const p = pages[i];
+      allBtn.textContent = `${i + 1}/${pages.length}`;
+      const params = new URLSearchParams({ folder, stem: p.stem });
+      try {
+        const r = await fetch(`/api/page/pdf-text-layer?${params}`, { method: 'POST' });
+        if (!r.ok) { errors++; continue; }
+        const data = await r.json();
+        done += data.updated || 0;
+        // If it's the current page, merge results into local state
+        if (i === pageIdx) {
+          data.shapes.forEach((s, si) => {
+            if (pageData.shapes[si] !== undefined) pageData.shapes[si].pdf_text = s.pdf_text;
+          });
+          updatePanel();
+        }
+      } catch (_) { errors++; }
+    }
+    const msg = errors ? `PDF text done: ${done} shape(s), ${errors} page error(s)` : `PDF text extracted: ${done} shape(s) across ${pages.length} pages`;
+    showToast(msg, 4000, errors ? 'orange' : undefined);
+  } finally {
+    allBtn.disabled = false; allBtn.textContent = '▶ All pages';
+    pageBtn.disabled = false;
+  }
+}
+
 // ── Batch helpers (shared by runOcrAll / runLlmAll) ───────────────────────────
 
 function _batchTargets() {
@@ -5687,6 +5864,24 @@ async function runSmartCorrect() {
 }
 
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
+function navigateLattice(dir) {
+  if (selIdx < 0 || !pageData?.shapes) return;
+  const sh = pageData.shapes[selIdx];
+  if (sh.super_row == null || sh.super_column == null) return;
+  let tr = sh.super_row, tc = sh.super_column;
+  if      (dir === 'right') tc++;
+  else if (dir === 'left')  tc--;
+  else if (dir === 'down')  tr++;
+  else if (dir === 'up')    tr--;
+  const ni = pageData.shapes.findIndex(s => s.super_row === tr && s.super_column === tc);
+  if (ni < 0) return;
+  selIdx = ni;
+  selSet.clear();
+  selSet.add(ni);
+  updatePanel();
+  drawOverlay();
+}
+
 document.addEventListener('keydown', e => {
   const inField=e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'||e.target.tagName==='SELECT';
   if (e.key==='Escape') {
@@ -5705,12 +5900,14 @@ document.addEventListener('keydown', e => {
   if (e.key==='Delete'||e.key==='Backspace') { deleteSelectedShape(); return; }
   if (e.key==='e'||e.key==='E') { if(pages.length) toggleEditMode(); return; }
   if (e.key==='a'||e.key==='A') { pageData.shapes.forEach((_,i)=>selSet.add(i)); selIdx=selSet.size?[...selSet][0]:-1; updatePanel(); drawOverlay(); return; }
-  if (e.key==='n'||e.key==='N') { cloneSelectionToPage(+1); return; }
+  if (e.key==='n'||e.key==='N') { goPage(+1); return; }
+  if (e.key==='m'||e.key==='M') { goPage(-1); return; }
   if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
-  if (e.key==='m'||e.key==='M') { cloneSelectionToPage(+2); return; }
   if (e.key==='o'||e.key==='O') { cloneSelectionToPage(-2); return; }
-  if (e.key==='ArrowRight'||e.key==='ArrowDown') goPage(+1);
-  if (e.key==='ArrowLeft' ||e.key==='ArrowUp')   goPage(-1);
+  if (e.key==='ArrowRight') { navigateLattice('right'); return; }
+  if (e.key==='ArrowLeft')  { navigateLattice('left');  return; }
+  if (e.key==='ArrowDown')  { navigateLattice('down');  return; }
+  if (e.key==='ArrowUp')    { navigateLattice('up');    return; }
 });
 
 // ── Page loading ─────────────────────────────────────────────────────────────

@@ -151,8 +151,9 @@ Open with **Open Editor** on the dashboard, or navigate directly to `/static/ind
 |---|---|
 | Pan | Click-drag on empty canvas (when not in draw mode) |
 | Zoom | Scroll wheel |
-| Previous / next page | ← → arrow keys |
-| Toggle draw mode | **E** |
+| Previous / next page | **M** / **N** |
+| Navigate lattice cells | ← → ↑ ↓ arrow keys (when a lattice cell is selected) |
+| Toggle edit / review mode | **E** |
 
 ### Drawing boxes
 | Action | How |
@@ -178,10 +179,10 @@ Open with **Open Editor** on the dashboard, or navigate directly to `/static/ind
 |---|---|
 | Copy selection | Ctrl+C |
 | Paste (offset by 10px) | Ctrl+V |
-| Stamp onto next page | **N** |
 | Stamp onto previous page | **P** |
+| Stamp 2 pages back | **O** |
 
-Stamping (N/P) is useful when many pages share the same table structure — annotate one page fully, then stamp to all neighbors.
+Stamping is useful when many pages share the same table structure — annotate one page fully, then stamp to neighbours.
 
 ### Lattice (table grid) tools
 
@@ -273,3 +274,46 @@ python econai.py set-stage <name> <stage>                     # set stage manual
 
 **Type B (structured text):**
 same, without the `superstructure` step
+
+---
+
+## Keyboard shortcuts (annotation editor)
+
+### Page navigation
+| Key | Action |
+|---|---|
+| **N** | Next page |
+| **M** | Previous page |
+
+### Lattice cell navigation
+| Key | Action |
+|---|---|
+| **→** | Move selection to the cell to the right (same lattice row) |
+| **←** | Move selection to the cell to the left (same lattice row) |
+| **↓** | Move selection to the cell below (same lattice column) |
+| **↑** | Move selection to the cell above (same lattice column) |
+
+Arrow keys only move within the lattice. If no lattice cell is selected, or there is no neighbour in that direction, the key does nothing.
+
+### Editing
+| Key | Action |
+|---|---|
+| **E** | Toggle edit / review mode |
+| **A** | Select all shapes on the page |
+| **Delete** / **Backspace** | Delete selected shape(s) |
+| **Ctrl+Z** | Undo (up to 50 steps) |
+| **Ctrl+S** | Save human correction |
+| **Ctrl+C** | Copy selected shape(s) |
+| **Ctrl+V** | Paste (offset by 10 px) |
+| **Ctrl + ←/→/↑/↓** | Clone selected shape flush-adjacent in that direction |
+
+### Stamping across pages
+| Key | Action |
+|---|---|
+| **P** | Stamp selection onto the previous page |
+| **O** | Stamp selection 2 pages back |
+
+### Modals & modes
+| Key | Action |
+|---|---|
+| **Escape** | Close open modal / cancel current drawing mode |
