@@ -2898,6 +2898,7 @@ def api_export_excel(
     types:       str  = Query(""),         # comma-sep label types; empty = all
     col_headers: str  = Query(""),         # comma-sep column header labels; empty = no header row
     stems:       str  = Query(""),         # comma-sep stems to include; empty = all (document scope)
+    col_filter:  str  = Query(""),         # comma-sep 1-indexed column numbers; empty = all columns
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -3209,6 +3210,38 @@ def api_export_excel(
 
     data_start = 2 if hdr_list else 1   # row where data cells begin
 
+    # ── Column filter ────────────────────────────────────────────────────────
+    # col_filter is a comma-sep list of 1-indexed column numbers from the client.
+    # We parse them to a 0-indexed set, then strip and re-index after shapes_to_cells.
+    _col_filter_set: set | None = None
+    if col_filter.strip():
+        _col_filter_set = set()
+        for part in col_filter.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                lo, _, hi = part.partition("-")
+                try:
+                    _col_filter_set.update(range(int(lo) - 1, int(hi)))
+                except ValueError:
+                    pass
+            else:
+                try:
+                    _col_filter_set.add(int(part) - 1)
+                except ValueError:
+                    pass
+
+    def apply_col_filter(cells):
+        """Keep only columns in _col_filter_set and re-index col_idx to be contiguous."""
+        if _col_filter_set is None:
+            return cells
+        kept = [c for c in cells if c["col_idx"] in _col_filter_set]
+        # Re-index: sort the kept col indices, map old → new
+        old_cols = sorted({c["col_idx"] for c in kept})
+        remap = {old: new for new, old in enumerate(old_cols)}
+        return [{**c, "col_idx": remap[c["col_idx"]]} for c in kept]
+
     def load_shapes(jf):
         try:
             return json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
@@ -3239,7 +3272,7 @@ def api_export_excel(
         print(f"[EXCEL] processing page {jfiles[0].name}", flush=True)
         ws = wb.create_sheet(title=stem[:31])
         write_header_row(ws)
-        write_cells(ws, shapes_to_cells(load_shapes(jfiles[0])), base_row=data_start)
+        write_cells(ws, apply_col_filter(shapes_to_cells(load_shapes(jfiles[0]))), base_row=data_start)
 
     elif not dual:
         # ── Whole document, single layout: all pages on one sheet ─────────
@@ -3248,7 +3281,7 @@ def api_export_excel(
         cur_row = data_start
         for jf in jfiles:
             print(f"[EXCEL] processing {jf.name}", flush=True)
-            cells = shapes_to_cells(load_shapes(jf))
+            cells = apply_col_filter(shapes_to_cells(load_shapes(jf)))
             if not cells:
                 continue
             write_cells(ws, cells, col_offset=0, base_row=cur_row)
@@ -3270,8 +3303,8 @@ def api_export_excel(
             right_jf = jfiles[i+1] if i+1 < len(jfiles) else None
             i += 2
 
-            left_cells  = shapes_to_cells(load_shapes(left_jf))
-            right_cells = shapes_to_cells(load_shapes(right_jf)) if right_jf else []
+            left_cells  = apply_col_filter(shapes_to_cells(load_shapes(left_jf)))
+            right_cells = apply_col_filter(shapes_to_cells(load_shapes(right_jf))) if right_jf else []
 
             # Align lattice rows between left and right pages
             left_latt  = excel_row_for_lattice(left_cells)   # within-page row
