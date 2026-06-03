@@ -2897,6 +2897,7 @@ def api_export_excel(
     layer:       str  = Query("best_llm"), # "ocr"|"llm"|"human"|"best_ocr"|"best_llm"
     types:       str  = Query(""),         # comma-sep label types; empty = all
     col_headers: str  = Query(""),         # comma-sep column header labels; empty = no header row
+    stems:       str  = Query(""),         # comma-sep stems to include; empty = all (document scope)
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -3221,6 +3222,14 @@ def api_export_excel(
         jfiles = [d / f"{stem}.json"]
     else:
         jfiles = sorted(d.glob("*.json"), key=lambda f: natural_key(f.stem))
+        if stems.strip():
+            # Client sent an explicit ordered list of stems — filter and preserve that order
+            stem_list  = [s.strip() for s in stems.split(",") if s.strip()]
+            stem_index = {s: i for i, s in enumerate(stem_list)}
+            jfiles = sorted(
+                (jf for jf in jfiles if jf.stem in stem_index),
+                key=lambda jf: stem_index[jf.stem],
+            )
 
     wb  = openpyxl.Workbook()
     wb.remove(wb.active)

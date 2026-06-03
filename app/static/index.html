@@ -1030,6 +1030,7 @@
         <option value="clear_ocr">✕ Remove OCR results</option>
         <option value="pdf_text_layer">PDF text layer extraction</option>
         <option value="clear_llm">✕ Remove LLM results</option>
+        <option value="clear_llm_hallucinations">✕ Clear LLM hallucinations</option>
         <option value="strip_short_lines">✂ Remove short lines from text</option>
         <option value="trim_overlaps">✂ Trim overlaps</option>
       </select>
@@ -1050,6 +1051,16 @@
       <label class="row" style="margin-bottom:4px;">Pages</label>
       <input type="text" id="batch-pages" placeholder="e.g. 1-10, 3, 12-  (blank = all)" />
       <div style="font-size:10px;color:#555;margin-top:3px;">Numbers / ranges separated by commas. Leave blank to process all pages.</div>
+      <div style="display:flex;gap:18px;margin-top:6px;">
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#aaa;cursor:pointer;">
+          <input type="checkbox" id="batch-parity-odd"  onchange="onBatchParityChange('odd')"
+                 style="accent-color:#e94560;width:13px;height:13px;"> Odd pages only
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#aaa;cursor:pointer;">
+          <input type="checkbox" id="batch-parity-even" onchange="onBatchParityChange('even')"
+                 style="accent-color:#e94560;width:13px;height:13px;"> Even pages only
+        </label>
+      </div>
     </div>
 
     <!-- overlaps+lattice options -->
@@ -1159,6 +1170,27 @@
       </div>
     </div>
 
+    <!-- Clear LLM hallucinations options -->
+    <div id="batch-clear-llm-halluc-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div style="font-size:11px;color:#aaa;">Clears LLM output if <em>either</em> condition is met:</div>
+      <label class="row">
+        <span style="white-space:nowrap;">LLM has at least</span>
+        <input type="number" id="batch-llm-halluc-thresh" value="2" min="1" max="99"
+               style="width:52px;flex:none;" />
+        <span>more rows than OCR</span>
+      </label>
+      <label class="row">
+        <span style="white-space:nowrap;">Any row is longer than</span>
+        <input type="number" id="batch-llm-halluc-digit-thresh" value="4" min="1" max="999"
+               style="width:52px;flex:none;" />
+        <span>characters</span>
+      </label>
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Restrict to label types (leave all unchecked = any label):</div>
+        <div id="batch-llm-halluc-label-checks"></div>
+      </div>
+    </div>
+
     <!-- Strip short lines options -->
     <div id="batch-strip-opts" style="display:none;flex-direction:column;gap:10px;">
       <div>
@@ -1233,7 +1265,29 @@
         <input type="radio" name="xls-scope" value="page" checked style="accent-color:#e94560;"> Current page only
       </label>
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="radio" name="xls-scope" value="range" style="accent-color:#e94560;"> Page range
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
         <input type="radio" name="xls-scope" value="document" style="accent-color:#e94560;"> Whole document
+      </label>
+    </div>
+
+    <!-- Page range input (shown only for "range" scope) -->
+    <div id="xls-range-section" style="display:none;flex-direction:column;gap:4px;">
+      <input type="text" id="xls-pages" placeholder="e.g. 1-10, 3, 12-  (blank = all)"
+        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
+      <div style="font-size:0.7rem;color:#555;">Numbers / ranges separated by commas. Leave blank to export all pages.</div>
+    </div>
+
+    <!-- Odd / even parity (shown for range and whole-document) -->
+    <div id="xls-parity-section" style="display:none;flex-direction:row;gap:18px;">
+      <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;color:#aaa;cursor:pointer;">
+        <input type="checkbox" id="xls-parity-odd"  onchange="onXlsParityChange('odd')"
+               style="accent-color:#e94560;"> Odd pages only
+      </label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;color:#aaa;cursor:pointer;">
+        <input type="checkbox" id="xls-parity-even" onchange="onXlsParityChange('even')"
+               style="accent-color:#e94560;"> Even pages only
       </label>
     </div>
 
@@ -3520,7 +3574,8 @@ function openBatchModal() {
   _batchPopulateLabels('batch-llm-label-checks',       'batchLlmLabels');
   _batchPopulateLabels('batch-score-label-checks',     'batchScoreLabels');
   _batchPopulateLabels('batch-clear-ocr-label-checks', 'batchClearOcrLabels');
-  _batchPopulateLabels('batch-clear-llm-label-checks', 'batchClearLlmLabels');
+  _batchPopulateLabels('batch-clear-llm-label-checks',          'batchClearLlmLabels');
+  _batchPopulateLabels('batch-llm-halluc-label-checks',      'batchLlmHallucLabels');
   // Sync model/mode from the main LLM panel if available
   const savedModel = localStorage.getItem('llm-model');
   const savedMode  = localStorage.getItem('llm-mode');
@@ -3558,8 +3613,23 @@ function onBatchOpChange() {
   document.getElementById('batch-llm-opts').style.display       = op === 'llm'          ? 'flex' : 'none';
   document.getElementById('batch-score-opts').style.display     = op === 'score_delete' ? 'flex' : 'none';
   document.getElementById('batch-clear-ocr-opts').style.display = op === 'clear_ocr'         ? 'flex' : 'none';
-  document.getElementById('batch-clear-llm-opts').style.display = op === 'clear_llm'         ? 'flex' : 'none';
-  document.getElementById('batch-strip-opts').style.display     = op === 'strip_short_lines'  ? 'flex' : 'none';
+  document.getElementById('batch-clear-llm-opts').style.display          = op === 'clear_llm'          ? 'flex' : 'none';
+  document.getElementById('batch-clear-llm-halluc-opts').style.display = op === 'clear_llm_hallucinations' ? 'flex' : 'none';
+  document.getElementById('batch-strip-opts').style.display               = op === 'strip_short_lines'   ? 'flex' : 'none';
+}
+
+function onBatchParityChange(which) {
+  if (which === 'odd'  && document.getElementById('batch-parity-odd').checked)
+    document.getElementById('batch-parity-even').checked = false;
+  if (which === 'even' && document.getElementById('batch-parity-even').checked)
+    document.getElementById('batch-parity-odd').checked  = false;
+}
+
+function onXlsParityChange(which) {
+  if (which === 'odd'  && document.getElementById('xls-parity-odd').checked)
+    document.getElementById('xls-parity-even').checked = false;
+  if (which === 'even' && document.getElementById('xls-parity-even').checked)
+    document.getElementById('xls-parity-odd').checked  = false;
 }
 
 function onBatchLlmModeChange() {
@@ -3667,9 +3737,13 @@ function _setTextField(shape, field, text) {
 
 async function runBatch() {
   const op       = document.getElementById('batch-op').value;
-  const rawPages = document.getElementById('batch-pages').value;
-  const indices  = _parsePageRange(rawPages);
+  const rawPages   = document.getElementById('batch-pages').value;
+  const indices    = _parsePageRange(rawPages);
   if (!indices) return;
+  const parityOdd  = document.getElementById('batch-parity-odd').checked;
+  const parityEven = document.getElementById('batch-parity-even').checked;
+  if (parityOdd)  for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
+  if (parityEven) for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
   if (!indices.size) { showToast('No valid pages in range'); return; }
   if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') await _syncOcrSettings();
 
@@ -3693,6 +3767,10 @@ async function runBatch() {
     if (!confirm(`Remove OCR results on ${sorted.length} page(s)?`)) return;
   } else if (op === 'clear_llm') {
     if (!confirm(`Remove LLM results on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'clear_llm_hallucinations') {
+    const t  = parseInt(document.getElementById('batch-llm-halluc-thresh').value) || 2;
+    const dt = parseInt(document.getElementById('batch-llm-halluc-digit-thresh').value) || 4;
+    if (!confirm(`Clear LLM hallucinations on ${sorted.length} page(s)?\n• Row count ≥ ${t} more than OCR\n• OR any row is longer than ${dt} characters`)) return;
   } else if (op === 'strip_short_lines') {
     const field = document.getElementById('batch-strip-field').value;
     const fieldLabel = { ocr: 'OCR', llm: 'LLM', human: 'Human', pdf: 'PDF' }[field] || field;
@@ -3935,6 +4013,38 @@ async function runBatch() {
         await fetch(`${API}/api/page/shapes?${params}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ shapes }),
+        });
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — cleared LLM from ${n} shape(s)`;
+
+    } else if (op === 'clear_llm_hallucinations') {
+      const thresh      = parseInt(document.getElementById('batch-llm-halluc-thresh').value) || 2;
+      const digitThresh = parseInt(document.getElementById('batch-llm-halluc-digit-thresh').value) || 4;
+      const checks  = document.querySelectorAll('#batch-llm-halluc-label-checks input[type=checkbox]');
+      const remembered = {}; const selLabels = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchLlmHallucLabels', JSON.stringify(remembered));
+      const labelSet      = new Set(selLabels);
+      const filterByLabel = labelSet.size > 0;
+
+      const res   = await fetch(`${API}/api/page?${params}`);
+      const pdata = await res.json();
+      const shps  = pdata.shapes || [];
+      const cf    = _computeColumnFilter(shps);
+      let n = 0;
+      shps.forEach((s, i) => {
+        if (filterByLabel && !labelSet.has(s.label)) return;
+        if (cf !== null && !cf.has(i)) return;
+        if (!s.openai_output?.response) return;
+        const llmLines   = _lineCount(s.openai_output.response);
+        const ocrLines   = _lineCount(s.tesseract_output?.ocr_text);
+        const wideNumber = s.openai_output.response.split('\n').some(line => line.length > digitThresh);
+        if (llmLines - ocrLines >= thresh || wideNumber) { s.openai_output = null; n++; }
+      });
+      if (n > 0) {
+        await fetch(`${API}/api/page/shapes?${params}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shapes: shps }),
         });
       }
       progText.textContent = `Page ${idx + 1}/${pages.length} — cleared LLM from ${n} shape(s)`;
@@ -4249,11 +4359,15 @@ function openExcelExportModal() {
       wrap.appendChild(label);
     });
   }
-  // Show/hide dual layout option based on scope
+  // Show/hide sections based on scope
   const updateLayout = () => {
     const scope = document.querySelector('input[name="xls-scope"]:checked')?.value;
     document.getElementById('xls-layout-section').style.display =
-      scope === 'document' ? '' : 'none';
+      (scope === 'document' || scope === 'range') ? '' : 'none';
+    document.getElementById('xls-range-section').style.display =
+      scope === 'range' ? 'flex' : 'none';
+    document.getElementById('xls-parity-section').style.display =
+      (scope === 'document' || scope === 'range') ? 'flex' : 'none';
   };
   document.querySelectorAll('input[name="xls-scope"]').forEach(r =>
     r.addEventListener('change', updateLayout));
@@ -4268,25 +4382,43 @@ function closeExcelExportModal() {
 async function doExcelExport() {
   const scope  = document.querySelector('input[name="xls-scope"]:checked')?.value || 'page';
   const dual   = (document.querySelector('input[name="xls-dual"]:checked')?.value === 'dual')
-                  && scope === 'document';
+                  && scope !== 'page';
   const layer  = document.getElementById('xls-layer').value;
   const checked = [...document.querySelectorAll('#xls-types-wrap input[type=checkbox]:checked')]
                     .map(cb => cb.value);
-  const types  = checked.join(',');
-
+  const types      = checked.join(',');
   const colHeaders = document.getElementById('xls-col-headers').value.trim();
+
   const params = new URLSearchParams({
-    folder: folder,
-    scope,
-    layer,
-    types,
+    folder, layer, types,
     dual: dual ? 'true' : 'false',
     ...(colHeaders ? { col_headers: colHeaders } : {}),
   });
+
   if (scope === 'page') {
+    // Single current page
     const stem = pages[pageIdx]?.stem;
     if (!stem) { alert('No page loaded'); return; }
+    params.set('scope', 'page');
     params.set('stem', stem);
+  } else {
+    // Range or whole document — resolve stems client-side
+    let indices;
+    if (scope === 'range') {
+      indices = _parsePageRange(document.getElementById('xls-pages').value);
+      if (!indices) return;
+    } else {
+      indices = new Set([...Array(pages.length).keys()]);
+    }
+    // Apply parity filter
+    const parityOdd  = document.getElementById('xls-parity-odd').checked;
+    const parityEven = document.getElementById('xls-parity-even').checked;
+    if (parityOdd)  for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
+    if (parityEven) for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
+    if (!indices.size) { alert('No pages in selected range/parity.'); return; }
+    const stemsList = [...indices].sort((a, b) => a - b).map(i => pages[i].stem);
+    params.set('scope', 'document');
+    params.set('stems', stemsList.join(','));
   }
 
   closeExcelExportModal();
