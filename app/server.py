@@ -3123,13 +3123,14 @@ def api_export_excel(
             return
 
         # ── Alignment padding (blue) ─────────────────────────────────────
+        # Data columns are now shifted +1 to make room for the meta (row#) column.
         if align_pad > 0:
             min_ci = min(c["col_idx"] for c in cells)
             max_ci = max(c["col_idx"] for c in cells)
             for pad_r in range(base_row, base_row + align_pad):
                 for ci in range(min_ci, max_ci + 1):
                     ws.cell(row=pad_r,
-                            column=ci + 1 + col_offset).fill = _blue_fill
+                            column=ci + 2 + col_offset).fill = _blue_fill
 
         # ── Cell content ─────────────────────────────────────────────────
         rmap: dict = defaultdict(list)
@@ -3140,9 +3141,13 @@ def api_export_excel(
         for row_idx in sorted(rmap):
             row_cells = rmap[row_idx]
             max_lines = max(len(c["lines"]) for c in row_cells)
+            # Write lattice row number in meta column (col_offset+1), first sub-row only
+            meta_c = ws.cell(row=excel_row, column=col_offset + 1)
+            meta_c.value     = row_idx + 1   # 1-based
+            meta_c.alignment = _align
             for line_i in range(max_lines):
                 for c in row_cells:
-                    col  = c["col_idx"] + 1 + col_offset
+                    col  = c["col_idx"] + 2 + col_offset   # +2: meta col shift
                     xcel = ws.cell(row=excel_row + line_i, column=col)
                     xcel.alignment = _align
                     if line_i < len(c["lines"]):
@@ -3153,6 +3158,10 @@ def api_export_excel(
             excel_row += max_lines
 
         # ── Column widths proportional to avg annotation pixel width ─────
+        # Set meta column to a narrow fixed width.
+        meta_letter = get_column_letter(col_offset + 1)
+        if ws.column_dimensions[meta_letter].width < 4.0:
+            ws.column_dimensions[meta_letter].width = 4.0
         col_px: dict = defaultdict(list)
         for c in cells:
             col_px[c["col_idx"]].append(c.get("w_px", 50))
@@ -3161,31 +3170,25 @@ def api_export_excel(
             total_px = sum(avg_px.values())
             for col_idx, px in avg_px.items():
                 width  = max(4.0, min(60.0, px / total_px * 120))
-                letter = get_column_letter(col_idx + 1 + col_offset)
+                letter = get_column_letter(col_idx + 2 + col_offset)   # +2: meta shift
                 if ws.column_dimensions[letter].width < width:
                     ws.column_dimensions[letter].width = round(width, 1)
 
-    def write_source_row(ws, row, names: list, col_offset=0,
-                         total_left_cols=0, total_right_cols=0):
+    def write_source_row(ws, row, names: list, col_offset=0, right_col_offset=None):
         """
-        Write a grey banner row with source file name(s).
-        - Single-layout: name fills from col_offset+1 across total_left_cols.
-        - Dual-layout:   left name fills left block, right name fills right block.
+        Write source file name(s) in the meta column(s) before data rows.
+        - col_offset+1       → left / single page meta column
+        - right_col_offset+1 → right page meta column (dual layout only)
         """
-        if total_left_cols > 0:
-            # Left (or single) block
-            for ci in range(col_offset + 1, col_offset + total_left_cols + 1):
-                cell = ws.cell(row=row, column=ci)
-                cell.fill = _src_fill
-                cell.font = _src_font
-            ws.cell(row=row, column=col_offset + 1).value = names[0] if names else ""
-        if total_right_cols > 0 and len(names) > 1:
-            right_start = col_offset + total_left_cols + 2   # +2 = gap column
-            for ci in range(right_start, right_start + total_right_cols):
-                cell = ws.cell(row=row, column=ci)
-                cell.fill = _src_fill
-                cell.font = _src_font
-            ws.cell(row=row, column=right_start).value = names[1]
+        def _write_one(col, name):
+            c = ws.cell(row=row, column=col)
+            c.value     = name
+            c.fill      = _src_fill
+            c.font      = _src_font
+            c.alignment = _align
+        _write_one(col_offset + 1, names[0] if names else "")
+        if right_col_offset is not None and len(names) > 1:
+            _write_one(right_col_offset + 1, names[1])
 
     def max_col_of(cells):
         return max((c["col_idx"] for c in cells), default=-1)
@@ -3198,17 +3201,22 @@ def api_export_excel(
     _hdr_font_white = Font(bold=True, color="FFFFFF")
 
     def write_header_row(ws, col_offset=0):
-        """Write hdr_list as a bold row at row 1, starting at col_offset+1."""
-        if not hdr_list:
-            return
+        """Write 'Row' meta header + hdr_list data headers at row 1."""
+        # Meta column header
+        mc = ws.cell(row=1, column=col_offset + 1)
+        mc.value     = "Row"
+        mc.font      = _hdr_font_white
+        mc.fill      = _hdr_fill
+        mc.alignment = _align
+        # User-specified data column headers (shifted +1 for meta col)
         for i, label in enumerate(hdr_list):
-            cell = ws.cell(row=1, column=i + 1 + col_offset)
+            cell = ws.cell(row=1, column=i + 2 + col_offset)
             cell.value     = label
             cell.font      = _hdr_font_white
             cell.fill      = _hdr_fill
             cell.alignment = _align
 
-    data_start = 2 if hdr_list else 1   # row where data cells begin
+    data_start = 2   # row 1 is always the header row (meta col "Row" + optional data headers)
 
     # ── Column filter ────────────────────────────────────────────────────────
     # col_filter is a comma-sep list of 1-indexed column numbers from the client.
@@ -3284,13 +3292,11 @@ def api_export_excel(
             cells = apply_col_filter(shapes_to_cells(load_shapes(jf)))
             if not cells:
                 continue
-            write_cells(ws, cells, col_offset=0, base_row=cur_row)
+            # Source banner BEFORE the page data
+            write_source_row(ws, cur_row, [jf.stem], col_offset=0)
+            write_cells(ws, cells, col_offset=0, base_row=cur_row + 1)
             page_h = page_excel_height(cells)
-            # source-name banner row immediately after the page's data
-            n_cols = max_col_of(cells) + 1
-            write_source_row(ws, cur_row + page_h, [jf.stem],
-                             col_offset=0, total_left_cols=n_cols)
-            cur_row += page_h + 1   # +1 for the source row (replaces blank sep)
+            cur_row += 1 + page_h   # 1 source row + data rows
 
     else:
         # ── Whole document, dual layout: paired pages side-by-side ────────
@@ -3312,32 +3318,30 @@ def api_export_excel(
             left_pad   = max(0, right_latt - left_latt)
             right_pad  = max(0, left_latt  - right_latt)
 
-            right_col  = max_col_of(left_cells) + 2          # 1-column gap
+            # +3: meta col (1) + left data cols + gap col (1)
+            right_col  = max_col_of(left_cells) + 3
 
             # Write column headers once (row 1) across both column groups
-            if hdr_list and not dual_headers_written:
+            if not dual_headers_written:
                 write_header_row(ws, col_offset=0)
                 write_header_row(ws, col_offset=right_col)
                 dual_headers_written = True
 
+            # Source banner BEFORE the pair data
+            names = [left_jf.stem] + ([right_jf.stem] if right_jf else [])
+            write_source_row(ws, cur_row, names,
+                             col_offset=0, right_col_offset=right_col)
+
             write_cells(ws, left_cells,  col_offset=0,
-                        base_row=cur_row, align_pad=left_pad)
+                        base_row=cur_row + 1, align_pad=left_pad)
             write_cells(ws, right_cells, col_offset=right_col,
-                        base_row=cur_row, align_pad=right_pad)
+                        base_row=cur_row + 1, align_pad=right_pad)
 
             pair_height = max(
                 page_excel_height(left_cells,  extra=left_pad),
                 page_excel_height(right_cells, extra=right_pad),
             )
-            # source-name banner row after the pair
-            left_n_cols  = max_col_of(left_cells)  + 1
-            right_n_cols = max_col_of(right_cells) + 1
-            names = [left_jf.stem] + ([right_jf.stem] if right_jf else [])
-            write_source_row(ws, cur_row + pair_height, names,
-                             col_offset=0,
-                             total_left_cols=left_n_cols,
-                             total_right_cols=right_n_cols)
-            cur_row += pair_height + 1   # +1 for source row
+            cur_row += 1 + pair_height   # 1 source row + data rows
 
     if not wb.worksheets:
         wb.create_sheet("Empty")
