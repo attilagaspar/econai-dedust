@@ -3141,11 +3141,11 @@ def api_export_excel(
         for row_idx in sorted(rmap):
             row_cells = rmap[row_idx]
             max_lines = max(len(c["lines"]) for c in row_cells)
-            # Write lattice row number in meta column (col_offset+1), first sub-row only
-            meta_c = ws.cell(row=excel_row, column=col_offset + 1)
-            meta_c.value     = row_idx + 1   # 1-based
-            meta_c.alignment = _align
             for line_i in range(max_lines):
+                # Write lattice row number in meta column on every sub-row
+                meta_c = ws.cell(row=excel_row + line_i, column=col_offset + 1)
+                meta_c.value     = row_idx + 1   # 1-based
+                meta_c.alignment = _align
                 for c in row_cells:
                     col  = c["col_idx"] + 2 + col_offset   # +2: meta col shift
                     xcel = ws.cell(row=excel_row + line_i, column=col)
