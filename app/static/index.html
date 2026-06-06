@@ -590,6 +590,9 @@
   <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>&#8594;</button>
   <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none;background:#0f3460;border:1px solid #444;border-radius:3px;color:#fff;padding:2px 6px;font-size:12px;"></select>
   <div style="flex:1"></div>
+  <button onclick="openPromptPalette()"
+          style="background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aaa;padding:2px 9px;cursor:pointer;font-size:11px;"
+          title="Manage saved LLM prompts">📋 Prompts</button>
   <label for="folder-input" style="color:#666;font-size:11px;">Folder:</label>
   <input id="folder-input" type="text" placeholder="e.g. samples/kozponti_ertesito"
          style="width:220px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#aaa;padding:2px 6px;font-size:11px;" />
@@ -1124,6 +1127,12 @@
       </div>
       <textarea id="batch-llm-prompt" rows="3" placeholder="Prompt…"
         style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+      <div style="display:flex;gap:6px;">
+        <button onclick="openPromptPaletteForBatch()"
+          style="background:#0d1b35;border:1px solid #0f3460;border-radius:4px;color:#aaa;padding:3px 9px;cursor:pointer;font-size:11px;flex:1;">📋 Load from palette</button>
+        <button onclick="saveBatchPromptToPalette()"
+          style="background:#0d1b35;border:1px solid #0f3460;border-radius:4px;color:#aaa;padding:3px 9px;cursor:pointer;font-size:11px;flex:1;">💾 Save to palette</button>
+      </div>
       <div>
         <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Process these label types:</div>
         <div id="batch-llm-label-checks"></div>
@@ -1251,6 +1260,29 @@
         <thead id="llm-test-thead" style="position:sticky;top:0;background:#0d1b35;z-index:1;"></thead>
         <tbody id="llm-test-tbody"></tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- Prompt palette modal -->
+<div id="prompt-palette-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:3000;align-items:center;justify-content:center;">
+  <div style="background:#0d1b35;border:1px solid #0f3460;border-radius:8px;width:520px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;padding:18px;gap:12px;box-shadow:0 8px 40px #000a;">
+    <!-- header -->
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:14px;font-weight:700;color:#e0e0e0;flex:1;">📋 Prompt Palette</span>
+      <button onclick="closePromptPalette()" style="background:none;border:1px solid #333;border-radius:4px;color:#888;font-size:12px;padding:4px 10px;cursor:pointer;">✕ Close</button>
+    </div>
+    <!-- saved prompts list -->
+    <div id="prompt-palette-list" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:6px;min-height:40px;max-height:44vh;"></div>
+    <!-- add new prompt -->
+    <div style="border-top:1px solid #1a3a6e;padding-top:10px;display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:11px;color:#aaa;">Add to palette:</div>
+      <input type="text" id="palette-new-name" placeholder="Name…"
+        style="background:#0d2a4a;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;width:100%;box-sizing:border-box;" />
+      <textarea id="palette-new-text" rows="3" placeholder="Prompt text…"
+        style="background:#0d2a4a;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+      <button onclick="addPromptToPalette()"
+        style="background:#0f3460;border:1px solid #e94560;border-radius:4px;color:#e94560;padding:5px 14px;cursor:pointer;font-size:12px;font-weight:600;align-self:flex-start;">+ Add</button>
     </div>
   </div>
 </div>
@@ -4432,6 +4464,98 @@ async function doExcelExport() {
   } catch(e) {
     alert('Export error: ' + e.message);
   }
+}
+
+// ── Prompt palette ────────────────────────────────────────────────────────────
+const PALETTE_KEY = 'promptPalette';
+let _paletteFromBatch = false;
+
+function _getPalette() {
+  try { return JSON.parse(localStorage.getItem(PALETTE_KEY) || '[]'); } catch { return []; }
+}
+function _setPalette(arr) {
+  localStorage.setItem(PALETTE_KEY, JSON.stringify(arr));
+}
+
+function openPromptPalette(fromBatch) {
+  _paletteFromBatch = !!fromBatch;
+  _renderPaletteList();
+  // clear add-new fields
+  document.getElementById('palette-new-name').value = '';
+  document.getElementById('palette-new-text').value = '';
+  document.getElementById('prompt-palette-modal').style.display = 'flex';
+}
+function openPromptPaletteForBatch() { openPromptPalette(true); }
+function closePromptPalette() {
+  document.getElementById('prompt-palette-modal').style.display = 'none';
+}
+
+function _renderPaletteList() {
+  const list    = document.getElementById('prompt-palette-list');
+  const palette = _getPalette();
+  if (!palette.length) {
+    list.innerHTML = '<div style="font-size:12px;color:#555;padding:8px 0;">No saved prompts yet.</div>';
+    return;
+  }
+  list.innerHTML = palette.map((p, i) => `
+    <div style="background:#060f20;border:1px solid #1a3a6e;border-radius:5px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;font-weight:600;color:#e0e0e0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(p.name)}</span>
+        <button onclick="loadFromPalette(${i})"
+          style="background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#e0e0e0;font-size:11px;padding:2px 10px;cursor:pointer;white-space:nowrap;">
+          ${_paletteFromBatch ? '↙ Load' : '↙ Load'}
+        </button>
+        <button onclick="deleteFromPalette(${i})"
+          style="background:none;border:1px solid #3a1a1a;border-radius:3px;color:#e94560;font-size:11px;padding:2px 8px;cursor:pointer;">✕</button>
+      </div>
+      <div style="font-size:10px;color:#556;white-space:pre-wrap;max-height:52px;overflow:hidden;line-height:1.4;">${_escHtml(p.text.slice(0, 200))}${p.text.length > 200 ? '…' : ''}</div>
+    </div>
+  `).join('');
+}
+
+function _escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function loadFromPalette(idx) {
+  const palette = _getPalette();
+  if (!palette[idx]) return;
+  document.getElementById('batch-llm-prompt').value = palette[idx].text;
+  closePromptPalette();
+  showToast('Prompt loaded ✓');
+}
+
+function deleteFromPalette(idx) {
+  const palette = _getPalette();
+  palette.splice(idx, 1);
+  _setPalette(palette);
+  _renderPaletteList();
+}
+
+function addPromptToPalette() {
+  const name = document.getElementById('palette-new-name').value.trim();
+  const text = document.getElementById('palette-new-text').value.trim();
+  if (!name) { showToast('Enter a name'); return; }
+  if (!text) { showToast('Prompt text is empty'); return; }
+  const palette = _getPalette();
+  palette.push({ name, text });
+  _setPalette(palette);
+  document.getElementById('palette-new-name').value = '';
+  document.getElementById('palette-new-text').value = '';
+  _renderPaletteList();
+  showToast('Saved to palette ✓');
+}
+
+function saveBatchPromptToPalette() {
+  const text = document.getElementById('batch-llm-prompt').value.trim();
+  if (!text) { showToast('Prompt is empty'); return; }
+  // Pre-fill the add-new section and open modal
+  const name = text.slice(0, 40).replace(/\n/g, ' ');
+  openPromptPalette(false);
+  document.getElementById('palette-new-name').value = name;
+  document.getElementById('palette-new-text').value = text;
+  // focus the name field so user can rename quickly
+  setTimeout(() => document.getElementById('palette-new-name').select(), 50);
 }
 
 // ── Edit mode toggle ─────────────────────────────────────────────────────────
