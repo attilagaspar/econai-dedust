@@ -3157,22 +3157,23 @@ def api_export_excel(
                         xcel.fill  = _red_fill
             excel_row += max_lines
 
-        # ── Column widths proportional to avg annotation pixel width ─────
-        # Set meta column to a narrow fixed width.
+        # ── Column widths based on maximum content length ────────────────
+        # Meta column: fit the largest row number
         meta_letter = get_column_letter(col_offset + 1)
-        if ws.column_dimensions[meta_letter].width < 4.0:
-            ws.column_dimensions[meta_letter].width = 4.0
-        col_px: dict = defaultdict(list)
+        max_row_num = (max(rmap.keys()) + 1) if rmap else 1
+        meta_w = max(4.0, float(len(str(max_row_num)) + 1))
+        if ws.column_dimensions[meta_letter].width < meta_w:
+            ws.column_dimensions[meta_letter].width = meta_w
+        # Data columns: max character length of any line in that column
+        col_max_len: dict = defaultdict(int)
         for c in cells:
-            col_px[c["col_idx"]].append(c.get("w_px", 50))
-        if col_px:
-            avg_px   = {col: sum(pxs)/len(pxs) for col, pxs in col_px.items()}
-            total_px = sum(avg_px.values())
-            for col_idx, px in avg_px.items():
-                width  = max(4.0, min(60.0, px / total_px * 120))
-                letter = get_column_letter(col_idx + 2 + col_offset)   # +2: meta shift
-                if ws.column_dimensions[letter].width < width:
-                    ws.column_dimensions[letter].width = round(width, 1)
+            for line in c["lines"]:
+                col_max_len[c["col_idx"]] = max(col_max_len[c["col_idx"]], len(str(line)))
+        for col_idx, max_len in col_max_len.items():
+            width  = max(4.0, min(60.0, float(max_len + 2)))
+            letter = get_column_letter(col_idx + 2 + col_offset)   # +2: meta shift
+            if ws.column_dimensions[letter].width < width:
+                ws.column_dimensions[letter].width = width
 
     def write_source_row(ws, row, names: list, col_offset=0, right_col_offset=None):
         """
