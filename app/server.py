@@ -2952,8 +2952,15 @@ def api_export_excel(
 
     def shapes_to_cells(shapes):
         """
-        Return list of dicts: {row_idx, col_idx, lines[]}
-        Lattice rows/cols are detected by spatial clustering.
+        Return list of dicts: {row_idx, col_idx, lines[], w_px}.
+
+        Preferred path: use super_row / super_column already stored on each
+        shape by the app's lattice detector (1-indexed → converted to 0-indexed
+        here).  This is the authoritative assignment and exactly matches what
+        the app viewer shows.
+
+        Fallback: shapes that lack super_row/super_column are assigned
+        row/col indices via spatial clustering (legacy behaviour).
         """
         raw = []
         for sh in shapes:
@@ -2971,103 +2978,76 @@ def api_export_excel(
                             cx=(x1+x2)/2, cy=(y1+y2)/2,
                             top_y=y1, bot_y=y2,
                             h=max(1, y2-y1), w=max(1, x2-x1),
-                            label=sh.get("label", "?")))
+                            label=sh.get("label", "?"),
+                            super_row=sh.get("super_row"),
+                            super_col=sh.get("super_column")))
         print(f"[EXCEL] shapes_to_cells: {len(shapes)} shapes in, {len(raw)} with text", flush=True)
         if not raw:
             return []
 
-        # ── Row clustering — mirror the JS lattice detector logic ─────────
-        # Sort by top edge.  For each shape check whether its centre-y falls
-        # within [avgTop − TOL, avgBottom + TOL] of an existing row, where
-        # avgTop/avgBottom are the mean top/bottom edges of shapes already in
-        # that row.  This is identical to _latticeAssignCoords in index.html
-        # and correctly separates pre-lattice headers (small, near the top of
-        # the page) from tall cells whose centre-y happens to be far below.
-        ROW_TOL = 10
-        raw.sort(key=lambda c: c["top_y"])
-        row_groups: list = []   # list of lists of raw-cell dicts
-        for c in raw:
-            placed = False
-            for grp in row_groups:
-                avg_top = sum(r["top_y"] for r in grp) / len(grp)
-                avg_bot = sum(r["bot_y"] for r in grp) / len(grp)
-                if avg_top - ROW_TOL <= c["cy"] <= avg_bot + ROW_TOL:
-                    grp.append(c)
-                    placed = True
-                    break
-            if not placed:
-                row_groups.append([c])
-        for row_idx, grp in enumerate(row_groups):
-            for c in grp:
-                c["row_idx"] = row_idx
-            grp.sort(key=lambda c: c["cx"])
+        # Partition: shapes with stored lattice coords vs. those without
+        have_coords = [c for c in raw if c["super_row"] is not None and c["super_col"] is not None]
+        no_coords   = [c for c in raw if c["super_row"] is None or  c["super_col"] is None]
 
-        # ── Column clustering (global) ───────────────────────────────────
-        med_w    = sorted(c["w"] for c in raw)[len(raw)//2]
-        thresh_x = max(3, med_w * 0.45)
-        all_cx   = sorted({c["cx"] for c in raw})
-        col_centers: list = []
-        if all_cx:
-            grp = [all_cx[0]]
-            for cx in all_cx[1:]:
-                if cx - grp[-1] <= thresh_x:
-                    grp.append(cx)
-                else:
-                    col_centers.append(sum(grp)/len(grp))
-                    grp = [cx]
-            col_centers.append(sum(grp)/len(grp))
-        for c in raw:
-            c["col_idx"] = min(range(len(col_centers)),
-                               key=lambda i: abs(col_centers[i] - c["cx"]))
+        # ── Path A: use stored super_row / super_column (1-indexed → 0-indexed)
+        for c in have_coords:
+            c["row_idx"] = int(c["super_row"]) - 1
+            c["col_idx"] = int(c["super_col"]) - 1
 
-        # ── Build final cell list (taller cell wins; loser is rescued) ─────
-        # When two cells land on the same (row_idx, col_idx) — e.g. a short
-        # county-name header and the tall craft-list text_cell both mapping to
-        # the same column — keep the taller one in the slot AND relocate the
-        # shorter one to row_idx-1 (one row above) so it is not lost.
-        # After all cells are placed, row indices are normalised to start at 0.
-        winner: dict = {}   # (row_idx, col_idx) → raw cell dict
-        _dbg: list = []
-        for c in raw:
+        # ── Path B: spatial clustering for shapes that lack lattice coords ────
+        if no_coords:
+            ROW_TOL = 10
+            no_coords.sort(key=lambda c: c["top_y"])
+            row_groups: list = []
+            for c in no_coords:
+                placed = False
+                for grp in row_groups:
+                    avg_top = sum(r["top_y"] for r in grp) / len(grp)
+                    avg_bot = sum(r["bot_y"] for r in grp) / len(grp)
+                    if avg_top - ROW_TOL <= c["cy"] <= avg_bot + ROW_TOL:
+                        grp.append(c); placed = True; break
+                if not placed:
+                    row_groups.append([c])
+            for ri, grp in enumerate(row_groups):
+                for c in grp:
+                    c["row_idx"] = ri
+            med_w    = sorted(c["w"] for c in no_coords)[len(no_coords)//2]
+            thresh_x = max(3, med_w * 0.45)
+            all_cx   = sorted({c["cx"] for c in no_coords})
+            col_centers: list = []
+            if all_cx:
+                grp = [all_cx[0]]
+                for cx in all_cx[1:]:
+                    if cx - grp[-1] <= thresh_x:
+                        grp.append(cx)
+                    else:
+                        col_centers.append(sum(grp)/len(grp)); grp = [cx]
+                col_centers.append(sum(grp)/len(grp))
+            for c in no_coords:
+                c["col_idx"] = min(range(len(col_centers)),
+                                   key=lambda i: abs(col_centers[i] - c["cx"]))
+
+        all_raw = have_coords + no_coords
+
+        # ── Deduplicate: if two shapes share (row_idx, col_idx) keep the taller
+        winner: dict = {}
+        for c in all_raw:
             k = (c["row_idx"], c["col_idx"])
-            if k in winner:
-                prev = winner[k]
-                if c["h"] > prev["h"]:
-                    winner[k] = c          # taller takes the slot
-                    loser = dict(prev)
-                else:
-                    loser = dict(c)        # prev stays, newcomer is the loser
-                # Try to rescue the loser one row above
-                rescue_k = (loser["row_idx"] - 1, loser["col_idx"])
-                if rescue_k not in winner:
-                    loser["row_idx"] -= 1
-                    winner[rescue_k] = loser
-                    _dbg.append(
-                        f"COLLISION {k}: taller kept, "
-                        f"rescued {loser['label']!r}(h={loser['h']:.0f}) "
-                        f"-> row {loser['row_idx']}"
-                    )
-                else:
-                    _dbg.append(
-                        f"COLLISION {k}: taller kept, "
-                        f"discarded {loser['label']!r}(h={loser['h']:.0f}) "
-                        f"(rescue slot occupied)"
-                    )
-            else:
+            if k not in winner or c["h"] > winner[k]["h"]:
                 winner[k] = c
 
-        # Normalise row_idx so the minimum is 0 (relocated cells may be < 0)
+        # Normalise row_idx so minimum is 0
         if winner:
             min_row = min(c["row_idx"] for c in winner.values())
-            if min_row < 0:
+            if min_row != 0:
                 for c in winner.values():
                     c["row_idx"] -= min_row
-        cells = [dict(row_idx=c["row_idx"],
-                      col_idx=c["col_idx"],
-                      lines=text_to_lines(c["text"]),
-                      w_px=c["w"])
-                 for c in winner.values()]
-        return cells
+
+        return [dict(row_idx=c["row_idx"],
+                     col_idx=c["col_idx"],
+                     lines=text_to_lines(c["text"]),
+                     w_px=c["w"])
+                for c in winner.values()]
 
     # ── Helpers for stacking / dual-page alignment ───────────────────────────
 
