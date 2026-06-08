@@ -886,6 +886,7 @@
                 <option value="full">Tesseract</option>
                 <option value="easyocr">EasyOCR</option>
                 <option value="easyocr-linebyline">EasyOCR line×line</option>
+                <option value="easyocr-anchored">EasyOCR — anchored</option>
                 <option value="linebyline">Tess line×line</option>
               </select>
               <button id="ocr-btn"      class="field-run-btn" onclick="runOcr()">▶ Run</button>
@@ -4760,6 +4761,9 @@ async function runOcr() {
   await _syncOcrSettings();
   const mode = document.getElementById('ocr-mode').value;
 
+  // Anchored mode always uses the selected shape as reference — ignore multi-select
+  if (mode === 'easyocr-anchored')   { runOcrAnchored();                                                 return; }
+
   // Multi-select: run on every selected shape
   if (selSet.size > 1) {
     await _runOcrBatch([...selSet].sort((a, b) => a - b));
@@ -5016,6 +5020,107 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shap
           ocr_text:  msg.ocr_text,
           mean_conf: msg.mean_conf ?? null,
           mode:      'linebyline',
+        };
+        if (shapeIdx === selIdx) updatePanel();
+        refreshDiag();
+      }
+    }
+    if (batchAbort) { reader.cancel(); break; }
+  }
+  llmProgress = null;
+  drawOverlay();
+}
+
+// ── EasyOCR anchored ─────────────────────────────────────────────────────────
+// The selected shape acts as a row-count reference; all other shapes in the
+// same super_row are cut into exactly that many rows and EasyOCR'd.
+
+async function runOcrAnchored() {
+  if (selIdx < 0 || !pages.length) return;
+  const refShape = pageData.shapes[selIdx];
+
+  // Determine row count from best available text on the reference shape
+  const refText = refShape.human_output?.human_corrected_text
+               || refShape.openai_output?.response
+               || refShape.tesseract_output?.ocr_text;
+  if (!refText?.trim()) {
+    showToast('Reference shape has no text — cannot determine row count'); return;
+  }
+  const nRows = _lineCount(refText);
+  if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
+
+  const superRow = refShape.super_row;
+  if (superRow == null) {
+    showToast('Selected shape is not in a lattice row — run Lattice detect first'); return;
+  }
+
+  // All other shapes in the same super_row
+  const targets = [];
+  pageData.shapes.forEach((s, i) => {
+    if (i !== selIdx && s.super_row === superRow) targets.push(i);
+  });
+  if (!targets.length) { showToast('No other shapes in same lattice row'); return; }
+
+  const btn     = document.getElementById('ocr-btn');
+  const stopBtn = document.getElementById('ocr-stop-btn');
+  btn.disabled = true; btn.textContent = '…';
+  stopBtn.style.display = 'inline-block';
+  batchAbort = false;
+
+  showToast(`Anchored OCR · ${nRows} rows → ${targets.length} shapes`);
+
+  try {
+    for (const idx of targets) {
+      if (batchAbort) break;
+      try { await _ocrAnchoredOne(idx, nRows); }
+      catch(e) { showToast(`Shape ${idx}: ${e.message}`); }
+    }
+  } finally {
+    refreshDiag(); drawOverlay(); updatePanel();
+    btn.disabled = false; btn.textContent = '▶ Run';
+    stopBtn.style.display = 'none';
+    batchAbort = false;
+  }
+}
+
+async function _ocrAnchoredOne(shapeIdx, nRows) {
+  const shape = pageData.shapes[shapeIdx];
+  const spts  = shape.points;
+  const sx1   = Math.min(spts[0][0], spts[1][0]);
+  const sy1   = Math.min(spts[0][1], spts[1][1]);
+  const sx2   = Math.max(spts[0][0], spts[1][0]);
+  const pad   = 4, imgW = pageData.imageWidth || 99999;
+  const cropOriginX = Math.max(0, sx1 - pad);
+  const cropOriginY = Math.max(0, sy1 - pad);
+  const cropRight   = Math.min(imgW, sx2 + pad);
+
+  const params = new URLSearchParams({
+    folder, stem: pages[pageIdx].stem, idx: shapeIdx, n_rows: nRows,
+  });
+  const r = await fetch(`${API}/api/page/shape/ocr/easyocr/anchored?${params}`, {method: 'POST'});
+  if (!r.ok) throw new Error(r.status);
+
+  const reader = r.body.getReader(), decoder = new TextDecoder();
+  let buffer = '';
+  outer: while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const chunks = buffer.split('\n\n'); buffer = chunks.pop();
+    for (const chunk of chunks) {
+      if (!chunk.startsWith('data: ')) continue;
+      let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'lines_detected') {
+        llmProgress = {cropOriginX, cropOriginY, cropRight,
+                       lines: msg.lines, activeRow: -1, emptyRows: null};
+        drawOverlay();
+      } else if (msg.type === 'row_result') {
+        llmProgress.activeRow = msg.row; drawOverlay();
+        if (batchAbort) { reader.cancel(); break outer; }
+      } else if (msg.type === 'done') {
+        pageData.shapes[shapeIdx].tesseract_output = {
+          ocr_text: msg.ocr_text, mean_conf: msg.mean_conf ?? null,
+          engine: 'easyocr', mode: 'anchored',
         };
         if (shapeIdx === selIdx) updatePanel();
         refreshDiag();

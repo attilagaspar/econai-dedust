@@ -1071,6 +1071,161 @@ async def api_ocr_easyocr_linebyline(
 
 
 # ---------------------------------------------------------------------------
+# EasyOCR — anchored (forced-N-row split guided by reference column)
+# ---------------------------------------------------------------------------
+
+def _split_into_n_rows(crop_image, n_rows: int) -> list[tuple[int, int]]:
+    """
+    Cut crop_image into exactly n_rows bands using histogram valley search.
+    For each expected cut position (i * h // n_rows) we search a small window
+    for the brightest (whitest = least ink = inter-row gap) pixel row and use
+    that as the actual cut.  Returns a list of n_rows (top, bottom) tuples.
+    """
+    import numpy as np
+    gray = np.array(crop_image.convert("L"))
+    h = gray.shape[0]
+    if n_rows <= 1 or h == 0:
+        return [(0, h)]
+    hist    = gray.mean(axis=1)          # per-row brightness (higher = whiter)
+    window  = max(3, h // (n_rows * 3)) # search ±window around each nominal cut
+    cuts    = [0]
+    for i in range(1, n_rows):
+        center = i * h // n_rows
+        lo     = max(0, center - window)
+        hi     = min(h - 1, center + window)
+        best_y = lo + int(np.argmax(hist[lo : hi + 1]))
+        cuts.append(best_y)
+    cuts.append(h)
+    return [(cuts[i], cuts[i + 1]) for i in range(n_rows)]
+
+
+@app.post("/api/page/shape/ocr/easyocr/anchored")
+async def api_ocr_easyocr_anchored(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    idx:    int = Query(...),
+    n_rows: int = Query(...),
+    langs:  str = Query("en,hu"),
+):
+    """
+    EasyOCR with a forced n_rows split derived from a reference column.
+    Streams SSE in the same format as /easyocr/linebyline.
+    """
+    import asyncio, concurrent.futures
+    import json as _json
+    import numpy as np
+    from PIL import Image as PILImage
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data_doc = json.loads(jf.read_text(encoding="utf-8"))
+    shapes   = data_doc.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    shape = shapes[idx]
+    pts   = shape["points"]
+    xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    shadow  = _get_shadow_page(folder, stem, img_path)
+    iw, ih  = shadow.size
+    pad     = 4
+    crop    = shadow.crop((
+        max(0, int(x1) - pad), max(0, int(y1) - pad),
+        min(iw, int(x2) + pad), min(ih, int(y2) + pad),
+    ))
+
+    rows      = _split_into_n_rows(crop, n_rows)
+    lang_list = [l.strip() for l in langs.split(",") if l.strip()]
+    reader    = _get_easyocr_reader(lang_list)
+    crop_bin  = crop.convert("L")
+
+    def gen():
+        yield _json.dumps({"type": "lines_detected", "count": len(rows),
+                           "lines": [list(r) for r in rows]})
+
+        line_texts:  list[str]   = []
+        conf_values: list[float] = []
+
+        for i, (top, bottom) in enumerate(rows):
+            # Small symmetric padding, clamped by neighbours
+            row_pad     = max(2, (bottom - top) // 6)
+            prev_bottom = rows[i - 1][1] if i > 0 else 0
+            next_top    = rows[i + 1][0] if i < len(rows) - 1 else crop_bin.height
+            rt = max(top    - row_pad, (prev_bottom + top)    // 2)
+            rb = min(bottom + row_pad, (bottom      + next_top) // 2)
+            rt = max(0, rt);  rb = min(crop_bin.height, rb)
+            row_img = crop_bin.crop((0, rt, crop_bin.width, rb))
+
+            target_h = 128
+            scale    = target_h / max(1, row_img.height)
+            row_img  = row_img.resize(
+                (max(1, int(row_img.width * scale)), target_h), PILImage.LANCZOS
+            ).convert("RGB")
+
+            import io as _io2, base64 as _b64
+            _buf = _io2.BytesIO()
+            row_img.save(_buf, format="PNG")
+            img_b64 = _b64.b64encode(_buf.getvalue()).decode("ascii")
+
+            try:
+                results = reader.readtext(
+                    np.array(row_img),
+                    allowlist="0123456789-",
+                    min_size=4,
+                    text_threshold=0.4,
+                    low_text=0.3,
+                )
+                results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+                texts = [t for _, t, _ in results]
+                confs = [c for _, _, c in results]
+                text  = " ".join(texts).strip()
+                conf  = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+            except Exception:
+                text, conf = "", 0.0
+
+            text = text or "-"
+            line_texts.append(text)
+            conf_values.append(conf)
+            yield _json.dumps({"type": "row_result", "row": i, "text": text,
+                               "img_b64": img_b64, "top": top, "bottom": bottom})
+
+        combined  = "\n".join(line_texts)
+        mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+        shape["tesseract_output"] = {
+            "ocr_text": combined, "mean_conf": mean_conf,
+            "engine": "easyocr", "mode": "anchored",
+        }
+        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
+                      encoding="utf-8")
+        yield _json.dumps({"type": "done", "ocr_text": combined, "mean_conf": mean_conf})
+
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen())
+            while True:
+                item = await loop.run_in_executor(pool, _safe_next, it)
+                if item is _SSE_DONE:
+                    break
+                yield f"data: {item}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Routes — LLM cleaner
 # ---------------------------------------------------------------------------
 
