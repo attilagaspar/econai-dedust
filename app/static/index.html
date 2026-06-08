@@ -4958,7 +4958,7 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
             mode:      'linebyline',
           };
           llmProgress = null;
-          updatePanel();
+          updatePanel(); refreshDiag();
           drawRowOverlay(lastRowLines, -1);
           showToast(`OCR line-by-line done · ${lineResults.length} rows`);
         }
@@ -5723,7 +5723,7 @@ function _batchStart(allBtn, stopBtn, ...disableBtns) {
 
 function _batchEnd(allBtn, stopBtn, done, total, label, ...enableBtns) {
   batchHighlight = -1; batchAbort = false; llmProgress = null;
-  drawOverlay();
+  refreshDiag(); drawOverlay();
   allBtn.disabled = false; allBtn.textContent = '▶ All';
   stopBtn.style.display = 'none';
   enableBtns.forEach(b => { if (b) b.disabled = false; });
