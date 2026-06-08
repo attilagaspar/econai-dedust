@@ -904,6 +904,14 @@
               <input id="ocr-cell-height" type="number" value="26" min="6" max="300"
                 style="width:52px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
             </div>
+            <div id="ocr-anchor-source-wrap" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
+              <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Anchor at</span>
+              <select id="ocr-anchor-source" class="llm-select" style="flex:none;">
+                <option value="ocr">OCR</option>
+                <option value="llm">LLM</option>
+                <option value="human">Human</option>
+              </select>
+            </div>
             <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
               <div class="line-nums" id="f-ocr-lines">1</div>
               <textarea id="f-ocr" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
@@ -953,6 +961,14 @@
               <input type="checkbox" id="llm-use-shadow" style="accent-color:#e94560;cursor:pointer;">
               Use shadow (line-erased) image
             </label>
+            <div id="llm-anchor-source-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
+              <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Anchor at</span>
+              <select id="llm-anchor-source" class="llm-select" style="flex:none;">
+                <option value="ocr">OCR</option>
+                <option value="llm">LLM</option>
+                <option value="human">Human</option>
+              </select>
+            </div>
             <div id="llm-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
               <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
               <input id="llm-cell-height" type="number" value="26" min="6" max="300"
@@ -4753,8 +4769,10 @@ function updatePanel() {
 // ── OCR ───────────────────────────────────────────────────────────────────────
 function updateOcrMode() {
   const mode = document.getElementById('ocr-mode').value;
-  const showHeight = mode === 'linebyline' || mode === 'easyocr-linebyline';
-  document.getElementById('ocr-cellheight-wrap').style.display = showHeight ? 'flex' : 'none';
+  const showHeight  = mode === 'linebyline' || mode === 'easyocr-linebyline';
+  const showAnchor  = mode === 'easyocr-anchored';
+  document.getElementById('ocr-cellheight-wrap').style.display    = showHeight ? 'flex' : 'none';
+  document.getElementById('ocr-anchor-source-wrap').style.display = showAnchor ? 'flex' : 'none';
 }
 
 async function runOcr() {
@@ -5040,12 +5058,13 @@ async function runOcrAnchored() {
   if (selIdx < 0 || !pages.length) return;
   const refShape = pageData.shapes[selIdx];
 
-  // Determine row count from best available text on the reference shape
-  const refText = refShape.human_output?.human_corrected_text
-               || refShape.openai_output?.response
-               || refShape.tesseract_output?.ocr_text;
+  // Determine row count from the chosen anchor source
+  const anchorSrc = document.getElementById('ocr-anchor-source').value;
+  const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
+                : anchorSrc === 'llm'   ? refShape.openai_output?.response
+                :                         refShape.tesseract_output?.ocr_text;
   if (!refText?.trim()) {
-    showToast('Reference shape has no text — cannot determine row count'); return;
+    showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
   }
   const nRows = _lineCount(refText);
   if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
@@ -5146,7 +5165,8 @@ function updateLlmPrompt() {
   const el   = document.getElementById('llm-prompt');
   const isDefault = Object.values(LLM_PROMPTS).includes(el.value.trim()) || !el.value.trim();
   if (isDefault) el.value = LLM_PROMPTS[mode] || '';
-  document.getElementById('llm-cellheight-wrap').style.display = mode === 'linebyline' ? 'flex' : 'none';
+  document.getElementById('llm-cellheight-wrap').style.display    = mode === 'linebyline' ? 'flex' : 'none';
+  document.getElementById('llm-anchor-source-wrap').style.display = mode === 'anchored'   ? 'flex' : 'none';
 }
 
 // ── Empty row detection ───────────────────────────────────────────────────────
@@ -6087,11 +6107,12 @@ async function runLlmAnchored() {
   if (selIdx < 0 || !pages.length) return;
   const refShape = pageData.shapes[selIdx];
 
-  const refText = refShape.human_output?.human_corrected_text
-               || refShape.openai_output?.response
-               || refShape.tesseract_output?.ocr_text;
+  const anchorSrc = document.getElementById('llm-anchor-source').value;
+  const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
+                : anchorSrc === 'llm'   ? refShape.openai_output?.response
+                :                         refShape.tesseract_output?.ocr_text;
   if (!refText?.trim()) {
-    showToast('Reference shape has no text — cannot determine row count'); return;
+    showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
   }
   const nRows = _lineCount(refText);
   if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
