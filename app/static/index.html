@@ -5017,11 +5017,14 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shap
           mean_conf: msg.mean_conf ?? null,
           mode:      'linebyline',
         };
+        if (shapeIdx === selIdx) updatePanel();
+        refreshDiag();
       }
     }
     if (batchAbort) { reader.cancel(); break; }
   }
   llmProgress = null;
+  drawOverlay();
 }
 
 // ── LLM Cleaner ───────────────────────────────────────────────────────────────
