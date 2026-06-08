@@ -946,6 +946,7 @@
                 <option value="image+ocr">Image + OCR</option>
                 <option value="ocr">OCR only</option>
                 <option value="linebyline">Line-by-line</option>
+                <option value="anchored">Anchored</option>
               </select>
             </div>
             <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;margin-top:2px;">
@@ -5630,6 +5631,8 @@ async function runLlmTest() {
 async function runLlm() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('llm-mode').value;
+  // Anchored uses selected shape as reference — bypass multi-select batch
+  if (mode === 'anchored') { runLlmAnchored(); return; }
   if (selSet.size > 1) {
     await _runLlmBatch([...selSet].sort((a, b) => a - b));
     return;
@@ -6074,6 +6077,115 @@ async function runLlmLineByLine() {
     btn.disabled = false; btn.textContent = '▶ Send';
     stopBtn.style.display = 'none';
   }
+}
+
+// ── LLM anchored ─────────────────────────────────────────────────────────────
+// Selected shape is the row-count reference; all other shapes in the same
+// super_row are split into exactly that many rows and LLM-processed.
+
+async function runLlmAnchored() {
+  if (selIdx < 0 || !pages.length) return;
+  const refShape = pageData.shapes[selIdx];
+
+  const refText = refShape.human_output?.human_corrected_text
+               || refShape.openai_output?.response
+               || refShape.tesseract_output?.ocr_text;
+  if (!refText?.trim()) {
+    showToast('Reference shape has no text — cannot determine row count'); return;
+  }
+  const nRows = _lineCount(refText);
+  if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
+
+  const superRow = refShape.super_row;
+  if (superRow == null) {
+    showToast('Selected shape is not in a lattice row — run Lattice detect first'); return;
+  }
+
+  const prompt = document.getElementById('llm-prompt').value.trim();
+  if (!prompt) { showToast('Prompt is empty'); return; }
+
+  const targets = [];
+  pageData.shapes.forEach((s, i) => {
+    if (i !== selIdx && s.super_row === superRow) targets.push(i);
+  });
+  if (!targets.length) { showToast('No other shapes in same lattice row'); return; }
+
+  const btn     = document.getElementById('llm-btn');
+  const stopBtn = document.getElementById('llm-stop-btn');
+  btn.disabled = true; btn.textContent = '…';
+  if (stopBtn) stopBtn.style.display = 'inline-block';
+  batchAbort = false;
+
+  showToast(`Anchored LLM · ${nRows} rows → ${targets.length} shapes`);
+
+  try {
+    for (const idx of targets) {
+      if (batchAbort) break;
+      try { await _llmAnchoredOne(idx, nRows); }
+      catch(e) { showToast(`Shape ${idx}: ${e.message}`); }
+    }
+  } finally {
+    refreshDiag(); drawOverlay(); updatePanel();
+    btn.disabled = false; btn.textContent = '▶ Send';
+    if (stopBtn) stopBtn.style.display = 'none';
+    batchAbort = false;
+  }
+}
+
+async function _llmAnchoredOne(shapeIdx, nRows) {
+  const shape = pageData.shapes[shapeIdx];
+  const spts  = shape.points;
+  const sx1   = Math.min(spts[0][0], spts[1][0]);
+  const sy1   = Math.min(spts[0][1], spts[1][1]);
+  const sx2   = Math.max(spts[0][0], spts[1][0]);
+  const pad   = 4, imgW = pageData.imageWidth || 99999;
+  const cropOriginX = Math.max(0, sx1 - pad);
+  const cropOriginY = Math.max(0, sy1 - pad);
+  const cropRight   = Math.min(imgW, sx2 + pad);
+
+  const model     = document.getElementById('llm-model').value;
+  const prompt    = document.getElementById('llm-prompt').value.trim();
+  const useShadow = document.getElementById('llm-use-shadow').checked;
+  const params    = new URLSearchParams({
+    folder, stem: pages[pageIdx].stem, idx: shapeIdx,
+    n_rows: nRows, model, use_shadow: useShadow,
+  });
+  const r = await fetch(`${API}/api/page/shape/llm/anchored?${params}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt}),
+  });
+  if (!r.ok) throw new Error(r.status);
+
+  const reader = r.body.getReader(), decoder = new TextDecoder();
+  let buffer = '';
+  outer: while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    const chunks = buffer.split('\n\n'); buffer = chunks.pop();
+    for (const chunk of chunks) {
+      if (!chunk.startsWith('data: ')) continue;
+      let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'lines_detected') {
+        llmProgress = {cropOriginX, cropOriginY, cropRight,
+                       lines: msg.lines, activeRow: -1, emptyRows: null};
+        drawOverlay();
+      } else if (msg.type === 'row_result') {
+        llmProgress.activeRow = msg.row; drawOverlay();
+        if (batchAbort) { reader.cancel(); break outer; }
+      } else if (msg.type === 'done') {
+        pageData.shapes[shapeIdx].openai_output = {
+          response: msg.response, model: msg.model,
+          mode: 'anchored', timestamp: msg.timestamp,
+        };
+        if (shapeIdx === selIdx) updatePanel();
+        refreshDiag();
+      }
+    }
+    if (batchAbort) { reader.cancel(); break; }
+  }
+  llmProgress = null;
+  drawOverlay();
 }
 
 // ── Save correction text ─────────────────────────────────────────────────────

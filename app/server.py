@@ -1575,6 +1575,126 @@ async def api_llm_linebyline(
     )
 
 
+@app.post("/api/page/shape/llm/anchored")
+async def api_llm_anchored(
+    folder:     str  = Query(...),
+    stem:       str  = Query(...),
+    idx:        int  = Query(...),
+    n_rows:     int  = Query(...),
+    model:      str  = Query("gpt-4o-mini"),
+    use_shadow: bool = Query(False),
+    body:       LlmRequest = ...,
+):
+    """
+    LLM anchored: same SSE format as /llm/linebyline but uses forced n_rows
+    split (histogram valley search) instead of auto-detecting row count.
+    """
+    import os, asyncio, base64, io as _io, datetime, concurrent.futures
+    import json as _json
+    from PIL import Image as PILImage
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data_doc = json.loads(jf.read_text(encoding="utf-8"))
+    shapes   = data_doc.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    shape = shapes[idx]
+    pts   = shape["points"]
+    xs    = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+
+    if use_shadow:
+        full_img = _get_shadow_page(folder, stem, img_path).convert("RGB")
+    else:
+        full_img = PILImage.open(str(img_path)).convert("RGB")
+    iw, ih = full_img.size
+    pad    = 4
+    crop   = full_img.crop((
+        max(0, int(x1) - pad), max(0, int(y1) - pad),
+        min(iw, int(x2) + pad), min(ih, int(y2) + pad),
+    ))
+
+    rows        = _split_into_n_rows(crop, n_rows)
+    prompt_text = body.prompt + _EMPTY_CELL_GUARD
+
+    def gen():
+        yield _json.dumps({"type": "lines_detected", "count": len(rows),
+                           "lines": [list(r) for r in rows]})
+
+        client = _make_llm_client(model)
+        line_responses: list[str] = []
+
+        for i, (top, bottom) in enumerate(rows):
+            row_pad = max(4, (bottom - top) // 6)
+            rt = max(0, top    - row_pad)
+            rb = min(crop.height, bottom + row_pad)
+            row_img = crop.crop((0, rt, crop.width, rb))
+            if row_img.height < 48:
+                scale   = 48 / max(1, row_img.height)
+                row_img = row_img.resize(
+                    (max(1, int(row_img.width * scale)), 48), PILImage.LANCZOS
+                )
+            buf = _io.BytesIO()
+            row_img.save(buf, format="JPEG", quality=92)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+
+            messages = [{"role": "user", "content": [
+                {"type": "text",      "text": prompt_text},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+            ]}]
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, max_tokens=64, temperature=0,
+                )
+                text = (resp.choices[0].message.content or "").strip()
+            except Exception as exc:
+                text = f"[error: {exc}]"
+
+            line_responses.append(text)
+            yield _json.dumps({"type": "row_result", "row": i, "text": text,
+                               "top": top, "bottom": bottom})
+
+        combined  = "\n".join(line_responses)
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+        shape["openai_output"] = {
+            "response":       combined,
+            "model":          model,
+            "mode":           "anchored",
+            "timestamp":      timestamp,
+            "lines_detected": len(rows),
+        }
+        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
+                      encoding="utf-8")
+        yield _json.dumps({"type": "done", "response": combined,
+                           "model": model, "timestamp": timestamp})
+
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen())
+            while True:
+                item = await loop.run_in_executor(pool, _safe_next, it)
+                if item is _SSE_DONE:
+                    break
+                yield f"data: {item}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes — project management
 # ---------------------------------------------------------------------------
