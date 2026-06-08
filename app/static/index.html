@@ -2106,6 +2106,9 @@ function onDiagnosticChange() {
   }
 }
 
+// Re-run diagnostics if a mode is active (call before drawOverlay after data changes)
+function refreshDiag() { if (diagnosticMode !== 'none') computeDiagnostics(); }
+
 // ── Lattice detection ─────────────────────────────────────────────────────────
 
 function openLatticeModal() {
@@ -4171,7 +4174,7 @@ async function runBatch() {
   document.getElementById('batch-cancel-btn').textContent = 'Cancel';
 
   // Refresh current page view
-  await reloadPageData(); drawOverlay(); updatePanel();
+  await reloadPageData(); refreshDiag(); drawOverlay(); updatePanel();
   flaggedOverlaps = new Set();
 }
 
@@ -4777,8 +4780,7 @@ async function runOcr() {
     if (!pageData.shapes[selIdx].tesseract_output) pageData.shapes[selIdx].tesseract_output = {};
     pageData.shapes[selIdx].tesseract_output.ocr_text  = data.ocr_text;
     pageData.shapes[selIdx].tesseract_output.mean_conf = data.mean_conf;
-    updatePanel();
-    drawOverlay();
+    updatePanel(); refreshDiag(); drawOverlay();
     showToast(`OCR done · conf ${data.mean_conf}%`);
   } finally {
     btn.disabled = false; btn.textContent = '▶ Run';
@@ -4853,8 +4855,7 @@ async function runOcrEasyOcr() {
     pageData.shapes[selIdx].tesseract_output = {
       ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr',
     };
-    updatePanel();
-    drawOverlay();
+    updatePanel(); refreshDiag(); drawOverlay();
     showToast(`EasyOCR done · conf ${data.mean_conf}%`);
   } finally {
     btn.disabled = false; btn.textContent = '▶ Run';
@@ -5560,6 +5561,7 @@ async function runLlm() {
       updatePanel();
       console.log('[LLM] textarea after  updatePanel:', JSON.stringify(el?.value)?.slice(0, 80));
     }
+    refreshDiag(); drawOverlay();
     showToast('LLM done' + (myIdx !== selIdx ? ' (navigated away — result saved)' : ''));
   } finally {
     btn.disabled = false; btn.textContent = '▶ Send';
@@ -5948,7 +5950,7 @@ async function runLlmLineByLine() {
           }
           llmProgress = null;
           if (myIdx === selIdx) updatePanel();
-          drawRowOverlay(lastRowLines, -1);
+          refreshDiag(); drawRowOverlay(lastRowLines, -1);
           showToast(`Line-by-line done · ${lineResults.length} rows`);
         }
       }
@@ -5986,7 +5988,7 @@ async function saveCorrection() {
   pageData.shapes[selIdx].human_output.human_corrected_text=text;
   document.getElementById('save-status').textContent='✓ Saved';
   setTimeout(()=>document.getElementById('save-status').textContent='',2000);
-  drawOverlay();
+  refreshDiag(); drawOverlay();
 }
 
 // ── Smart Correct ────────────────────────────────────────────────────────────
