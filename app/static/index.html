@@ -1055,6 +1055,8 @@
         <option value="clear_llm_hallucinations">✕ Clear LLM hallucinations</option>
         <option value="strip_short_lines">✂ Remove short lines from text</option>
         <option value="trim_overlaps">✂ Trim overlaps</option>
+        <option value="anchored_ocr">⚓ Anchored OCR (EasyOCR)</option>
+        <option value="anchored_llm">⚓ Anchored LLM</option>
       </select>
     </div>
     <div>
@@ -1238,6 +1240,48 @@
       <div style="font-size:10px;color:#555;line-height:1.5;">
         Removes every line shorter than 3 characters (dashes, dots, single letters…)<br>
         except 1- or 2-digit numbers which are always kept.
+      </div>
+    </div>
+
+    <!-- Anchored OCR / LLM options -->
+    <div id="batch-anchored-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row">
+        <span style="white-space:nowrap;">Anchor column pattern</span>
+        <input type="text" id="batch-anchored-pattern" placeholder="e.g. 1, 2  or  1, 2, 3, 4"
+          style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" />
+      </label>
+      <div style="font-size:10px;color:#555;line-height:1.5;margin-top:-6px;">
+        Comma-separated column numbers (super_column). Cycles per page in batch order.<br>
+        E.g. <em>1,2</em> → page 1 anchors col 1, page 2 anchors col 2, page 3 anchors col 1 …
+      </div>
+      <label class="row">
+        <span>Anchor at</span>
+        <select id="batch-anchored-source" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="ocr">OCR</option>
+          <option value="llm">LLM</option>
+          <option value="human">Human</option>
+        </select>
+      </label>
+      <label class="row">
+        <input type="checkbox" id="batch-anchored-overwrite" style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Overwrite existing results</span>
+      </label>
+      <!-- LLM-only sub-section -->
+      <div id="batch-anchored-llm-section" style="display:none;flex-direction:column;gap:8px;">
+        <select id="batch-anchored-model" style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="gpt-4.1-mini">4.1-mini</option>
+          <option value="gpt-5-nano">5-nano</option>
+          <option value="gpt-4.1-nano">4.1-nano</option>
+          <option value="gpt-4.1">4.1</option>
+          <option value="gpt-4o-mini">4o-mini</option>
+          <option value="gpt-4o">4o</option>
+        </select>
+        <textarea id="batch-anchored-prompt" rows="3" placeholder="Prompt…"
+          style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+        <label class="row">
+          <input type="checkbox" id="batch-anchored-use-shadow" style="accent-color:#e94560;width:13px;height:13px;">
+          <span>Use shadow (line-erased) image</span>
+        </label>
       </div>
     </div>
 
@@ -3668,6 +3712,9 @@ function onBatchOpChange() {
   document.getElementById('batch-clear-llm-opts').style.display          = op === 'clear_llm'          ? 'flex' : 'none';
   document.getElementById('batch-clear-llm-halluc-opts').style.display = op === 'clear_llm_hallucinations' ? 'flex' : 'none';
   document.getElementById('batch-strip-opts').style.display               = op === 'strip_short_lines'   ? 'flex' : 'none';
+  const isAnchored = op === 'anchored_ocr' || op === 'anchored_llm';
+  document.getElementById('batch-anchored-opts').style.display          = isAnchored ? 'flex' : 'none';
+  document.getElementById('batch-anchored-llm-section').style.display   = op === 'anchored_llm' ? 'flex' : 'none';
 }
 
 function onBatchParityChange(which) {
@@ -3829,6 +3876,13 @@ async function runBatch() {
     if (!confirm(`Strip short lines from ${fieldLabel} text on ${sorted.length} page(s)?`)) return;
   } else if (op === 'trim_overlaps') {
     if (!confirm(`Trim overlapping annotation pairs on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'anchored_ocr' || op === 'anchored_llm') {
+    const pat = document.getElementById('batch-anchored-pattern').value.trim();
+    if (!pat) { showToast('Enter an anchor column pattern'); return; }
+    if (op === 'anchored_llm' && !document.getElementById('batch-anchored-prompt').value.trim()) {
+      showToast('Prompt is empty'); return;
+    }
+    if (!confirm(`Run ${op === 'anchored_ocr' ? 'anchored EasyOCR' : 'anchored LLM'} on ${sorted.length} page(s)?`)) return;
   }
 
   _batchRunning = true;
@@ -4175,6 +4229,63 @@ async function runBatch() {
         });
       }
       progText.textContent = `Page ${idx + 1}/${pages.length} — trimmed ${trimmed} overlapping pair(s)`;
+
+    } else if (op === 'anchored_ocr' || op === 'anchored_llm') {
+      const pattern    = document.getElementById('batch-anchored-pattern').value
+                           .split(',').map(s => parseInt(s.trim())).filter(n => n > 0);
+      const anchorCol  = pattern[done % pattern.length];   // 1-indexed super_column
+      const anchorSrc  = document.getElementById('batch-anchored-source').value;
+      const overwrite  = document.getElementById('batch-anchored-overwrite').checked;
+      const model      = op === 'anchored_llm' ? document.getElementById('batch-anchored-model').value : '';
+      const prompt     = op === 'anchored_llm' ? document.getElementById('batch-anchored-prompt').value.trim() : '';
+      const useShadow  = op === 'anchored_llm' ? document.getElementById('batch-anchored-use-shadow').checked : false;
+
+      const res   = await fetch(`${API}/api/page?${params}`);
+      const pdata = await res.json();
+      const shps  = pdata.shapes || [];
+
+      // Group by super_row
+      const rowMap = {};
+      shps.forEach((s, i) => {
+        if (s.super_row == null) return;
+        (rowMap[s.super_row] ??= []).push({s, i});
+      });
+
+      let shapesDone = 0;
+      for (const entries of Object.values(rowMap)) {
+        if (_batchStop) break;
+        const anchorEntry = entries.find(e => e.s.super_column === anchorCol);
+        if (!anchorEntry) continue;
+        const anchorShape = anchorEntry.s;
+        const refText = anchorSrc === 'human' ? anchorShape.human_output?.human_corrected_text
+                      : anchorSrc === 'llm'   ? anchorShape.openai_output?.response
+                      :                         anchorShape.tesseract_output?.ocr_text;
+        if (!refText?.trim()) continue;
+        const nRows = _lineCount(refText);
+        if (nRows < 1) continue;
+
+        for (const {s, i} of entries) {
+          if (_batchStop) break;
+          if (i === anchorEntry.i) continue;   // skip the anchor shape itself
+          if (!overwrite) {
+            const hasResult = op === 'anchored_ocr'
+              ? !!s.tesseract_output?.ocr_text
+              : !!s.openai_output?.response;
+            if (hasResult) continue;
+          }
+          try {
+            if (op === 'anchored_ocr') {
+              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows});
+              await _drainSse(`${API}/api/page/shape/ocr/easyocr/anchored?${p}`);
+            } else {
+              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows, model, use_shadow: useShadow});
+              await _drainSse(`${API}/api/page/shape/llm/anchored?${p}`, {prompt});
+            }
+            shapesDone++;
+          } catch(e) { showToast(`Shape ${i} on ${stem}: ${e.message}`); }
+        }
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — ${shapesDone} shapes processed (anchor col ${anchorCol})`;
     }
 
     done++;
@@ -5847,6 +5958,17 @@ function _batchStart(allBtn, stopBtn, ...disableBtns) {
   allBtn.disabled = true;
   stopBtn.style.display = 'inline-block';
   disableBtns.forEach(b => { if (b) b.disabled = true; });
+}
+
+async function _drainSse(url, jsonBody) {
+  /** POST to an SSE endpoint and drain it (server writes results to disk). */
+  const opts = jsonBody
+    ? { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jsonBody) }
+    : { method: 'POST' };
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(r.status);
+  const reader = r.body.getReader();
+  while (true) { const {done} = await reader.read(); if (done) break; }
 }
 
 function _batchEnd(allBtn, stopBtn, done, total, label, ...enableBtns) {
