@@ -2978,12 +2978,12 @@ def api_export_excel(
 
         # ── Row clustering — mirror the JS lattice detector logic ─────────
         # Sort by top edge.  For each shape check whether its centre-y falls
-        # within [avgTop − TOL, effective_bot + TOL] of an existing row.
-        # effective_bot is capped at avg_top + med_h so that a single tall
-        # shape (e.g. a merged cell spanning 2 rows) cannot absorb shapes
-        # from the visually next row into the same row group.
+        # within [avgTop − TOL, avgBottom + TOL] of an existing row, where
+        # avgTop/avgBottom are the mean top/bottom edges of shapes already in
+        # that row.  This is identical to _latticeAssignCoords in index.html
+        # and correctly separates pre-lattice headers (small, near the top of
+        # the page) from tall cells whose centre-y happens to be far below.
         ROW_TOL = 10
-        med_h = sorted(c["h"] for c in raw)[len(raw) // 2]   # median cell height
         raw.sort(key=lambda c: c["top_y"])
         row_groups: list = []   # list of lists of raw-cell dicts
         for c in raw:
@@ -2991,10 +2991,7 @@ def api_export_excel(
             for grp in row_groups:
                 avg_top = sum(r["top_y"] for r in grp) / len(grp)
                 avg_bot = sum(r["bot_y"] for r in grp) / len(grp)
-                # Cap the effective bottom so a tall shape doesn't swallow
-                # the next row's shapes.
-                effective_bot = min(avg_bot, avg_top + med_h) + ROW_TOL
-                if avg_top - ROW_TOL <= c["cy"] <= effective_bot:
+                if avg_top - ROW_TOL <= c["cy"] <= avg_bot + ROW_TOL:
                     grp.append(c)
                     placed = True
                     break
