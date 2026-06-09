@@ -6312,7 +6312,7 @@ async function runLlmAnchored() {
   if (!targets.length) { showToast('No target shapes in same lattice row'); return; }
 
   const btn     = document.getElementById('llm-btn');
-  const stopBtn = document.getElementById('llm-stop-btn');
+  const stopBtn = document.getElementById('llm-batch-stop-btn');
   btn.disabled = true; btn.textContent = '…';
   if (stopBtn) stopBtn.style.display = 'inline-block';
   batchAbort = false;
