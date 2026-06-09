@@ -659,6 +659,7 @@
           <option value="human_rows">Human row mismatch</option>
           <option value="ocr_llm">OCR ≠ LLM line count</option>
           <option value="best_rows">Human&gt;LLM&gt;OCR mismatch</option>
+          <option value="best_rows_pdf">Human&gt;LLM&gt;OCR&gt;PDF mismatch</option>
         </select>
         <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
         <button class="nav-btn" id="smart-correct-btn" onclick="runSmartCorrect()" disabled
@@ -910,6 +911,7 @@
                 <option value="ocr">OCR</option>
                 <option value="llm">LLM</option>
                 <option value="human">Human</option>
+                <option value="pdf">PDF</option>
               </select>
             </div>
             <div id="ocr-anchor-cols-wrap" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
@@ -972,6 +974,7 @@
                 <option value="ocr">OCR</option>
                 <option value="llm">LLM</option>
                 <option value="human">Human</option>
+                <option value="pdf">PDF</option>
               </select>
             </div>
             <div id="llm-anchor-cols-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
@@ -1276,6 +1279,7 @@
           <option value="ocr">OCR</option>
           <option value="llm">LLM</option>
           <option value="human">Human</option>
+          <option value="pdf">PDF</option>
         </select>
       </label>
       <label class="row">
@@ -2154,6 +2158,11 @@ function computeDiagnostics() {
         return s.human_output?.human_corrected_text
             || s.openai_output?.response
             || s.tesseract_output?.ocr_text;
+      if (diagnosticMode === 'best_rows_pdf')
+        return s.human_output?.human_corrected_text
+            || s.openai_output?.response
+            || s.tesseract_output?.ocr_text
+            || s.pdf_text;
     };
     const rowGroups = {};
     shapes.forEach((s, i) => {
@@ -2191,7 +2200,7 @@ function onDiagnosticChange() {
   drawOverlay();
   const scBtn = document.getElementById('smart-correct-btn');
   if (scBtn && !scBtn.disabled) {
-    const rowModes = ['ocr_rows','llm_rows','human_rows','best_rows'];
+    const rowModes = ['ocr_rows','llm_rows','human_rows','best_rows','best_rows_pdf'];
     scBtn.style.opacity = rowModes.includes(diagnosticMode) ? '1' : '0.35';
     scBtn.title = rowModes.includes(diagnosticMode)
       ? 'Auto-correct ±1 line-count mismatches found by Diagnose'
@@ -4290,6 +4299,7 @@ async function runBatch() {
         const anchorShape = anchorEntry.s;
         const refText = anchorSrc === 'human' ? anchorShape.human_output?.human_corrected_text
                       : anchorSrc === 'llm'   ? anchorShape.openai_output?.response
+                      : anchorSrc === 'pdf'   ? anchorShape.pdf_text
                       :                         anchorShape.tesseract_output?.ocr_text;
         if (!refText?.trim()) continue;
         const nRows = _lineCount(refText);
@@ -5218,6 +5228,7 @@ async function runOcrAnchored() {
   const anchorSrc = document.getElementById('ocr-anchor-source').value;
   const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
                 : anchorSrc === 'llm'   ? refShape.openai_output?.response
+                : anchorSrc === 'pdf'   ? refShape.pdf_text
                 :                         refShape.tesseract_output?.ocr_text;
   if (!refText?.trim()) {
     showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
@@ -6284,6 +6295,7 @@ async function runLlmAnchored() {
   const anchorSrc = document.getElementById('llm-anchor-source').value;
   const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
                 : anchorSrc === 'llm'   ? refShape.openai_output?.response
+                : anchorSrc === 'pdf'   ? refShape.pdf_text
                 :                         refShape.tesseract_output?.ocr_text;
   if (!refText?.trim()) {
     showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
@@ -6422,7 +6434,7 @@ function _applyHumanCorrection(shape, text) {
 async function runSmartCorrect() {
   if (!pageData?.shapes?.length) return;
   const mode = diagnosticMode;
-  const ROW_MODES = ['ocr_rows','llm_rows','human_rows','best_rows'];
+  const ROW_MODES = ['ocr_rows','llm_rows','human_rows','best_rows','best_rows_pdf'];
   if (!ROW_MODES.includes(mode)) {
     showToast('Smart Correct only works in row-mismatch Diagnose modes');
     return;
@@ -6439,6 +6451,11 @@ async function runSmartCorrect() {
       return s.human_output?.human_corrected_text
           || s.openai_output?.response
           || s.tesseract_output?.ocr_text;
+    if (mode === 'best_rows_pdf')
+      return s.human_output?.human_corrected_text
+          || s.openai_output?.response
+          || s.tesseract_output?.ocr_text
+          || s.pdf_text;
   };
 
   // Write back to the same source field (overwrite machine-generated results)
@@ -6452,15 +6469,17 @@ async function runSmartCorrect() {
     } else if (mode === 'human_rows') {
       if (!s.human_output) s.human_output = {};
       s.human_output.human_corrected_text = text;
-    } else if (mode === 'best_rows') {
+    } else if (mode === 'best_rows' || mode === 'best_rows_pdf') {
       // Write to whichever field provided the value
       if (s.human_output?.human_corrected_text) {
         s.human_output.human_corrected_text = text;
       } else if (s.openai_output?.response) {
         s.openai_output.response = text;
-      } else {
+      } else if (s.tesseract_output?.ocr_text || mode === 'best_rows') {
         if (!s.tesseract_output) s.tesseract_output = {};
         s.tesseract_output.ocr_text = text;
+      } else {
+        s.pdf_text = text;   // pdf_text was the source
       }
     }
   };
