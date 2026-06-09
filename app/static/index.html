@@ -1305,8 +1305,14 @@
       </div>
     </div>
 
+    <label class="row" style="margin-top:4px;">
+      <input type="checkbox" id="batch-verbose" style="accent-color:#e94560;width:13px;height:13px;">
+      <span style="font-size:12px;color:#aaa;">Verbose — show API responses</span>
+    </label>
+
     <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
     <div id="batch-progress"></div>
+    <pre id="batch-verbose-log" style="display:none;background:#060f20;border:1px solid #0f3460;border-radius:4px;padding:8px;font-size:10px;color:#7ec8a0;font-family:monospace;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;"></pre>
 
     <div id="batch-modal-btns">
       <button id="batch-cancel-btn" onclick="closeBatchModal()">Cancel</button>
@@ -3941,6 +3947,10 @@ async function runBatch() {
   const progText = document.getElementById('batch-progress');
   const progBar  = document.getElementById('batch-progress-bar');
 
+  _batchVerbose = document.getElementById('batch-verbose').checked;
+  const verboseEl = _batchLogEl();
+  if (verboseEl) { verboseEl.textContent = ''; verboseEl.style.display = _batchVerbose ? 'block' : 'none'; }
+
   let done = 0;
   for (const idx of sorted) {
     if (_batchStop) break;
@@ -4058,9 +4068,10 @@ async function runBatch() {
         if (!overwrite && sh.openai_output?.response) continue;
         if (requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
+        batchLog(`[${stem}] shape ${si} (${sh.label}) row=${sh.super_row} col=${sh.super_column}`);
         try {
           await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow);
-        } catch(e) { if (_batchStop) break; }
+        } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
       }
 
     } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
@@ -4089,10 +4100,11 @@ async function runBatch() {
         if (colFilter  !== null && !colFilter.has(si))  continue;
         if (!overwrite && sh.tesseract_output?.ocr_text) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
+        batchLog(`[${stem}] shape ${si} (${sh.label}) row=${sh.super_row} col=${sh.super_column}`);
         try {
           await _batchOcrShape(stem, si, op, cellHeight);
           shapeDone++;
-        } catch(e) { if (_batchStop) break; }
+        } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
       }
 
     } else if (op === 'score_delete') {
@@ -4368,6 +4380,36 @@ async function _drainSSE(response) {
   }
 }
 
+// ── Verbose batch logging ─────────────────────────────────────────────────────
+let _batchVerbose = false;
+const _batchLogEl = () => document.getElementById('batch-verbose-log');
+
+function batchLog(msg) {
+  if (!_batchVerbose) return;
+  const el = _batchLogEl();
+  if (!el) return;
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+async function _drainSSEVerbose(response, onMsg) {
+  /** Drain an SSE response, calling onMsg(parsedObject) for each event. */
+  const reader  = response.body.getReader();
+  const dec     = new TextDecoder();
+  let   buf     = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const chunks = buf.split('\n\n'); buf = chunks.pop();
+    for (const chunk of chunks) {
+      if (!chunk.startsWith('data: ')) continue;
+      try { onMsg(JSON.parse(chunk.slice(6))); } catch {}
+    }
+    if (_batchStop) { reader.cancel(); break; }
+  }
+}
+
 async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useShadow) {
   const params = new URLSearchParams({ folder, stem, idx, model, mode, use_shadow: !!useShadow });
   if (mode === 'linebyline') {
@@ -4377,13 +4419,24 @@ async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useSha
       body: JSON.stringify({ prompt }),
     });
     if (!r.ok) throw new Error(r.status);
-    await _drainSSE(r);
+    if (_batchVerbose) {
+      await _drainSSEVerbose(r, msg => {
+        if (msg.type === 'row_result') batchLog(`    row ${msg.row + 1}: ${msg.text}`);
+        if (msg.type === 'done')       batchLog(`  ↳ ${msg.response.replace(/\n/g, ' | ')}`);
+      });
+    } else {
+      await _drainSSE(r);
+    }
   } else {
     const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt }),
     });
     if (!r.ok) throw new Error(r.status);
+    if (_batchVerbose) {
+      const data = await r.json().catch(() => ({}));
+      batchLog(`  ↳ ${(data.response || '').replace(/\n/g, ' | ')}`);
+    }
   }
 }
 
@@ -4392,11 +4445,22 @@ async function _batchOcrShape(stem, idx, op, cellHeight) {
   if (op === 'ocr_tesseract') {
     const r = await fetch(`${API}/api/page/shape/ocr?${params}`, { method: 'POST' });
     if (!r.ok) throw new Error(r.status);
+    if (_batchVerbose) {
+      const data = await r.json().catch(() => ({}));
+      batchLog(`  ↳ ${(data.ocr_text || '').replace(/\n/g, ' | ')}`);
+    }
   } else if (op === 'ocr_easyocr_lbl') {
     params.set('cell_height', cellHeight);
     const r = await fetch(`${API}/api/page/shape/ocr/easyocr/linebyline?${params}`, { method: 'POST' });
     if (!r.ok) throw new Error(r.status);
-    await _drainSSE(r);
+    if (_batchVerbose) {
+      await _drainSSEVerbose(r, msg => {
+        if (msg.type === 'row_result') batchLog(`    row ${msg.row + 1}: ${msg.text}`);
+        if (msg.type === 'done')       batchLog(`  ↳ ${msg.ocr_text.replace(/\n/g, ' | ')}`);
+      });
+    } else {
+      await _drainSSE(r);
+    }
   }
 }
 
