@@ -979,6 +979,12 @@
               </button>
             </div>
             <textarea id="llm-prompt" rows="4" placeholder="Prompt…"></textarea>
+            <div style="display:flex;gap:4px;margin-top:2px;">
+              <button onclick="openPromptPaletteForInspector()"
+                style="background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aaa;padding:2px 7px;cursor:pointer;font-size:10px;flex:1;">📋 Load</button>
+              <button onclick="saveInspectorPromptToPalette()"
+                style="background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aaa;padding:2px 7px;cursor:pointer;font-size:10px;flex:1;">💾 Save</button>
+            </div>
             <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:68px;">
               <div class="line-nums" id="f-llm-result-lines">1</div>
               <textarea id="f-llm-result" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
@@ -4602,6 +4608,7 @@ async function doExcelExport() {
 // ── Prompt palette ────────────────────────────────────────────────────────────
 const PALETTE_KEY = 'promptPalette';
 let _paletteFromBatch = false;
+let _paletteTarget = 'batch-llm-prompt';   // id of textarea to load into
 
 function _getPalette() {
   try { return JSON.parse(localStorage.getItem(PALETTE_KEY) || '[]'); } catch { return []; }
@@ -4610,15 +4617,17 @@ function _setPalette(arr) {
   localStorage.setItem(PALETTE_KEY, JSON.stringify(arr));
 }
 
-function openPromptPalette(fromBatch) {
+function openPromptPalette(fromBatch, targetId) {
   _paletteFromBatch = !!fromBatch;
+  _paletteTarget = targetId || 'batch-llm-prompt';
   _renderPaletteList();
   // clear add-new fields
   document.getElementById('palette-new-name').value = '';
   document.getElementById('palette-new-text').value = '';
   document.getElementById('prompt-palette-modal').style.display = 'flex';
 }
-function openPromptPaletteForBatch() { openPromptPalette(true); }
+function openPromptPaletteForBatch()      { openPromptPalette(true,  'batch-llm-prompt'); }
+function openPromptPaletteForInspector()  { openPromptPalette(true,  'llm-prompt'); }
 function closePromptPalette() {
   document.getElementById('prompt-palette-modal').style.display = 'none';
 }
@@ -4653,7 +4662,7 @@ function _escHtml(s) {
 function loadFromPalette(idx) {
   const palette = _getPalette();
   if (!palette[idx]) return;
-  document.getElementById('batch-llm-prompt').value = palette[idx].text;
+  document.getElementById(_paletteTarget).value = palette[idx].text;
   closePromptPalette();
   showToast('Prompt loaded ✓');
 }
@@ -4677,6 +4686,16 @@ function addPromptToPalette() {
   document.getElementById('palette-new-text').value = '';
   _renderPaletteList();
   showToast('Saved to palette ✓');
+}
+
+function saveInspectorPromptToPalette() {
+  const text = document.getElementById('llm-prompt').value.trim();
+  if (!text) { showToast('Prompt is empty'); return; }
+  const name = text.slice(0, 40).replace(/\n/g, ' ');
+  openPromptPalette(false);
+  document.getElementById('palette-new-name').value = name;
+  document.getElementById('palette-new-text').value = text;
+  setTimeout(() => document.getElementById('palette-new-name').select(), 50);
 }
 
 function saveBatchPromptToPalette() {
