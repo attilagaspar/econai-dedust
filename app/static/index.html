@@ -2118,17 +2118,25 @@ function _lineCount(text) {
 
 // Parse a column list string (e.g. "1,3-5,7") into a Set of 1-indexed ints.
 // Returns null if the string is blank (meaning "all columns").
+// Parse a column filter string into a predicate col => bool.
+// Supports: single numbers ("3"), closed ranges ("2-5"), open upper ("10-"),
+// open lower ("-5"), and comma-separated combinations.
+// Returns null (= no filter, accept all) if the string is blank or unparseable.
 function _parseColSet(str) {
   if (!str?.trim()) return null;
-  const set = new Set();
+  const ranges = [];
   for (const part of str.split(',')) {
     const p = part.trim();
     if (!p) continue;
-    const m = p.match(/^(\d+)-(\d+)$/);
-    if (m) { for (let i = +m[1]; i <= +m[2]; i++) set.add(i); }
-    else if (/^\d+$/.test(p)) set.add(+p);
+    let m;
+    if ((m = p.match(/^(\d+)-(\d+)$/)))  { ranges.push([+m[1], +m[2]]);       continue; }
+    if ((m = p.match(/^(\d+)-$/)))        { ranges.push([+m[1], Infinity]);     continue; }
+    if ((m = p.match(/^-(\d+)$/)))        { ranges.push([1,      +m[1]]);       continue; }
+    if (/^\d+$/.test(p))                  { ranges.push([+p,     +p]);          continue; }
+    // unrecognised token — ignore silently
   }
-  return set.size ? set : null;
+  if (!ranges.length) return null;
+  return col => ranges.some(([lo, hi]) => col >= lo && col <= hi);
 }
 
 function computeDiagnostics() {
@@ -5248,7 +5256,7 @@ async function runOcrAnchored() {
   pageData.shapes.forEach((s, i) => {
     if (i === selIdx) return;
     if (s.super_row !== superRow) return;
-    if (colSet && !colSet.has(s.super_column)) return;   // column filter
+    if (colSet && !colSet(s.super_column)) return;        // column filter
     if (s.super_column === anchorCol) return;             // skip anchor column even if listed
     targets.push(i);
   });
@@ -6317,7 +6325,7 @@ async function runLlmAnchored() {
   pageData.shapes.forEach((s, i) => {
     if (i === selIdx) return;
     if (s.super_row !== superRow) return;
-    if (colSet && !colSet.has(s.super_column)) return;
+    if (colSet && !colSet(s.super_column)) return;
     if (s.super_column === anchorCol) return;
     targets.push(i);
   });
