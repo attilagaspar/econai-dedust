@@ -912,6 +912,11 @@
                 <option value="human">Human</option>
               </select>
             </div>
+            <div id="ocr-anchor-cols-wrap" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
+              <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Columns</span>
+              <input id="ocr-anchor-cols" type="text" placeholder="blank = all others"
+                style="flex:1;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;" />
+            </div>
             <div class="lined-wrap" style="resize:vertical;overflow:auto;min-height:52px;">
               <div class="line-nums" id="f-ocr-lines">1</div>
               <textarea id="f-ocr" readonly style="resize:none;width:100%;box-sizing:border-box;color:#ccc;font:inherit;white-space:pre;overflow-wrap:normal;overflow-x:auto;cursor:text;padding:5px 7px;">—</textarea>
@@ -968,6 +973,11 @@
                 <option value="llm">LLM</option>
                 <option value="human">Human</option>
               </select>
+            </div>
+            <div id="llm-anchor-cols-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
+              <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Columns</span>
+              <input id="llm-anchor-cols" type="text" placeholder="blank = all others"
+                style="flex:1;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;" />
             </div>
             <div id="llm-cellheight-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
               <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Cell height (px)</span>
@@ -2100,6 +2110,21 @@ function _trimShapesOverlaps(shapes) {
 // ── Diagnostic highlighting ───────────────────────────────────────────────────
 function _lineCount(text) {
   return text ? text.split('\n').filter(l => l.trim()).length : 0;
+}
+
+// Parse a column list string (e.g. "1,3-5,7") into a Set of 1-indexed ints.
+// Returns null if the string is blank (meaning "all columns").
+function _parseColSet(str) {
+  if (!str?.trim()) return null;
+  const set = new Set();
+  for (const part of str.split(',')) {
+    const p = part.trim();
+    if (!p) continue;
+    const m = p.match(/^(\d+)-(\d+)$/);
+    if (m) { for (let i = +m[1]; i <= +m[2]; i++) set.add(i); }
+    else if (/^\d+$/.test(p)) set.add(+p);
+  }
+  return set.size ? set : null;
 }
 
 function computeDiagnostics() {
@@ -4903,6 +4928,7 @@ function updateOcrMode() {
   const showAnchor  = mode === 'easyocr-anchored';
   document.getElementById('ocr-cellheight-wrap').style.display    = showHeight ? 'flex' : 'none';
   document.getElementById('ocr-anchor-source-wrap').style.display = showAnchor ? 'flex' : 'none';
+  document.getElementById('ocr-anchor-cols-wrap').style.display   = showAnchor ? 'flex' : 'none';
 }
 
 async function runOcr() {
@@ -5204,12 +5230,18 @@ async function runOcrAnchored() {
     showToast('Selected shape is not in a lattice row — run Lattice detect first'); return;
   }
 
-  // All other shapes in the same super_row
+  // Build target list — same super_row, not the anchor, optionally filtered by column
+  const colSet  = _parseColSet(document.getElementById('ocr-anchor-cols').value);
+  const anchorCol = pageData.shapes[selIdx].super_column;
   const targets = [];
   pageData.shapes.forEach((s, i) => {
-    if (i !== selIdx && s.super_row === superRow) targets.push(i);
+    if (i === selIdx) return;
+    if (s.super_row !== superRow) return;
+    if (colSet && !colSet.has(s.super_column)) return;   // column filter
+    if (s.super_column === anchorCol) return;             // skip anchor column even if listed
+    targets.push(i);
   });
-  if (!targets.length) { showToast('No other shapes in same lattice row'); return; }
+  if (!targets.length) { showToast('No target shapes in same lattice row'); return; }
 
   const btn     = document.getElementById('ocr-btn');
   const stopBtn = document.getElementById('ocr-stop-btn');
@@ -5297,6 +5329,7 @@ function updateLlmPrompt() {
   if (isDefault) el.value = LLM_PROMPTS[mode] || '';
   document.getElementById('llm-cellheight-wrap').style.display    = mode === 'linebyline' ? 'flex' : 'none';
   document.getElementById('llm-anchor-source-wrap').style.display = mode === 'anchored'   ? 'flex' : 'none';
+  document.getElementById('llm-anchor-cols-wrap').style.display   = mode === 'anchored'   ? 'flex' : 'none';
 }
 
 // ── Empty row detection ───────────────────────────────────────────────────────
@@ -6266,11 +6299,17 @@ async function runLlmAnchored() {
   const prompt = document.getElementById('llm-prompt').value.trim();
   if (!prompt) { showToast('Prompt is empty'); return; }
 
+  const colSet   = _parseColSet(document.getElementById('llm-anchor-cols').value);
+  const anchorCol = refShape.super_column;
   const targets = [];
   pageData.shapes.forEach((s, i) => {
-    if (i !== selIdx && s.super_row === superRow) targets.push(i);
+    if (i === selIdx) return;
+    if (s.super_row !== superRow) return;
+    if (colSet && !colSet.has(s.super_column)) return;
+    if (s.super_column === anchorCol) return;
+    targets.push(i);
   });
-  if (!targets.length) { showToast('No other shapes in same lattice row'); return; }
+  if (!targets.length) { showToast('No target shapes in same lattice row'); return; }
 
   const btn     = document.getElementById('llm-btn');
   const stopBtn = document.getElementById('llm-stop-btn');
