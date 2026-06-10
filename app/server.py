@@ -123,6 +123,15 @@ def list_pages(folder: str = Query(..., description="Absolute or relative path t
     return {"folder": str(d), "pages": pages}
 
 
+@app.get("/api/json-stems")
+def list_json_stems(folder: str = Query(...)):
+    """Return every JSON stem in the folder sorted naturally — no image required."""
+    d = _resolve_folder(folder)
+    stems = [jf.stem for jf in sorted(d.glob("*.json"),
+                                       key=lambda p: _page_sort_key(p.stem))]
+    return {"stems": stems}
+
+
 # ---------------------------------------------------------------------------
 # Routes — serving files
 # ---------------------------------------------------------------------------

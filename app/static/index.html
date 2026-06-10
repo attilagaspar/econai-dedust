@@ -1486,6 +1486,7 @@ let ocrSettings   = {
   morph_open_kernel:      2,
 };
 let pages         = [];
+let allJsonStems  = [];   // all JSON stems in folder, no image requirement
 let pageIdx       = 0;
 let pageData      = null;
 let selIdx        = -1;          // primary selected shape (for panel display)
@@ -4681,48 +4682,41 @@ async function doExcelExport() {
   const colHeaders = document.getElementById('xls-col-headers').value.trim();
   const colFilter  = document.getElementById('xls-col-filter').value.trim();
 
-  // Resolve page range.
-  // We send page_from/page_to to the server so it slices its own sorted JSON
-  // list — this works even for pages that have no image file (which would be
-  // absent from the client-side `pages` array).
-  // Parity is handled client-side; for odd/even we fall back to stems.
+  // Resolve page range using allJsonStems (all JSON files, no image requirement).
+  // Falls back to pages[] if allJsonStems hasn't loaded yet.
   const rawPages   = document.getElementById('xls-pages').value.trim();
   const parityOdd  = document.getElementById('xls-parity-odd').checked;
   const parityEven = document.getElementById('xls-parity-even').checked;
+  const stemSource = allJsonStems.length ? allJsonStems : pages.map(p => p.stem);
+  const n          = stemSource.length;
 
-  let pageParams = {};   // will hold either page_from/page_to OR stems
-
-  if (!parityOdd && !parityEven) {
-    // Simple range — let server slice; no dependency on pages[]
-    if (rawPages === '') {
-      // blank = all; send neither stems nor range → server uses all JSON files
-    } else {
-      const m = rawPages.match(/^(\d+)-(\d*)$/);
-      if (m) {
-        pageParams.page_from = parseInt(m[1]);
-        if (m[2]) pageParams.page_to = parseInt(m[2]);
+  // Parse range against the full stem list
+  let indices;
+  if (rawPages === '') {
+    indices = new Set([...Array(n).keys()]);
+  } else {
+    // Inline parse — same logic as _parsePageRange but against n (full JSON count)
+    indices = new Set();
+    for (const part of rawPages.split(',')) {
+      const s = part.trim(); if (!s) continue;
+      const m = s.match(/^(\d*)-(\d*)$|^(\d+)$/);
+      if (!m) { alert(`Cannot parse: "${s}"`); return; }
+      if (m[3] !== undefined) {
+        const p = parseInt(m[3]) - 1; if (p >= 0 && p < n) indices.add(p);
       } else {
-        // Complex expression (multiple parts) or single page — fall back to stems
-        const indices = _parsePageRange(rawPages);
-        if (!indices) return;
-        const stemsList = [...indices].sort((a,b)=>a-b).map(i=>pages[i]?.stem).filter(Boolean);
-        if (!stemsList.length) { alert('No pages loaded.'); return; }
-        pageParams.stems = stemsList.join(',');
+        const from = m[1] === '' ? 0     : parseInt(m[1]) - 1;
+        const to   = m[2] === '' ? n - 1 : parseInt(m[2]) - 1;
+        for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) indices.add(i);
       }
     }
-  } else {
-    // Parity filter requires knowing which pages are odd/even → need stems
-    const indices = rawPages === ''
-      ? new Set([...Array(pages.length).keys()])
-      : _parsePageRange(rawPages);
-    if (!indices) return;
-    if (parityOdd)  for (const i of [...indices]) { if ((i+1)%2===0) indices.delete(i); }
-    if (parityEven) for (const i of [...indices]) { if ((i+1)%2===1) indices.delete(i); }
-    if (!indices.size) { alert('No pages in selected range/parity.'); return; }
-    const stemsList = [...indices].sort((a,b)=>a-b).map(i=>pages[i]?.stem).filter(Boolean);
-    if (!stemsList.length) { alert('No pages loaded.'); return; }
-    pageParams.stems = stemsList.join(',');
   }
+  if (parityOdd)  for (const i of [...indices]) { if ((i+1)%2===0) indices.delete(i); }
+  if (parityEven) for (const i of [...indices]) { if ((i+1)%2===1) indices.delete(i); }
+  if (!indices.size) { alert('No pages in selected range/parity.'); return; }
+
+  const stemsList = [...indices].sort((a,b)=>a-b).map(i => stemSource[i]).filter(Boolean);
+  if (!stemsList.length) { alert('No pages found.'); return; }
+  const pageParams = { stems: stemsList.join(',') };
 
   const params = new URLSearchParams({
     folder, layer, types,
@@ -6730,6 +6724,11 @@ async function loadFolder() {
   if (!r.ok) { alert('Folder not found: '+folder); return; }
   const data=await r.json(); pages=data.pages;
   if (!pages.length) { alert('No pages found (need matching .json + image)'); return; }
+  // Also load all JSON stems (no image requirement) for Excel export range
+  fetch(`${API}/api/json-stems?folder=${encodeURIComponent(folder)}`)
+    .then(r => r.ok ? r.json() : {stems:[]})
+    .then(d => { allJsonStems = d.stems || []; })
+    .catch(() => { allJsonStems = []; });
   const sel=document.getElementById('page-select');
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';
