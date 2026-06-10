@@ -3212,10 +3212,13 @@ def api_export_excel(
         ocr   = ((shape.get("tesseract_output") or {}).get("ocr_text") or
                  (shape.get("easyocr_output")   or {}).get("ocr_text") or "")
         llm   = (shape.get("openai_output") or {}).get("response") or ""
+        pdf   = shape.get("pdf_text") or ""
         if layer == "human":    return human.strip()
         if layer == "ocr":      return ocr.strip()
         if layer == "llm":      return llm.strip()
+        if layer == "pdf":      return pdf.strip()
         if layer == "best_ocr": return (human or ocr or llm).strip()
+        if layer == "best_pdf": return (human or llm or ocr or pdf).strip()
         return (human or llm or ocr).strip()   # best_llm (default)
 
     def text_to_lines(text):
