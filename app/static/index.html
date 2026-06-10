@@ -1084,6 +1084,9 @@
       <select id="batch-condition" style="width:100%;">
         <option value="none">— all shapes —</option>
         <option value="ocr_row_minority">OCR row mismatch — minority only (red in diagnostic)</option>
+        <option value="pdf_has_digits">PDF layer has numbers</option>
+        <option value="pdf_has_chars">PDF layer has characters (≥3 letters)</option>
+        <option value="pdf_has_any">PDF layer has numbers or characters</option>
       </select>
     </div>
     <div>
@@ -3816,6 +3819,22 @@ function _computeOverlapsOnShapes(shapes, threshold) {
 function _computeConditionFilter(shapes) {
   const cond = document.getElementById('batch-condition').value;
   if (cond === 'none') return null;
+
+  if (cond === 'pdf_has_digits' || cond === 'pdf_has_chars' || cond === 'pdf_has_any') {
+    // "meaningful" PDF layer: at least one digit, or at least 3 Unicode letters
+    const hasDigit  = t => /\d/.test(t);
+    const hasChars  = t => (t.match(/\p{L}/gu) || []).length >= 3;
+    const flagged   = new Set();
+    shapes.forEach((s, i) => {
+      const t = s.pdf_text || '';
+      if (!t.trim()) return;
+      const ok = cond === 'pdf_has_digits' ? hasDigit(t)
+               : cond === 'pdf_has_chars'  ? hasChars(t)
+               :                             hasDigit(t) || hasChars(t);
+      if (ok) flagged.add(i);
+    });
+    return flagged;
+  }
 
   if (cond === 'ocr_row_minority') {
     const flagged = new Set();
