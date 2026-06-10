@@ -3174,6 +3174,8 @@ def api_export_excel(
     col_headers: str  = Query(""),         # comma-sep column header labels; empty = no header row
     stems:       str  = Query(""),         # comma-sep stems to include; empty = all (document scope)
     col_filter:  str  = Query(""),         # comma-sep 1-indexed column numbers; empty = all columns
+    page_from:   int  = Query(None),       # 1-indexed first page of range (inclusive); alternative to stems
+    page_to:     int  = Query(None),       # 1-indexed last  page of range (inclusive)
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -3480,30 +3482,36 @@ def api_export_excel(
     # ── Column filter ────────────────────────────────────────────────────────
     # col_filter is a comma-sep list of 1-indexed column numbers from the client.
     # We parse them to a 0-indexed set, then strip and re-index after shapes_to_cells.
-    _col_filter_set: set | None = None
+    # col_filter: comma-sep 1-indexed column numbers/ranges; empty = all columns.
+    # Supports open-ended ranges: "4-" means col 4 to infinity; "-3" means 1-3.
+    _col_filter_ranges: list | None = None   # list of (lo, hi) 0-indexed, hi=None=∞
     if col_filter.strip():
-        _col_filter_set = set()
+        _col_filter_ranges = []
         for part in col_filter.split(","):
             part = part.strip()
             if not part:
                 continue
-            if "-" in part:
-                lo, _, hi = part.partition("-")
-                try:
-                    _col_filter_set.update(range(int(lo) - 1, int(hi)))
-                except ValueError:
-                    pass
-            else:
-                try:
-                    _col_filter_set.add(int(part) - 1)
-                except ValueError:
-                    pass
+            try:
+                if "-" in part:
+                    lo_s, _, hi_s = part.partition("-")
+                    lo = (int(lo_s) - 1) if lo_s.strip() else 0
+                    hi = (int(hi_s) - 1) if hi_s.strip() else None   # None = ∞
+                    _col_filter_ranges.append((lo, hi))
+                else:
+                    v = int(part) - 1
+                    _col_filter_ranges.append((v, v))
+            except ValueError:
+                pass
+
+    def _col_matches(col_idx):
+        return any(lo <= col_idx <= (hi if hi is not None else col_idx)
+                   for lo, hi in _col_filter_ranges)
 
     def apply_col_filter(cells):
-        """Keep only columns in _col_filter_set and re-index col_idx to be contiguous."""
-        if _col_filter_set is None:
+        """Keep only columns matching _col_filter_ranges and re-index col_idx."""
+        if _col_filter_ranges is None:
             return cells
-        kept = [c for c in cells if c["col_idx"] in _col_filter_set]
+        kept = [c for c in cells if _col_matches(c["col_idx"])]
         # Re-index: sort the kept col indices, map old → new
         old_cols = sorted({c["col_idx"] for c in kept})
         remap = {old: new for new, old in enumerate(old_cols)}
@@ -3530,6 +3538,11 @@ def api_export_excel(
                 (jf for jf in jfiles if jf.stem in stem_index),
                 key=lambda jf: stem_index[jf.stem],
             )
+        elif page_from is not None or page_to is not None:
+            # Numeric range against the full sorted JSON list (no image required)
+            lo = max(0, (page_from or 1) - 1)
+            hi = (page_to or len(jfiles)) - 1
+            jfiles = jfiles[lo : hi + 1]
 
     wb  = openpyxl.Workbook()
     wb.remove(wb.active)
