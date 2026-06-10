@@ -3239,17 +3239,54 @@ def api_export_excel(
             lines.pop()
         return lines or [""]
 
+    def _spatial_cluster_rows(items, tol):
+        """Group items by Y proximity. Returns row_idx on each item."""
+        items.sort(key=lambda c: c["top_y"])
+        row_groups: list = []
+        for c in items:
+            placed = False
+            for grp in row_groups:
+                avg_top = sum(r["top_y"] for r in grp) / len(grp)
+                avg_bot = sum(r["bot_y"] for r in grp) / len(grp)
+                if avg_top - tol <= c["cy"] <= avg_bot + tol:
+                    grp.append(c); placed = True; break
+            if not placed:
+                row_groups.append([c])
+        for ri, grp in enumerate(row_groups):
+            for c in grp:
+                c["row_idx"] = ri
+
+    def _spatial_cluster_cols(items):
+        """Assign col_idx by clustering cx values."""
+        if not items:
+            return
+        med_w    = sorted(c["w"] for c in items)[len(items) // 2]
+        thresh_x = max(3, med_w * 0.5)
+        all_cx   = sorted({c["cx"] for c in items})
+        col_centers: list = []
+        grp = [all_cx[0]]
+        for cx in all_cx[1:]:
+            if cx - grp[-1] <= thresh_x:
+                grp.append(cx)
+            else:
+                col_centers.append(sum(grp) / len(grp)); grp = [cx]
+        col_centers.append(sum(grp) / len(grp))
+        for c in items:
+            c["col_idx"] = min(range(len(col_centers)),
+                               key=lambda i: abs(col_centers[i] - c["cx"]))
+
     def shapes_to_cells(shapes):
         """
         Return list of dicts: {row_idx, col_idx, lines[], w_px}.
 
-        Preferred path: use super_row / super_column already stored on each
-        shape by the app's lattice detector (1-indexed → converted to 0-indexed
-        here).  This is the authoritative assignment and exactly matches what
-        the app viewer shows.
+        Lattice path (preferred): shapes with super_row/super_column use those
+        directly (1-indexed → 0-indexed).  Text is expanded line-by-line so the
+        lattice row structure is preserved in Excel.
 
-        Fallback: shapes that lack super_row/super_column are assigned
-        row/col indices via spatial clustering (legacy behaviour).
+        Spatial path (no lattice): each annotation = ONE Excel cell regardless
+        of how many text lines it contains.  Row/col are assigned by spatial
+        clustering of bounding-box positions.  This prevents multi-line cells
+        from bleeding over adjacent annotations.
         """
         raw = []
         for sh in shapes:
@@ -3274,63 +3311,52 @@ def api_export_excel(
         if not raw:
             return []
 
-        # Partition: shapes with stored lattice coords vs. those without
         have_coords = [c for c in raw if c["super_row"] is not None and c["super_col"] is not None]
-        no_coords   = [c for c in raw if c["super_row"] is None or  c["super_col"] is None]
 
-        # ── Path A: use stored super_row / super_column (1-indexed → 0-indexed)
+        # ── Spatial path: no lattice on this page ────────────────────────────
+        if not have_coords:
+            med_h   = sorted(c["h"] for c in raw)[len(raw) // 2]
+            row_tol = max(5, med_h * 0.4)
+            _spatial_cluster_rows(raw, row_tol)
+            _spatial_cluster_cols(raw)
+            # Each shape → one cell; text kept as a single value (no line expansion)
+            winner: dict = {}
+            for c in raw:
+                k = (c["row_idx"], c["col_idx"])
+                if k not in winner or c["h"] > winner[k]["h"]:
+                    winner[k] = c
+            if winner:
+                min_row = min(c["row_idx"] for c in winner.values())
+                if min_row != 0:
+                    for c in winner.values(): c["row_idx"] -= min_row
+            return [dict(row_idx=c["row_idx"],
+                         col_idx=c["col_idx"],
+                         lines=[c["text"]],   # ← one cell, no line expansion
+                         w_px=c["w"])
+                    for c in winner.values()]
+
+        # ── Lattice path: use stored super_row / super_column ────────────────
+        no_coords = [c for c in raw if c["super_row"] is None or c["super_col"] is None]
+
         for c in have_coords:
             c["row_idx"] = int(c["super_row"]) - 1
             c["col_idx"] = int(c["super_col"]) - 1
 
-        # ── Path B: spatial clustering for shapes that lack lattice coords ────
         if no_coords:
-            ROW_TOL = 10
-            no_coords.sort(key=lambda c: c["top_y"])
-            row_groups: list = []
-            for c in no_coords:
-                placed = False
-                for grp in row_groups:
-                    avg_top = sum(r["top_y"] for r in grp) / len(grp)
-                    avg_bot = sum(r["bot_y"] for r in grp) / len(grp)
-                    if avg_top - ROW_TOL <= c["cy"] <= avg_bot + ROW_TOL:
-                        grp.append(c); placed = True; break
-                if not placed:
-                    row_groups.append([c])
-            for ri, grp in enumerate(row_groups):
-                for c in grp:
-                    c["row_idx"] = ri
-            med_w    = sorted(c["w"] for c in no_coords)[len(no_coords)//2]
-            thresh_x = max(3, med_w * 0.45)
-            all_cx   = sorted({c["cx"] for c in no_coords})
-            col_centers: list = []
-            if all_cx:
-                grp = [all_cx[0]]
-                for cx in all_cx[1:]:
-                    if cx - grp[-1] <= thresh_x:
-                        grp.append(cx)
-                    else:
-                        col_centers.append(sum(grp)/len(grp)); grp = [cx]
-                col_centers.append(sum(grp)/len(grp))
-            for c in no_coords:
-                c["col_idx"] = min(range(len(col_centers)),
-                                   key=lambda i: abs(col_centers[i] - c["cx"]))
+            _spatial_cluster_rows(no_coords, 10)
+            _spatial_cluster_cols(no_coords)
 
         all_raw = have_coords + no_coords
-
-        # ── Deduplicate: if two shapes share (row_idx, col_idx) keep the taller
-        winner: dict = {}
+        winner = {}
         for c in all_raw:
             k = (c["row_idx"], c["col_idx"])
             if k not in winner or c["h"] > winner[k]["h"]:
                 winner[k] = c
 
-        # Normalise row_idx so minimum is 0
         if winner:
             min_row = min(c["row_idx"] for c in winner.values())
             if min_row != 0:
-                for c in winner.values():
-                    c["row_idx"] -= min_row
+                for c in winner.values(): c["row_idx"] -= min_row
 
         return [dict(row_idx=c["row_idx"],
                      col_idx=c["col_idx"],
