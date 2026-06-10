@@ -1387,7 +1387,7 @@ def api_llm_cell(
             "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
         })
 
-    prompt_text = body.prompt + _EMPTY_CELL_GUARD
+    prompt_text = body.prompt
     if mode == "image+ocr":
         ocr_text = shape.get("tesseract_output", {}).get("ocr_text", "")
         if ocr_text:
@@ -1496,7 +1496,7 @@ async def api_llm_linebyline(
     ))
 
     rows = _detect_text_rows(crop, cell_height)
-    prompt_text = body.prompt + _EMPTY_CELL_GUARD
+    prompt_text = body.prompt
 
     def gen():
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
@@ -1633,7 +1633,7 @@ async def api_llm_anchored(
     ))
 
     rows        = _split_into_n_rows(crop, n_rows)
-    prompt_text = body.prompt + _EMPTY_CELL_GUARD
+    prompt_text = body.prompt
 
     def gen():
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
