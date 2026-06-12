@@ -59,16 +59,29 @@ def _write_json(path, obj):
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(text)
-            # Windows: os.replace can transiently fail if a reader has the
-            # target open — retry briefly
-            for attempt in range(5):
+            # Windows: os.replace fails while ANYTHING holds the target open —
+            # Dropbox sync and antivirus scanners routinely do for a second or
+            # two.  Retry with backoff for up to ~10 s before giving up.
+            delay = 0.05
+            for attempt in range(12):
                 try:
                     os.replace(tmp, str(path))
-                    break
+                    return
                 except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
+                    if attempt == 11:
+                        break
+                    time.sleep(delay)
+                    delay = min(delay * 1.7, 2.0)
+            # Last resort: direct write.  Not crash-atomic, but we hold the
+            # global write lock so no other server thread interleaves, and it
+            # beats losing the data outright.
+            print(f"[write_json] os.replace blocked for {path.name} — "
+                  f"falling back to direct write", flush=True)
+            path.write_text(text, encoding="utf-8")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         except BaseException:
             try:
                 os.unlink(tmp)
