@@ -685,6 +685,8 @@
           <option value="best_rows_pdf">Human&gt;LLM&gt;OCR&gt;PDF mismatch</option>
         </select>
         <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
+        <button class="nav-btn" onclick="openRuleEditor()"
+                title="Define arithmetic rules between lattice columns (e.g. 1+2=4); each rule appears in the Diagnose dropdown">⚖ Rules</button>
         <button class="nav-btn" id="smart-correct-btn" onclick="runSmartCorrect()" disabled
                 title="Auto-correct ±1 line-count mismatches found by Diagnose: remove spurious empty lines or add leading padding">✨ Smart Correct</button>
         <button class="nav-btn" onclick="openExcelExportModal()"
@@ -1080,6 +1082,27 @@
     </div>
   </div>
 
+</div>
+
+<!-- Rule editor modal -->
+<div id="rule-editor-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#16213e;border:1px solid #0f3460;border-radius:8px;padding:18px 20px;width:600px;max-width:92vw;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+    <h3 style="margin:0;color:#e94560;font-size:1rem;">⚖ Row rules</h3>
+    <div style="font-size:0.75rem;color:#888;line-height:1.5;">
+      Arithmetic rules between lattice columns, checked per internal row.
+      Numbers refer to <b>lattice column numbers</b> (1-indexed); operators
+      <b>+ − * / ( )</b> and exactly one <b>=</b>. Example: <b>1+2=4</b>.
+      Values are read from the best layer (Human &gt; LLM &gt; OCR &gt; PDF);
+      anything that isn't a clean number makes the rule fail for that row.
+      Each saved rule appears in the Diagnose dropdown as <b>ROW RULE: name</b>.
+    </div>
+    <div id="rule-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+    <button onclick="addRule()" style="align-self:flex-start;background:none;border:1px dashed #0f3460;color:#aaa;border-radius:5px;padding:4px 14px;cursor:pointer;font-size:0.8rem;">+ Add rule</button>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <button onclick="closeRuleEditor()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
+      <button onclick="saveRules()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">✓ Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- Toast notification -->
@@ -2184,6 +2207,169 @@ function _parseColSet(str) {
   return col => ranges.some(([lo, hi]) => col >= lo && col <= hi);
 }
 
+// ── Row rules: arithmetic checks between lattice columns ────────────────────
+let projectRules = [];   // [{expr: "1+2=4", name: "..."}]
+
+async function loadRules() {
+  try {
+    const r = await fetch(`${API}/api/rules?folder=${encodeURIComponent(folder)}`);
+    projectRules = r.ok ? ((await r.json()).rules || []) : [];
+  } catch { projectRules = []; }
+  populateRuleDiagOptions();
+}
+
+function populateRuleDiagOptions() {
+  const sel = document.getElementById('diagnostic-select');
+  [...sel.querySelectorAll('option[data-rule]')].forEach(o => o.remove());
+  projectRules.forEach((rule, i) => {
+    const o = document.createElement('option');
+    o.value = `rule:${i}`;
+    o.dataset.rule = '1';
+    o.textContent = `ROW RULE: ${rule.name || rule.expr}`;
+    sel.appendChild(o);
+  });
+  if (diagnosticMode.startsWith('rule:') && !projectRules[parseInt(diagnosticMode.slice(5))]) {
+    diagnosticMode = 'none';
+    sel.value = 'none';
+  }
+}
+
+// ── Rule editor modal ──
+function openRuleEditor() {
+  if (!folder) { showToast('Load a folder first'); return; }
+  renderRuleList();
+  document.getElementById('rule-editor-modal').style.display = 'flex';
+}
+function closeRuleEditor() {
+  document.getElementById('rule-editor-modal').style.display = 'none';
+}
+function renderRuleList() {
+  const wrap = document.getElementById('rule-list');
+  wrap.innerHTML = projectRules.length ? projectRules.map((r, i) => `
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input class="rule-expr" data-i="${i}" value="${_escHtml(r.expr || '')}" placeholder="e.g. 1+2=4"
+        style="width:130px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;font-family:monospace;">
+      <input class="rule-name" data-i="${i}" value="${_escHtml(r.name || '')}" placeholder="name (e.g. male + female = all workers)"
+        style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;">
+      <button onclick="deleteRule(${i})" title="Delete rule"
+        style="background:none;border:1px solid #c04040;color:#fca5a5;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:0.8rem;">✕</button>
+    </div>`).join('')
+    : '<div style="color:#666;font-size:0.8rem;">No rules yet — add one below.</div>';
+}
+function _collectRuleInputs() {
+  document.querySelectorAll('#rule-list .rule-expr').forEach(el => { projectRules[+el.dataset.i].expr = el.value.trim(); });
+  document.querySelectorAll('#rule-list .rule-name').forEach(el => { projectRules[+el.dataset.i].name = el.value.trim(); });
+}
+function addRule() {
+  _collectRuleInputs();
+  projectRules.push({expr: '', name: ''});
+  renderRuleList();
+}
+function deleteRule(i) {
+  _collectRuleInputs();
+  projectRules.splice(i, 1);
+  renderRuleList();
+}
+async function saveRules() {
+  _collectRuleInputs();
+  projectRules = projectRules.filter(r => r.expr);
+  for (const r of projectRules) {
+    if (!/^[\d+\-*/().\s]+=[\d+\-*/().\s]+$/.test(r.expr)) {
+      showToast(`Invalid expression: "${r.expr}" — use column numbers, + - * / ( ) and one =`);
+      return;
+    }
+  }
+  const resp = await fetch(`${API}/api/rules?folder=${encodeURIComponent(folder)}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({rules: projectRules}),
+  });
+  if (!resp.ok) { showToast(`Rule save failed: ${resp.status}`); return; }
+  populateRuleDiagOptions();
+  closeRuleEditor();
+  showToast(`${projectRules.length} rule(s) saved`);
+  refreshDiag(); drawOverlay();
+}
+
+// ── Rule evaluation ──
+// Best layer per internal row: Human > LLM > OCR > PDF.  Cells without an
+// internal row structure fall back to their best flat text split into lines.
+function _bestRowValues(shape) {
+  const rows = shape.row_struct?.rows;
+  if (rows?.length) return rows.map(r =>
+    (r.human || '').trim() || (r.llm || '').trim() || (r.ocr || '').trim() || (r.pdf || '').trim());
+  const flat = shape.human_output?.human_corrected_text
+            || shape.openai_output?.response
+            || shape.tesseract_output?.ocr_text
+            || shape.pdf_text || '';
+  return flat.trim() ? flat.trim().split('\n').map(s => s.trim()) : [];
+}
+
+function _ruleNum(s) {
+  if (s == null) return NaN;
+  s = String(s).trim().replace(/\s+/g, '').replace(',', '.');
+  return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
+}
+
+// Evaluate "1+2=4" with valueAt(col) → number|NaN.  Returns true/false;
+// any unparseable value makes the rule fail (false).  null = malformed rule.
+function _evalRuleExpr(expr, valueAt) {
+  const sides = expr.split('=');
+  if (sides.length !== 2) return null;
+  const evalSide = (side) => {
+    let ok = true;
+    const replaced = side.replace(/\d+/g, m => {
+      const v = valueAt(parseInt(m, 10));
+      if (isNaN(v)) { ok = false; return '0'; }
+      return `(${v})`;
+    });
+    if (!ok || !/^[\d+\-*/().\s]+$/.test(replaced)) return NaN;
+    try {
+      const v = Function('"use strict";return (' + replaced + ')')();
+      return (typeof v === 'number' && isFinite(v)) ? v : NaN;
+    } catch { return NaN; }
+  };
+  const L = evalSide(sides[0]), R = evalSide(sides[1]);
+  if (isNaN(L) || isNaN(R)) return false;
+  return Math.abs(L - R) <= 1e-6;
+}
+
+function _computeRuleDiagnostic(ruleIdx) {
+  const rule = projectRules[ruleIdx];
+  if (!rule?.expr || !pageData?.shapes) return;
+  const cols = [...new Set((rule.expr.match(/\d+/g) || []).map(Number))];
+  if (!cols.length) return;
+
+  // Group lattice cells: super_row → {super_column → {shape, idx}}
+  const rowMap = {};
+  pageData.shapes.forEach((s, i) => {
+    if (s.super_row == null || s.super_column == null) return;
+    (rowMap[s.super_row] ??= {})[s.super_column] = {s, i};
+  });
+
+  for (const sr of Object.keys(rowMap)) {
+    const entry = rowMap[sr];
+    // All referenced columns must exist in this lattice row (skips headers)
+    if (!cols.every(c => entry[c])) continue;
+    const vals = {};
+    let nRows = 0;
+    cols.forEach(c => {
+      vals[c] = _bestRowValues(entry[c].s);
+      nRows = Math.max(nRows, vals[c].length);
+    });
+    if (!nRows) continue;   // nothing to evaluate in this lattice row
+    let bad = 0;
+    for (let k = 0; k < nRows; k++) {
+      if (_evalRuleExpr(rule.expr, c => _ruleNum(vals[c]?.[k])) === false) bad++;
+    }
+    if (bad > 0) {
+      cols.forEach(c => {
+        diagnosticFlagged.add(entry[c].i);
+        diagnosticRowCounts[entry[c].i] = bad;   // label = #violated internal rows
+      });
+    }
+  }
+}
+
 function computeDiagnostics() {
   diagnosticFlagged   = new Set();
   diagnosticRowCounts = {};
@@ -2193,6 +2379,12 @@ function computeDiagnostics() {
     return;
   }
   const shapes = pageData.shapes;
+
+  if (diagnosticMode.startsWith('rule:')) {
+    _computeRuleDiagnostic(parseInt(diagnosticMode.slice(5), 10));
+    if (countEl) countEl.textContent = diagnosticFlagged.size ? `(${diagnosticFlagged.size})` : '';
+    return;
+  }
 
   if (diagnosticMode === 'ocr_llm') {
     // Flag shapes where both OCR and LLM exist but have different line counts
@@ -7400,6 +7592,7 @@ async function loadFolder() {
     .then(r => r.ok ? r.json() : {stems:[]})
     .then(d => { allJsonStems = d.stems || []; })
     .catch(() => { allJsonStems = []; });
+  loadRules();   // row rules → Diagnose dropdown entries
   const sel=document.getElementById('page-select');
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';

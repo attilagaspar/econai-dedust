@@ -323,6 +323,38 @@ def replace_shapes(
 
 
 # ---------------------------------------------------------------------------
+# Row rules — arithmetic checks between lattice columns (e.g. "1+2=4"),
+# stored as JSON in the annotation folder.  Deliberately NOT a .json file so
+# the page-listing globs (*.json) never mistake it for a page.
+# ---------------------------------------------------------------------------
+
+_RULES_FILENAME = "econai_rules.cfg"
+
+
+@app.get("/api/rules")
+def api_get_rules(folder: str = Query(...)):
+    d  = _resolve_folder(folder)
+    rf = d / _RULES_FILENAME
+    if not rf.exists():
+        return {"rules": []}
+    try:
+        return {"rules": json.loads(rf.read_text(encoding="utf-8")).get("rules", [])}
+    except Exception:
+        return {"rules": []}
+
+
+class RulesBody(BaseModel):
+    rules: list    # [{"expr": "1+2=4", "name": "male + female = all"}, ...]
+
+
+@app.put("/api/rules")
+def api_put_rules(folder: str = Query(...), body: RulesBody = ...):
+    d = _resolve_folder(folder)
+    _write_json(d / _RULES_FILENAME, {"rules": body.rules})
+    return {"ok": True, "count": len(body.rules)}
+
+
+# ---------------------------------------------------------------------------
 # Internal row structure (row_struct)
 #
 # Each shape may carry exactly one row_struct describing its internal rows:
