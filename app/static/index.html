@@ -2470,9 +2470,10 @@ function renderRuleFixList() {
     const _bd = 'border:1px solid #44557f;';   // bright cell edges
     const headerCells = v.cols.map(c =>
       `<td colspan="2" style="color:#aaa;padding:1px 8px;${_bd}">col ${c.col}</td>`).join('');
-    const rows = Array.from({length: v.nRows}, (_, k) => {
-      const bad = badSet.has(k);
-      const bg  = bad ? 'background:rgba(255,0,80,0.15);' : '';
+    // Only the violating lines are shown (they are all the LLM sees, too)
+    const rows = v.badRows.map(k => {
+      const bad = true;
+      const bg  = 'background:rgba(255,0,80,0.10);';
       const cells = v.cols.map(c => {
         const prop = v.proposal?.[c.col]?.[k];
         const changed = prop != null && String(prop).trim() !== String(c.values[k] ?? '').trim();
