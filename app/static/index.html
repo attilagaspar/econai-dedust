@@ -687,6 +687,8 @@
         <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
         <button class="nav-btn" onclick="openRuleEditor()"
                 title="Define arithmetic rules between lattice columns (e.g. 1+2=4); each rule appears in the Diagnose dropdown">⚖ Rules</button>
+        <button class="nav-btn" onclick="openRuleFix()"
+                title="List all violations of the active ROW RULE on this page and ask the LLM to propose corrections">🛠 Fix rule</button>
         <button class="nav-btn" id="smart-correct-btn" onclick="runSmartCorrect()" disabled
                 title="Auto-correct ±1 line-count mismatches found by Diagnose: remove spurious empty lines or add leading padding">✨ Smart Correct</button>
         <button class="nav-btn" onclick="openExcelExportModal()"
@@ -1105,6 +1107,31 @@
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
       <button onclick="closeRuleEditor()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
       <button onclick="saveRules()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">✓ Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rule fix modal -->
+<div id="rule-fix-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#16213e;border:1px solid #0f3460;border-radius:8px;padding:18px 20px;width:780px;max-width:94vw;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+    <h3 id="rf-title" style="margin:0;color:#e94560;font-size:1rem;">🛠 Rule fix</h3>
+    <div style="font-size:0.75rem;color:#888;line-height:1.5;">
+      Every violation of the active rule on this page is listed below. <b>▶ Ask LLM</b>
+      sends each violation's cell images and current readings (best layer per row)
+      to the LLM with the prompt; proposed corrections appear as diffs.
+      <b>✓ Apply</b> writes the changed values into the rows' <b>Human</b> layer.
+    </div>
+    <textarea id="rf-prompt" rows="6"
+      style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:6px 8px;font-size:0.8rem;width:100%;box-sizing:border-box;resize:vertical;"></textarea>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <button id="rf-run-btn" onclick="runRuleFixLlm()"
+        style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">▶ Ask LLM</button>
+      <span style="font-size:0.75rem;color:#666;">model: <span id="rf-model"></span></span>
+      <span id="rf-status" style="font-size:0.78rem;color:#aaa;"></span>
+    </div>
+    <div id="rf-list" style="display:flex;flex-direction:column;gap:12px;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <button onclick="closeRuleFix()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Close</button>
     </div>
   </div>
 </div>
@@ -2350,11 +2377,13 @@ function _evalRuleExpr(expr, valueAt) {
   return Math.abs(L - R) <= 1e-6;
 }
 
-function _computeRuleDiagnostic(ruleIdx) {
-  const rule = projectRules[ruleIdx];
-  if (!rule?.expr || !pageData?.shapes) return;
+// Scan the page for violations of one rule.  Returns
+// [{superRow, nRows, badRows:[k,...], cols:[{col, idx, values:[...]}]}]
+function _ruleScanPage(rule) {
+  const out = [];
+  if (!rule?.expr || !pageData?.shapes) return out;
   const cols = [...new Set((rule.expr.match(/\d+/g) || []).map(Number))];
-  if (!cols.length) return;
+  if (!cols.length) return out;
 
   // Group lattice cells: super_row → {super_column → {shape, idx}}
   const rowMap = {};
@@ -2379,13 +2408,216 @@ function _computeRuleDiagnostic(ruleIdx) {
       if (_evalRuleExpr(rule.expr, c => _ruleNum(vals[c]?.[k], rule.zeros)) === false) badRows.push(k);
     }
     if (badRows.length) {
-      cols.forEach(c => {
-        diagnosticFlagged.add(entry[c].i);
-        diagnosticRowCounts[entry[c].i] = badRows.length;  // label = #violated rows
-        diagnosticRuleRows[entry[c].i]  = new Set(badRows);
-      });
+      out.push({superRow: parseInt(sr, 10), nRows, badRows,
+                cols: cols.map(c => ({col: c, idx: entry[c].i, values: vals[c]}))});
     }
   }
+  return out;
+}
+
+function _computeRuleDiagnostic(ruleIdx) {
+  const rule = projectRules[ruleIdx];
+  _ruleScanPage(rule).forEach(v => {
+    v.cols.forEach(({idx}) => {
+      diagnosticFlagged.add(idx);
+      diagnosticRowCounts[idx] = v.badRows.length;   // label = #violated rows
+      diagnosticRuleRows[idx]  = new Set(v.badRows);
+    });
+  });
+}
+
+// ── Rule fix: LLM-assisted correction of rule violations ────────────────────
+const DEFAULT_RULEFIX_PROMPT =
+`You are correcting digit-reading errors in a scanned historical statistical table.
+You receive one cropped image per table column, and below, for each column, the values we currently read from it — one value per line, top to bottom. The lines of the different columns are aligned: line N of every column belongs to the same physical row of the table.
+An arithmetic rule must hold between the columns on every line, but on the listed lines it fails — most likely because digits were misread (e.g. 5 vs 6, 50 vs 5O, a dropped digit) or a value sits on the wrong line. A dash or similar mark in the image means zero.
+Compare the readings with the images and propose the most plausible minimal corrections that make the rule hold on the violating lines. Leave all other values unchanged.`;
+
+let _rfState = null;   // {ruleIdx, rule, violations:[...], running}
+
+function openRuleFix() {
+  if (!diagnosticMode.startsWith('rule:')) {
+    showToast('Select a ROW RULE in the Diagnose dropdown first'); return;
+  }
+  const ruleIdx = parseInt(diagnosticMode.slice(5), 10);
+  const rule    = projectRules[ruleIdx];
+  if (!rule) { showToast('Rule not found'); return; }
+  const violations = _ruleScanPage(rule).map(v => ({...v, proposal: null, status: '', applied: false}));
+  _rfState = {ruleIdx, rule, violations, running: false};
+  document.getElementById('rf-title').textContent =
+    `🛠 Rule fix — ${rule.name || rule.expr} (${rule.expr})`;
+  document.getElementById('rf-prompt').value =
+    localStorage.getItem('ruleFixPrompt') || DEFAULT_RULEFIX_PROMPT;
+  document.getElementById('rf-model').textContent = document.getElementById('llm-model').value;
+  document.getElementById('rf-status').textContent =
+    violations.length ? `${violations.length} violation(s) on this page` : 'No violations on this page 🎉';
+  renderRuleFixList();
+  document.getElementById('rule-fix-modal').style.display = 'flex';
+}
+
+function closeRuleFix() {
+  if (_rfState) _rfState.running = false;
+  document.getElementById('rule-fix-modal').style.display = 'none';
+}
+
+function renderRuleFixList() {
+  const wrap = document.getElementById('rf-list');
+  if (!_rfState) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = _rfState.violations.map((v, vi) => {
+    const badSet = new Set(v.badRows);
+    const rows = v.cols.map(c => {
+      const cells = [];
+      for (let k = 0; k < v.nRows; k++) {
+        const prop = v.proposal?.[c.col]?.[k];
+        const changed = prop != null && String(prop).trim() !== String(c.values[k] ?? '').trim();
+        cells.push(`<td style="padding:1px 6px;${badSet.has(k) ? 'background:rgba(255,0,80,0.15);' : ''}">`
+          + `${_escHtml(c.values[k] ?? '')}`
+          + (changed ? ` <span style="color:#4ade80;">→ ${_escHtml(String(prop))}</span>` : '')
+          + `</td>`);
+      }
+      return `<tr><td style="color:#888;padding:1px 6px;">col ${c.col}</td>${cells.join('')}</tr>`;
+    }).join('');
+    const headerCells = Array.from({length: v.nRows}, (_, k) =>
+      `<td style="color:#555;padding:1px 6px;${badSet.has(k) ? 'color:#ff5577;font-weight:bold;' : ''}">${k + 1}</td>`).join('');
+    const fixOk = v.proposal ? _rfProposalOk(v) : null;
+    return `<div style="border:1px solid #0f3460;border-radius:6px;padding:8px 10px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+        <b style="font-size:0.85rem;color:#ccc;">Lattice row ${v.superRow}</b>
+        <span style="font-size:0.75rem;color:#ff5577;">violating line(s): ${v.badRows.map(k => k + 1).join(', ')}</span>
+        <span style="font-size:0.75rem;color:#aaa;">${_escHtml(v.status || '')}</span>
+        ${v.proposal ? `<span style="font-size:0.75rem;color:${fixOk ? '#4ade80' : '#fbbf24'};">${fixOk ? '✓ proposal satisfies the rule' : '⚠ proposal still violates the rule'}</span>` : ''}
+        <span style="flex:1;"></span>
+        ${v.applied
+          ? '<span style="font-size:0.78rem;color:#4ade80;">✓ applied</span>'
+          : (v.proposal
+              ? `<button onclick="applyRuleFix(${vi})" style="background:#1f7a3d;border:none;color:#fff;border-radius:4px;padding:3px 12px;cursor:pointer;font-size:0.78rem;">✓ Apply</button>`
+              : '')}
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="border-collapse:collapse;font-size:0.78rem;font-family:monospace;color:#ddd;">
+          <tr><td style="color:#555;padding:1px 6px;">line</td>${headerCells}</tr>
+          ${rows}
+        </table>
+      </div>
+    </div>`;
+  }).join('') || '<div style="color:#666;font-size:0.8rem;">Nothing to fix.</div>';
+}
+
+// Does the proposal make the rule hold on every line?
+function _rfProposalOk(v) {
+  const rule = _rfState.rule;
+  const val = (c, k) => {
+    const prop = v.proposal?.[c]?.[k];
+    const cur  = v.cols.find(x => x.col === c)?.values[k];
+    return _ruleNum(prop != null ? prop : cur, rule.zeros);
+  };
+  for (let k = 0; k < v.nRows; k++) {
+    if (_evalRuleExpr(rule.expr, c => val(c, k)) === false) return false;
+  }
+  return true;
+}
+
+function _buildRuleFixPrompt(userPrompt, rule, v) {
+  let s = userPrompt.trim() + '\n\n';
+  s += `Rule that must hold on every line: ${rule.expr}`;
+  if (rule.name) s += `  ("${rule.name}")`;
+  s += `\nColumn numbers in the rule refer to the labeled images.`;
+  s += `\nViolating lines (1-based): ${v.badRows.map(k => k + 1).join(', ')}\n`;
+  v.cols.forEach(c => {
+    s += `\nColumn ${c.col} current readings (${v.nRows} lines):\n`;
+    for (let k = 0; k < v.nRows; k++) s += `${k + 1}: ${c.values[k] ?? ''}\n`;
+  });
+  s += `\nReply ONLY with a JSON object mapping each column number to its full corrected list of exactly ${v.nRows} values (strings), e.g. {"${v.cols[0].col}": ["12", "0", "345"]}. No explanation, no other text.`;
+  return s;
+}
+
+function _parseRuleFixReply(text, v) {
+  const a = text.indexOf('{'), b = text.lastIndexOf('}');
+  if (a < 0 || b <= a) return null;
+  let obj;
+  try { obj = JSON.parse(text.slice(a, b + 1)); } catch { return null; }
+  const out = {};
+  for (const c of v.cols) {
+    const arr = obj[String(c.col)] ?? obj[c.col];
+    if (!Array.isArray(arr)) continue;
+    out[c.col] = Array.from({length: v.nRows}, (_, k) =>
+      arr[k] != null ? String(arr[k]).trim() : (c.values[k] ?? ''));
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+async function runRuleFixLlm() {
+  if (!_rfState) return;
+  const btn = document.getElementById('rf-run-btn');
+  if (_rfState.running) { _rfState.running = false; btn.textContent = '…'; return; }
+  const prompt = document.getElementById('rf-prompt').value;
+  localStorage.setItem('ruleFixPrompt', prompt);
+  const model = document.getElementById('llm-model').value;
+  _rfState.running = true;
+  btn.textContent = '■ Stop';
+  const statusEl = document.getElementById('rf-status');
+  const todo = _rfState.violations.filter(v => !v.proposal && !v.applied);
+  let done = 0;
+  for (const v of _rfState.violations) {
+    if (!_rfState.running) break;
+    if (v.proposal || v.applied) continue;
+    v.status = '⟳ asking LLM…'; renderRuleFixList();
+    statusEl.textContent = `${done + 1}/${todo.length}`;
+    try {
+      const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, model});
+      const r = await fetch(`${API}/api/page/rule-llm?${params}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          prompt: _buildRuleFixPrompt(prompt, _rfState.rule, v),
+          idxs:   v.cols.map(c => c.idx),
+          labels: v.cols.map(c => `Image of column ${c.col}:`),
+        }),
+      });
+      if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 80)}`);
+      const data = await r.json();
+      v.proposal = _parseRuleFixReply(data.response, v);
+      v.status   = v.proposal ? '' : '✕ unparseable LLM reply';
+    } catch (e) {
+      v.status = `✕ ${e.message}`;
+    }
+    done++;
+    renderRuleFixList();
+  }
+  _rfState.running = false;
+  btn.textContent = '▶ Ask LLM';
+  statusEl.textContent = 'done';
+}
+
+async function applyRuleFix(vi) {
+  const v = _rfState?.violations[vi];
+  if (!v?.proposal || v.applied) return;
+  for (const c of v.cols) {
+    const arr = v.proposal[c.col];
+    if (!arr) continue;
+    const shape = pageData.shapes[c.idx];
+    const rows  = _rsRows(shape);
+    if (rows) {
+      let changed = false;
+      rows.forEach((r, k) => {
+        const nv  = (arr[k] ?? '').trim();
+        const cur = ((r.human || '').trim() || (r.llm || '').trim()
+                  || (r.ocr || '').trim()   || (r.pdf || '').trim());
+        if (nv !== '' && nv !== cur) { r.human = nv; changed = true; }
+      });
+      if (changed) await saveRowStruct(c.idx);
+    } else {
+      // No internal rows: write the whole corrected vector as flat Human text
+      const text = arr.join('\n');
+      await patchShape(c.idx, {human_corrected_text: text});
+      if (!shape.human_output) shape.human_output = {};
+      shape.human_output.human_corrected_text = text;
+    }
+  }
+  v.applied = true;
+  renderRuleFixList();
+  refreshDiag(); drawOverlay();
+  if (v.cols.some(c => c.idx === selIdx)) updatePanel();
+  showToast(`Lattice row ${v.superRow}: corrections written to Human layer`);
 }
 
 function computeDiagnostics() {

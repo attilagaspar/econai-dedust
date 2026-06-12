@@ -354,6 +354,66 @@ def api_put_rules(folder: str = Query(...), body: RulesBody = ...):
     return {"ok": True, "count": len(body.rules)}
 
 
+class RuleLlmBody(BaseModel):
+    prompt: str
+    idxs:   list                     # shape indices whose crops to attach
+    labels: Optional[list] = None    # parallel text labels for the images
+
+
+@app.post("/api/page/rule-llm")
+def api_rule_llm(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    model:  str = Query("gpt-4o"),
+    body:   RuleLlmBody = ...,
+):
+    """Rule-fix helper: send one prompt + several labeled cell crops to the
+    LLM in a single message and return its raw reply."""
+    import base64, io as _io
+    from PIL import Image as PILImage
+
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    img    = PILImage.open(str(img_path)).convert("RGB")
+    w, h   = img.size
+
+    content = [{"type": "text", "text": body.prompt}]
+    labels  = body.labels or [f"Image {i}" for i in body.idxs]
+    for idx, label in zip(body.idxs, labels):
+        idx = int(idx)
+        if idx < 0 or idx >= len(shapes):
+            continue
+        x1, y1, x2, y2 = _shape_bbox(shapes[idx])
+        pad  = 4
+        crop = img.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
+                         min(w, int(x2) + pad), min(h, int(y2) + pad)))
+        buf = _io.BytesIO()
+        crop.save(buf, format="JPEG", quality=92)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        content.append({"type": "text", "text": str(label)})
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}",
+                                      "detail": "high"}})
+
+    try:
+        client = _make_llm_client(model)
+        resp   = client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": content}],
+            max_tokens=2048, temperature=0,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"response": (resp.choices[0].message.content or "").strip()}
+
+
 # ---------------------------------------------------------------------------
 # Internal row structure (row_struct)
 #
