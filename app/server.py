@@ -399,6 +399,18 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False)
                     row["pdf"] = old[i]["pdf"]
             new_rows.append(row)
         shape["row_struct"] = {"version": 1, "origin": origin, "rows": new_rows}
+
+    # A flat Human correction must never vanish from the table: if the rows'
+    # human column is empty but flat human text exists (e.g. the structure
+    # was just created by anchoring), pull it in top-aligned — extra lines
+    # beyond the row count are truncated.
+    rows_now = shape["row_struct"]["rows"]
+    if layer != "human" and not any((r.get("human") or "").strip() for r in rows_now):
+        flat_h = (shape.get("human_output") or {}).get("human_corrected_text") or ""
+        if flat_h.strip():
+            for r, t in zip(rows_now, _split_lines(flat_h)):
+                r["human"] = t
+
     _sync_flat_from_rows(shape)
 
 
