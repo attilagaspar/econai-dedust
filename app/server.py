@@ -3577,7 +3577,8 @@ def api_export_excel(
     folder:      str  = Query(...),
     scope:       str  = Query("page"),      # "page" | "document"
     stem:        str  = Query(None),        # required when scope="page"
-    dual:        bool = Query(False),       # dual-page layout (odd left, even right)
+    dual:        bool = Query(False),       # legacy: equivalent to pattern="1,1"
+    pattern:     str  = Query(""),          # 1/0 page pattern, e.g. "1,1,0,0"; empty = all pages vertically
     layer:       str  = Query("best_llm"), # "ocr"|"llm"|"human"|"best_ocr"|"best_llm"
     types:       str  = Query(""),         # comma-sep label types; empty = all
     col_headers: str  = Query(""),         # comma-sep column header labels; empty = no header row
@@ -3794,49 +3795,16 @@ def api_export_excel(
                      w_px=c["w"])
                 for c in winner.values()]
 
-    # ── Helpers for stacking / dual-page alignment ───────────────────────────
+    # ── Helpers for stacking / horizontal page groups ────────────────────────
 
-    def lattice_start_row(cells):
-        """First lattice row_idx where column density >= 60% of the page maximum.
-        Returns 0 if the page is sparse or empty."""
-        if not cells:
-            return 0
-        rmap: dict = defaultdict(set)
-        for c in cells:
-            rmap[c["row_idx"]].add(c["col_idx"])
-        max_cols  = max(len(s) for s in rmap.values())
-        threshold = max(2, max_cols * 0.6)
-        for ridx in sorted(rmap):
-            if len(rmap[ridx]) >= threshold:
-                return ridx
-        return min(rmap)
-
-    def excel_row_for_lattice(cells):
-        """1-based Excel row (within-page, no external offset) where lattice begins."""
-        if not cells:
-            return 1
-        target = lattice_start_row(cells)
+    def row_rank_list(cells):
+        """Ordered list of (row_idx, height) for the lattice rows that are
+        actually printed (rows with no surviving cells simply don't appear)."""
         rmap: dict = defaultdict(list)
         for c in cells:
             rmap[c["row_idx"]].append(c)
-        row = 1
-        for ridx in sorted(rmap):
-            if ridx >= target:
-                return row
-            row += max(len(c["lines"]) for c in rmap[ridx])
-        return row
-
-    def page_excel_height(cells, extra=0, row_heights=None):
-        """Total Excel rows a page occupies (expansion + optional alignment pad).
-        row_heights forces minimum per-lattice-row heights (dual-page sync)."""
-        if not cells:
-            return extra
-        rmap: dict = defaultdict(list)
-        for c in cells:
-            rmap[c["row_idx"]].append(c)
-        return extra + sum(max(max(len(c["lines"]) for c in row),
-                               (row_heights or {}).get(ridx, 0))
-                           for ridx, row in rmap.items())
+        return [(ridx, max(len(c["lines"]) for c in rmap[ridx]))
+                for ridx in sorted(rmap)]
 
     def write_cells(ws, cells, col_offset=0, base_row=1, align_pad=0, row_heights=None):
         """
@@ -3906,21 +3874,15 @@ def api_export_excel(
             if ws.column_dimensions[letter].width < width:
                 ws.column_dimensions[letter].width = width
 
-    def write_source_row(ws, row, names: list, col_offset=0, right_col_offset=None):
-        """
-        Write source file name(s) in the meta column(s) before data rows.
-        - col_offset+1       → left / single page meta column
-        - right_col_offset+1 → right page meta column (dual layout only)
-        """
-        def _write_one(col, name):
-            c = ws.cell(row=row, column=col)
+    def write_source_row(ws, row, entries):
+        """Write source file names in the meta columns before data rows.
+        entries: list of (col_offset, name) — one per page in the group."""
+        for col_offset, name in entries:
+            c = ws.cell(row=row, column=col_offset + 1)
             c.value     = name
             c.fill      = _src_fill
             c.font      = _src_font
             c.alignment = _align
-        _write_one(col_offset + 1, names[0] if names else "")
-        if right_col_offset is not None and len(names) > 1:
-            _write_one(right_col_offset + 1, names[1])
 
     def max_col_of(cells):
         return max((c["col_idx"] for c in cells), default=-1)
@@ -4025,85 +3987,64 @@ def api_export_excel(
         write_header_row(ws)
         write_cells(ws, apply_col_filter(shapes_to_cells(load_shapes(jfiles[0]))), base_row=data_start)
 
-    elif not dual:
-        # ── Whole document, single layout: all pages on one sheet ─────────
-        ws      = wb.create_sheet(title="Export")
-        write_header_row(ws)
-        cur_row = data_start
-        for jf in jfiles:
-            print(f"[EXCEL] processing {jf.name}", flush=True)
-            cells = apply_col_filter(shapes_to_cells(load_shapes(jf)))
-            if not cells:
-                continue
-            # Source banner BEFORE the page data
-            write_source_row(ws, cur_row, [jf.stem], col_offset=0)
-            write_cells(ws, cells, col_offset=0, base_row=cur_row + 1)
-            page_h = page_excel_height(cells)
-            cur_row += 1 + page_h   # 1 source row + data rows
-
     else:
-        # ── Whole document, dual layout: paired pages side-by-side ────────
+        # ── Whole document: 1/0 page pattern over the selected sequence ───
+        # Each cycle of the pattern consumes len(pattern) pages; the 1-pages
+        # of a cycle are printed side by side horizontally, the 0-pages are
+        # skipped, then the next cycle continues below.  Empty pattern = "1"
+        # (every page, stacked vertically).  Legacy dual=true maps to "1,1".
+        bits = [1 if p.strip() == "1" else 0
+                for p in pattern.split(",") if p.strip() != ""] if pattern.strip() else []
+        if not bits:
+            bits = [1, 1] if dual else [1]
+
         ws      = wb.create_sheet(title="Export")
         cur_row = data_start
-        dual_headers_written = False
+        headers_written = False
         i = 0
         while i < len(jfiles):
-            left_jf  = jfiles[i]
-            right_jf = jfiles[i+1] if i+1 < len(jfiles) else None
-            i += 2
+            chunk = jfiles[i : i + len(bits)]
+            i += len(bits)
+            printed = [jf for jf, b in zip(chunk, bits) if b == 1]
+            if not printed:
+                continue
+            cells_list = [apply_col_filter(shapes_to_cells(load_shapes(jf)))
+                          for jf in printed]
+            for jf in printed:
+                print(f"[EXCEL] processing {jf.name}", flush=True)
+            if not any(cells_list):
+                continue
 
-            left_cells  = apply_col_filter(shapes_to_cells(load_shapes(left_jf)))
-            right_cells = apply_col_filter(shapes_to_cells(load_shapes(right_jf))) if right_jf else []
+            # Column offset of each page in the group: meta col + data + gap
+            offsets, coff = [], 0
+            for cells in cells_list:
+                offsets.append(coff)
+                coff += max_col_of(cells) + 3
 
-            # Align lattice rows between left and right pages
-            left_latt  = excel_row_for_lattice(left_cells)   # within-page row
-            right_latt = excel_row_for_lattice(right_cells)
-            left_pad   = max(0, right_latt - left_latt)
-            right_pad  = max(0, left_latt  - right_latt)
+            if not headers_written:
+                for o in offsets:
+                    write_header_row(ws, col_offset=o)
+                headers_written = True
 
-            # Sync per-lattice-row heights from the lattice start onwards so
-            # paired rows sit exactly next to one another, not just the start
-            def _heights(cells):
-                m: dict = defaultdict(int)
-                for c in cells:
-                    m[c["row_idx"]] = max(m[c["row_idx"]], len(c["lines"]))
-                return m
-            l_start, r_start = lattice_start_row(left_cells), lattice_start_row(right_cells)
-            lh, rh = _heights(left_cells), _heights(right_cells)
-            shared_keys = ({k - l_start for k in lh if k >= l_start} |
-                           {k - r_start for k in rh if k >= r_start})
-            left_hmap, right_hmap = {}, {}
-            for k in shared_keys:
-                h = max(lh.get(k + l_start, 0), rh.get(k + r_start, 0))
-                left_hmap[k + l_start]  = h
-                right_hmap[k + r_start] = h
+            # Source banner BEFORE the group data
+            write_source_row(ws, cur_row,
+                             [(o, jf.stem) for o, jf in zip(offsets, printed)])
 
-            # +3: meta col (1) + left data cols + gap col (1)
-            right_col  = max_col_of(left_cells) + 3
+            # Rank-based row sync: the k-th PRINTED lattice row of every page
+            # in the group starts on the same Excel row; the next rank starts
+            # after the tallest k-th row (shorter rows get red-padded blanks)
+            ranks   = [row_rank_list(cells) for cells in cells_list]
+            n_ranks = max((len(r) for r in ranks), default=0)
+            heights = [max((r[k][1] for r in ranks if k < len(r)), default=1)
+                       for k in range(n_ranks)]
+            hmaps   = [{ridx: heights[k] for k, (ridx, _h) in enumerate(r)}
+                       for r in ranks]
 
-            # Write column headers once (row 1) across both column groups
-            if not dual_headers_written:
-                write_header_row(ws, col_offset=0)
-                write_header_row(ws, col_offset=right_col)
-                dual_headers_written = True
+            for cells, o, hmap in zip(cells_list, offsets, hmaps):
+                write_cells(ws, cells, col_offset=o,
+                            base_row=cur_row + 1, row_heights=hmap)
 
-            # Source banner BEFORE the pair data
-            names = [left_jf.stem] + ([right_jf.stem] if right_jf else [])
-            write_source_row(ws, cur_row, names,
-                             col_offset=0, right_col_offset=right_col)
-
-            write_cells(ws, left_cells,  col_offset=0,
-                        base_row=cur_row + 1, align_pad=left_pad,
-                        row_heights=left_hmap)
-            write_cells(ws, right_cells, col_offset=right_col,
-                        base_row=cur_row + 1, align_pad=right_pad,
-                        row_heights=right_hmap)
-
-            pair_height = max(
-                page_excel_height(left_cells,  extra=left_pad,  row_heights=left_hmap),
-                page_excel_height(right_cells, extra=right_pad, row_heights=right_hmap),
-            )
-            cur_row += 1 + pair_height   # 1 source row + data rows
+            cur_row += 1 + sum(heights)   # 1 source row + data rows
 
     if not wb.worksheets:
         wb.create_sheet("Empty")
