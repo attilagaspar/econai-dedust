@@ -1113,7 +1113,7 @@
 
 <!-- Rule fix modal -->
 <div id="rule-fix-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;">
-  <div style="background:#16213e;border:1px solid #0f3460;border-radius:8px;padding:18px 20px;width:780px;max-width:94vw;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+  <div style="background:#16213e;border:1px solid #0f3460;border-radius:8px;padding:18px 20px;width:1040px;max-width:96vw;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
     <h3 id="rf-title" style="margin:0;color:#e94560;font-size:1rem;">🛠 Rule fix</h3>
     <div style="font-size:0.75rem;color:#888;line-height:1.5;">
       Every violation of the active rule on this page is listed below. <b>▶ Ask LLM</b>
@@ -2465,15 +2465,20 @@ function renderRuleFixList() {
   if (!_rfState) { wrap.innerHTML = ''; return; }
   wrap.innerHTML = _rfState.violations.map((v, vi) => {
     const badSet = new Set(v.badRows);
-    // Transposed layout: one table row per LINE, one table column per lattice column
+    // Transposed layout: one table row per LINE; per lattice column a crop
+    // slice + the reading (+ LLM proposal when it arrives)
     const headerCells = v.cols.map(c =>
-      `<td style="color:#888;padding:1px 8px;">col ${c.col}</td>`).join('');
+      `<td colspan="2" style="color:#888;padding:1px 8px;border-left:1px solid #1a2a4a;">col ${c.col}</td>`).join('');
     const rows = Array.from({length: v.nRows}, (_, k) => {
       const bad = badSet.has(k);
+      const bg  = bad ? 'background:rgba(255,0,80,0.15);' : '';
       const cells = v.cols.map(c => {
         const prop = v.proposal?.[c.col]?.[k];
         const changed = prop != null && String(prop).trim() !== String(c.values[k] ?? '').trim();
-        return `<td style="padding:1px 8px;${bad ? 'background:rgba(255,0,80,0.15);' : ''}">`
+        return `<td style="padding:1px 4px;border-left:1px solid #1a2a4a;${bg}">`
+          + `<canvas class="rf-crop" data-idx="${c.idx}" data-k="${k}" data-n="${v.nRows}"`
+          + ` style="display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;"></canvas></td>`
+          + `<td style="padding:1px 8px;${bg}">`
           + `${_escHtml(c.values[k] ?? '')}`
           + (changed ? ` <span style="color:#4ade80;">→ ${_escHtml(String(prop))}</span>` : '')
           + `</td>`;
@@ -2502,6 +2507,59 @@ function renderRuleFixList() {
       </div>
     </div>`;
   }).join('') || '<div style="color:#666;font-size:0.8rem;">Nothing to fix.</div>';
+  _rfDrawAllCrops();
+}
+
+// Draw each line's slice of the cell crops into the rule-fix tables.
+// Crop images are fetched once per shape (/api/cell) and cached for the
+// lifetime of the modal; band positions come from row_struct when present,
+// otherwise the cell is split evenly into nRows bands.
+function _rfDrawAllCrops() {
+  if (!_rfState) return;
+  _rfState.imgCache ??= {};
+  const stem = pages[pageIdx].stem;
+  const need = new Set();
+  document.querySelectorAll('#rf-list canvas.rf-crop').forEach(cv => need.add(+cv.dataset.idx));
+  need.forEach(idx => {
+    let img = _rfState.imgCache[idx];
+    if (!img) {
+      img = new Image();
+      img.onload = () => _rfDrawCropsFor(idx);
+      img.src = `${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(stem)}&idx=${idx}`;
+      _rfState.imgCache[idx] = img;
+    } else if (img.complete && img.naturalWidth) {
+      _rfDrawCropsFor(idx);
+    }
+  });
+}
+
+function _rfDrawCropsFor(idx) {
+  const img = _rfState?.imgCache?.[idx];
+  if (!img?.naturalWidth) return;
+  const shape = pageData.shapes[idx];
+  if (!shape?.points) return;
+  const ys   = shape.points.map(p => p[1]);
+  const top  = Math.max(0, Math.min(...ys) - 4);   // /api/cell uses pad=4
+  const rows = shape.row_struct?.rows;
+  document.querySelectorAll(`#rf-list canvas.rf-crop[data-idx="${idx}"]`).forEach(cv => {
+    const k = +cv.dataset.k;
+    let relT, relB;
+    if (rows?.[k]) {
+      relT = rows[k].y0 - top;
+      relB = rows[k].y1 - top;
+    } else {
+      const n = +cv.dataset.n || 1;
+      relT = img.naturalHeight *  k      / n;
+      relB = img.naturalHeight * (k + 1) / n;
+    }
+    relT = Math.max(0, relT);
+    relB = Math.min(img.naturalHeight, Math.max(relB, relT + 1));
+    const srcH  = relB - relT;
+    const scale = Math.min(18 / srcH, 110 / img.naturalWidth);
+    cv.width  = Math.max(1, Math.round(img.naturalWidth * scale));
+    cv.height = Math.max(1, Math.round(srcH * scale));
+    cv.getContext('2d').drawImage(img, 0, relT, img.naturalWidth, srcH, 0, 0, cv.width, cv.height);
+  });
 }
 
 // Does the proposal make the rule hold on every line?
