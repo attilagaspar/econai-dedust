@@ -3751,7 +3751,7 @@ function renderRowTable(shape) {
   // Column order follows data quality, worst → best: crop, PDF, OCR, LLM, Human
   const hasPdf = pdfLines.length > 0;
   let html = '<table class="rs-table"><tr><th>#</th><th></th>'
-           + (hasPdf ? '<th>PDF</th>' : '')
+           + (hasPdf ? '<th>PDF <button class="rs-copy-btn" onclick="_rsCopyColPdf()" title="Copy whole PDF column to Human (top-aligned)">⤓H</button></th>' : '')
            + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button></th>'
            + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button></th>'
            + '<th>Human</th></tr>';
@@ -3806,6 +3806,17 @@ let _rsPdfCap = 60;
 function _rsSetPdfCap(v) {
   const n = parseInt(v, 10);
   if (n > 0) { _rsPdfCap = n; if (selIdx >= 0) renderRowTable(pageData.shapes[selIdx]); }
+}
+
+async function _rsCopyColPdf() {
+  if (selIdx < 0) return;
+  const shape = pageData.shapes[selIdx];
+  const rows  = _rsRows(shape); if (!rows) return;
+  const pdfLines = (shape.pdf_text || '').trim()
+    ? shape.pdf_text.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
+  rows.forEach((r, i) => { r.human = (pdfLines[i] ?? '').trim(); });
+  await saveRowStruct(selIdx);
+  renderRowTable(shape);
 }
 
 async function _rsCopyPdf(i) {
