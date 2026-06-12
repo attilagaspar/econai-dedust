@@ -3726,7 +3726,10 @@ function renderRowTable(shape) {
     const mism = txt && txt !== joined(rowsOf[id]);
     const el = document.getElementById(id)?.closest('.lined-wrap');
     if (el) el.style.display = mism ? '' : 'none';
-    if (mism) mismatches.push(`${rowsOf[id].toUpperCase()} (${splitLines(txt).length} lines vs ${rows.length} rows)`);
+    if (mism) mismatches.push(
+      `${rowsOf[id].toUpperCase()} (${splitLines(txt).length} lines vs ${rows.length} rows) `
+      + `<button class="rs-copy-btn" onclick="_rsImportFlat('${rowsOf[id]}')" `
+      + `title="Force-fill the rows top-aligned from the flat text (extra lines are dropped)">⤓ import anyway</button>`);
   });
 
   // PDF layer: shown read-only next to the rows, capped (extracts can be huge)
@@ -3745,19 +3748,21 @@ function renderRowTable(shape) {
       ? 'Drag dividers on the crop · double-click divider = merge · double-click band = split'
       : '');
 
+  // Column order follows data quality, worst → best: crop, PDF, OCR, LLM, Human
   const hasPdf = pdfLines.length > 0;
   let html = '<table class="rs-table"><tr><th>#</th><th></th>'
+           + (hasPdf ? '<th>PDF</th>' : '')
            + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button></th>'
            + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button></th>'
-           + (hasPdf ? '<th>PDF</th>' : '')
            + '<th>Human</th></tr>';
   for (let i = 0; i < nRows; i++) {
     const r   = rows[i];
     const pdf = i < pdfShown ? pdfLines[i] : '';
     if (!r) {
       // Ghost row: PDF line beyond the row structure
-      html += `<tr class="rs-ghost"><td class="rs-n">·</td><td class="rs-img"></td><td></td><td></td>`
-            + `<td title="${_escHtml(pdf)}">${_escHtml(pdf)}</td><td></td></tr>`;
+      html += `<tr class="rs-ghost"><td class="rs-n">·</td><td class="rs-img"></td>`
+            + `<td title="${_escHtml(pdf)}">${_escHtml(pdf)}</td>`
+            + `<td></td><td></td><td></td></tr>`;
       continue;
     }
     const o = (r.ocr || '').trim(), l = (r.llm || '').trim(), h = (r.human || '').trim();
@@ -3767,15 +3772,34 @@ function renderRowTable(shape) {
     html += `<tr class="${cls}" onmouseenter="_rsHover(${i})" onmouseleave="_rsHover(-1)">`
           + `<td class="rs-n">${r.n}</td>`
           + `<td class="rs-img"><canvas class="rs-crop" data-ri="${i}"></canvas></td>`
-          + `<td class="rs-clk" onclick="_rsCopyCell(${i},'ocr')" title="${_escHtml(r.ocr || '')} — click to copy to Human">${_escHtml(r.ocr || '')}</td>`
-          + `<td class="rs-clk" onclick="_rsCopyCell(${i},'llm')" title="${_escHtml(r.llm || '')} — click to copy to Human">${_escHtml(r.llm || '')}</td>`
           + (hasPdf
               ? `<td class="rs-clk" onclick="_rsCopyPdf(${i})" title="${_escHtml(pdf)} — click to copy to Human">${_escHtml(pdf)}</td>` : '')
+          + `<td class="rs-clk" onclick="_rsCopyCell(${i},'ocr')" title="${_escHtml(r.ocr || '')} — click to copy to Human">${_escHtml(r.ocr || '')}</td>`
+          + `<td class="rs-clk" onclick="_rsCopyCell(${i},'llm')" title="${_escHtml(r.llm || '')} — click to copy to Human">${_escHtml(r.llm || '')}</td>`
           + `<td><input class="rs-human" value="${_escHtml(r.human || '')}" `
           + `onchange="_rsHumanEdit(${i}, this.value)"></td></tr>`;
   }
   wrap.innerHTML = html + '</table>';
   _rsDrawCrops();
+}
+
+// Force-fill a layer's row values from its flat text, top-aligned (used when
+// the line count doesn't match the row structure and auto-distribute refuses)
+async function _rsImportFlat(layer) {
+  if (selIdx < 0) return;
+  const shape = pageData.shapes[selIdx];
+  const rows  = _rsRows(shape); if (!rows) return;
+  const flatText = layer === 'ocr'
+                 ? (shape.tesseract_output?.ocr_text || shape.easyocr_output?.ocr_text || '')
+                 : layer === 'llm'
+                 ? (shape.openai_output?.response || '')
+                 : (shape.human_output?.human_corrected_text || '');
+  const lines = flatText.trim() ? flatText.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
+  rows.forEach((r, i) => { r[layer] = lines[i] ?? ''; });
+  await saveRowStruct(selIdx);
+  renderRowTable(shape);
+  showToast(`${layer.toUpperCase()} imported into ${Math.min(lines.length, rows.length)} rows`
+            + (lines.length > rows.length ? ` (${lines.length - rows.length} extra lines dropped)` : ''));
 }
 
 let _rsPdfCap = 60;
