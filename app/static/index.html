@@ -2429,9 +2429,9 @@ function _computeRuleDiagnostic(ruleIdx) {
 // ── Rule fix: LLM-assisted correction of rule violations ────────────────────
 const DEFAULT_RULEFIX_PROMPT =
 `You are correcting digit-reading errors in a scanned historical statistical table.
-You receive one cropped image per table column, and below, for each column, the values we currently read from it — one value per line, top to bottom. The lines of the different columns are aligned: line N of every column belongs to the same physical row of the table.
-An arithmetic rule must hold between the columns on every line, but on the listed lines it fails — most likely because digits were misread (e.g. 5 vs 6, 50 vs 5O, a dropped digit) or a value sits on the wrong line. A dash or similar mark in the image means zero.
-Compare the readings with the images and propose the most plausible minimal corrections that make the rule hold on the violating lines. Leave all other values unchanged.`;
+For each violating line you receive one small image snippet per table column (labeled with its column and line number), and below, the values we currently read on those lines.
+An arithmetic rule must hold between the columns on every line, but on these lines it fails — most likely because digits were misread (e.g. 5 vs 6, 50 vs 5O, a dropped digit). A dash or similar mark in the image means zero; an empty snippet also means zero.
+Compare the readings with the image snippets and propose the most plausible minimal corrections that make the rule hold on each violating line.`;
 
 let _rfState = null;   // {ruleIdx, rule, violations:[...], running}
 
@@ -2447,7 +2447,7 @@ function openRuleFix() {
   document.getElementById('rf-title').textContent =
     `🛠 Rule fix — ${rule.name || rule.expr} (${rule.expr})`;
   document.getElementById('rf-prompt').value =
-    localStorage.getItem('ruleFixPrompt') || DEFAULT_RULEFIX_PROMPT;
+    localStorage.getItem('ruleFixPrompt2') || DEFAULT_RULEFIX_PROMPT;
   document.getElementById('rf-model').textContent = document.getElementById('llm-model').value;
   document.getElementById('rf-status').textContent =
     violations.length ? `${violations.length} violation(s) on this page` : 'No violations on this page 🎉';
@@ -2467,23 +2467,24 @@ function renderRuleFixList() {
     const badSet = new Set(v.badRows);
     // Transposed layout: one table row per LINE; per lattice column a crop
     // slice + the reading (+ LLM proposal when it arrives)
+    const _bd = 'border:1px solid #44557f;';   // bright cell edges
     const headerCells = v.cols.map(c =>
-      `<td colspan="2" style="color:#888;padding:1px 8px;border-left:1px solid #1a2a4a;">col ${c.col}</td>`).join('');
+      `<td colspan="2" style="color:#aaa;padding:1px 8px;${_bd}">col ${c.col}</td>`).join('');
     const rows = Array.from({length: v.nRows}, (_, k) => {
       const bad = badSet.has(k);
       const bg  = bad ? 'background:rgba(255,0,80,0.15);' : '';
       const cells = v.cols.map(c => {
         const prop = v.proposal?.[c.col]?.[k];
         const changed = prop != null && String(prop).trim() !== String(c.values[k] ?? '').trim();
-        return `<td style="padding:1px 4px;border-left:1px solid #1a2a4a;${bg}">`
+        return `<td style="padding:2px 4px;${_bd}${bg}">`
           + `<canvas class="rf-crop" data-idx="${c.idx}" data-k="${k}" data-n="${v.nRows}"`
           + ` style="display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;"></canvas></td>`
-          + `<td style="padding:1px 8px;${bg}">`
+          + `<td style="padding:1px 8px;${_bd}${bg}">`
           + `${_escHtml(c.values[k] ?? '')}`
           + (changed ? ` <span style="color:#4ade80;">→ ${_escHtml(String(prop))}</span>` : '')
           + `</td>`;
       }).join('');
-      return `<tr><td style="padding:1px 8px;color:#555;${bad ? 'color:#ff5577;font-weight:bold;' : ''}">${k + 1}</td>${cells}</tr>`;
+      return `<tr><td style="padding:1px 8px;color:#777;${_bd}${bad ? 'color:#ff5577;font-weight:bold;' : ''}">${k + 1}</td>${cells}</tr>`;
     }).join('');
     const fixOk = v.proposal ? _rfProposalOk(v) : null;
     return `<div style="border:1px solid #0f3460;border-radius:6px;padding:8px 10px;">
@@ -2580,16 +2581,21 @@ function _buildRuleFixPrompt(userPrompt, rule, v) {
   let s = userPrompt.trim() + '\n\n';
   s += `Rule that must hold on every line: ${rule.expr}`;
   if (rule.name) s += `  ("${rule.name}")`;
-  s += `\nColumn numbers in the rule refer to the labeled images.`;
+  s += `\nColumn numbers in the rule refer to the labeled image snippets.`;
   s += `\nViolating lines (1-based): ${v.badRows.map(k => k + 1).join(', ')}\n`;
-  v.cols.forEach(c => {
-    s += `\nColumn ${c.col} current readings (${v.nRows} lines):\n`;
-    for (let k = 0; k < v.nRows; k++) s += `${k + 1}: ${c.values[k] ?? ''}\n`;
+  s += `\nCurrent readings on the violating lines:\n`;
+  v.badRows.forEach(k => {
+    s += `line ${k + 1}:  ` + v.cols.map(c => `col ${c.col} = "${c.values[k] ?? ''}"`).join('   ') + '\n';
   });
-  s += `\nReply ONLY with a JSON object mapping each column number to its full corrected list of exactly ${v.nRows} values (strings), e.g. {"${v.cols[0].col}": ["12", "0", "345"]}. No explanation, no other text.`;
+  s += `\nReply ONLY with a JSON object of the form {"<column>": {"<line>": "<corrected value>", ...}, ...} `
+     + `covering the corrections you propose on these lines (omit values you would keep). `
+     + `Example: {"${v.cols[0].col}": {"${(v.badRows[0] ?? 0) + 1}": "345"}}. No explanation, no other text.`;
   return s;
 }
 
+// Accepts the per-line mapping format {"4": {"8": "123"}} (preferred) and the
+// legacy full-vector format {"4": ["12", ...]}.  Returns proposal[col] as a
+// sparse array of length nRows (only proposed positions filled).
 function _parseRuleFixReply(text, v) {
   const a = text.indexOf('{'), b = text.lastIndexOf('}');
   if (a < 0 || b <= a) return null;
@@ -2597,10 +2603,20 @@ function _parseRuleFixReply(text, v) {
   try { obj = JSON.parse(text.slice(a, b + 1)); } catch { return null; }
   const out = {};
   for (const c of v.cols) {
-    const arr = obj[String(c.col)] ?? obj[c.col];
-    if (!Array.isArray(arr)) continue;
-    out[c.col] = Array.from({length: v.nRows}, (_, k) =>
-      arr[k] != null ? String(arr[k]).trim() : (c.values[k] ?? ''));
+    const entry = obj[String(c.col)] ?? obj[c.col];
+    if (entry == null) continue;
+    const arr = new Array(v.nRows);
+    if (Array.isArray(entry)) {
+      entry.forEach((val, k) => { if (k < v.nRows && val != null) arr[k] = String(val).trim(); });
+    } else if (typeof entry === 'object') {
+      Object.entries(entry).forEach(([line, val]) => {
+        const k = parseInt(line, 10) - 1;
+        if (k >= 0 && k < v.nRows && val != null) arr[k] = String(val).trim();
+      });
+    } else {
+      continue;
+    }
+    if (arr.some(x => x != null)) out[c.col] = arr;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -2610,7 +2626,7 @@ async function runRuleFixLlm() {
   const btn = document.getElementById('rf-run-btn');
   if (_rfState.running) { _rfState.running = false; btn.textContent = '…'; return; }
   const prompt = document.getElementById('rf-prompt').value;
-  localStorage.setItem('ruleFixPrompt', prompt);
+  localStorage.setItem('ruleFixPrompt2', prompt);
   const model = document.getElementById('llm-model').value;
   _rfState.running = true;
   btn.textContent = '■ Stop';
@@ -2623,13 +2639,31 @@ async function runRuleFixLlm() {
     v.status = '⟳ asking LLM…'; renderRuleFixList();
     statusEl.textContent = `${done + 1}/${todo.length}`;
     try {
+      // Send only the violating lines: one band snippet per (line, column)
+      const crops = [];
+      v.badRows.forEach(k => {
+        v.cols.forEach(c => {
+          const shape = pageData.shapes[c.idx];
+          const rsRows = shape.row_struct?.rows;
+          let y0, y1;
+          if (rsRows?.[k]) {
+            y0 = rsRows[k].y0; y1 = rsRows[k].y1;
+          } else {
+            const ysAll = shape.points.map(p => p[1]);
+            const t = Math.min(...ysAll), b = Math.max(...ysAll);
+            y0 = t + (b - t) *  k      / v.nRows;
+            y1 = t + (b - t) * (k + 1) / v.nRows;
+          }
+          crops.push({idx: c.idx, y0, y1,
+                      label: `Column ${c.col}, line ${k + 1}:`});
+        });
+      });
       const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, model});
       const r = await fetch(`${API}/api/page/rule-llm?${params}`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           prompt: _buildRuleFixPrompt(prompt, _rfState.rule, v),
-          idxs:   v.cols.map(c => c.idx),
-          labels: v.cols.map(c => `Image of column ${c.col}:`),
+          crops,
         }),
       });
       if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 80)}`);
@@ -2665,8 +2699,11 @@ async function applyRuleFix(vi) {
       });
       if (changed) await saveRowStruct(c.idx);
     } else {
-      // No internal rows: write the whole corrected vector as flat Human text
-      const text = arr.join('\n');
+      // No internal rows: merge the sparse proposal over the current values
+      // and write the result as flat Human text
+      const merged = c.values.map((cur, k) =>
+        (arr[k] != null && arr[k] !== '') ? arr[k] : (cur ?? ''));
+      const text = merged.join('\n');
       await patchShape(c.idx, {human_corrected_text: text});
       if (!shape.human_output) shape.human_output = {};
       shape.human_output.human_corrected_text = text;
