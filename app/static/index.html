@@ -1092,9 +1092,13 @@
       Arithmetic rules between lattice columns, checked per internal row.
       Numbers refer to <b>lattice column numbers</b> (1-indexed); operators
       <b>+ − * / ( )</b> and exactly one <b>=</b>. Example: <b>1+2=4</b>.
-      Values are read from the best layer (Human &gt; LLM &gt; OCR &gt; PDF);
-      anything that isn't a clean number makes the rule fail for that row.
-      Each saved rule appears in the Diagnose dropdown as <b>ROW RULE: name</b>.
+      Values are read from the best layer (Human &gt; LLM &gt; OCR &gt; PDF).
+      The third box holds the <b>zero characters</b>: a cell consisting only
+      of these (any dash, underscore, dot…) counts as <b>0</b>, and empty
+      cells are always 0. Anything else that isn't a clean number makes the
+      rule fail for that row. Each saved rule appears in the Diagnose
+      dropdown as <b>ROW RULE: name</b>; violating internal rows are shaded
+      red on the page.
     </div>
     <div id="rule-list" style="display:flex;flex-direction:column;gap:6px;"></div>
     <button onclick="addRule()" style="align-self:flex-start;background:none;border:1px dashed #0f3460;color:#aaa;border-radius:5px;padding:4px 14px;cursor:pointer;font-size:0.8rem;">+ Add rule</button>
@@ -1559,6 +1563,7 @@ let latticeSepMode     = null;      // 'col' | 'row' | null — lattice separato
 let diagnosticMode      = 'none';
 let diagnosticFlagged   = new Set();
 let diagnosticRowCounts = {}; // shape index → line count (for row-mismatch modes)
+let diagnosticRuleRows  = {}; // shape index → Set of violated internal row indices (rule modes)
 let llmProgress     = null;      // {cropOriginX, cropOriginY, cropRight, lines[], activeRow, emptyRows}
 let llmAbortCtrl    = null;      // AbortController for the active line-by-line run
 let batchAbort      = false;     // flag to stop a running "All" batch
@@ -2248,9 +2253,12 @@ function renderRuleList() {
   wrap.innerHTML = projectRules.length ? projectRules.map((r, i) => `
     <div style="display:flex;gap:6px;align-items:center;">
       <input class="rule-expr" data-i="${i}" value="${_escHtml(r.expr || '')}" placeholder="e.g. 1+2=4"
-        style="width:130px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;font-family:monospace;">
+        style="width:110px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;font-family:monospace;">
       <input class="rule-name" data-i="${i}" value="${_escHtml(r.name || '')}" placeholder="name (e.g. male + female = all workers)"
         style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;">
+      <input class="rule-zeros" data-i="${i}" value="${_escHtml(r.zeros ?? DEFAULT_ZERO_CHARS)}"
+        title="Zero characters: a cell consisting only of these counts as 0 (empty cells are always 0)"
+        style="width:90px;background:#0d1b35;border:1px solid #0f3460;color:#888;border-radius:4px;padding:5px 8px;font-size:0.85rem;font-family:monospace;">
       <button onclick="deleteRule(${i})" title="Delete rule"
         style="background:none;border:1px solid #c04040;color:#fca5a5;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:0.8rem;">✕</button>
     </div>`).join('')
@@ -2259,10 +2267,11 @@ function renderRuleList() {
 function _collectRuleInputs() {
   document.querySelectorAll('#rule-list .rule-expr').forEach(el => { projectRules[+el.dataset.i].expr = el.value.trim(); });
   document.querySelectorAll('#rule-list .rule-name').forEach(el => { projectRules[+el.dataset.i].name = el.value.trim(); });
+  document.querySelectorAll('#rule-list .rule-zeros').forEach(el => { projectRules[+el.dataset.i].zeros = el.value; });
 }
 function addRule() {
   _collectRuleInputs();
-  projectRules.push({expr: '', name: ''});
+  projectRules.push({expr: '', name: '', zeros: DEFAULT_ZERO_CHARS});
   renderRuleList();
 }
 function deleteRule(i) {
@@ -2304,12 +2313,16 @@ function _bestRowValues(shape) {
   return flat.trim() ? flat.trim().split('\n').map(s => s.trim()) : [];
 }
 
-function _ruleNum(s) {
-  if (s == null) return NaN;
+// Default "zero characters": tokens made only of these mean zero in the
+// sources (dash variants, underscore, dots, commas…).  Per-rule overridable.
+const DEFAULT_ZERO_CHARS = '-_–—―−‐‑‒·.,~';
+
+function _ruleNum(s, zeroChars) {
+  if (s == null) return 0;                       // empty / missing cell = 0
   s = String(s).trim();
-  // Anything that vaguely resembles a dash means zero in the sources:
-  // hyphen, underscore, en/em/horizontal dashes, minus sign, middle dot…
-  if (/^[-_–—―−‐‑‒·.,~]{1,3}$/.test(s)) return 0;
+  if (!s) return 0;
+  const zset = zeroChars || DEFAULT_ZERO_CHARS;
+  if ([...s].every(ch => zset.includes(ch))) return 0;
   s = s.replace(/\s+/g, '').replace(',', '.');
   return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
 }
@@ -2361,14 +2374,15 @@ function _computeRuleDiagnostic(ruleIdx) {
       nRows = Math.max(nRows, vals[c].length);
     });
     if (!nRows) continue;   // nothing to evaluate in this lattice row
-    let bad = 0;
+    const badRows = [];
     for (let k = 0; k < nRows; k++) {
-      if (_evalRuleExpr(rule.expr, c => _ruleNum(vals[c]?.[k])) === false) bad++;
+      if (_evalRuleExpr(rule.expr, c => _ruleNum(vals[c]?.[k], rule.zeros)) === false) badRows.push(k);
     }
-    if (bad > 0) {
+    if (badRows.length) {
       cols.forEach(c => {
         diagnosticFlagged.add(entry[c].i);
-        diagnosticRowCounts[entry[c].i] = bad;   // label = #violated internal rows
+        diagnosticRowCounts[entry[c].i] = badRows.length;  // label = #violated rows
+        diagnosticRuleRows[entry[c].i]  = new Set(badRows);
       });
     }
   }
@@ -2377,6 +2391,7 @@ function _computeRuleDiagnostic(ruleIdx) {
 function computeDiagnostics() {
   diagnosticFlagged   = new Set();
   diagnosticRowCounts = {};
+  diagnosticRuleRows  = {};
   const countEl = document.getElementById('diagnostic-count');
   if (diagnosticMode === 'none' || !pageData?.shapes) {
     if (countEl) countEl.textContent = '';
@@ -3170,19 +3185,43 @@ function drawOverlay() {
       const br = imgToScreen(Math.max(...xs), Math.max(...ys));
       if (!tl || !br) return;
       const flagged = diagnosticFlagged.has(i);
-      // Dashed outline only on deviants
+      const isRule  = diagnosticMode.startsWith('rule:');
+      // Dashed outline only on deviants (softer in rule mode — the violating
+      // internal rows carry the strong highlight there)
       if (flagged) {
         const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         r.setAttribute('x',               tl.x);
         r.setAttribute('y',               tl.y);
         r.setAttribute('width',           Math.max(0, br.x - tl.x));
         r.setAttribute('height',          Math.max(0, br.y - tl.y));
-        r.setAttribute('fill',            'rgba(255,0,100,0.07)');
+        r.setAttribute('fill',            isRule ? 'none' : 'rgba(255,0,100,0.07)');
         r.setAttribute('stroke',          '#ff0064');
-        r.setAttribute('stroke-width',    '1.5');
+        r.setAttribute('stroke-width',    isRule ? '1' : '1.5');
+        r.setAttribute('stroke-opacity',  isRule ? '0.45' : '1');
         r.setAttribute('stroke-dasharray','5 3');
         r.style.pointerEvents = 'none';
         svgOverlay.appendChild(r);
+      }
+      // Rule mode: highlight the violating INTERNAL rows in red
+      if (flagged && isRule && diagnosticRuleRows[i]?.size && shape.row_struct?.rows) {
+        const rsRows = shape.row_struct.rows;
+        diagnosticRuleRows[i].forEach(k => {
+          const rr = rsRows[k]; if (!rr) return;
+          const a = imgToScreen(Math.min(...xs), rr.y0);
+          const b = imgToScreen(Math.max(...xs), rr.y1);
+          if (!a || !b) return;
+          const band = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          band.setAttribute('x',               a.x);
+          band.setAttribute('y',               a.y);
+          band.setAttribute('width',           Math.max(0, b.x - a.x));
+          band.setAttribute('height',          Math.max(0, b.y - a.y));
+          band.setAttribute('fill',            'rgba(255,0,80,0.18)');
+          band.setAttribute('stroke',          '#ff2050');
+          band.setAttribute('stroke-width',    '1.2');
+          band.setAttribute('stroke-dasharray','4 3');
+          band.style.pointerEvents = 'none';
+          svgOverlay.appendChild(band);
+        });
       }
       // Row-count label in top-left of every cell with data
       const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
