@@ -12,8 +12,12 @@ or via econai.py (coming soon).
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +40,42 @@ from app.pipeline import (
 )
 
 from contextlib import asynccontextmanager
+
+# ---------------------------------------------------------------------------
+# Atomic JSON writes — concurrent handlers (SSE OCR/LLM runs, row edits,
+# shape patches) may write the same page JSON; a plain write_text can leave
+# an interleaved/corrupt file.  Serialize writes and use temp-file + replace
+# so readers always see a complete document.
+# ---------------------------------------------------------------------------
+_JSON_WRITE_LOCK = threading.Lock()
+
+
+def _write_json(path, obj):
+    path = Path(path)
+    text = json.dumps(obj, indent=2, ensure_ascii=False)
+    with _JSON_WRITE_LOCK:
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent),
+                                   prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            # Windows: os.replace can transiently fail if a reader has the
+            # target open — retry briefly
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, str(path))
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -208,7 +248,7 @@ def update_shape(
     if body.label is not None:
         shape["label"] = body.label
 
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "idx": idx}
 
 
@@ -244,7 +284,7 @@ def add_shape(
     }
     data["shapes"].append(new_shape)
     new_idx = len(data["shapes"]) - 1
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "idx": new_idx}
 
 
@@ -265,7 +305,7 @@ def replace_shapes(
         raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
     data = json.loads(jf.read_text(encoding="utf-8"))
     data["shapes"] = body.shapes
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "count": len(body.shapes)}
 
 
@@ -435,7 +475,7 @@ def update_row_struct(
         shape["row_struct"] = rs
         _sync_flat_from_rows(shape)
 
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "row_struct": shape.get("row_struct")}
 
 
@@ -503,7 +543,7 @@ def api_rows_convert(
 
     shape["row_struct"] = {"version": 1, "origin": "converted", "rows": rows}
     _sync_flat_from_rows(shape)
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "rows": len(rows), "row_struct": shape["row_struct"]}
 
 
@@ -525,7 +565,7 @@ def delete_shape(
         raise HTTPException(status_code=400, detail=f"Shape index {idx} out of range")
 
     shapes.pop(idx)
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "remaining": len(shapes)}
 
 
@@ -595,7 +635,7 @@ def api_pdf_text_layer(
 
     doc.close()
 
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
     return {"ok": True, "updated": updated, "shapes": shapes}
 
 
@@ -729,7 +769,7 @@ def api_ocr_cell(
         "lang":      lang,
     }
     _distribute_flat_to_rows(shapes[idx], "ocr", ocr_text)
-    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data)
 
     return {"ocr_text": ocr_text, "mean_conf": mean_conf}
 
@@ -1051,7 +1091,7 @@ def api_ocr_easyocr(
         "langs":     lang_list,
     }
     _distribute_flat_to_rows(shapes[idx], "ocr", ocr_text)
-    jf.write_text(json.dumps(data_doc, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(jf, data_doc)
 
     return {"ocr_text": ocr_text, "mean_conf": mean_conf}
 
@@ -1165,8 +1205,7 @@ async def api_ocr_linebyline(
             "lang":      lang,
             "mode":      "linebyline",
         }
-        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
-                      encoding="utf-8")
+        _write_json(jf, data_doc)
 
         yield _json.dumps({"type": "done", "ocr_text": combined, "mean_conf": mean_conf})
 
@@ -1307,8 +1346,7 @@ async def api_ocr_easyocr_linebyline(
             "engine":    "easyocr",
             "mode":      "linebyline",
         }
-        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
-                      encoding="utf-8")
+        _write_json(jf, data_doc)
 
         yield _json.dumps({"type": "done", "ocr_text": combined, "mean_conf": mean_conf})
 
@@ -1470,8 +1508,7 @@ async def api_ocr_easyocr_anchored(
             "ocr_text": combined, "mean_conf": mean_conf,
             "engine": "easyocr", "mode": "anchored",
         }
-        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
-                      encoding="utf-8")
+        _write_json(jf, data_doc)
         yield _json.dumps({"type": "done", "ocr_text": combined, "mean_conf": mean_conf})
 
     async def event_gen():
@@ -1692,7 +1729,7 @@ def api_llm_cell(
             "timestamp": timestamp,
         }
         _distribute_flat_to_rows(shape, "llm", result)
-        jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _write_json(jf, data)
 
     return {"response": result, "model": model, "mode": mode,
             "timestamp": timestamp, "prompt_sent": prompt_text,
@@ -1821,8 +1858,7 @@ async def api_llm_linebyline(
                 "timestamp":      timestamp,
                 "lines_detected": len(rows),
             }
-            jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
-                          encoding="utf-8")
+            _write_json(jf, data_doc)
 
         yield _json.dumps({"type": "done", "response": combined,
                            "model": model, "timestamp": timestamp,
@@ -1949,8 +1985,7 @@ async def api_llm_anchored(
             "timestamp":      timestamp,
             "lines_detected": len(rows),
         }
-        jf.write_text(_json.dumps(data_doc, indent=2, ensure_ascii=False),
-                      encoding="utf-8")
+        _write_json(jf, data_doc)
         yield _json.dumps({"type": "done", "response": combined,
                            "model": model, "timestamp": timestamp})
 
@@ -3074,7 +3109,7 @@ def api_apply_predictions(name: str):
             continue
         pred = _json.loads(pred_file.read_text(encoding="utf-8"))
         ann["shapes"] = pred.get("shapes", [])
-        ann_file.write_text(_json.dumps(ann, indent=2, ensure_ascii=False), encoding="utf-8")
+        _write_json(ann_file, ann)
         applied += 1
     return {"applied": applied, "skipped_had_annotations": skipped}
 
@@ -3290,8 +3325,7 @@ def api_perspective(body: PerspectiveRequest):
         data["shapes"]      = []
         data["imageWidth"]  = out_w
         data["imageHeight"] = out_h
-        jf.write_text(json.dumps(data, indent=2, ensure_ascii=False),
-                      encoding="utf-8")
+        _write_json(jf, data)
         return {"ok": True, "width": out_w, "height": out_h}
     else:
         buf = io.BytesIO()
@@ -3431,7 +3465,7 @@ async def api_audit_update_stats(folder: str = Query(...), request: Request = No
     """Save audit stats for the project."""
     body = await request.json()
     stats_file = _resolve_folder(folder).parent / "audit_stats.json"
-    stats_file.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json(stats_file, body)
     return {"ok": True}
 
 
