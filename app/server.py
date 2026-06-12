@@ -373,13 +373,15 @@ def _sync_flat_from_rows(shape):
         shape["human_output"]["human_corrected_text"] = t
 
 
-def _apply_layer_rows(shape, bands_abs, layer, texts, origin):
+def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False):
     """Write one layer's per-row texts into the shape's row_struct.
     If a structure with the same row count already exists, its boxes are kept
     and only this layer's values change; otherwise the structure is rebuilt
-    from bands_abs (other layers survive when the row count matches)."""
+    from bands_abs (other layers survive when the row count matches).
+    force_boxes=True always adopts bands_abs as the stored boxes — used by
+    row-structure anchoring, where the projected bands are authoritative."""
     rs = shape.get("row_struct")
-    if rs and len(rs.get("rows", [])) == len(texts):
+    if not force_boxes and rs and len(rs.get("rows", [])) == len(texts):
         for r, t in zip(rs["rows"], texts):
             r[layer] = t
     else:
@@ -1595,7 +1597,8 @@ async def api_ocr_easyocr_anchored(
         combined  = "\n".join(line_texts)
         mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
         _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
-                          "ocr", line_texts, "anchored")
+                          "ocr", line_texts, "anchored",
+                          force_boxes=projected is not None)
         shape["tesseract_output"] = {
             "ocr_text": combined, "mean_conf": mean_conf,
             "engine": "easyocr", "mode": "anchored",
@@ -2072,7 +2075,8 @@ async def api_llm_anchored(
         combined  = "\n".join(line_responses)
         timestamp = datetime.datetime.utcnow().isoformat() + "Z"
         _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
-                          "llm", line_responses, "anchored")
+                          "llm", line_responses, "anchored",
+                          force_boxes=projected is not None)
         shape["openai_output"] = {
             "response":       combined,
             "model":          model,
