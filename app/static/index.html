@@ -3754,7 +3754,8 @@ function renderRowTable(shape) {
            + (hasPdf ? '<th>PDF <button class="rs-copy-btn" onclick="_rsCopyColPdf()" title="Copy whole PDF column to Human (top-aligned)">⤓H</button></th>' : '')
            + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button></th>'
            + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button></th>'
-           + '<th>Human</th></tr>';
+           + '<th>Human <button class="rs-copy-btn" onclick="_rsMajorityVote()" '
+           + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button></th></tr>';
   for (let i = 0; i < nRows; i++) {
     const r   = rows[i];
     const pdf = i < pdfShown ? pdfLines[i] : '';
@@ -3806,6 +3807,37 @@ let _rsPdfCap = 60;
 function _rsSetPdfCap(v) {
   const n = parseInt(v, 10);
   if (n > 0) { _rsPdfCap = n; if (selIdx >= 0) renderRowTable(pageData.shapes[selIdx]); }
+}
+
+// Fill Human with the majority opinion of the available sources (PDF/OCR/LLM):
+// 1 source → copy it; 2 → copy iff they agree; 3 → copy if at least 2 agree.
+// Rows without a winner keep their current Human value.
+async function _rsMajorityVote() {
+  if (selIdx < 0) return;
+  const shape = pageData.shapes[selIdx];
+  const rows  = _rsRows(shape); if (!rows) return;
+  const pdfLines = (shape.pdf_text || '').trim()
+    ? shape.pdf_text.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
+  let filled = 0, noConsensus = 0;
+  rows.forEach((r, i) => {
+    const votes = [(pdfLines[i] ?? ''), (r.ocr || ''), (r.llm || '')]
+      .map(v => v.trim()).filter(Boolean);
+    if (!votes.length) return;
+    let winner = null;
+    if (votes.length === 1) winner = votes[0];
+    else {
+      const counts = {};
+      votes.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
+      const [val, n] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+      if (n >= 2) winner = val;
+    }
+    if (winner !== null) { r.human = winner; filled++; }
+    else noConsensus++;
+  });
+  await saveRowStruct(selIdx);
+  renderRowTable(shape);
+  showToast(`Majority vote: ${filled} row${filled !== 1 ? 's' : ''} filled`
+            + (noConsensus ? `, ${noConsensus} without consensus left unchanged` : ''));
 }
 
 async function _rsCopyColPdf() {
