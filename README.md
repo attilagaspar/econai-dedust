@@ -136,9 +136,11 @@ Open the editor and check the predicted boxes. Fix any mistakes, adjust boundari
 
 Once the layout is correct, use the toolbar in the editor to run OCR on each cell (or batch-process all pages). The LLM cleaning step uses the OpenAI API to normalize numbers, fix OCR errors, and extract structured fields. Your OpenAI key goes in the settings panel in the editor.
 
+Line-by-line and anchored OCR/LLM runs also record each cell's **internal row structure** — where every text row sits inside the cell, with the OCR / LLM / Human readings stored side by side per row (see [Internal row structure](#internal-row-structure) below).
+
 ### Step 10: Export
 
-Click **Export** in the editor toolbar. This generates an `.xlsx` file preserving the table structure, one row per text line in each cell.
+Click **Export** in the editor toolbar. This generates an `.xlsx` file preserving the table structure, one row per text line in each cell. Cells with an internal row structure export one Excel row per internal row, with the chosen content layer (e.g. Human > LLM > OCR > PDF) applied per row; in dual-page layout, paired lattice rows are aligned line-for-line.
 
 ---
 
@@ -197,9 +199,27 @@ Once you have a rough layout, the lattice tools let you define the precise grid:
 | **Snap** | Snap all cells to the exact grid boundaries |
 | **Row fill / Col fill** | Propagate a label across a whole row or column |
 
+### Internal row structure
+
+Each annotation can carry an **internal row structure** (`row_struct` in the JSON): the bounding band of every text row inside the cell, numbered 1…N, with the OCR, LLM and Human content stored **per row, side by side**. One structure per cell — the layers share it. Old JSONs without it load unchanged, and the flat text fields are always kept in sync, so everything downstream (export, diagnostics, batch conditions) works either way.
+
+| Feature | Where |
+|---|---|
+| Structures are created automatically | Any line-by-line or anchored OCR/LLM run |
+| Convert a legacy cell | **⊞ Convert** in the right panel (best layer's line count + histogram split) |
+| Convert in bulk | Batch op **⊞ Convert annotations to internal rows** |
+| Table view | Selecting a structured cell shows `# · crop · PDF · OCR · LLM · Human`; green = layers agree, red = conflict; Human editable inline |
+| Copy to Human | Click any PDF/OCR/LLM value (one row) or **⤓H** in a header (whole column) |
+| Majority vote | **⚖** fills Human where the sources agree (2-of-3 rule) |
+| Re-pull a column | **⟳** per column — PDF re-clipped per row band, EasyOCR / LLM rerun over the current bands |
+| Edit dividers | Edit mode, on the cell crop: drag a divider; double-click a (red-highlighted) divider = merge; double-click a band = split |
+| Project a structure | Anchored OCR/LLM with **Anchor at: Row structure** copies the reference cell's exact dividers onto the rest of the lattice row |
+
+Dividers are always visible (dashed lines on the page, bands on the crop). Moving or resizing a box rescales its rows proportionally. See [WHATS_NEW_INTERNAL_ROWS.md](WHATS_NEW_INTERNAL_ROWS.md) for a hands-on guide.
+
 ### Batch operations
 
-The toolbar has a **Batch** button that lets you run operations (overlap removal, lattice correction, OCR, LLM cleaning) across all pages at once with a live progress log.
+The toolbar has a **Batch** button that lets you run operations (overlap removal, lattice correction, OCR, LLM cleaning, anchored OCR/LLM, conversion to internal rows) across all pages at once with a live progress log, page/parity/condition/column filters, and an anchor-column pattern that may contain empty slots to skip pages (e.g. `8,,2,1`).
 
 ---
 
