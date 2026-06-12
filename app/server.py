@@ -380,6 +380,8 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin):
                 for lay in _ROW_LAYERS:
                     if lay != layer and old[i].get(lay):
                         row[lay] = old[i][lay]
+                if old[i].get("pdf") is not None:
+                    row["pdf"] = old[i]["pdf"]
             new_rows.append(row)
         shape["row_struct"] = {"version": 1, "origin": origin, "rows": new_rows}
     _sync_flat_from_rows(shape)
@@ -465,9 +467,14 @@ def update_row_struct(
         rs = shape.get("row_struct") or {"version": 1, "origin": body.origin or "manual"}
         if body.origin:
             rs["origin"] = body.origin
-        rows = [{"n": 0, "y0": float(r["y0"]), "y1": float(r["y1"]),
-                 "ocr": r.get("ocr") or "", "llm": r.get("llm") or "",
-                 "human": r.get("human") or ""} for r in body.rows]
+        rows = []
+        for r in body.rows:
+            row = {"n": 0, "y0": float(r["y0"]), "y1": float(r["y1"]),
+                   "ocr": r.get("ocr") or "", "llm": r.get("llm") or "",
+                   "human": r.get("human") or ""}
+            if r.get("pdf") is not None:
+                row["pdf"] = r["pdf"]
+            rows.append(row)
         rows.sort(key=lambda r: r["y0"])
         for i, r in enumerate(rows):
             r["n"] = i + 1
@@ -545,6 +552,52 @@ def api_rows_convert(
     _sync_flat_from_rows(shape)
     _write_json(jf, data)
     return {"ok": True, "rows": len(rows), "row_struct": shape["row_struct"]}
+
+
+@app.post("/api/page/shape/rows/pdf-refresh")
+def api_rows_pdf_refresh(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    idx:    int = Query(...),
+):
+    """Re-extract the PDF text layer for one shape, clipped per internal row
+    band — each row gets exactly the PDF words inside its own band, stored as
+    row['pdf'] (display-only, not part of the OCR/LLM/Human layer triad)."""
+    import fitz
+
+    d  = _resolve_folder(folder)
+    jf = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+    shape = shapes[idx]
+    rs    = shape.get("row_struct")
+    if not rs or not rs.get("rows"):
+        raise HTTPException(status_code=400, detail="Shape has no internal row structure")
+
+    pdf_path  = data.get("pdf_source")
+    pdf_page  = data.get("pdf_page")
+    pdf_scale = data.get("pdf_scale", 2.0)
+    if not pdf_path or pdf_page is None:
+        raise HTTPException(status_code=400, detail="No PDF source recorded for this page")
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail=f"Source PDF not found at: {pdf_path}")
+
+    doc  = fitz.open(str(pdf_path))
+    page = doc[int(pdf_page)]
+    x1, _, x2, _ = _shape_bbox(shape)
+    for r in rs["rows"]:
+        rect = fitz.Rect(x1 / pdf_scale, r["y0"] / pdf_scale,
+                         x2 / pdf_scale, r["y1"] / pdf_scale)
+        r["pdf"] = " ".join(page.get_text("text", clip=rect).split())
+    doc.close()
+
+    _write_json(jf, data)
+    return {"ok": True, "row_struct": shape["row_struct"]}
 
 
 @app.delete("/api/page/shape")

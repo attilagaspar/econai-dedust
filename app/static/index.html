@@ -3750,16 +3750,19 @@ function renderRowTable(shape) {
       : '');
 
   // Column order follows data quality, worst → best: crop, PDF, OCR, LLM, Human
-  const hasPdf = pdfLines.length > 0;
+  const hasPdf = pdfLines.length > 0 || rows.some(r => (r.pdf || '').trim());
   let html = '<table class="rs-table"><tr><th>#</th><th></th>'
-           + (hasPdf ? '<th>PDF <button class="rs-copy-btn" onclick="_rsCopyColPdf()" title="Copy whole PDF column to Human (top-aligned)">⤓H</button></th>' : '')
-           + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button></th>'
-           + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button></th>'
+           + (hasPdf ? '<th>PDF <button class="rs-copy-btn" onclick="_rsCopyColPdf()" title="Copy whole PDF column to Human">⤓H</button>'
+                     + '<button class="rs-copy-btn" onclick="_rsRefreshPdf()" title="Re-extract the PDF text layer per current row band">⟳</button></th>' : '')
+           + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button>'
+           + '<button class="rs-copy-btn" onclick="_rsRefreshOcr()" title="Re-run EasyOCR row by row using the current row structure">⟳</button></th>'
+           + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button>'
+           + '<button class="rs-copy-btn" onclick="_rsRefreshLlm()" title="Re-run the LLM row by row using the current row structure and the active prompt">⟳</button></th>'
            + '<th>Human <button class="rs-copy-btn" onclick="_rsMajorityVote()" '
            + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button></th></tr>';
   for (let i = 0; i < nRows; i++) {
     const r   = rows[i];
-    const pdf = i < pdfShown ? pdfLines[i] : '';
+    const pdf = (r?.pdf != null) ? r.pdf : (i < pdfShown ? pdfLines[i] : '');
     if (!r) {
       // Ghost row: PDF line beyond the row structure
       html += `<tr class="rs-ghost"><td class="rs-n">·</td><td class="rs-img"></td>`
@@ -3810,6 +3813,49 @@ function _rsSetPdfCap(v) {
   if (n > 0) { _rsPdfCap = n; if (selIdx >= 0) renderRowTable(pageData.shapes[selIdx]); }
 }
 
+// PDF value for row i: prefer the per-row extraction (row.pdf, written by the
+// PDF ⟳ refresh), fall back to the flat pdf_text lines top-aligned
+function _rsPdfVal(shape, i) {
+  const rows = _rsRows(shape);
+  if (rows?.[i]?.pdf != null) return rows[i].pdf;
+  const lines = (shape.pdf_text || '').trim()
+    ? shape.pdf_text.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
+  return lines[i] ?? '';
+}
+
+// ── Per-column refresh: re-pull content into the CURRENT row structure ──────
+async function _rsRefreshPdf() {
+  if (selIdx < 0) return;
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx});
+  const r = await fetch(`${API}/api/page/shape/rows/pdf-refresh?${params}`, {method: 'POST'});
+  if (!r.ok) { showToast(`PDF refresh failed: ${(await r.text()).slice(0, 120)}`); return; }
+  const data = await r.json();
+  pageData.shapes[selIdx].row_struct = data.row_struct;
+  renderRowTable(pageData.shapes[selIdx]);
+  showToast('PDF layer re-extracted per row');
+}
+
+async function _rsRefreshOcr() {
+  if (selIdx < 0) return;
+  showToast('EasyOCR over current rows…');
+  const ch = parseInt(document.getElementById('ocr-cellheight')?.value, 10) || 26;
+  try { await _ocrLineByLineOne(selIdx, ch, '/api/page/shape/ocr/easyocr/linebyline'); }
+  catch (e) { showToast(`OCR refresh failed: ${e.message}`); return; }
+  renderRowTable(pageData.shapes[selIdx]); refreshDiag();
+}
+
+async function _rsRefreshLlm() {
+  if (selIdx < 0) return;
+  const model  = document.getElementById('llm-model').value;
+  const prompt = document.getElementById('llm-prompt').value.trim();
+  if (!prompt) { showToast('LLM prompt is empty'); return; }
+  showToast('LLM over current rows…');
+  const ch = parseInt(document.getElementById('llm-cellheight')?.value, 10) || 28;
+  try { await _llmLineByLineOne(selIdx, model, prompt, ch); }
+  catch (e) { showToast(`LLM refresh failed: ${e.message}`); return; }
+  renderRowTable(pageData.shapes[selIdx]); refreshDiag();
+}
+
 // Fill Human with the majority opinion of the available sources (PDF/OCR/LLM):
 // 1 source → copy it; 2 → copy iff they agree; 3 → copy if at least 2 agree.
 // Rows without a winner keep their current Human value.
@@ -3817,11 +3863,9 @@ async function _rsMajorityVote() {
   if (selIdx < 0) return;
   const shape = pageData.shapes[selIdx];
   const rows  = _rsRows(shape); if (!rows) return;
-  const pdfLines = (shape.pdf_text || '').trim()
-    ? shape.pdf_text.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
   let filled = 0, noConsensus = 0;
   rows.forEach((r, i) => {
-    const votes = [(pdfLines[i] ?? ''), (r.ocr || ''), (r.llm || '')]
+    const votes = [_rsPdfVal(shape, i), (r.ocr || ''), (r.llm || '')]
       .map(v => v.trim()).filter(Boolean);
     if (!votes.length) return;
     let winner = null;
@@ -3845,9 +3889,7 @@ async function _rsCopyColPdf() {
   if (selIdx < 0) return;
   const shape = pageData.shapes[selIdx];
   const rows  = _rsRows(shape); if (!rows) return;
-  const pdfLines = (shape.pdf_text || '').trim()
-    ? shape.pdf_text.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
-  rows.forEach((r, i) => { r.human = (pdfLines[i] ?? '').trim(); });
+  rows.forEach((r, i) => { r.human = _rsPdfVal(shape, i).trim(); });
   await saveRowStruct(selIdx);
   renderRowTable(shape);
 }
@@ -3856,8 +3898,7 @@ async function _rsCopyPdf(i) {
   if (selIdx < 0) return;
   const shape = pageData.shapes[selIdx];
   const rows  = _rsRows(shape); if (!rows?.[i]) return;
-  const pdfLines = (shape.pdf_text || '').trim().split('\n');
-  rows[i].human = (pdfLines[i] || '').trim();
+  rows[i].human = _rsPdfVal(shape, i).trim();
   await saveRowStruct(selIdx);
   renderRowTable(shape);
 }
