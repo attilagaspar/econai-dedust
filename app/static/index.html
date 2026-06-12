@@ -1127,6 +1127,12 @@
       <button id="rf-run-btn" onclick="runRuleFixLlm()"
         style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">▶ Ask LLM</button>
       <span style="font-size:0.75rem;color:#666;">model: <span id="rf-model"></span></span>
+      <label style="font-size:0.75rem;color:#666;display:flex;align-items:center;gap:4px;"
+             title="Violations with more bad lines than this are split into multiple LLM requests; 1 = one line per request">
+        max lines / request:
+        <input type="number" id="rf-chunk" value="8" min="1"
+          style="width:46px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:2px 4px;font-size:0.78rem;">
+      </label>
       <span id="rf-status" style="font-size:0.78rem;color:#aaa;"></span>
     </div>
     <div id="rf-list" style="display:flex;flex-direction:column;gap:12px;"></div>
@@ -2448,6 +2454,8 @@ function openRuleFix() {
     `🛠 Rule fix — ${rule.name || rule.expr} (${rule.expr})`;
   document.getElementById('rf-prompt').value =
     localStorage.getItem('ruleFixPrompt2') || DEFAULT_RULEFIX_PROMPT;
+  document.getElementById('rf-chunk').value =
+    parseInt(localStorage.getItem('ruleFixChunk'), 10) || 8;
   document.getElementById('rf-model').textContent = document.getElementById('llm-model').value;
   document.getElementById('rf-status').textContent =
     violations.length ? `${violations.length} violation(s) on this page` : 'No violations on this page 🎉';
@@ -2578,19 +2586,20 @@ function _rfProposalOk(v) {
   return true;
 }
 
-function _buildRuleFixPrompt(userPrompt, rule, v) {
+function _buildRuleFixPrompt(userPrompt, rule, v, lines) {
+  lines = lines ?? v.badRows;
   let s = userPrompt.trim() + '\n\n';
   s += `Rule that must hold on every line: ${rule.expr}`;
   if (rule.name) s += `  ("${rule.name}")`;
   s += `\nColumn numbers in the rule refer to the labeled image snippets.`;
-  s += `\nViolating lines (1-based): ${v.badRows.map(k => k + 1).join(', ')}\n`;
+  s += `\nViolating lines (1-based): ${lines.map(k => k + 1).join(', ')}\n`;
   s += `\nCurrent readings on the violating lines:\n`;
-  v.badRows.forEach(k => {
+  lines.forEach(k => {
     s += `line ${k + 1}:  ` + v.cols.map(c => `col ${c.col} = "${c.values[k] ?? ''}"`).join('   ') + '\n';
   });
   s += `\nReply ONLY with a JSON object of the form {"<column>": {"<line>": "<corrected value>", ...}, ...} `
      + `covering the corrections you propose on these lines (omit values you would keep). `
-     + `Example: {"${v.cols[0].col}": {"${(v.badRows[0] ?? 0) + 1}": "345"}}. No explanation, no other text.`;
+     + `Example: {"${v.cols[0].col}": {"${(lines[0] ?? 0) + 1}": "345"}}. No explanation, no other text.`;
   return s;
 }
 
@@ -2639,41 +2648,69 @@ async function runRuleFixLlm() {
     if (v.proposal || v.applied) continue;
     v.status = '⟳ asking LLM…'; renderRuleFixList();
     statusEl.textContent = `${done + 1}/${todo.length}`;
-    try {
-      // Send only the violating lines: one band snippet per (line, column)
-      const crops = [];
-      v.badRows.forEach(k => {
-        v.cols.forEach(c => {
-          const shape = pageData.shapes[c.idx];
-          const rsRows = shape.row_struct?.rows;
-          let y0, y1;
-          if (rsRows?.[k]) {
-            y0 = rsRows[k].y0; y1 = rsRows[k].y1;
-          } else {
-            const ysAll = shape.points.map(p => p[1]);
-            const t = Math.min(...ysAll), b = Math.max(...ysAll);
-            y0 = t + (b - t) *  k      / v.nRows;
-            y1 = t + (b - t) * (k + 1) / v.nRows;
-          }
-          crops.push({idx: c.idx, y0, y1,
-                      label: `Column ${c.col}, line ${k + 1}:`});
-        });
-      });
-      const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, model});
-      const r = await fetch(`${API}/api/page/rule-llm?${params}`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          prompt: _buildRuleFixPrompt(prompt, _rfState.rule, v),
-          crops,
-        }),
-      });
-      if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 80)}`);
-      const data = await r.json();
-      v.proposal = _parseRuleFixReply(data.response, v);
-      v.status   = v.proposal ? '' : '✕ unparseable LLM reply';
-    } catch (e) {
-      v.status = `✕ ${e.message}`;
+
+    // Split the violating lines into chunks of at most rf-chunk lines —
+    // chunk size 1 means one line per request
+    const chunkSize = Math.max(1, parseInt(document.getElementById('rf-chunk').value, 10) || 8);
+    localStorage.setItem('ruleFixChunk', String(chunkSize));
+    const chunks = [];
+    for (let a = 0; a < v.badRows.length; a += chunkSize) {
+      chunks.push(v.badRows.slice(a, a + chunkSize));
     }
+
+    let merged = null, failures = 0;
+    for (const [ci, lines] of chunks.entries()) {
+      if (!_rfState.running) break;
+      if (chunks.length > 1) {
+        v.status = `⟳ asking LLM… (part ${ci + 1}/${chunks.length})`;
+        renderRuleFixList();
+      }
+      try {
+        // One band snippet per (line, column) of this chunk
+        const crops = [];
+        lines.forEach(k => {
+          v.cols.forEach(c => {
+            const shape = pageData.shapes[c.idx];
+            const rsRows = shape.row_struct?.rows;
+            let y0, y1;
+            if (rsRows?.[k]) {
+              y0 = rsRows[k].y0; y1 = rsRows[k].y1;
+            } else {
+              const ysAll = shape.points.map(p => p[1]);
+              const t = Math.min(...ysAll), b = Math.max(...ysAll);
+              y0 = t + (b - t) *  k      / v.nRows;
+              y1 = t + (b - t) * (k + 1) / v.nRows;
+            }
+            crops.push({idx: c.idx, y0, y1,
+                        label: `Column ${c.col}, line ${k + 1}:`});
+          });
+        });
+        const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, model});
+        const r = await fetch(`${API}/api/page/rule-llm?${params}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            prompt: _buildRuleFixPrompt(prompt, _rfState.rule, v, lines),
+            crops,
+          }),
+        });
+        if (!r.ok) throw new Error(`${r.status}: ${(await r.text()).slice(0, 80)}`);
+        const data = await r.json();
+        const part = _parseRuleFixReply(data.response, v);
+        if (!part) { failures++; continue; }
+        // Merge this chunk's sparse proposal into the violation's proposal
+        merged ??= {};
+        Object.entries(part).forEach(([col, arr]) => {
+          merged[col] ??= new Array(v.nRows);
+          arr.forEach((val, k) => { if (val != null) merged[col][k] = val; });
+        });
+      } catch (e) {
+        failures++;
+        v.status = `✕ ${e.message}`;
+      }
+    }
+    v.proposal = merged;
+    if (merged) v.status = failures ? `⚠ ${failures}/${chunks.length} part(s) failed` : '';
+    else if (!v.status.startsWith('✕')) v.status = '✕ unparseable LLM reply';
     done++;
     renderRuleFixList();
   }
