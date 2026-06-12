@@ -118,7 +118,8 @@
     /* ── Internal rows table ── */
     .rs-table { width:100%; border-collapse:collapse; font-size:11px; }
     .rs-table th { text-align:left; color:#888; font-size:9px; text-transform:uppercase;
-                   letter-spacing:.5px; padding:2px 4px; border-bottom:1px solid #333; }
+                   letter-spacing:.5px; padding:2px 4px; border-bottom:1px solid #333;
+                   white-space:nowrap; }
     .rs-table td { padding:2px 4px; border-bottom:1px solid #222; color:#ddd;
                    white-space:nowrap; max-width:110px; overflow:hidden; text-overflow:ellipsis; }
     .rs-table td.rs-n { color:#666; width:18px; text-align:right; }
@@ -3757,7 +3758,9 @@ function renderRowTable(shape) {
            + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button>'
            + '<button class="rs-copy-btn" onclick="_rsRefreshOcr()" title="Re-run EasyOCR row by row using the current row structure">⟳</button></th>'
            + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button>'
-           + '<button class="rs-copy-btn" onclick="_rsRefreshLlm()" title="Re-run the LLM row by row using the current row structure and the active prompt">⟳</button></th>'
+           + `<button class="rs-copy-btn" id="rs-llm-refresh-btn" onclick="_rsRefreshLlm()" `
+           + `title="${_rsLlmRunning ? 'Stop' : 'Re-run the LLM row by row using the current row structure and the active prompt'}">`
+           + `${_rsLlmRunning ? '■' : '⟳'}</button></th>`
            + '<th>Human <button class="rs-copy-btn" onclick="_rsMajorityVote()" '
            + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button></th></tr>';
   for (let i = 0; i < nRows; i++) {
@@ -3844,16 +3847,29 @@ async function _rsRefreshOcr() {
   renderRowTable(pageData.shapes[selIdx]); refreshDiag();
 }
 
+let _rsLlmRunning = false;
 async function _rsRefreshLlm() {
   if (selIdx < 0) return;
+  if (_rsLlmRunning) {                      // second click = stop
+    batchAbort = true;
+    const btn = document.getElementById('rs-llm-refresh-btn');
+    if (btn) btn.textContent = '…';
+    return;
+  }
   const model  = document.getElementById('llm-model').value;
   const prompt = document.getElementById('llm-prompt').value.trim();
   if (!prompt) { showToast('LLM prompt is empty'); return; }
+  _rsLlmRunning = true; batchAbort = false;
+  const btn = document.getElementById('rs-llm-refresh-btn');
+  if (btn) { btn.textContent = '■'; btn.title = 'Stop'; }
   showToast('LLM over current rows…');
   const ch = parseInt(document.getElementById('llm-cellheight')?.value, 10) || 28;
   try { await _llmLineByLineOne(selIdx, model, prompt, ch); }
-  catch (e) { showToast(`LLM refresh failed: ${e.message}`); return; }
-  renderRowTable(pageData.shapes[selIdx]); refreshDiag();
+  catch (e) { showToast(`LLM refresh failed: ${e.message}`); }
+  finally {
+    _rsLlmRunning = false; batchAbort = false;
+    if (selIdx >= 0) { renderRowTable(pageData.shapes[selIdx]); refreshDiag(); }
+  }
 }
 
 // Fill Human with the majority opinion of the available sources (PDF/OCR/LLM):
