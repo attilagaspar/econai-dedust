@@ -115,6 +115,20 @@
       overflow: hidden;
     }
 
+    /* ── Internal rows table ── */
+    .rs-table { width:100%; border-collapse:collapse; font-size:11px; }
+    .rs-table th { text-align:left; color:#888; font-size:9px; text-transform:uppercase;
+                   letter-spacing:.5px; padding:2px 4px; border-bottom:1px solid #333; }
+    .rs-table td { padding:2px 4px; border-bottom:1px solid #222; color:#ddd;
+                   white-space:nowrap; max-width:110px; overflow:hidden; text-overflow:ellipsis; }
+    .rs-table td.rs-n { color:#666; width:18px; text-align:right; }
+    .rs-table tr.rs-ok  td { background:rgba(30,160,60,0.13); }
+    .rs-table tr.rs-bad td { background:rgba(220,40,40,0.16); }
+    .rs-table tr:hover td { outline:1px solid rgba(0,160,255,0.5); }
+    .rs-table input.rs-human { width:100%; min-width:50px; box-sizing:border-box; background:#16213e;
+                   border:1px solid #2a2a4a; border-radius:3px; color:#eee; font:inherit; padding:1px 3px; }
+    .rs-table input.rs-human:focus { border-color:#e94560; outline:none; }
+
     /* ── Centre: cell crop inspector ── */
     #inspector {
       width: 80px;
@@ -856,6 +870,25 @@
           <div class="field-label">Row / Column</div>
           <div id="f-super" class="field-value">—</div>
         </div>
+        <!-- Internal row structure: OCR / LLM / Human side by side -->
+        <div class="field-group" id="fg-rows" style="display:none">
+          <div class="field-label-row">
+            <div style="display:flex;align-items:center;gap:5px;">
+              <span class="field-label">Internal rows</span>
+              <span id="rows-meta" style="font-size:10px;color:#666;"></span>
+            </div>
+            <div style="display:flex;gap:3px;align-items:center;">
+              <button class="field-run-btn" id="rows-convert-btn" onclick="convertToRows()"
+                      title="Build internal row structure from the best text layer (Human > LLM > OCR) using the anchoring split algorithm">⊞ Convert</button>
+              <button class="field-run-btn" id="rows-remove-btn" onclick="removeRowStruct()"
+                      title="Remove internal row structure (flat text layers are kept)"
+                      style="color:#fca5a5;border-color:#c04040;">✕ Rows</button>
+            </div>
+          </div>
+          <div id="rows-table-wrap" style="overflow-x:auto;"></div>
+          <div id="rows-hint" style="font-size:10px;color:#555;margin-top:2px;"></div>
+        </div>
+
         <!-- PDF text layer — shown above OCR -->
         <div class="field-group" id="fg-pdf" style="display:none">
           <div class="field-label-row">
@@ -1077,6 +1110,7 @@
         <option value="trim_overlaps">✂ Trim overlaps</option>
         <option value="anchored_ocr">⚓ Anchored OCR (EasyOCR)</option>
         <option value="anchored_llm">⚓ Anchored LLM</option>
+        <option value="convert_rows">⊞ Convert annotations to internal rows</option>
       </select>
     </div>
     <div>
@@ -2874,6 +2908,25 @@ function drawOverlay() {
       svgOverlay.appendChild(rect);
     });
 
+    // Internal row dividers (row_struct) — always visible
+    const rsRows = shape.row_struct?.rows;
+    if (rsRows?.length > 1) {
+      for (let ri = 1; ri < rsRows.length; ri++) {
+        const a = imgToScreen(Math.min(...xs), rsRows[ri].y0);
+        const b = imgToScreen(Math.max(...xs), rsRows[ri].y0);
+        if (!a || !b) continue;
+        const ln = document.createElementNS('http://www.w3.org/2000/svg','line');
+        ln.setAttribute('x1', a.x); ln.setAttribute('y1', a.y);
+        ln.setAttribute('x2', b.x); ln.setAttribute('y2', b.y);
+        ln.setAttribute('stroke', '#00e0ff');
+        ln.setAttribute('stroke-width', '1');
+        ln.setAttribute('stroke-dasharray', '4 3');
+        ln.setAttribute('stroke-opacity', '0.85');
+        ln.style.pointerEvents = 'none';
+        svgOverlay.appendChild(ln);
+      }
+    }
+
     // Resize handles for selected shape in edit mode
     if (editMode && i===selIdx) {
       HANDLES.forEach(h => {
@@ -3449,10 +3502,16 @@ window.addEventListener('mouseup', async e => {
     drawOverlay(); updatePanel();
 
   } else if (state.type==='lattice-row' || state.type==='lattice-col') {
+    // Points were mutated during the drag; remap internal row bands from the
+    // original bbox to the new one before persisting
+    Object.entries(state.origPts || {}).forEach(([i, op]) => {
+      _rescaleRowStructLocal(pageData.shapes[i], op, pageData.shapes[i].points);
+    });
     drawOverlay();
     await replaceAllShapes();
 
   } else if (state.type==='resize') {
+    _rescaleRowStructLocal(pageData.shapes[state.idx], pageData.shapes[state.idx].points, dragCurrentPts);
     pageData.shapes[state.idx].points=dragCurrentPts;
     dragCurrentPts=null; drawOverlay();
     await patchShape(state.idx, { points: pageData.shapes[state.idx].points });
@@ -3460,7 +3519,10 @@ window.addEventListener('mouseup', async e => {
 
   } else if (state.type==='move') {
     dragCurrentPts=null;
-    state.movers.forEach(i => { pageData.shapes[i].points=state.ptsMap[i]; });
+    state.movers.forEach(i => {
+      _rescaleRowStructLocal(pageData.shapes[i], pageData.shapes[i].points, state.ptsMap[i]);
+      pageData.shapes[i].points=state.ptsMap[i];
+    });
     drawOverlay();
     await replaceAllShapes();
     updatePanel();
@@ -3531,6 +3593,262 @@ async function patchShape(idx, body) {
     method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
   });
 }
+
+// ── Internal row structure (row_struct) ──────────────────────────────────────
+// Each shape may carry row_struct.rows = [{n, y0, y1, ocr, llm, human}, ...]
+// with absolute page Y coordinates.  The flat text layers are kept in sync
+// (server-side and mirrored locally) so everything downstream keeps working.
+
+function _rsRows(shape) { return shape?.row_struct?.rows || null; }
+
+// Clearing a flat layer must also clear it inside row_struct, otherwise the
+// next sync would resurrect the cleared text from the rows
+function _rsClearLayer(shape, layer) {
+  const rows = _rsRows(shape);
+  if (rows) rows.forEach(r => { r[layer] = ''; });
+}
+
+function _syncFlatLocal(shape) {
+  const rows = _rsRows(shape); if (!rows?.length) return;
+  const join = L => rows.map(r => r[L] || '').join('\n');
+  const any  = L => rows.some(r => (r[L] || '').trim());
+  if (any('ocr'))   { (shape.tesseract_output ??= {}).ocr_text             = join('ocr');   }
+  if (any('llm'))   { (shape.openai_output    ??= {}).response             = join('llm');   }
+  if (any('human')) { (shape.human_output     ??= {}).human_corrected_text = join('human'); }
+}
+
+function _rescaleRowStructLocal(shape, oldPts, newPts) {
+  const rows = _rsRows(shape);
+  if (!rows?.length || !oldPts || !newPts) return;
+  const oy1=Math.min(oldPts[0][1],oldPts[1][1]), oy2=Math.max(oldPts[0][1],oldPts[1][1]);
+  const ny1=Math.min(newPts[0][1],newPts[1][1]), ny2=Math.max(newPts[0][1],newPts[1][1]);
+  const oh=oy2-oy1, nh=ny2-ny1;
+  if (oh<=0 || nh<=0 || (oy1===ny1 && oy2===ny2)) return;
+  rows.forEach(r => {
+    r.y0 = ny1 + (r.y0-oy1)*nh/oh;
+    r.y1 = ny1 + (r.y1-oy1)*nh/oh;
+  });
+}
+
+// Bands in cell-crop pixel space (the crop served by /api/cell uses pad=4)
+function _rsBandsRel(shape) {
+  const rows = _rsRows(shape); if (!rows?.length) return null;
+  const ys  = shape.points.map(p=>p[1]);
+  const top = Math.max(0, Math.min(...ys) - 4);
+  return rows.map(r => [r.y0 - top, r.y1 - top]);
+}
+
+async function saveRowStruct(idx, origin = null) {
+  const shape  = pageData.shapes[idx];
+  const rows   = _rsRows(shape) || [];
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx});
+  const r = await fetch(`${API}/api/page/shape/rows?${params}`, {
+    method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({rows, origin}),
+  });
+  if (r.ok) {
+    const data = await r.json();
+    if (data.row_struct) shape.row_struct = data.row_struct;
+    else delete shape.row_struct;
+    _syncFlatLocal(shape);
+  } else {
+    showToast(`Row save failed: ${r.status}`);
+  }
+  drawOverlay(); refreshDiag();
+}
+
+// After a line-by-line / anchored run the server has written row_struct to
+// disk — pull it into the local pageData copy.
+async function _refreshShapeRowStruct(idx) {
+  try {
+    const p = pages[pageIdx];
+    const r = await fetch(`${API}/api/page?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(p.stem)}`);
+    const data = await r.json();
+    if (data.shapes?.[idx]?.row_struct) pageData.shapes[idx].row_struct = data.shapes[idx].row_struct;
+  } catch {}
+  drawOverlay();
+  if (idx === selIdx) updatePanel();
+}
+
+// ── Internal rows: table view + actions ─────────────────────────────────────
+function renderRowTable(shape) {
+  const fg   = document.getElementById('fg-rows');
+  const wrap = document.getElementById('rows-table-wrap');
+  const hint = document.getElementById('rows-hint');
+  const meta = document.getElementById('rows-meta');
+  const rows = _rsRows(shape);
+  fg.style.display = 'flex';
+
+  // Flat text boxes are replaced by the table when a row structure exists
+  const hasRs = !!rows?.length;
+  ['f-ocr', 'f-llm-result', 'human-input'].forEach(id => {
+    const el = document.getElementById(id)?.closest('.lined-wrap');
+    if (el) el.style.display = hasRs ? 'none' : '';
+  });
+  document.getElementById('rows-convert-btn').style.display = hasRs ? 'none' : '';
+  document.getElementById('rows-remove-btn').style.display  = hasRs ? '' : 'none';
+
+  if (!hasRs) {
+    wrap.innerHTML = '';
+    meta.textContent = '';
+    const hasText = shape.human_output?.human_corrected_text
+                 || shape.openai_output?.response
+                 || shape.tesseract_output?.ocr_text;
+    hint.textContent = hasText
+      ? 'No internal rows yet — Convert splits the cell using the best text layer.'
+      : 'No internal rows (cell has no text in any layer).';
+    return;
+  }
+
+  meta.textContent = `${rows.length} row${rows.length > 1 ? 's' : ''} · ${shape.row_struct.origin || ''}`;
+  hint.textContent = editMode
+    ? 'Drag dividers on the crop · double-click divider = merge · double-click band = split'
+    : '';
+
+  let html = '<table class="rs-table"><tr><th>#</th><th>OCR</th><th>LLM</th><th>Human</th></tr>';
+  rows.forEach((r, i) => {
+    const o = (r.ocr || '').trim(), l = (r.llm || '').trim(), h = (r.human || '').trim();
+    const agree    = o && l && o === l && (!h || h === o);
+    const conflict = (o && l && o !== l) || (h && ((o && h !== o) || (l && h !== l)));
+    const cls = agree ? 'rs-ok' : conflict ? 'rs-bad' : '';
+    html += `<tr class="${cls}" onmouseenter="_rsHover(${i})" onmouseleave="_rsHover(-1)">`
+          + `<td class="rs-n">${r.n}</td>`
+          + `<td title="${_escHtml(r.ocr || '')}">${_escHtml(r.ocr || '')}</td>`
+          + `<td title="${_escHtml(r.llm || '')}">${_escHtml(r.llm || '')}</td>`
+          + `<td><input class="rs-human" value="${_escHtml(r.human || '')}" `
+          + `onchange="_rsHumanEdit(${i}, this.value)"></td></tr>`;
+  });
+  wrap.innerHTML = html + '</table>';
+}
+
+function _rsHover(rowIdx) {
+  if (selIdx < 0) return;
+  const bands = _rsBandsRel(pageData.shapes[selIdx]);
+  if (bands) drawRowOverlay(bands, rowIdx);
+}
+
+async function _rsHumanEdit(rowIdx, value) {
+  if (selIdx < 0) return;
+  const rows = _rsRows(pageData.shapes[selIdx]);
+  if (!rows?.[rowIdx]) return;
+  rows[rowIdx].human = value;
+  await saveRowStruct(selIdx);
+  renderRowTable(pageData.shapes[selIdx]);
+}
+
+async function convertToRows() {
+  if (selIdx < 0 || !pages.length) return;
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx, force: 'true'});
+  const r = await fetch(`${API}/api/page/shape/rows/convert?${params}`, {method: 'POST'});
+  if (!r.ok) { showToast(`Convert failed: ${(await r.text()).slice(0, 120)}`); return; }
+  const data = await r.json();
+  pageData.shapes[selIdx].row_struct = data.row_struct;
+  _syncFlatLocal(pageData.shapes[selIdx]);
+  updatePanel(); drawOverlay(); refreshDiag();
+  showToast(`Converted to ${data.rows} internal rows`);
+}
+
+async function removeRowStruct() {
+  if (selIdx < 0) return;
+  if (!confirm('Remove the internal row structure? Flat text layers are kept.')) return;
+  delete pageData.shapes[selIdx].row_struct;
+  await saveRowStruct(selIdx);     // empty rows → server deletes it
+  updatePanel();
+}
+
+// ── Internal rows: divider editing on the cell crop (edit mode) ─────────────
+let _rsDrag = null;   // {divider: i} — boundary between rows[i-1] and rows[i]
+
+function _rsCropY(e) {
+  // Mouse event → cell-crop pixel Y (the canvas draws at natural resolution)
+  const img  = document.getElementById('cell-crop');
+  const rect = img.getBoundingClientRect();
+  return (e.clientY - rect.top) * ((img.naturalHeight || img.clientHeight) / img.clientHeight);
+}
+
+function _rsCropTop(shape) {
+  const ys = shape.points.map(p => p[1]);
+  return Math.max(0, Math.min(...ys) - 4);
+}
+
+function _rsNearestDivider(shape, cropY, tol = 6) {
+  const rows = _rsRows(shape); if (!rows) return -1;
+  const top = _rsCropTop(shape);
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs((rows[i].y0 - top) - cropY) <= tol) return i;
+  }
+  return -1;
+}
+
+function _initRowCanvasEditing() {
+  const canvas = document.getElementById('row-canvas');
+
+  canvas.addEventListener('mousemove', e => {
+    if (selIdx < 0 || !editMode) return;
+    const shape = pageData.shapes[selIdx];
+    if (_rsDrag) {
+      const rows = _rsRows(shape);
+      const i    = _rsDrag.divider;
+      const top  = _rsCropTop(shape);
+      const minY = rows[i - 1].y0 + 3, maxY = rows[i].y1 - 3;
+      const yAbs = Math.min(maxY, Math.max(minY, _rsCropY(e) + top));
+      rows[i - 1].y1 = yAbs;
+      rows[i].y0     = yAbs;
+      drawRowOverlay(_rsBandsRel(shape), -1);
+      drawOverlay();
+      e.preventDefault();
+      return;
+    }
+    canvas.style.cursor = _rsNearestDivider(shape, _rsCropY(e)) >= 0 ? 'row-resize' : '';
+  });
+
+  canvas.addEventListener('mousedown', e => {
+    if (selIdx < 0 || !editMode) return;
+    const div = _rsNearestDivider(pageData.shapes[selIdx], _rsCropY(e));
+    if (div >= 0) { _rsDrag = {divider: div}; e.preventDefault(); e.stopPropagation(); }
+  });
+
+  window.addEventListener('mouseup', async () => {
+    if (!_rsDrag) return;
+    _rsDrag = null;
+    if (selIdx >= 0) {
+      await saveRowStruct(selIdx, 'manual');
+      renderRowTable(pageData.shapes[selIdx]);
+    }
+  });
+
+  canvas.addEventListener('dblclick', async e => {
+    if (selIdx < 0 || !editMode) return;
+    const shape = pageData.shapes[selIdx];
+    const rows  = _rsRows(shape);
+    if (!rows) return;
+    const top   = _rsCropTop(shape);
+    const div   = _rsNearestDivider(shape, _rsCropY(e));
+
+    if (div >= 0) {
+      // Merge the two rows around the divider; texts joined with a space
+      const a = rows[div - 1], b = rows[div];
+      a.y1 = b.y1;
+      ['ocr', 'llm', 'human'].forEach(L => {
+        a[L] = [(a[L] || '').trim(), (b[L] || '').trim()].filter(Boolean).join(' ');
+      });
+      rows.splice(div, 1);
+    } else {
+      // Split the band under the cursor; the upper half keeps the texts
+      const yAbs = _rsCropY(e) + top;
+      const i = rows.findIndex(r => yAbs > r.y0 + 3 && yAbs < r.y1 - 3);
+      if (i < 0) return;
+      const r = rows[i];
+      rows.splice(i + 1, 0, {n: 0, y0: yAbs, y1: r.y1, ocr: '', llm: '', human: ''});
+      r.y1 = yAbs;
+    }
+    await saveRowStruct(selIdx, 'manual');
+    drawRowOverlay(_rsBandsRel(shape), -1);
+    renderRowTable(shape);
+    e.preventDefault();
+  });
+}
+document.addEventListener('DOMContentLoaded', _initRowCanvasEditing);
 
 async function replaceAllShapes() {
   const params=new URLSearchParams({folder,stem:pages[pageIdx].stem});
@@ -3909,6 +4227,14 @@ function _setTextField(shape, field, text) {
   } else if (field === 'pdf') {
     shape.pdf_text = text;
   }
+  // Keep the internal row table in sync when the line counts match
+  if (field === 'ocr' || field === 'llm' || field === 'human') {
+    const rows = _rsRows(shape);
+    if (rows) {
+      const lines = (text || '').split('\n');
+      if (lines.length === rows.length) rows.forEach((r, i) => { r[field] = lines[i]; });
+    }
+  }
 }
 
 async function runBatch() {
@@ -4173,7 +4499,7 @@ async function runBatch() {
       shapes.forEach((s, i) => {
         if (!labelSet.has(s.label)) return;
         if (colFilter !== null && !colFilter.has(i)) return;
-        if (s.tesseract_output) { s.tesseract_output = null; n++; }
+        if (s.tesseract_output) { s.tesseract_output = null; _rsClearLayer(s, 'ocr'); n++; }
       });
       if (n > 0) {
         await fetch(`${API}/api/page/shapes?${params}`, {
@@ -4198,7 +4524,7 @@ async function runBatch() {
       shapes.forEach((s, i) => {
         if (!labelSet.has(s.label)) return;
         if (colFilter !== null && !colFilter.has(i)) return;
-        if (s.openai_output) { s.openai_output = null; n++; }
+        if (s.openai_output) { s.openai_output = null; _rsClearLayer(s, 'llm'); n++; }
       });
       if (n > 0) {
         await fetch(`${API}/api/page/shapes?${params}`, {
@@ -4230,7 +4556,7 @@ async function runBatch() {
         const llmLines   = _lineCount(s.openai_output.response);
         const ocrLines   = _lineCount(s.tesseract_output?.ocr_text);
         const wideNumber = s.openai_output.response.split('\n').some(line => line.length > digitThresh);
-        if (llmLines - ocrLines >= thresh || wideNumber) { s.openai_output = null; n++; }
+        if (llmLines - ocrLines >= thresh || wideNumber) { s.openai_output = null; _rsClearLayer(s, 'llm'); n++; }
       });
       if (n > 0) {
         await fetch(`${API}/api/page/shapes?${params}`, {
@@ -4312,6 +4638,38 @@ async function runBatch() {
         });
       }
       progText.textContent = `Page ${idx + 1}/${pages.length} — trimmed ${trimmed} overlapping pair(s)`;
+
+    } else if (op === 'convert_rows') {
+      const res    = await fetch(`${API}/api/page?${params}`);
+      const pdata  = await res.json();
+      const shapes = pdata.shapes || [];
+      const condFilter = _computeConditionFilter(shapes);
+      const colFilter  = _computeColumnFilter(shapes);
+      let converted = 0, skipped = 0;
+
+      for (let si = 0; si < shapes.length; si++) {
+        if (_batchStop) break;
+        const sh = shapes[si];
+        if (condFilter !== null && !condFilter.has(si)) continue;
+        if (colFilter  !== null && !colFilter.has(si))  continue;
+        if (sh.row_struct?.rows?.length) { skipped++; continue; }   // already converted
+        const text = sh.human_output?.human_corrected_text
+                  || sh.openai_output?.response
+                  || sh.tesseract_output?.ocr_text;
+        if (!text?.trim()) continue;
+        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length}`;
+        try {
+          const p2 = new URLSearchParams({folder, stem, idx: si});
+          const r2 = await fetch(`${API}/api/page/shape/rows/convert?${p2}`, {method: 'POST'});
+          if (r2.ok) {
+            converted++;
+            if (_batchVerbose) batchLog(`[${stem}] shape ${si}: → ${(await r2.json()).rows} rows`);
+          } else if (_batchVerbose) {
+            batchLog(`[${stem}] shape ${si}: ✕ ${r2.status}`);
+          }
+        } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
+      }
+      progText.textContent = `Page ${idx + 1}/${pages.length} — converted ${converted}, skipped ${skipped}`;
 
     } else if (op === 'anchored_ocr' || op === 'anchored_llm') {
       const pattern    = document.getElementById('batch-anchored-pattern').value
@@ -4961,6 +5319,7 @@ function updatePanel() {
   if (selIdx !== _lastPanelIdx) {
     _lastPanelIdx = selIdx;
     lastRowLines  = null;
+    lastEmptyRows = new Set();
     drawRowOverlay(null, -1);
     document.getElementById('preproc-rows').innerHTML = '';
     document.getElementById('preproc-placeholder').style.display = 'block';
@@ -4971,8 +5330,14 @@ function updatePanel() {
     if (!inspector.classList.contains('inspector-collapsed')) {
       inspector.style.width = Math.min(420, Math.max(80, this.naturalWidth + 20)) + 'px';
     }
-    if (lastRowLines) drawRowOverlay(lastRowLines, -1);
+    const rsBands = _rsBandsRel(pageData?.shapes?.[selIdx]);
+    if (rsBands)           drawRowOverlay(rsBands, -1);
+    else if (lastRowLines) drawRowOverlay(lastRowLines, -1);
   };
+
+  // Divider editing is done on the crop overlay canvas in edit mode
+  const rowCanvas = document.getElementById('row-canvas');
+  rowCanvas.style.pointerEvents = (editMode && _rsRows(shape)) ? 'auto' : 'none';
   cropImg.src=`${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}&idx=${selIdx}`;
   cropImg.style.display='block'; cropPh.style.display='none';
 
@@ -5029,6 +5394,9 @@ function updatePanel() {
 
   document.getElementById('human-input').value=shape.human_output?.human_corrected_text||'';
 
+  // Internal rows: table view replaces the flat text boxes when present
+  renderRowTable(shape);
+
   // PDF text layer
   document.getElementById('fg-pdf').style.display='flex';
   document.getElementById('f-pdf').value = shape.pdf_text ?? '—';
@@ -5082,6 +5450,7 @@ async function runOcr() {
     if (!pageData.shapes[selIdx].tesseract_output) pageData.shapes[selIdx].tesseract_output = {};
     pageData.shapes[selIdx].tesseract_output.ocr_text  = data.ocr_text;
     pageData.shapes[selIdx].tesseract_output.mean_conf = data.mean_conf;
+    if (pageData.shapes[selIdx].row_struct) await _refreshShapeRowStruct(selIdx);
     updatePanel(); refreshDiag(); drawOverlay();
     showToast(`OCR done · conf ${data.mean_conf}%`);
   } finally {
@@ -5127,12 +5496,14 @@ async function _runOcrBatch(targets) {
         if (!r.ok) throw new Error(r.status);
         const data = await r.json();
         pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr'};
+        if (pageData.shapes[i].row_struct) await _refreshShapeRowStruct(i);
       } else {
         const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
         const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
         if (!r.ok) throw new Error(r.status);
         const data = await r.json();
         pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf};
+        if (pageData.shapes[i].row_struct) await _refreshShapeRowStruct(i);
       }
       done++;
       if (i === selIdx) updatePanel(); else drawOverlay();
@@ -5157,6 +5528,7 @@ async function runOcrEasyOcr() {
     pageData.shapes[selIdx].tesseract_output = {
       ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr',
     };
+    if (pageData.shapes[selIdx].row_struct) await _refreshShapeRowStruct(selIdx);
     updatePanel(); refreshDiag(); drawOverlay();
     showToast(`EasyOCR done · conf ${data.mean_conf}%`);
   } finally {
@@ -5260,6 +5632,7 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
             mode:      'linebyline',
           };
           llmProgress = null;
+          await _refreshShapeRowStruct(selIdx);
           updatePanel(); refreshDiag();
           drawRowOverlay(lastRowLines, -1);
           showToast(`OCR line-by-line done · ${lineResults.length} rows`);
@@ -5319,6 +5692,7 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shap
           mean_conf: msg.mean_conf ?? null,
           mode:      'linebyline',
         };
+        await _refreshShapeRowStruct(shapeIdx);
         if (shapeIdx === selIdx) updatePanel();
         refreshDiag();
       }
@@ -5428,6 +5802,7 @@ async function _ocrAnchoredOne(shapeIdx, nRows) {
           ocr_text: msg.ocr_text, mean_conf: msg.mean_conf ?? null,
           engine: 'easyocr', mode: 'anchored',
         };
+        await _refreshShapeRowStruct(shapeIdx);
         if (shapeIdx === selIdx) updatePanel();
         refreshDiag();
       }
@@ -5972,6 +6347,7 @@ async function runLlm() {
       mode: data.mode, timestamp: data.timestamp,
       tokens_in: data.tokens_in, tokens_out: data.tokens_out,
     };
+    if (pageData.shapes[myIdx].row_struct) await _refreshShapeRowStruct(myIdx);
     if (myIdx === selIdx) {
       // Still on the same shape — refresh panel
       const el = document.getElementById('f-llm-result');
@@ -6016,7 +6392,7 @@ async function clearOcr() {
   if (!pageData?.shapes) return;
   const targets = _clearTargets();
   if (!targets.length) return;
-  targets.forEach(i => { pageData.shapes[i].tesseract_output = null; });
+  targets.forEach(i => { pageData.shapes[i].tesseract_output = null; _rsClearLayer(pageData.shapes[i], 'ocr'); });
   updatePanel(); drawOverlay();
   await replaceAllShapes();
   showToast(`OCR cleared for ${targets.length} shape${targets.length !== 1 ? 's' : ''}`);
@@ -6025,7 +6401,7 @@ async function clearOcr() {
 async function clearOcrPage() {
   if (!pageData?.shapes?.length) return;
   let n = 0;
-  pageData.shapes.forEach(s => { if (s.tesseract_output) { s.tesseract_output = null; n++; } });
+  pageData.shapes.forEach(s => { if (s.tesseract_output) { s.tesseract_output = null; _rsClearLayer(s, 'ocr'); n++; } });
   updatePanel(); drawOverlay();
   await replaceAllShapes();
   showToast(`OCR cleared for ${n} shape${n !== 1 ? 's' : ''} on this page`);
@@ -6035,7 +6411,7 @@ async function clearLlm() {
   if (!pageData?.shapes) return;
   const targets = _clearTargets();
   if (!targets.length) return;
-  targets.forEach(i => { pageData.shapes[i].openai_output = null; });
+  targets.forEach(i => { pageData.shapes[i].openai_output = null; _rsClearLayer(pageData.shapes[i], 'llm'); });
   updatePanel(); drawOverlay();
   await replaceAllShapes();
   showToast(`LLM cleared for ${targets.length} shape${targets.length !== 1 ? 's' : ''}`);
@@ -6044,7 +6420,7 @@ async function clearLlm() {
 async function clearLlmPage() {
   if (!pageData?.shapes?.length) return;
   let n = 0;
-  pageData.shapes.forEach(s => { if (s.openai_output) { s.openai_output = null; n++; } });
+  pageData.shapes.forEach(s => { if (s.openai_output) { s.openai_output = null; _rsClearLayer(s, 'llm'); n++; } });
   updatePanel(); drawOverlay();
   await replaceAllShapes();
   showToast(`LLM cleared for ${n} shape${n !== 1 ? 's' : ''} on this page`);
@@ -6177,6 +6553,7 @@ async function _llmSingleShape(shapeIdx, model, mode, prompt) {
   pageData.shapes[shapeIdx].openai_output = {
     response: data.response, model: data.model, mode: data.mode, timestamp: data.timestamp,
   };
+  if (pageData.shapes[shapeIdx].row_struct) await _refreshShapeRowStruct(shapeIdx);
 }
 
 async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
@@ -6220,6 +6597,7 @@ async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
         pageData.shapes[shapeIdx].openai_output = {
           response: msg.response, model: msg.model, mode: 'linebyline', timestamp: msg.timestamp,
         };
+        await _refreshShapeRowStruct(shapeIdx);
       }
     }
     if (batchAbort) { reader.cancel(); break; }
@@ -6376,6 +6754,7 @@ async function runLlmLineByLine() {
               response: msg.response, model: msg.model,
               mode: 'linebyline', timestamp: msg.timestamp,
             };
+            await _refreshShapeRowStruct(myIdx);
           }
           llmProgress = null;
           if (myIdx === selIdx) updatePanel();
@@ -6504,6 +6883,7 @@ async function _llmAnchoredOne(shapeIdx, nRows) {
           response: msg.response, model: msg.model,
           mode: 'anchored', timestamp: msg.timestamp,
         };
+        await _refreshShapeRowStruct(shapeIdx);
         if (shapeIdx === selIdx) updatePanel();
         refreshDiag();
       }
@@ -6532,6 +6912,7 @@ async function saveCorrection() {
   const r=await patchShape(selIdx,{human_corrected_text:text});
   if (!pageData.shapes[selIdx].human_output) pageData.shapes[selIdx].human_output={};
   pageData.shapes[selIdx].human_output.human_corrected_text=text;
+  if (pageData.shapes[selIdx].row_struct) await _refreshShapeRowStruct(selIdx);
   document.getElementById('save-status').textContent='✓ Saved';
   setTimeout(()=>document.getElementById('save-status').textContent='',2000);
   refreshDiag(); drawOverlay();

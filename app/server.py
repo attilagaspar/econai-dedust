@@ -199,8 +199,10 @@ def update_shape(
         if "human_output" not in shape:
             shape["human_output"] = {}
         shape["human_output"]["human_corrected_text"] = body.human_corrected_text
+        _distribute_flat_to_rows(shape, "human", body.human_corrected_text)
 
     if body.points is not None:
+        _rescale_row_struct(shape, shape.get("points"), body.points)
         shape["points"] = body.points
 
     if body.label is not None:
@@ -265,6 +267,238 @@ def replace_shapes(
     data["shapes"] = body.shapes
     jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"ok": True, "count": len(body.shapes)}
+
+
+# ---------------------------------------------------------------------------
+# Internal row structure (row_struct)
+#
+# Each shape may carry exactly one row_struct describing its internal rows:
+#   {"version": 1, "origin": "linebyline|anchored|converted|manual",
+#    "rows": [{"n": 1, "y0": <abs page Y>, "y1": <abs page Y>,
+#              "ocr": "...", "llm": "...", "human": "..."}, ...]}
+# Coordinates are absolute page pixels; X is implicit (the shape bbox).
+# The legacy flat text fields are re-derived from row_struct on every write,
+# so all existing consumers (Excel export, diagnostics, batch conditions,
+# anchoring source lookups) keep working unchanged.
+# ---------------------------------------------------------------------------
+
+_ROW_LAYERS = ("ocr", "llm", "human")
+
+
+def _shape_bbox(shape):
+    pts = shape["points"]
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _sync_flat_from_rows(shape):
+    """Re-derive the legacy flat text fields from row_struct.  A layer whose
+    rows are all empty is left untouched (preserves legacy text)."""
+    rs = shape.get("row_struct")
+    if not rs or not rs.get("rows"):
+        return
+    rows = rs["rows"]
+
+    def joined(layer):
+        vals = [(r.get(layer) or "") for r in rows]
+        return "\n".join(vals) if any(v.strip() for v in vals) else None
+
+    t = joined("ocr")
+    if t is not None:
+        if not isinstance(shape.get("tesseract_output"), dict):
+            shape["tesseract_output"] = {}
+        shape["tesseract_output"]["ocr_text"] = t
+    t = joined("llm")
+    if t is not None:
+        if not isinstance(shape.get("openai_output"), dict):
+            shape["openai_output"] = {}
+        shape["openai_output"]["response"] = t
+    t = joined("human")
+    if t is not None:
+        if not isinstance(shape.get("human_output"), dict):
+            shape["human_output"] = {}
+        shape["human_output"]["human_corrected_text"] = t
+
+
+def _apply_layer_rows(shape, bands_abs, layer, texts, origin):
+    """Write one layer's per-row texts into the shape's row_struct.
+    If a structure with the same row count already exists, its boxes are kept
+    and only this layer's values change; otherwise the structure is rebuilt
+    from bands_abs (other layers survive when the row count matches)."""
+    rs = shape.get("row_struct")
+    if rs and len(rs.get("rows", [])) == len(texts):
+        for r, t in zip(rs["rows"], texts):
+            r[layer] = t
+    else:
+        old = (rs or {}).get("rows", [])
+        new_rows = []
+        for i, ((b0, b1), t) in enumerate(zip(bands_abs, texts)):
+            row = {"n": i + 1, "y0": float(b0), "y1": float(b1),
+                   "ocr": "", "llm": "", "human": ""}
+            row[layer] = t
+            if len(old) == len(texts):
+                for lay in _ROW_LAYERS:
+                    if lay != layer and old[i].get(lay):
+                        row[lay] = old[i][lay]
+            new_rows.append(row)
+        shape["row_struct"] = {"version": 1, "origin": origin, "rows": new_rows}
+    _sync_flat_from_rows(shape)
+
+
+def _distribute_flat_to_rows(shape, layer, text):
+    """Whole-cell OCR/LLM/human writes: push the flat text into the existing
+    row_struct when the line counts match, so the table view stays in sync."""
+    rs = shape.get("row_struct")
+    if not rs or not rs.get("rows"):
+        return
+    lines = (text or "").split("\n")
+    if len(lines) == len(rs["rows"]):
+        for r, t in zip(rs["rows"], lines):
+            r[layer] = t
+
+
+def _existing_row_bands_rel(shape, crop_top, crop_h):
+    """Return the existing row_struct bands converted to crop-relative
+    coordinates (clamped), or None.  Used so re-running a layer reuses the
+    established structure instead of re-detecting rows."""
+    rs = shape.get("row_struct")
+    if not rs or not rs.get("rows"):
+        return None
+    bands = []
+    for r in rs["rows"]:
+        t = max(0, int(round(r["y0"] - crop_top)))
+        b = min(crop_h, int(round(r["y1"] - crop_top)))
+        if b <= t:
+            b = min(crop_h, t + 1)
+        bands.append((t, b))
+    return bands
+
+
+def _rescale_row_struct(shape, old_pts, new_pts):
+    """Linearly remap row bands when the shape bbox changes (move / resize)."""
+    rs = shape.get("row_struct")
+    if not rs or not rs.get("rows") or not old_pts or not new_pts:
+        return
+    oy = [p[1] for p in old_pts]; ny = [p[1] for p in new_pts]
+    oy1, oy2 = min(oy), max(oy)
+    ny1, ny2 = min(ny), max(ny)
+    oh, nh = oy2 - oy1, ny2 - ny1
+    if oh <= 0 or nh <= 0 or (oy1 == ny1 and oy2 == ny2):
+        return
+    for r in rs["rows"]:
+        r["y0"] = ny1 + (r["y0"] - oy1) * nh / oh
+        r["y1"] = ny1 + (r["y1"] - oy1) * nh / oh
+
+
+class RowStructBody(BaseModel):
+    rows:   list                    # [{y0, y1, ocr, llm, human}, ...] abs page Y
+    origin: Optional[str] = None
+
+
+@app.patch("/api/page/shape/rows")
+def update_row_struct(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    idx:    int = Query(...),
+    body:   RowStructBody = ...,
+):
+    """Replace a shape's internal row structure (divider edits, human cell
+    edits, removal).  An empty rows list deletes the structure."""
+    d  = _resolve_folder(folder)
+    jf = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+    shape = shapes[idx]
+
+    if not body.rows:
+        shape.pop("row_struct", None)
+    else:
+        rs = shape.get("row_struct") or {"version": 1, "origin": body.origin or "manual"}
+        if body.origin:
+            rs["origin"] = body.origin
+        rows = [{"n": 0, "y0": float(r["y0"]), "y1": float(r["y1"]),
+                 "ocr": r.get("ocr") or "", "llm": r.get("llm") or "",
+                 "human": r.get("human") or ""} for r in body.rows]
+        rows.sort(key=lambda r: r["y0"])
+        for i, r in enumerate(rows):
+            r["n"] = i + 1
+        rs["rows"] = rows
+        shape["row_struct"] = rs
+        _sync_flat_from_rows(shape)
+
+    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "row_struct": shape.get("row_struct")}
+
+
+@app.post("/api/page/shape/rows/convert")
+def api_rows_convert(
+    folder: str  = Query(...),
+    stem:   str  = Query(...),
+    idx:    int  = Query(...),
+    force:  bool = Query(False, description="Rebuild even if row_struct exists"),
+):
+    """Build row_struct for a legacy annotation: the line count of the best
+    text layer (Human > LLM > OCR) fixes N, then the same histogram-valley
+    algorithm used by anchoring finds the band boundaries.  Layers whose line
+    count matches N are distributed into the rows; mismatched layers stay
+    empty in the table (their flat text is preserved)."""
+    d        = _resolve_folder(folder)
+    jf       = d / f"{stem}.json"
+    img_path = _find_image(d, stem)
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+    shape = shapes[idx]
+
+    if shape.get("row_struct") and not force:
+        raise HTTPException(status_code=400, detail="row_struct already exists (use force=true)")
+
+    human = (shape.get("human_output")    or {}).get("human_corrected_text") or ""
+    llm   = (shape.get("openai_output")   or {}).get("response") or ""
+    ocr   = (shape.get("tesseract_output") or {}).get("ocr_text") or ""
+    best  = human or llm or ocr
+    if not best.strip():
+        raise HTTPException(status_code=400, detail="Shape has no text in any layer")
+    n = len(best.split("\n"))
+
+    x1, y1, x2, y2 = _shape_bbox(shape)
+    shadow = _get_shadow_page(folder, stem, img_path)
+    iw, ih = shadow.size
+    pad    = 4
+    cy1    = max(0, int(y1) - pad)
+    crop   = shadow.crop((
+        max(0, int(x1) - pad), cy1,
+        min(iw, int(x2) + pad), min(ih, int(y2) + pad),
+    ))
+    bands     = _split_into_n_rows(crop, n)
+    bands_abs = [(t + cy1, b + cy1) for t, b in bands]
+
+    layers = {"human": human.split("\n") if human else None,
+              "llm":   llm.split("\n")   if llm   else None,
+              "ocr":   ocr.split("\n")   if ocr   else None}
+    rows = []
+    for i, (b0, b1) in enumerate(bands_abs):
+        row = {"n": i + 1, "y0": float(b0), "y1": float(b1),
+               "ocr": "", "llm": "", "human": ""}
+        for lay, lines in layers.items():
+            if lines and len(lines) == n:
+                row[lay] = lines[i]
+        rows.append(row)
+
+    shape["row_struct"] = {"version": 1, "origin": "converted", "rows": rows}
+    _sync_flat_from_rows(shape)
+    jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "rows": len(rows), "row_struct": shape["row_struct"]}
 
 
 @app.delete("/api/page/shape")
@@ -488,6 +722,7 @@ def api_ocr_cell(
         "mean_conf": mean_conf,
         "lang":      lang,
     }
+    _distribute_flat_to_rows(shapes[idx], "ocr", ocr_text)
     jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return {"ocr_text": ocr_text, "mean_conf": mean_conf}
@@ -809,6 +1044,7 @@ def api_ocr_easyocr(
         "engine":    "easyocr",
         "langs":     lang_list,
     }
+    _distribute_flat_to_rows(shapes[idx], "ocr", ocr_text)
     jf.write_text(json.dumps(data_doc, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return {"ocr_text": ocr_text, "mean_conf": mean_conf}
@@ -863,7 +1099,9 @@ async def api_ocr_linebyline(
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
 
-    rows = _detect_text_rows(crop, cell_height)
+    crop_top = max(0, int(y1) - pad)
+    rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
+            or _detect_text_rows(crop, cell_height))
 
     tess_config = "--psm 7 -c tessedit_char_whitelist=0123456789-"
 
@@ -913,6 +1151,8 @@ async def api_ocr_linebyline(
         combined  = "\n".join(line_texts)
         mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
 
+        _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                          "ocr", line_texts, "linebyline")
         shape["tesseract_output"] = {
             "ocr_text":  combined,
             "mean_conf": mean_conf,
@@ -982,7 +1222,9 @@ async def api_ocr_easyocr_linebyline(
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
 
-    rows      = _detect_text_rows(crop, cell_height)
+    crop_top  = max(0, int(y1) - pad)
+    rows      = (_existing_row_bands_rel(shape, crop_top, crop.height)
+                 or _detect_text_rows(crop, cell_height))
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
 
@@ -1051,6 +1293,8 @@ async def api_ocr_easyocr_linebyline(
         combined  = "\n".join(line_texts)
         mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
 
+        _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                          "ocr", line_texts, "linebyline")
         shape["tesseract_output"] = {
             "ocr_text":  combined,
             "mean_conf": mean_conf,
@@ -1152,7 +1396,12 @@ async def api_ocr_easyocr_anchored(
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
 
-    rows      = _split_into_n_rows(crop, n_rows)
+    crop_top = max(0, int(y1) - pad)
+    existing = _existing_row_bands_rel(shape, crop_top, crop.height)
+    # Anchoring is an explicit structural directive: keep the existing
+    # structure only when its row count already matches the anchor
+    rows      = existing if (existing and len(existing) == n_rows) \
+                else _split_into_n_rows(crop, n_rows)
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
     crop_bin  = crop.convert("L")
@@ -1209,6 +1458,8 @@ async def api_ocr_easyocr_anchored(
 
         combined  = "\n".join(line_texts)
         mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+        _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                          "ocr", line_texts, "anchored")
         shape["tesseract_output"] = {
             "ocr_text": combined, "mean_conf": mean_conf,
             "engine": "easyocr", "mode": "anchored",
@@ -1434,6 +1685,7 @@ def api_llm_cell(
             "mode":      mode,
             "timestamp": timestamp,
         }
+        _distribute_flat_to_rows(shape, "llm", result)
         jf.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return {"response": result, "model": model, "mode": mode,
@@ -1495,7 +1747,9 @@ async def api_llm_linebyline(
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
 
-    rows = _detect_text_rows(crop, cell_height)
+    crop_top = max(0, int(y1) - pad)
+    rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
+            or _detect_text_rows(crop, cell_height))
     prompt_text = body.prompt
 
     def gen():
@@ -1552,6 +1806,8 @@ async def api_llm_linebyline(
         timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
         if not dry_run:
+            _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                              "llm", line_responses, "linebyline")
             shape["openai_output"] = {
                 "response":       combined,
                 "model":          model,
@@ -1632,7 +1888,10 @@ async def api_llm_anchored(
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
 
-    rows        = _split_into_n_rows(crop, n_rows)
+    crop_top = max(0, int(y1) - pad)
+    existing = _existing_row_bands_rel(shape, crop_top, crop.height)
+    rows        = existing if (existing and len(existing) == n_rows) \
+                  else _split_into_n_rows(crop, n_rows)
     prompt_text = body.prompt
 
     def gen():
@@ -1675,6 +1934,8 @@ async def api_llm_anchored(
 
         combined  = "\n".join(line_responses)
         timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+        _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                          "llm", line_responses, "anchored")
         shape["openai_output"] = {
             "response":       combined,
             "model":          model,
