@@ -1482,6 +1482,10 @@
         <option value="ocr">OCR only</option>
         <option value="pdf">PDF layer only</option>
       </select>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="xls-rows-only" style="accent-color:#e94560;width:13px;height:13px;">
+        Only cells with internal row structure
+      </label>
     </div>
 
     <!-- Annotation types -->
@@ -5363,6 +5367,7 @@ async function doExcelExport() {
   if (!stemsList.length) { alert('No pages found.'); return; }
   const pageParams = { stems: stemsList.join(',') };
 
+  const rowsOnly = document.getElementById('xls-rows-only').checked;
   const params = new URLSearchParams({
     folder, layer, types,
     scope: 'document',
@@ -5370,6 +5375,7 @@ async function doExcelExport() {
     ...pageParams,
     ...(colHeaders ? { col_headers: colHeaders } : {}),
     ...(colFilter  ? { col_filter:  colFilter  } : {}),
+    ...(rowsOnly   ? { rows_only:   'true'     } : {}),
   });
 
   closeExcelExportModal();

@@ -3585,6 +3585,7 @@ def api_export_excel(
     col_filter:  str  = Query(""),         # comma-sep 1-indexed column numbers; empty = all columns
     page_from:   int  = Query(None),       # 1-indexed first page of range (inclusive); alternative to stems
     page_to:     int  = Query(None),       # 1-indexed last  page of range (inclusive)
+    rows_only:   bool = Query(False),      # export only cells that have an internal row structure
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -3715,6 +3716,8 @@ def api_export_excel(
         raw = []
         for sh in shapes:
             if selected_types and sh.get("label", "") not in selected_types:
+                continue
+            if rows_only and not ((sh.get("row_struct") or {}).get("rows")):
                 continue
             row_lines = get_row_lines(sh)   # internal row structure wins
             text      = get_text(sh)
