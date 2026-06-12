@@ -465,7 +465,8 @@ def api_rows_convert(
 
     human = (shape.get("human_output")    or {}).get("human_corrected_text") or ""
     llm   = (shape.get("openai_output")   or {}).get("response") or ""
-    ocr   = (shape.get("tesseract_output") or {}).get("ocr_text") or ""
+    ocr   = ((shape.get("tesseract_output") or {}).get("ocr_text")
+             or (shape.get("easyocr_output") or {}).get("ocr_text") or "")
     best  = human or llm or ocr
     if not best.strip():
         raise HTTPException(status_code=400, detail="Shape has no text in any layer")
