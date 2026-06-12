@@ -2306,7 +2306,11 @@ function _bestRowValues(shape) {
 
 function _ruleNum(s) {
   if (s == null) return NaN;
-  s = String(s).trim().replace(/\s+/g, '').replace(',', '.');
+  s = String(s).trim();
+  // Anything that vaguely resembles a dash means zero in the sources:
+  // hyphen, underscore, en/em/horizontal dashes, minus sign, middle dot…
+  if (/^[-_–—―−‐‑‒·.,~]{1,3}$/.test(s)) return 0;
+  s = s.replace(/\s+/g, '').replace(',', '.');
   return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
 }
 
