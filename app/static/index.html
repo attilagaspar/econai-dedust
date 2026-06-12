@@ -4943,9 +4943,17 @@ async function runBatch() {
       progText.textContent = `Page ${idx + 1}/${pages.length} — converted ${converted}, skipped ${skipped}`;
 
     } else if (op === 'anchored_ocr' || op === 'anchored_llm') {
+      // Empty slots (e.g. "8,,2,1") are skip positions: that page in the
+      // cycle is left untouched but still advances the pattern
       const pattern    = document.getElementById('batch-anchored-pattern').value
-                           .split(',').map(s => parseInt(s.trim())).filter(n => n > 0);
-      const anchorCol  = pattern[done % pattern.length];   // 1-indexed super_column
+                           .split(',').map(s => { const n = parseInt(s.trim()); return n > 0 ? n : null; });
+      const anchorCol  = pattern[done % pattern.length];   // 1-indexed super_column, or null = skip
+      if (anchorCol == null) {
+        progText.textContent = `Page ${idx + 1}/${pages.length} — skipped (empty pattern slot)`;
+        batchLog(`[${stem}] skipped — empty slot in anchor pattern`);
+        done++;
+        continue;
+      }
       const anchorSrc  = document.getElementById('batch-anchored-source').value;
       const overwrite  = document.getElementById('batch-anchored-overwrite').checked;
       const model      = op === 'anchored_llm' ? document.getElementById('batch-anchored-model').value : '';
