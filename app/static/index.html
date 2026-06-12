@@ -3745,7 +3745,8 @@ function renderRowTable(shape) {
         + `<input type="number" value="${_rsPdfCap}" min="1" style="width:46px;background:#16213e;border:1px solid #2a2a4a;`
         + `border-radius:3px;color:#eee;font-size:10px;padding:0 2px;" onchange="_rsSetPdfCap(this.value)"><br>` : '')
     + (editMode
-      ? 'Drag dividers on the crop · double-click divider = merge · double-click band = split'
+      ? 'On the crop: hovering a divider turns it <span style="color:#f87171;">red</span> (cursor ↕) — drag moves it, '
+        + 'double-click merges the two rows. Away from dividers (cursor ＋), double-click splits the band.'
       : '');
 
   // Column order follows data quality, worst → best: crop, PDF, OCR, LLM, Human
@@ -3945,13 +3946,39 @@ function _rsCropTop(shape) {
   return Math.max(0, Math.min(...ys) - 4);
 }
 
-function _rsNearestDivider(shape, cropY, tol = 6) {
+// Hit tolerance in CROP pixels, derived from ~7 screen pixels so the feel is
+// the same regardless of how much the crop is scaled in the panel
+function _rsTol() {
+  const img = document.getElementById('cell-crop');
+  const scale = (img?.naturalHeight && img.clientHeight) ? img.naturalHeight / img.clientHeight : 1;
+  return Math.max(3, 7 * scale);
+}
+
+function _rsNearestDivider(shape, cropY, tol) {
   const rows = _rsRows(shape); if (!rows) return -1;
+  tol = tol ?? _rsTol();
   const top = _rsCropTop(shape);
+  let best = -1, bestD = Infinity;
   for (let i = 1; i < rows.length; i++) {
-    if (Math.abs((rows[i].y0 - top) - cropY) <= tol) return i;
+    const d = Math.abs((rows[i].y0 - top) - cropY);
+    if (d <= tol && d < bestD) { best = i; bestD = d; }
   }
-  return -1;
+  return best;
+}
+
+let _rsHoverDiv = -1;   // divider index currently highlighted under the cursor
+
+// Redraw the bands, then mark the hovered divider red (= "dbl-click merges HERE")
+async function _rsRedrawWithHover(shape) {
+  await drawRowOverlay(_rsBandsRel(shape), -1);
+  if (_rsHoverDiv < 0) return;
+  const canvas = document.getElementById('row-canvas');
+  const rows   = _rsRows(shape); if (!rows?.[_rsHoverDiv]) return;
+  const y   = rows[_rsHoverDiv].y0 - _rsCropTop(shape);
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = 'rgba(255,40,40,0.95)';
+  ctx.lineWidth   = 3;
+  ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
 }
 
 function _initRowCanvasEditing() {
@@ -3973,7 +4000,17 @@ function _initRowCanvasEditing() {
       e.preventDefault();
       return;
     }
-    canvas.style.cursor = _rsNearestDivider(shape, _rsCropY(e)) >= 0 ? 'row-resize' : '';
+    const div = _rsNearestDivider(shape, _rsCropY(e));
+    if (div !== _rsHoverDiv) { _rsHoverDiv = div; _rsRedrawWithHover(shape); }
+    canvas.style.cursor = div >= 0 ? 'row-resize' : 'copy';
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (_rsHoverDiv >= 0 && selIdx >= 0) {
+      _rsHoverDiv = -1;
+      const shape = pageData.shapes[selIdx];
+      if (_rsRows(shape)) drawRowOverlay(_rsBandsRel(shape), -1);
+    }
   });
 
   canvas.addEventListener('mousedown', e => {
@@ -4016,6 +4053,7 @@ function _initRowCanvasEditing() {
       rows.splice(i + 1, 0, {n: 0, y0: yAbs, y1: r.y1, ocr: '', llm: '', human: ''});
       r.y1 = yAbs;
     }
+    _rsHoverDiv = -1;
     await saveRowStruct(selIdx, 'manual');
     drawRowOverlay(_rsBandsRel(shape), -1);
     renderRowTable(shape);
