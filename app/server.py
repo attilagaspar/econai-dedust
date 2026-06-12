@@ -345,13 +345,18 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin):
     _sync_flat_from_rows(shape)
 
 
+def _split_lines(text):
+    """Robust line split: trailing newlines / CR must not shift the count."""
+    return [l.rstrip("\r") for l in (text or "").strip().split("\n")]
+
+
 def _distribute_flat_to_rows(shape, layer, text):
     """Whole-cell OCR/LLM/human writes: push the flat text into the existing
     row_struct when the line counts match, so the table view stays in sync."""
     rs = shape.get("row_struct")
     if not rs or not rs.get("rows"):
         return
-    lines = (text or "").split("\n")
+    lines = _split_lines(text)
     if len(lines) == len(rs["rows"]):
         for r, t in zip(rs["rows"], lines):
             r[layer] = t
@@ -470,7 +475,7 @@ def api_rows_convert(
     best  = human or llm or ocr
     if not best.strip():
         raise HTTPException(status_code=400, detail="Shape has no text in any layer")
-    n = len(best.split("\n"))
+    n = len(_split_lines(best))
 
     x1, y1, x2, y2 = _shape_bbox(shape)
     shadow = _get_shadow_page(folder, stem, img_path)
@@ -484,9 +489,9 @@ def api_rows_convert(
     bands     = _split_into_n_rows(crop, n)
     bands_abs = [(t + cy1, b + cy1) for t, b in bands]
 
-    layers = {"human": human.split("\n") if human else None,
-              "llm":   llm.split("\n")   if llm   else None,
-              "ocr":   ocr.split("\n")   if ocr   else None}
+    layers = {"human": _split_lines(human) if human.strip() else None,
+              "llm":   _split_lines(llm)   if llm.strip()   else None,
+              "ocr":   _split_lines(ocr)   if ocr.strip()   else None}
     rows = []
     for i, (b0, b1) in enumerate(bands_abs):
         row = {"n": i + 1, "y0": float(b0), "y1": float(b1),

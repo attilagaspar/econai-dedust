@@ -135,6 +135,7 @@
     .rs-copy-btn { background:none; border:1px solid #444; border-radius:3px; color:#9ca3af;
                    font-size:9px; cursor:pointer; padding:0 3px; vertical-align:middle; }
     .rs-copy-btn:hover { color:#fff; border-color:#e94560; }
+    .rs-table tr.rs-ghost td { color:#555; font-style:italic; }
 
     /* ── Centre: cell crop inspector ── */
     #inspector {
@@ -3711,7 +3712,8 @@ function renderRowTable(shape) {
 
   // A flat layer that disagrees with the table (e.g. a whole-cell LLM run
   // whose line count didn't match the rows) must stay visible — un-hide its
-  // legacy text box and warn.
+  // legacy text box and warn with the actual line counts.
+  const splitLines = t => (t || '').trim() ? t.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
   const joined = L => rows.map(r => (r[L] || '')).join('\n').trim();
   const flat = {
     'f-ocr':        (shape.tesseract_output?.ocr_text || shape.easyocr_output?.ocr_text || '').trim(),
@@ -3724,21 +3726,40 @@ function renderRowTable(shape) {
     const mism = txt && txt !== joined(rowsOf[id]);
     const el = document.getElementById(id)?.closest('.lined-wrap');
     if (el) el.style.display = mism ? '' : 'none';
-    if (mism) mismatches.push(rowsOf[id].toUpperCase());
+    if (mism) mismatches.push(`${rowsOf[id].toUpperCase()} (${splitLines(txt).length} lines vs ${rows.length} rows)`);
   });
+
+  // PDF layer: shown read-only next to the rows, capped (extracts can be huge)
+  const pdfLines = splitLines(shape.pdf_text);
+  const pdfShown = Math.min(pdfLines.length, _rsPdfCap);
+  const nRows    = Math.max(rows.length, pdfShown);
+
   hint.innerHTML =
     (mismatches.length
-      ? `<span style="color:#fbbf24;">⚠ ${mismatches.join(', ')} text differs from the table `
-        + `(line count mismatch?) — flat view shown in its section below.</span><br>` : '')
+      ? `<span style="color:#fbbf24;">⚠ ${mismatches.join(', ')} — flat view shown in its section below.</span><br>` : '')
+    + (pdfLines.length > _rsPdfCap
+      ? `<span style="color:#fbbf24;">PDF has ${pdfLines.length} lines — showing first </span>`
+        + `<input type="number" value="${_rsPdfCap}" min="1" style="width:46px;background:#16213e;border:1px solid #2a2a4a;`
+        + `border-radius:3px;color:#eee;font-size:10px;padding:0 2px;" onchange="_rsSetPdfCap(this.value)"><br>` : '')
     + (editMode
       ? 'Drag dividers on the crop · double-click divider = merge · double-click band = split'
       : '');
 
+  const hasPdf = pdfLines.length > 0;
   let html = '<table class="rs-table"><tr><th>#</th><th></th>'
            + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button></th>'
            + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button></th>'
+           + (hasPdf ? '<th>PDF</th>' : '')
            + '<th>Human</th></tr>';
-  rows.forEach((r, i) => {
+  for (let i = 0; i < nRows; i++) {
+    const r   = rows[i];
+    const pdf = i < pdfShown ? pdfLines[i] : '';
+    if (!r) {
+      // Ghost row: PDF line beyond the row structure
+      html += `<tr class="rs-ghost"><td class="rs-n">·</td><td class="rs-img"></td><td></td><td></td>`
+            + `<td title="${_escHtml(pdf)}">${_escHtml(pdf)}</td><td></td></tr>`;
+      continue;
+    }
     const o = (r.ocr || '').trim(), l = (r.llm || '').trim(), h = (r.human || '').trim();
     const agree    = o && l && o === l && (!h || h === o);
     const conflict = (o && l && o !== l) || (h && ((o && h !== o) || (l && h !== l)));
@@ -3748,11 +3769,29 @@ function renderRowTable(shape) {
           + `<td class="rs-img"><canvas class="rs-crop" data-ri="${i}"></canvas></td>`
           + `<td class="rs-clk" onclick="_rsCopyCell(${i},'ocr')" title="${_escHtml(r.ocr || '')} — click to copy to Human">${_escHtml(r.ocr || '')}</td>`
           + `<td class="rs-clk" onclick="_rsCopyCell(${i},'llm')" title="${_escHtml(r.llm || '')} — click to copy to Human">${_escHtml(r.llm || '')}</td>`
+          + (hasPdf
+              ? `<td class="rs-clk" onclick="_rsCopyPdf(${i})" title="${_escHtml(pdf)} — click to copy to Human">${_escHtml(pdf)}</td>` : '')
           + `<td><input class="rs-human" value="${_escHtml(r.human || '')}" `
           + `onchange="_rsHumanEdit(${i}, this.value)"></td></tr>`;
-  });
+  }
   wrap.innerHTML = html + '</table>';
   _rsDrawCrops();
+}
+
+let _rsPdfCap = 60;
+function _rsSetPdfCap(v) {
+  const n = parseInt(v, 10);
+  if (n > 0) { _rsPdfCap = n; if (selIdx >= 0) renderRowTable(pageData.shapes[selIdx]); }
+}
+
+async function _rsCopyPdf(i) {
+  if (selIdx < 0) return;
+  const shape = pageData.shapes[selIdx];
+  const rows  = _rsRows(shape); if (!rows?.[i]) return;
+  const pdfLines = (shape.pdf_text || '').trim().split('\n');
+  rows[i].human = (pdfLines[i] || '').trim();
+  await saveRowStruct(selIdx);
+  renderRowTable(shape);
 }
 
 // Draw each row's slice of the cell crop into its table thumbnail
