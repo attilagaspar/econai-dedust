@@ -3639,6 +3639,30 @@ def api_export_excel(
             lines.pop()
         return lines or [""]
 
+    def get_row_lines(shape):
+        """Per-internal-row layer pick from row_struct, mirroring get_text's
+        layer logic at row level.  None when the shape has no usable rows —
+        the caller then falls back to the flat-text logic."""
+        rows = (shape.get("row_struct") or {}).get("rows") or []
+        if not rows:
+            return None
+
+        def pick(r):
+            h = (r.get("human") or "").strip()
+            o = (r.get("ocr")   or "").strip()
+            l = (r.get("llm")   or "").strip()
+            p = (r.get("pdf")   or "").strip()
+            if layer == "human":    return h
+            if layer == "ocr":      return o
+            if layer == "llm":      return l
+            if layer == "pdf":      return p
+            if layer == "best_ocr": return h or o or l
+            if layer == "best_pdf": return h or l or o or p
+            return h or l or o      # best_llm (default)
+
+        lines = [pick(r) for r in rows]
+        return lines if any(lines) else None
+
     def _spatial_cluster_rows(items, tol):
         """Group items by Y proximity. Returns row_idx on each item."""
         items.sort(key=lambda c: c["top_y"])
@@ -3692,15 +3716,16 @@ def api_export_excel(
         for sh in shapes:
             if selected_types and sh.get("label", "") not in selected_types:
                 continue
-            text = get_text(sh)
-            if not text:
+            row_lines = get_row_lines(sh)   # internal row structure wins
+            text      = get_text(sh)
+            if not text and not row_lines:
                 continue
             pts = sh.get("points", [])
             if not pts:
                 continue
             xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
-            raw.append(dict(text=text,
+            raw.append(dict(text=text, row_lines=row_lines,
                             cx=(x1+x2)/2, cy=(y1+y2)/2,
                             top_y=y1, bot_y=y2,
                             h=max(1, y2-y1), w=max(1, x2-x1),
@@ -3731,7 +3756,8 @@ def api_export_excel(
                     for c in winner.values(): c["row_idx"] -= min_row
             return [dict(row_idx=c["row_idx"],
                          col_idx=c["col_idx"],
-                         lines=[c["text"]],   # ← one cell, no line expansion
+                         # one cell, no line expansion
+                         lines=[c["text"] or "\n".join(c["row_lines"] or [])],
                          w_px=c["w"])
                     for c in winner.values()]
 
@@ -3760,7 +3786,8 @@ def api_export_excel(
 
         return [dict(row_idx=c["row_idx"],
                      col_idx=c["col_idx"],
-                     lines=text_to_lines(c["text"]),
+                     # Internal row structure is authoritative when present
+                     lines=c["row_lines"] if c["row_lines"] else text_to_lines(c["text"]),
                      w_px=c["w"])
                 for c in winner.values()]
 
@@ -3796,21 +3823,25 @@ def api_export_excel(
             row += max(len(c["lines"]) for c in rmap[ridx])
         return row
 
-    def page_excel_height(cells, extra=0):
-        """Total Excel rows a page occupies (expansion + optional alignment pad)."""
+    def page_excel_height(cells, extra=0, row_heights=None):
+        """Total Excel rows a page occupies (expansion + optional alignment pad).
+        row_heights forces minimum per-lattice-row heights (dual-page sync)."""
         if not cells:
             return extra
         rmap: dict = defaultdict(list)
         for c in cells:
             rmap[c["row_idx"]].append(c)
-        return extra + sum(max(len(c["lines"]) for c in row)
-                           for row in rmap.values())
+        return extra + sum(max(max(len(c["lines"]) for c in row),
+                               (row_heights or {}).get(ridx, 0))
+                           for ridx, row in rmap.items())
 
-    def write_cells(ws, cells, col_offset=0, base_row=1, align_pad=0):
+    def write_cells(ws, cells, col_offset=0, base_row=1, align_pad=0, row_heights=None):
         """
         Write cells to ws starting at base_row.
         align_pad blank rows (light-blue) are prepended before content — used to
         align the lattice with a paired page in dual-page mode.
+        row_heights forces minimum heights per lattice row so paired pages stay
+        line-for-line aligned in dual mode.
         Within each lattice row, cells shorter than max_lines are padded with
         blank light-red cells to flag line-count mismatches.
         """
@@ -3836,6 +3867,8 @@ def api_export_excel(
         for row_idx in sorted(rmap):
             row_cells = rmap[row_idx]
             max_lines = max(len(c["lines"]) for c in row_cells)
+            if row_heights:
+                max_lines = max(max_lines, row_heights.get(row_idx, 0))
             for line_i in range(max_lines):
                 # Write lattice row number in meta column on every sub-row
                 meta_c = ws.cell(row=excel_row + line_i, column=col_offset + 1)
@@ -4025,6 +4058,23 @@ def api_export_excel(
             left_pad   = max(0, right_latt - left_latt)
             right_pad  = max(0, left_latt  - right_latt)
 
+            # Sync per-lattice-row heights from the lattice start onwards so
+            # paired rows sit exactly next to one another, not just the start
+            def _heights(cells):
+                m: dict = defaultdict(int)
+                for c in cells:
+                    m[c["row_idx"]] = max(m[c["row_idx"]], len(c["lines"]))
+                return m
+            l_start, r_start = lattice_start_row(left_cells), lattice_start_row(right_cells)
+            lh, rh = _heights(left_cells), _heights(right_cells)
+            shared_keys = ({k - l_start for k in lh if k >= l_start} |
+                           {k - r_start for k in rh if k >= r_start})
+            left_hmap, right_hmap = {}, {}
+            for k in shared_keys:
+                h = max(lh.get(k + l_start, 0), rh.get(k + r_start, 0))
+                left_hmap[k + l_start]  = h
+                right_hmap[k + r_start] = h
+
             # +3: meta col (1) + left data cols + gap col (1)
             right_col  = max_col_of(left_cells) + 3
 
@@ -4040,13 +4090,15 @@ def api_export_excel(
                              col_offset=0, right_col_offset=right_col)
 
             write_cells(ws, left_cells,  col_offset=0,
-                        base_row=cur_row + 1, align_pad=left_pad)
+                        base_row=cur_row + 1, align_pad=left_pad,
+                        row_heights=left_hmap)
             write_cells(ws, right_cells, col_offset=right_col,
-                        base_row=cur_row + 1, align_pad=right_pad)
+                        base_row=cur_row + 1, align_pad=right_pad,
+                        row_heights=right_hmap)
 
             pair_height = max(
-                page_excel_height(left_cells,  extra=left_pad),
-                page_excel_height(right_cells, extra=right_pad),
+                page_excel_height(left_cells,  extra=left_pad,  row_heights=left_hmap),
+                page_excel_height(right_cells, extra=right_pad, row_heights=right_hmap),
             )
             cur_row += 1 + pair_height   # 1 source row + data rows
 
