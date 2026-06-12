@@ -434,6 +434,28 @@ def _existing_row_bands_rel(shape, crop_top, crop_h):
     return bands
 
 
+def _project_ref_bands(ref_shape, crop_top, crop_h, ty1, ty2):
+    """Project a reference shape's row_struct bands onto a target cell:
+    linear map from the reference bbox y-range to the target bbox y-range,
+    returned crop-relative and clamped.  None if the reference has no rows."""
+    rows = ((ref_shape or {}).get("row_struct") or {}).get("rows") or []
+    if not rows:
+        return None
+    _, ry1, _, ry2 = _shape_bbox(ref_shape)
+    rh = (ry2 - ry1) or 1.0
+    th = ty2 - ty1
+    bands = []
+    for r in rows:
+        a = ty1 + (r["y0"] - ry1) * th / rh
+        b = ty1 + (r["y1"] - ry1) * th / rh
+        t  = max(0, int(round(a - crop_top)))
+        bb = min(crop_h, int(round(b - crop_top)))
+        if bb <= t:
+            bb = min(crop_h, t + 1)
+        bands.append((t, bb))
+    return bands
+
+
 def _rescale_row_struct(shape, old_pts, new_pts):
     """Linearly remap row bands when the shape bbox changes (move / resize)."""
     rs = shape.get("row_struct")
@@ -1464,11 +1486,12 @@ def _split_into_n_rows(crop_image, n_rows: int) -> list[tuple[int, int]]:
 
 @app.post("/api/page/shape/ocr/easyocr/anchored")
 async def api_ocr_easyocr_anchored(
-    folder: str = Query(...),
-    stem:   str = Query(...),
-    idx:    int = Query(...),
-    n_rows: int = Query(...),
-    langs:  str = Query("en,hu"),
+    folder:  str = Query(...),
+    stem:    str = Query(...),
+    idx:     int = Query(...),
+    n_rows:  int = Query(...),
+    langs:   str = Query("en,hu"),
+    ref_idx: int = Query(-1, description="Project this shape's row_struct bands instead of the histogram split"),
 ):
     """
     EasyOCR with a forced n_rows split derived from a reference column.
@@ -1507,11 +1530,14 @@ async def api_ocr_easyocr_anchored(
     ))
 
     crop_top = max(0, int(y1) - pad)
-    existing = _existing_row_bands_rel(shape, crop_top, crop.height)
+    # Anchor at row structure: project the reference shape's bands directly
+    projected = (_project_ref_bands(shapes[ref_idx], crop_top, crop.height, y1, y2)
+                 if 0 <= ref_idx < len(shapes) else None)
+    existing  = _existing_row_bands_rel(shape, crop_top, crop.height)
     # Anchoring is an explicit structural directive: keep the existing
     # structure only when its row count already matches the anchor
-    rows      = existing if (existing and len(existing) == n_rows) \
-                else _split_into_n_rows(crop, n_rows)
+    rows      = projected or (existing if (existing and len(existing) == n_rows)
+                              else _split_into_n_rows(crop, n_rows))
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
     crop_bin  = crop.convert("L")
@@ -1956,6 +1982,7 @@ async def api_llm_anchored(
     n_rows:     int  = Query(...),
     model:      str  = Query("gpt-4o-mini"),
     use_shadow: bool = Query(False),
+    ref_idx:    int  = Query(-1, description="Project this shape's row_struct bands instead of the histogram split"),
     body:       LlmRequest = ...,
 ):
     """
@@ -1996,10 +2023,12 @@ async def api_llm_anchored(
         min(iw, int(x2) + pad), min(ih, int(y2) + pad),
     ))
 
-    crop_top = max(0, int(y1) - pad)
-    existing = _existing_row_bands_rel(shape, crop_top, crop.height)
-    rows        = existing if (existing and len(existing) == n_rows) \
-                  else _split_into_n_rows(crop, n_rows)
+    crop_top  = max(0, int(y1) - pad)
+    projected = (_project_ref_bands(shapes[ref_idx], crop_top, crop.height, y1, y2)
+                 if 0 <= ref_idx < len(shapes) else None)
+    existing  = _existing_row_bands_rel(shape, crop_top, crop.height)
+    rows        = projected or (existing if (existing and len(existing) == n_rows)
+                                else _split_into_n_rows(crop, n_rows))
     prompt_text = body.prompt
 
     def gen():

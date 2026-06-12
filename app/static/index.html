@@ -954,6 +954,7 @@
                 <option value="llm">LLM</option>
                 <option value="human">Human</option>
                 <option value="pdf">PDF</option>
+                <option value="structure">Row structure</option>
               </select>
             </div>
             <div id="ocr-anchor-cols-wrap" style="display:none;align-items:center;gap:5px;margin-bottom:2px;">
@@ -1017,6 +1018,7 @@
                 <option value="llm">LLM</option>
                 <option value="human">Human</option>
                 <option value="pdf">PDF</option>
+                <option value="structure">Row structure</option>
               </select>
             </div>
             <div id="llm-anchor-cols-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
@@ -1326,6 +1328,7 @@
           <option value="llm">LLM</option>
           <option value="human">Human</option>
           <option value="pdf">PDF</option>
+          <option value="structure">Row structure</option>
         </select>
       </label>
       <label class="row">
@@ -4966,13 +4969,21 @@ async function runBatch() {
         const anchorEntry = entries.find(e => e.s.super_column === anchorCol);
         if (!anchorEntry) continue;
         const anchorShape = anchorEntry.s;
-        const refText = anchorSrc === 'human' ? anchorShape.human_output?.human_corrected_text
-                      : anchorSrc === 'llm'   ? anchorShape.openai_output?.response
-                      : anchorSrc === 'pdf'   ? anchorShape.pdf_text
-                      :                         anchorShape.tesseract_output?.ocr_text;
-        if (!refText?.trim()) continue;
-        const nRows = _lineCount(refText);
-        if (nRows < 1) continue;
+        let nRows, refIdx = -1;
+        if (anchorSrc === 'structure') {
+          const refRows = anchorShape.row_struct?.rows;
+          if (!refRows?.length) continue;       // anchor has no structure — skip row
+          nRows  = refRows.length;
+          refIdx = anchorEntry.i;
+        } else {
+          const refText = anchorSrc === 'human' ? anchorShape.human_output?.human_corrected_text
+                        : anchorSrc === 'llm'   ? anchorShape.openai_output?.response
+                        : anchorSrc === 'pdf'   ? anchorShape.pdf_text
+                        :                         anchorShape.tesseract_output?.ocr_text;
+          if (!refText?.trim()) continue;
+          nRows = _lineCount(refText);
+          if (nRows < 1) continue;
+        }
 
         for (const {s, i} of entries) {
           if (_batchStop) break;
@@ -4985,10 +4996,10 @@ async function runBatch() {
           }
           try {
             if (op === 'anchored_ocr') {
-              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows});
+              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows, ref_idx: refIdx});
               await _drainSse(`${API}/api/page/shape/ocr/easyocr/anchored?${p}`);
             } else {
-              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows, model, use_shadow: useShadow});
+              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows, model, use_shadow: useShadow, ref_idx: refIdx});
               await _drainSse(`${API}/api/page/shape/llm/anchored?${p}`, {prompt});
             }
             shapesDone++;
@@ -5982,15 +5993,26 @@ async function runOcrAnchored() {
 
   // Determine row count from the chosen anchor source
   const anchorSrc = document.getElementById('ocr-anchor-source').value;
-  const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
-                : anchorSrc === 'llm'   ? refShape.openai_output?.response
-                : anchorSrc === 'pdf'   ? refShape.pdf_text
-                :                         refShape.tesseract_output?.ocr_text;
-  if (!refText?.trim()) {
-    showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
+  let nRows, refIdx = -1;
+  if (anchorSrc === 'structure') {
+    // Project the reference cell's exact row bands onto the targets
+    const refRows = refShape.row_struct?.rows;
+    if (!refRows?.length) {
+      showToast('Reference shape has no internal row structure — convert it first'); return;
+    }
+    nRows = refRows.length;
+    refIdx = selIdx;
+  } else {
+    const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
+                  : anchorSrc === 'llm'   ? refShape.openai_output?.response
+                  : anchorSrc === 'pdf'   ? refShape.pdf_text
+                  :                         refShape.tesseract_output?.ocr_text;
+    if (!refText?.trim()) {
+      showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
+    }
+    nRows = _lineCount(refText);
+    if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
   }
-  const nRows = _lineCount(refText);
-  if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
 
   const superRow = refShape.super_row;
   if (superRow == null) {
@@ -6021,7 +6043,7 @@ async function runOcrAnchored() {
   try {
     for (const idx of targets) {
       if (batchAbort) break;
-      try { await _ocrAnchoredOne(idx, nRows); }
+      try { await _ocrAnchoredOne(idx, nRows, refIdx); }
       catch(e) { showToast(`Shape ${idx}: ${e.message}`); }
     }
   } finally {
@@ -6032,7 +6054,7 @@ async function runOcrAnchored() {
   }
 }
 
-async function _ocrAnchoredOne(shapeIdx, nRows) {
+async function _ocrAnchoredOne(shapeIdx, nRows, refIdx = -1) {
   const shape = pageData.shapes[shapeIdx];
   const spts  = shape.points;
   const sx1   = Math.min(spts[0][0], spts[1][0]);
@@ -6044,7 +6066,7 @@ async function _ocrAnchoredOne(shapeIdx, nRows) {
   const cropRight   = Math.min(imgW, sx2 + pad);
 
   const params = new URLSearchParams({
-    folder, stem: pages[pageIdx].stem, idx: shapeIdx, n_rows: nRows,
+    folder, stem: pages[pageIdx].stem, idx: shapeIdx, n_rows: nRows, ref_idx: refIdx,
   });
   const r = await fetch(`${API}/api/page/shape/ocr/easyocr/anchored?${params}`, {method: 'POST'});
   if (!r.ok) throw new Error(r.status);
@@ -7054,15 +7076,25 @@ async function runLlmAnchored() {
   const refShape = pageData.shapes[selIdx];
 
   const anchorSrc = document.getElementById('llm-anchor-source').value;
-  const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
-                : anchorSrc === 'llm'   ? refShape.openai_output?.response
-                : anchorSrc === 'pdf'   ? refShape.pdf_text
-                :                         refShape.tesseract_output?.ocr_text;
-  if (!refText?.trim()) {
-    showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
+  let nRows, refIdx = -1;
+  if (anchorSrc === 'structure') {
+    const refRows = refShape.row_struct?.rows;
+    if (!refRows?.length) {
+      showToast('Reference shape has no internal row structure — convert it first'); return;
+    }
+    nRows = refRows.length;
+    refIdx = selIdx;
+  } else {
+    const refText = anchorSrc === 'human' ? refShape.human_output?.human_corrected_text
+                  : anchorSrc === 'llm'   ? refShape.openai_output?.response
+                  : anchorSrc === 'pdf'   ? refShape.pdf_text
+                  :                         refShape.tesseract_output?.ocr_text;
+    if (!refText?.trim()) {
+      showToast(`Reference shape has no ${anchorSrc.toUpperCase()} text`); return;
+    }
+    nRows = _lineCount(refText);
+    if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
   }
-  const nRows = _lineCount(refText);
-  if (nRows < 1) { showToast('Reference shape has 0 lines'); return; }
 
   const superRow = refShape.super_row;
   if (superRow == null) {
@@ -7095,7 +7127,7 @@ async function runLlmAnchored() {
   try {
     for (const idx of targets) {
       if (batchAbort) break;
-      try { await _llmAnchoredOne(idx, nRows); }
+      try { await _llmAnchoredOne(idx, nRows, refIdx); }
       catch(e) { showToast(`Shape ${idx}: ${e.message}`); }
     }
   } finally {
@@ -7106,7 +7138,7 @@ async function runLlmAnchored() {
   }
 }
 
-async function _llmAnchoredOne(shapeIdx, nRows) {
+async function _llmAnchoredOne(shapeIdx, nRows, refIdx = -1) {
   const shape = pageData.shapes[shapeIdx];
   const spts  = shape.points;
   const sx1   = Math.min(spts[0][0], spts[1][0]);
@@ -7122,7 +7154,7 @@ async function _llmAnchoredOne(shapeIdx, nRows) {
   const useShadow = document.getElementById('llm-use-shadow').checked;
   const params    = new URLSearchParams({
     folder, stem: pages[pageIdx].stem, idx: shapeIdx,
-    n_rows: nRows, model, use_shadow: useShadow,
+    n_rows: nRows, model, use_shadow: useShadow, ref_idx: refIdx,
   });
   const r = await fetch(`${API}/api/page/shape/llm/anchored?${params}`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
