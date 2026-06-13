@@ -1133,7 +1133,10 @@
       Every violation of the active rule on this page is listed below. <b>▶ Ask LLM</b>
       sends each violation's cell images and current readings (best layer per row)
       to the LLM with the prompt; proposed corrections appear as diffs.
-      <b>✓ Apply</b> writes the changed values into the rows' <b>Human</b> layer.
+      Each line has a checkbox (default checked). <b>✓ Apply checked</b> writes the
+      checked lines to the <b>LLM</b> layer (flagged 🛠 as rule-fixed) and removes
+      them; unchecked lines stay so you can hit <b>Ask LLM</b> again for a fresh
+      attempt. An existing Human value still wins by layer priority.
     </div>
     <textarea id="rf-prompt" rows="14"
       style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:6px 8px;font-size:0.8rem;width:100%;box-sizing:border-box;resize:vertical;min-height:160px;line-height:1.4;"></textarea>
@@ -2464,7 +2467,7 @@ function openRuleFix() {
   const ruleIdx = parseInt(diagnosticMode.slice(5), 10);
   const rule    = projectRules[ruleIdx];
   if (!rule) { showToast('Rule not found'); return; }
-  const violations = _ruleScanPage(rule).map(v => ({...v, proposal: null, status: '', applied: false}));
+  const violations = _ruleScanPage(rule).map(v => ({...v, proposal: null, status: ''}));
   _rfState = {ruleIdx, rule, violations, running: false};
   document.getElementById('rf-title').textContent =
     `🛠 Rule fix — ${rule.name || rule.expr} (${rule.expr})`;
@@ -2497,12 +2500,12 @@ function renderRuleFixList() {
     const badSet = new Set(v.badRows);
     // Transposed layout: one table row per LINE; per lattice column a crop
     // slice + the reading (+ LLM proposal when it arrives)
+    if (!v.badRows.length) return '';   // fully applied → drop from the list
     const _bd = 'border:1px solid #44557f;';   // bright cell edges
     const headerCells = v.cols.map(c =>
       `<td colspan="2" style="color:#aaa;padding:1px 8px;${_bd}">col ${c.col}</td>`).join('');
     // Only the violating lines are shown (they are all the LLM sees, too)
     const rows = v.badRows.map(k => {
-      const bad = true;
       const bg  = 'background:rgba(255,0,80,0.10);';
       const cells = v.cols.map(c => {
         const prop = v.proposal?.[c.col]?.[k];
@@ -2515,7 +2518,10 @@ function renderRuleFixList() {
           + (changed ? ` <span style="color:#4ade80;">→ ${_escHtml(String(prop))}</span>` : '')
           + `</td>`;
       }).join('');
-      return `<tr><td style="padding:1px 8px;color:#777;${_bd}${bad ? 'color:#ff5577;font-weight:bold;' : ''}">${k + 1}</td>${cells}</tr>`;
+      // Per-line checkbox (default checked) — only checked lines get applied
+      const chk = `<td style="${_bd}${bg}text-align:center;"><input type="checkbox" class="rf-rowcheck" `
+        + `data-vi="${vi}" data-k="${k}" checked style="accent-color:#1f7a3d;cursor:pointer;"></td>`;
+      return `<tr>${chk}<td style="padding:1px 8px;color:#ff5577;font-weight:bold;${_bd}">${k + 1}</td>${cells}</tr>`;
     }).join('');
     const fixOk = v.proposal ? _rfProposalOk(v) : null;
     return `<div style="border:1px solid #0f3460;border-radius:6px;padding:8px 10px;">
@@ -2525,15 +2531,13 @@ function renderRuleFixList() {
         <span style="font-size:0.75rem;color:#aaa;">${_escHtml(v.status || '')}</span>
         ${v.proposal ? `<span style="font-size:0.75rem;color:${fixOk ? '#4ade80' : '#fbbf24'};">${fixOk ? '✓ proposal satisfies the rule' : '⚠ proposal still violates the rule'}</span>` : ''}
         <span style="flex:1;"></span>
-        ${v.applied
-          ? '<span style="font-size:0.78rem;color:#4ade80;">✓ applied</span>'
-          : (v.proposal
-              ? `<button onclick="applyRuleFix(${vi})" style="background:#1f7a3d;border:none;color:#fff;border-radius:4px;padding:3px 12px;cursor:pointer;font-size:0.78rem;">✓ Apply</button>`
-              : '')}
+        ${v.proposal
+            ? `<button onclick="applyRuleFix(${vi})" title="Write the checked lines to the LLM layer and remove them; unchecked lines stay so you can re-ask" style="background:#1f7a3d;border:none;color:#fff;border-radius:4px;padding:3px 12px;cursor:pointer;font-size:0.78rem;">✓ Apply checked</button>`
+            : ''}
       </div>
       <div style="overflow-x:auto;">
         <table style="border-collapse:collapse;font-size:0.78rem;font-family:monospace;color:#ddd;">
-          <tr><td style="color:#555;padding:1px 6px;">line</td>${headerCells}</tr>
+          <tr><td style="color:#555;padding:1px 4px;text-align:center;">✓</td><td style="color:#555;padding:1px 6px;">line</td>${headerCells}</tr>
           ${rows}
         </table>
       </div>
@@ -2664,11 +2668,12 @@ async function runRuleFixLlm() {
   _rfState.running = true;
   btn.textContent = '■ Stop';
   const statusEl = document.getElementById('rf-status');
-  const todo = _rfState.violations.filter(v => !v.proposal && !v.applied);
+  // Eligible = still has violating lines and no current (unapplied) proposal
+  const todo = _rfState.violations.filter(v => v.badRows.length && !v.proposal);
   let done = 0;
   for (const v of _rfState.violations) {
     if (!_rfState.running) break;
-    if (v.proposal || v.applied) continue;
+    if (!v.badRows.length || v.proposal) continue;
     v.status = '⟳ asking LLM…'; renderRuleFixList();
     statusEl.textContent = `${done + 1}/${todo.length}`;
 
@@ -2744,7 +2749,14 @@ async function runRuleFixLlm() {
 
 async function applyRuleFix(vi) {
   const v = _rfState?.violations[vi];
-  if (!v?.proposal || v.applied) return;
+  if (!v?.proposal) return;
+
+  // Which displayed lines are checked (default checked)
+  const checked = new Set(
+    [...document.querySelectorAll(`#rf-list .rf-rowcheck[data-vi="${vi}"]`)]
+      .filter(cb => cb.checked).map(cb => +cb.dataset.k));
+
+  const applied = new Set();   // lines that actually received a change
   for (const c of v.cols) {
     const arr = v.proposal[c.col];
     if (!arr) continue;
@@ -2755,28 +2767,46 @@ async function applyRuleFix(vi) {
       // rule-fix.  An existing Human value keeps winning by layer priority.
       let changed = false;
       rows.forEach((r, k) => {
+        if (!checked.has(k)) return;
         const nv  = (arr[k] ?? '').trim();
         const cur = ((r.human || '').trim() || (r.llm || '').trim()
                   || (r.ocr || '').trim()   || (r.pdf || '').trim());
-        if (nv !== '' && nv !== cur) { r.llm = nv; r.llm_fixed = true; changed = true; }
+        if (nv !== '' && nv !== cur) { r.llm = nv; r.llm_fixed = true; changed = true; applied.add(k); }
       });
       if (changed) await saveRowStruct(c.idx);
     } else {
-      // No internal rows: merge the sparse proposal over the current values
+      // No internal rows: merge the checked changes over the current values
       // and write the result as the flat LLM response
-      const merged = c.values.map((cur, k) =>
-        (arr[k] != null && arr[k] !== '') ? arr[k] : (cur ?? ''));
-      if (!shape.openai_output) shape.openai_output = {};
-      shape.openai_output.response = merged.join('\n');
-      shape.openai_output.mode     = 'rulefix';
-      await replaceAllShapes();
+      let changed = false;
+      const merged = c.values.map((cur, k) => {
+        if (checked.has(k)) {
+          const nv = (arr[k] ?? '').trim();
+          if (nv !== '' && nv !== (cur ?? '').trim()) { applied.add(k); changed = true; return nv; }
+        }
+        return cur ?? '';
+      });
+      if (changed) {
+        if (!shape.openai_output) shape.openai_output = {};
+        shape.openai_output.response = merged.join('\n');
+        shape.openai_output.mode     = 'rulefix';
+        await replaceAllShapes();
+      }
     }
   }
-  v.applied = true;
+
+  // Remove the applied lines; drop the proposal so the remaining (unchecked /
+  // unfixed) lines are eligible for a fresh "Ask LLM" pass
+  v.badRows  = v.badRows.filter(k => !applied.has(k));
+  v.proposal = null;
+  v.status   = applied.size
+    ? (v.badRows.length ? `applied ${applied.size} — ask LLM again for the rest` : `applied ${applied.size}`)
+    : 'nothing applied';
   renderRuleFixList();
   refreshDiag(); drawOverlay();
   if (v.cols.some(c => c.idx === selIdx)) updatePanel();
-  showToast(`Lattice row ${v.superRow}: corrections written to LLM layer (rule-fix flag)`);
+  showToast(applied.size
+    ? `Lattice row ${v.superRow}: ${applied.size} line(s) written to LLM layer (rule-fix flag)`
+    : `Lattice row ${v.superRow}: no checked line had a change to apply`);
 }
 
 function computeDiagnostics() {
