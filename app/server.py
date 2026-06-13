@@ -425,10 +425,8 @@ def api_rule_llm(
 
     try:
         client = _make_llm_client(model)
-        resp   = client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": content}],
-            max_tokens=2048, temperature=0,
-        )
+        resp   = _llm_complete(client, model,
+                               [{"role": "user", "content": content}], 2048)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return {"response": (resp.choices[0].message.content or "").strip()}
@@ -1852,6 +1850,31 @@ def _make_llm_client(model: str):
     return OpenAI(api_key=api_key)
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """GPT-5 family and the o-series are reasoning models: via chat completions
+    they reject `max_tokens` (need `max_completion_tokens`), reject any
+    temperature other than the default 1, and burn tokens on hidden reasoning."""
+    m = (model or "").lower()
+    return m.startswith(("gpt-5", "o1", "o1-", "o3", "o3-", "o4", "o4-"))
+
+
+def _llm_complete(client, model, messages, max_out, temperature=0):
+    """Model-family-aware chat completion so reasoning models work alongside
+    the classic chat models with one call signature.  Reasoning models get a
+    token floor (reasoning tokens count against the budget) and low effort to
+    stay fast/cheap on these simple digit-transcription tasks."""
+    if _is_reasoning_model(model):
+        kwargs = dict(model=model, messages=messages,
+                      max_completion_tokens=max(max_out, 2000))
+        try:
+            return client.chat.completions.create(reasoning_effort="low", **kwargs)
+        except Exception:
+            # SDK / model that doesn't accept reasoning_effort — retry without it
+            return client.chat.completions.create(**kwargs)
+    return client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_out, temperature=temperature)
+
+
 @app.post("/api/page/shape/llm")
 def api_llm_cell(
     folder:     str  = Query(...),
@@ -1930,14 +1953,9 @@ def api_llm_cell(
 
     try:
         client   = _make_llm_client(model)
-        response = client.chat.completions.create(
-            model=model, messages=messages, max_tokens=1024,
-            # temperature=0 → fully deterministic; re-running the same cell always
-            # yields the same output.  Use a small positive value so that:
-            #   (a) repeated calls can differ, proving the API is actually invoked,
-            #   (b) the model has a tiny bit of freedom to self-correct.
-            temperature=0.2,
-        )
+        # temperature 0.2 for classic models — a tiny bit of freedom to
+        # self-correct; reasoning models ignore temperature (see _llm_complete)
+        response = _llm_complete(client, model, messages, 1024, temperature=0.2)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -2061,9 +2079,7 @@ async def api_llm_linebyline(
                 ],
             }]
             try:
-                resp = client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=64, temperature=0,
-                )
+                resp = _llm_complete(client, model, messages, 64)
                 text = (resp.choices[0].message.content or "").strip()
             except Exception as exc:
                 text = f"[error: {exc}]"
@@ -2193,9 +2209,7 @@ async def api_llm_anchored(
                     "url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
             ]}]
             try:
-                resp = client.chat.completions.create(
-                    model=model, messages=messages, max_tokens=64, temperature=0,
-                )
+                resp = _llm_complete(client, model, messages, 64)
                 text = (resp.choices[0].message.content or "").strip()
             except Exception as exc:
                 text = f"[error: {exc}]"

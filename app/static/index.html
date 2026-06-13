@@ -994,14 +994,28 @@
           <div id="fg-llm-body">
             <div class="llm-controls">
               <select id="llm-model" class="llm-select" title="Model">
-                <option value="gpt-4.1-mini">4.1-mini</option>
-                <option value="gpt-5-nano">5-nano</option>
-                <option value="gpt-4.1-nano">4.1-nano</option>
-                <option value="gpt-4.1">4.1</option>
-                <option value="gpt-4o-mini">4o-mini</option>
-                <option value="gpt-4o">4o</option>
-                <option value="gpt-4-turbo">4-turbo</option>
-                <option value="qwen2.5vl:7b">Qwen2.5-VL 7B (local)</option>
+                <option value="gpt-4.1-mini">GPT-4.1 mini</option>
+                <optgroup label="GPT-5 (reasoning)">
+                  <option value="gpt-5">GPT-5</option>
+                  <option value="gpt-5-mini">GPT-5 mini</option>
+                  <option value="gpt-5-nano">GPT-5 nano</option>
+                </optgroup>
+                <optgroup label="GPT-4.1">
+                  <option value="gpt-4.1">GPT-4.1</option>
+                  <option value="gpt-4.1-nano">GPT-4.1 nano</option>
+                </optgroup>
+                <optgroup label="GPT-4o">
+                  <option value="gpt-4o">GPT-4o</option>
+                  <option value="gpt-4o-mini">GPT-4o mini</option>
+                  <option value="gpt-4-turbo">GPT-4 turbo</option>
+                </optgroup>
+                <optgroup label="o-series (reasoning)">
+                  <option value="o4-mini">o4-mini</option>
+                  <option value="o3">o3</option>
+                </optgroup>
+                <optgroup label="Local">
+                  <option value="qwen2.5vl:7b">Qwen2.5-VL 7B</option>
+                </optgroup>
               </select>
               <select id="llm-mode" class="llm-select" title="Input mode" onchange="updateLlmPrompt()">
                 <option value="image">Image</option>
@@ -1126,7 +1140,9 @@
     <div style="display:flex;gap:10px;align-items:center;">
       <button id="rf-run-btn" onclick="runRuleFixLlm()"
         style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">▶ Ask LLM</button>
-      <span style="font-size:0.75rem;color:#666;">model: <span id="rf-model"></span></span>
+      <label style="font-size:0.75rem;color:#666;display:flex;align-items:center;gap:4px;">model:
+        <select id="rf-model" class="llm-select" style="font-size:0.78rem;"></select>
+      </label>
       <label style="font-size:0.75rem;color:#666;display:flex;align-items:center;gap:4px;"
              title="Violations with more bad lines than this are split into multiple LLM requests; 1 = one line per request">
         max lines / request:
@@ -2456,7 +2472,13 @@ function openRuleFix() {
     localStorage.getItem('ruleFixPrompt2') || DEFAULT_RULEFIX_PROMPT;
   document.getElementById('rf-chunk').value =
     parseInt(localStorage.getItem('ruleFixChunk'), 10) || 8;
-  document.getElementById('rf-model').textContent = document.getElementById('llm-model').value;
+  // Mirror the main model dropdown's options; default to the saved rule-fix
+  // model, else the model currently selected in the main LLM panel
+  const rfModel = document.getElementById('rf-model');
+  rfModel.innerHTML = document.getElementById('llm-model').innerHTML;
+  rfModel.value = localStorage.getItem('ruleFixModel')
+               || document.getElementById('llm-model').value;
+  if (!rfModel.value) rfModel.value = document.getElementById('llm-model').value;
   document.getElementById('rf-status').textContent =
     violations.length ? `${violations.length} violation(s) on this page` : 'No violations on this page 🎉';
   renderRuleFixList();
@@ -2637,7 +2659,8 @@ async function runRuleFixLlm() {
   if (_rfState.running) { _rfState.running = false; btn.textContent = '…'; return; }
   const prompt = document.getElementById('rf-prompt').value;
   localStorage.setItem('ruleFixPrompt2', prompt);
-  const model = document.getElementById('llm-model').value;
+  const model = document.getElementById('rf-model').value;
+  localStorage.setItem('ruleFixModel', model);
   _rfState.running = true;
   btn.textContent = '■ Stop';
   const statusEl = document.getElementById('rf-status');
