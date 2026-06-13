@@ -2728,30 +2728,32 @@ async function applyRuleFix(vi) {
     const shape = pageData.shapes[c.idx];
     const rows  = _rsRows(shape);
     if (rows) {
+      // Accepted fixes go to the LLM layer (it IS LLM output), flagged as
+      // rule-fix.  An existing Human value keeps winning by layer priority.
       let changed = false;
       rows.forEach((r, k) => {
         const nv  = (arr[k] ?? '').trim();
         const cur = ((r.human || '').trim() || (r.llm || '').trim()
                   || (r.ocr || '').trim()   || (r.pdf || '').trim());
-        if (nv !== '' && nv !== cur) { r.human = nv; changed = true; }
+        if (nv !== '' && nv !== cur) { r.llm = nv; r.llm_fixed = true; changed = true; }
       });
       if (changed) await saveRowStruct(c.idx);
     } else {
       // No internal rows: merge the sparse proposal over the current values
-      // and write the result as flat Human text
+      // and write the result as the flat LLM response
       const merged = c.values.map((cur, k) =>
         (arr[k] != null && arr[k] !== '') ? arr[k] : (cur ?? ''));
-      const text = merged.join('\n');
-      await patchShape(c.idx, {human_corrected_text: text});
-      if (!shape.human_output) shape.human_output = {};
-      shape.human_output.human_corrected_text = text;
+      if (!shape.openai_output) shape.openai_output = {};
+      shape.openai_output.response = merged.join('\n');
+      shape.openai_output.mode     = 'rulefix';
+      await replaceAllShapes();
     }
   }
   v.applied = true;
   renderRuleFixList();
   refreshDiag(); drawOverlay();
   if (v.cols.some(c => c.idx === selIdx)) updatePanel();
-  showToast(`Lattice row ${v.superRow}: corrections written to Human layer`);
+  showToast(`Lattice row ${v.superRow}: corrections written to LLM layer (rule-fix flag)`);
 }
 
 function computeDiagnostics() {
@@ -4204,7 +4206,10 @@ function _rsRows(shape) { return shape?.row_struct?.rows || null; }
 // next sync would resurrect the cleared text from the rows
 function _rsClearLayer(shape, layer) {
   const rows = _rsRows(shape);
-  if (rows) rows.forEach(r => { r[layer] = ''; });
+  if (rows) rows.forEach(r => {
+    r[layer] = '';
+    if (layer === 'llm') delete r.llm_fixed;
+  });
 }
 
 function _syncFlatLocal(shape) {
@@ -4373,7 +4378,8 @@ function renderRowTable(shape) {
           + (hasPdf
               ? `<td class="rs-clk" onclick="_rsCopyPdf(${i})" title="${_escHtml(pdf)} — click to copy to Human">${_escHtml(pdf)}</td>` : '')
           + `<td class="rs-clk" onclick="_rsCopyCell(${i},'ocr')" title="${_escHtml(r.ocr || '')} — click to copy to Human">${_escHtml(r.ocr || '')}</td>`
-          + `<td class="rs-clk" onclick="_rsCopyCell(${i},'llm')" title="${_escHtml(r.llm || '')} — click to copy to Human">${_escHtml(r.llm || '')}</td>`
+          + `<td class="rs-clk" onclick="_rsCopyCell(${i},'llm')" title="${_escHtml(r.llm || '')}${r.llm_fixed ? ' (rule-fix corrected)' : ''} — click to copy to Human">`
+          + `${_escHtml(r.llm || '')}${r.llm_fixed ? ' <span style="font-size:9px;" title="Corrected by rule-fix">🛠</span>' : ''}</td>`
           + `<td><input class="rs-human" value="${_escHtml(r.human || '')}" `
           + `onchange="_rsHumanEdit(${i}, this.value)"></td></tr>`;
   }

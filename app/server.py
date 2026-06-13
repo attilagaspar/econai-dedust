@@ -496,6 +496,8 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False)
     if not force_boxes and rs and len(rs.get("rows", [])) == len(texts):
         for r, t in zip(rs["rows"], texts):
             r[layer] = t
+            if layer == "llm":
+                r.pop("llm_fixed", None)   # fresh LLM read replaces a rule-fix
     else:
         old = (rs or {}).get("rows", [])
         new_rows = []
@@ -507,6 +509,8 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False)
                 for lay in _ROW_LAYERS:
                     if lay != layer and old[i].get(lay):
                         row[lay] = old[i][lay]
+                        if lay == "llm" and old[i].get("llm_fixed"):
+                            row["llm_fixed"] = True
                 if old[i].get("pdf") is not None:
                     row["pdf"] = old[i]["pdf"]
             new_rows.append(row)
@@ -541,6 +545,8 @@ def _distribute_flat_to_rows(shape, layer, text):
     if len(lines) == len(rs["rows"]):
         for r, t in zip(rs["rows"], lines):
             r[layer] = t
+            if layer == "llm":
+                r.pop("llm_fixed", None)
 
 
 def _existing_row_bands_rel(shape, crop_top, crop_h):
@@ -635,6 +641,8 @@ def update_row_struct(
                    "human": r.get("human") or ""}
             if r.get("pdf") is not None:
                 row["pdf"] = r["pdf"]
+            if r.get("llm_fixed"):
+                row["llm_fixed"] = True
             rows.append(row)
         rows.sort(key=lambda r: r["y0"])
         for i, r in enumerate(rows):
