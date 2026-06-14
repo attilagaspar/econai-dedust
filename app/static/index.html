@@ -28,6 +28,8 @@
       background: #16213e;
       border-bottom: 1px solid #0f3460;
       flex-shrink: 0;
+      flex-wrap: wrap;
+      row-gap: 4px;
     }
     #topbar h1 { font-size: 15px; font-weight: 600; color: #e94560; margin-right: 4px; }
     #load-btn:hover { background: #1a3a6e; border-color: #e94560; }
@@ -59,6 +61,9 @@
       align-items: center;
       gap: 8px;
       padding: 4px 10px;
+      flex-wrap: wrap;   /* buttons that don't fit wrap to a new line instead
+                            of being clipped under the right panel */
+      row-gap: 4px;
     }
     .nav-row + .nav-row {
       border-top: 1px solid #0f3460;
