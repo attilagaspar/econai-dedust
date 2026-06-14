@@ -693,6 +693,8 @@
                 title="Auto-correct ±1 line-count mismatches found by Diagnose: remove spurious empty lines or add leading padding">✨ Smart Correct</button>
         <button class="nav-btn" onclick="openExcelExportModal()"
                 title="Export annotations to Excel">↓ Excel</button>
+        <button class="nav-btn" id="clip-btn" onclick="toggleClipMode()"
+                title="Clips: stamp a colored flag on an annotation to link the same data unit across pages. Drag a flag from the tray onto an annotation, or click a flag then click an annotation.">🚩 Clips</button>
       </div>
     </div>
 
@@ -716,6 +718,11 @@
     <div id="legend"></div>
 
     <div id="osd-container">
+      <div id="clip-tray" data-show-all="0"
+           style="display:none;position:absolute;top:0;left:0;right:0;z-index:30;
+                  background:rgba(13,27,53,0.92);border-bottom:1px solid #0f3460;
+                  padding:4px 8px;gap:6px;align-items:center;flex-wrap:wrap;
+                  font-size:12px;color:#aac;"></div>
       <img id="shadow-overlay" alt="shadow preview"
            style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:10;background:#fff;" />
     </div>
@@ -1550,6 +1557,14 @@
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
         <input type="checkbox" id="xls-rows-only" style="accent-color:#e94560;width:13px;height:13px;">
         Only cells with internal row structure
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="xls-clip-col" style="accent-color:#e94560;width:13px;height:13px;">
+        Add a Clip column (each row's clip id)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="xls-clips-only" style="accent-color:#e94560;width:13px;height:13px;">
+        Only rows that have a clip
       </label>
     </div>
 
@@ -2858,6 +2873,173 @@ async function applyRuleFix(vi) {
     : `Lattice row ${v.superRow}: no checked line had a change to apply`);
 }
 
+// ── Clips: link the same data unit across pages via a colored flag id ───────
+let clipMode  = false;
+let clipIndex = {};     // {num: [{stem, idx}]}  — document-wide
+let clipMax   = 0;      // highest clip number in use
+let _clipArmed = null;  // a clip number "picked up" for click-to-place
+let _clipDrag  = null;  // {num, ghost, moved} while dragging a flag
+
+const CLIP_PALETTE = ['#e6194B','#3cb44b','#f58231','#4363d8','#911eb4','#42d4f4',
+                      '#f032e6','#bfef45','#fabed4','#469990','#9A6324','#800000',
+                      '#808000','#000075','#e6beff','#aaffc3'];
+function clipColor(n) { return CLIP_PALETTE[((n - 1) % CLIP_PALETTE.length + CLIP_PALETTE.length) % CLIP_PALETTE.length]; }
+
+async function loadClips() {
+  try {
+    const r = await fetch(`${API}/api/clips?folder=${encodeURIComponent(folder)}`);
+    const d = r.ok ? await r.json() : {clips: {}, max: 0};
+    clipIndex = d.clips || {}; clipMax = d.max || 0;
+  } catch { clipIndex = {}; clipMax = 0; }
+  renderClipTray();
+}
+
+// Keep the local index in sync after an assign/remove (no full rescan)
+function _clipIndexSet(stem, idx, num) {
+  for (const k of Object.keys(clipIndex)) {
+    clipIndex[k] = clipIndex[k].filter(m => !(m.stem === stem && m.idx === idx));
+    if (!clipIndex[k].length) delete clipIndex[k];
+  }
+  if (num != null) {
+    (clipIndex[String(num)] ??= []).push({stem, idx});
+    if (num > clipMax) clipMax = num;
+  }
+}
+
+function toggleClipMode() {
+  clipMode = !clipMode;
+  _clipArmed = null;
+  document.getElementById('clip-btn').classList.toggle('active', clipMode);
+  renderClipTray();
+  drawOverlay();
+}
+
+function renderClipTray() {
+  const tray = document.getElementById('clip-tray');
+  if (!tray) return;
+  if (!clipMode) { tray.style.display = 'none'; return; }
+  tray.style.display = 'flex';
+  const stem    = pages[pageIdx]?.stem;
+  const showAll = tray.dataset.showAll === '1';
+
+  // Flags worth offering on this page: clips with a member elsewhere but none
+  // here.  Default = "dangling" (exactly one member); show-all = every clip.
+  const items = [];
+  for (const [num, members] of Object.entries(clipIndex)) {
+    if (members.some(m => m.stem === stem)) continue;     // already placed here
+    if (!showAll && members.length !== 1) continue;       // only dangling by default
+    items.push({num: +num, count: members.length});
+  }
+  items.sort((a, b) => a.num - b.num);
+
+  let html = `<b style="color:#e94560;">🚩 Clips</b>`
+    + `<button onclick="clipMintArm()" title="Mint a new clip, then click/drag onto an annotation"
+        style="background:#1f7a3d;border:none;color:#fff;border-radius:4px;padding:2px 9px;cursor:pointer;font-weight:600;">➕ new (${clipMax + 1})</button>`
+    + `<label style="display:flex;align-items:center;gap:3px;cursor:pointer;">
+        <input type="checkbox" ${showAll ? 'checked' : ''} onchange="clipToggleShowAll(this.checked)"> show all</label>`
+    + (_clipArmed != null
+        ? `<span style="color:#ffe119;">armed: clip ${_clipArmed} — click an annotation (Esc to cancel)</span>` : '')
+    + `<span style="flex:1"></span>`;
+
+  if (!items.length) {
+    html += `<span style="color:#667;">${showAll ? 'no clips yet' : 'no dangling clips for this page'}</span>`;
+  } else {
+    items.forEach(it => {
+      html += `<span class="clip-flag" data-num="${it.num}" title="${it.count} member(s) — drag onto an annotation, or click to pick up"
+        style="display:inline-flex;align-items:center;gap:4px;background:${clipColor(it.num)};color:#fff;
+               border-radius:4px;padding:2px 8px;cursor:grab;font-weight:700;user-select:none;
+               ${_clipArmed === it.num ? 'outline:2px solid #ffe119;' : ''}">🚩 ${it.num}`
+        + (it.count > 1 ? `<span style="font-weight:400;opacity:.8;">×${it.count}</span>` : '')
+        + `</span>`;
+    });
+  }
+  tray.innerHTML = html;
+  tray.querySelectorAll('.clip-flag').forEach(el =>
+    el.addEventListener('mousedown', e => _clipFlagMouseDown(e, +el.dataset.num)));
+}
+
+function clipToggleShowAll(on) {
+  document.getElementById('clip-tray').dataset.showAll = on ? '1' : '0';
+  renderClipTray();
+}
+function clipMintArm() { _clipArmed = clipMax + 1; renderClipTray(); }
+
+async function assignClip(num, idx) {
+  if (idx == null || !pageData?.shapes?.[idx]) return;
+  pageData.shapes[idx].clip = num;
+  await replaceAllShapes();
+  _clipIndexSet(pages[pageIdx].stem, idx, num);
+  _clipArmed = null;
+  drawOverlay(); renderClipTray();
+  showToast(`Clip ${num} → annotation ${idx}`);
+}
+
+async function removeClip(idx) {
+  const s = pageData?.shapes?.[idx];
+  if (!s || s.clip == null) return;
+  const old = s.clip;
+  if (!confirm(`Remove clip ${old} from this annotation?`)) return;
+  delete s.clip;
+  await replaceAllShapes();
+  _clipIndexSet(pages[pageIdx].stem, idx, null);
+  drawOverlay(); renderClipTray();
+  showToast(`Clip ${old} removed`);
+}
+
+// Topmost (smallest-area) shape whose bbox contains an image-space point
+function _clipShapeAt(imgX, imgY) {
+  let best = -1, bestArea = Infinity;
+  (pageData?.shapes || []).forEach((s, i) => {
+    const p = s.points; if (!p || p.length < 2) return;
+    const x1 = Math.min(p[0][0], p[1][0]), x2 = Math.max(p[0][0], p[1][0]);
+    const y1 = Math.min(p[0][1], p[1][1]), y2 = Math.max(p[0][1], p[1][1]);
+    if (imgX < x1 || imgX > x2 || imgY < y1 || imgY > y2) return;
+    const area = (x2 - x1) * (y2 - y1);
+    if (area < bestArea) { bestArea = area; best = i; }
+  });
+  return best;
+}
+
+// Drag a flag from the tray; a short press without movement = pick-up (arm)
+function _clipFlagMouseDown(e, num) {
+  e.preventDefault(); e.stopPropagation();
+  _clipDrag = {num, moved: false, ghost: null};
+  const move = ev => {
+    if (!_clipDrag) return;
+    _clipDrag.moved = true;
+    if (!_clipDrag.ghost) {
+      const g = document.createElement('div');
+      g.textContent = `🚩 ${num}`;
+      g.style.cssText = `position:fixed;z-index:9999;pointer-events:none;background:${clipColor(num)};`
+        + `color:#fff;font-weight:700;border-radius:4px;padding:2px 8px;font-size:12px;opacity:.9;`;
+      document.body.appendChild(g);
+      _clipDrag.ghost = g;
+    }
+    _clipDrag.ghost.style.left = (ev.clientX + 8) + 'px';
+    _clipDrag.ghost.style.top  = (ev.clientY + 8) + 'px';
+  };
+  const up = ev => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    const d = _clipDrag; _clipDrag = null;
+    if (d.ghost) d.ghost.remove();
+    if (d.moved) {
+      const pt = screenToImg(ev.clientX, ev.clientY);
+      if (pt) { const hit = _clipShapeAt(pt.x, pt.y); if (hit >= 0) assignClip(num, hit); }
+    } else {
+      // treat as click = pick up / toggle
+      _clipArmed = (_clipArmed === num) ? null : num;
+      renderClipTray();
+    }
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && _clipArmed != null) { _clipArmed = null; renderClipTray(); }
+});
+
 function computeDiagnostics() {
   diagnosticFlagged   = new Set();
   diagnosticRowCounts = {};
@@ -3544,7 +3726,7 @@ function _applyLatticeDrag(adjustments, origPts, delta, axis) {
 function drawOverlay() {
   if (!svgOverlay || !pageData) return;
   while (svgOverlay.firstChild) svgOverlay.removeChild(svgOverlay.firstChild);
-  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode) ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode || clipMode) ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
     const pts = (() => {
@@ -3577,6 +3759,8 @@ function drawOverlay() {
       rect.style.cursor = editMode ? 'move' : 'pointer';
       rect.addEventListener('mousedown', e => {
         e.stopPropagation();
+        // Clip mode: an armed flag drops onto the clicked annotation
+        if (clipMode && _clipArmed != null) { assignClip(_clipArmed, i); return; }
         const ctrl = e.ctrlKey || e.metaKey;
         if (ctrl) {
           selectShape(i, true);
@@ -3611,6 +3795,37 @@ function drawOverlay() {
         ln.style.pointerEvents = 'none';
         svgOverlay.appendChild(ln);
       }
+    }
+
+    // Clip flag badge (top-right corner) for any annotation carrying a clip
+    if (shape.clip != null) {
+      const col = clipColor(shape.clip);
+      const label = String(shape.clip);
+      const bw = 13 + label.length * 6, bh = 14;
+      const bx = Math.max(tl.x, br.x - bw), by = tl.y;
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bg.setAttribute('x', bx); bg.setAttribute('y', by);
+      bg.setAttribute('width', bw); bg.setAttribute('height', bh);
+      bg.setAttribute('rx', '2'); bg.setAttribute('fill', col);
+      bg.setAttribute('stroke', '#fff'); bg.setAttribute('stroke-width', '0.7');
+      g.appendChild(bg);
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', bx + bw / 2); t.setAttribute('y', by + bh - 3.5);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', '#fff');
+      t.setAttribute('font-size', '10'); t.setAttribute('font-weight', 'bold');
+      t.textContent = '🚩' + label;
+      g.appendChild(t);
+      if (clipMode) {
+        g.style.pointerEvents = 'all'; g.style.cursor = 'pointer';
+        g.addEventListener('mousedown', e => { e.stopPropagation(); removeClip(i); });
+        const tt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        tt.textContent = `Clip ${label} — click to remove`;
+        g.appendChild(tt);
+      } else {
+        g.style.pointerEvents = 'none';
+      }
+      svgOverlay.appendChild(g);
     }
 
     // Resize handles for selected shape in edit mode
@@ -6058,7 +6273,9 @@ async function doExcelExport() {
   if (!stemsList.length) { alert('No pages found.'); return; }
   const pageParams = { stems: stemsList.join(',') };
 
-  const rowsOnly = document.getElementById('xls-rows-only').checked;
+  const rowsOnly  = document.getElementById('xls-rows-only').checked;
+  const clipCol   = document.getElementById('xls-clip-col').checked;
+  const clipsOnly = document.getElementById('xls-clips-only').checked;
   const params = new URLSearchParams({
     folder, layer, types,
     scope: 'document',
@@ -6067,6 +6284,8 @@ async function doExcelExport() {
     ...(colHeaders ? { col_headers: colHeaders } : {}),
     ...(colFilter  ? { col_filter:  colFilter  } : {}),
     ...(rowsOnly   ? { rows_only:   'true'     } : {}),
+    ...(clipCol    ? { clip_col:    'true'     } : {}),
+    ...(clipsOnly  ? { clips_only:  'true'     } : {}),
   });
 
   closeExcelExportModal();
@@ -8117,6 +8336,7 @@ async function loadFolder() {
     .then(d => { allJsonStems = d.stems || []; })
     .catch(() => { allJsonStems = []; });
   loadRules();   // row rules → Diagnose dropdown entries
+  loadClips();   // document-wide clip index → flag tray
   const sel=document.getElementById('page-select');
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';
@@ -8168,6 +8388,8 @@ async function loadPage(idx) {
   document.getElementById('col-fill-btn').disabled = false;
   document.getElementById('snap-btn').disabled = false;
   if (gridBtn.style.display!=='none') gridBtn.textContent = latticeVisible ? '📐 Hide Grid' : '📐 Show Grid';
+  _clipArmed = null;
+  renderClipTray();   // tray contents depend on the current page
 }
 
 function goPage(delta) { const n=pageIdx+delta; if(n>=0&&n<pages.length) loadPage(n); }

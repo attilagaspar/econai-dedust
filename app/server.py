@@ -354,6 +354,36 @@ def api_put_rules(folder: str = Query(...), body: RulesBody = ...):
     return {"ok": True, "count": len(body.rules)}
 
 
+# ---------------------------------------------------------------------------
+# Clips — a shared integer id stamped on annotations to link the same data
+# unit across pages (shape["clip"]).  This endpoint scans every page JSON and
+# returns the document-wide index clip -> [{stem, idx}] plus the max id, so
+# the editor can show "dangling" clips and mint fresh numbers.
+# ---------------------------------------------------------------------------
+
+@app.get("/api/clips")
+def api_get_clips(folder: str = Query(...)):
+    d = _resolve_folder(folder)
+    index: dict = {}
+    mx = 0
+    for jf in sorted(d.glob("*.json")):
+        try:
+            shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            continue
+        for i, s in enumerate(shapes):
+            c = s.get("clip")
+            if c is None:
+                continue
+            try:
+                c = int(c)
+            except (TypeError, ValueError):
+                continue
+            index.setdefault(str(c), []).append({"stem": jf.stem, "idx": i})
+            mx = max(mx, c)
+    return {"clips": index, "max": mx}
+
+
 class RuleLlmBody(BaseModel):
     prompt: str
     idxs:   Optional[list] = None    # legacy: whole-shape crops
@@ -3733,6 +3763,8 @@ def api_export_excel(
     page_from:   int  = Query(None),       # 1-indexed first page of range (inclusive); alternative to stems
     page_to:     int  = Query(None),       # 1-indexed last  page of range (inclusive)
     rows_only:   bool = Query(False),      # export only cells that have an internal row structure
+    clip_col:    bool = Query(False),      # add a "Clip" meta column with each row's clip id(s)
+    clips_only:  bool = Query(False),      # export only rows that carry a clip
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -3753,6 +3785,10 @@ def api_export_excel(
 
     d = _resolve_folder(folder)
     selected_types = {t.strip() for t in types.split(",") if t.strip()} if types else set()
+
+    # Number of meta columns before the data: Row# always, + Clip when asked.
+    # Data columns live at col_idx + 1 + META_COLS (+ group col_offset).
+    META_COLS = 2 if clip_col else 1
 
     # ── Styles ───────────────────────────────────────────────────────────────
     from openpyxl.styles import Font
@@ -3880,6 +3916,7 @@ def api_export_excel(
                             top_y=y1, bot_y=y2,
                             h=max(1, y2-y1), w=max(1, x2-x1),
                             label=sh.get("label", "?"),
+                            clip=sh.get("clip"),
                             super_row=sh.get("super_row"),
                             super_col=sh.get("super_column")))
         print(f"[EXCEL] shapes_to_cells: {len(shapes)} shapes in, {len(raw)} with text", flush=True)
@@ -3908,7 +3945,7 @@ def api_export_excel(
                          col_idx=c["col_idx"],
                          # one cell, no line expansion
                          lines=[c["text"] or "\n".join(c["row_lines"] or [])],
-                         w_px=c["w"])
+                         w_px=c["w"], clip=c.get("clip"))
                     for c in winner.values()]
 
         # ── Lattice path: use stored super_row / super_column ────────────────
@@ -3938,7 +3975,7 @@ def api_export_excel(
                      col_idx=c["col_idx"],
                      # Internal row structure is authoritative when present
                      lines=c["row_lines"] if c["row_lines"] else text_to_lines(c["text"]),
-                     w_px=c["w"])
+                     w_px=c["w"], clip=c.get("clip"))
                 for c in winner.values()]
 
     # ── Helpers for stacking / horizontal page groups ────────────────────────
@@ -3973,7 +4010,7 @@ def api_export_excel(
             for pad_r in range(base_row, base_row + align_pad):
                 for ci in range(min_ci, max_ci + 1):
                     ws.cell(row=pad_r,
-                            column=ci + 2 + col_offset).fill = _blue_fill
+                            column=ci + 1 + META_COLS + col_offset).fill = _blue_fill
 
         # ── Cell content ─────────────────────────────────────────────────
         rmap: dict = defaultdict(list)
@@ -3986,13 +4023,20 @@ def api_export_excel(
             max_lines = max(len(c["lines"]) for c in row_cells)
             if row_heights:
                 max_lines = max(max_lines, row_heights.get(row_idx, 0))
+            # This lattice row's clip id(s): distinct clips among its cells
+            row_clip = ";".join(sorted({str(c["clip"]) for c in row_cells
+                                        if c.get("clip") is not None}))
             for line_i in range(max_lines):
                 # Write lattice row number in meta column on every sub-row
                 meta_c = ws.cell(row=excel_row + line_i, column=col_offset + 1)
                 meta_c.value     = row_idx + 1   # 1-based
                 meta_c.alignment = _align
+                if clip_col:
+                    clip_c = ws.cell(row=excel_row + line_i, column=col_offset + 2)
+                    clip_c.value     = row_clip
+                    clip_c.alignment = _align
                 for c in row_cells:
-                    col  = c["col_idx"] + 2 + col_offset   # +2: meta col shift
+                    col  = c["col_idx"] + 1 + META_COLS + col_offset   # after meta col(s)
                     xcel = ws.cell(row=excel_row + line_i, column=col)
                     xcel.alignment = _align
                     if line_i < len(c["lines"]):
@@ -4016,7 +4060,7 @@ def api_export_excel(
                 col_max_len[c["col_idx"]] = max(col_max_len[c["col_idx"]], len(str(line)))
         for col_idx, max_len in col_max_len.items():
             width  = max(4.0, min(60.0, float(max_len + 2)))
-            letter = get_column_letter(col_idx + 2 + col_offset)   # +2: meta shift
+            letter = get_column_letter(col_idx + 1 + META_COLS + col_offset)
             if ws.column_dimensions[letter].width < width:
                 ws.column_dimensions[letter].width = width
 
@@ -4041,20 +4085,19 @@ def api_export_excel(
     _hdr_font_white = Font(bold=True, color="FFFFFF")
 
     def write_header_row(ws, col_offset=0):
-        """Write 'Row' meta header + hdr_list data headers at row 1."""
-        # Meta column header
-        mc = ws.cell(row=1, column=col_offset + 1)
-        mc.value     = "Row"
-        mc.font      = _hdr_font_white
-        mc.fill      = _hdr_fill
-        mc.alignment = _align
-        # User-specified data column headers (shifted +1 for meta col)
-        for i, label in enumerate(hdr_list):
-            cell = ws.cell(row=1, column=i + 2 + col_offset)
-            cell.value     = label
+        """Write 'Row' (+ 'Clip') meta header + hdr_list data headers at row 1."""
+        def _hdr(col, text):
+            cell = ws.cell(row=1, column=col)
+            cell.value     = text
             cell.font      = _hdr_font_white
             cell.fill      = _hdr_fill
             cell.alignment = _align
+        _hdr(col_offset + 1, "Row")
+        if clip_col:
+            _hdr(col_offset + 2, "Clip")
+        # User-specified data column headers (after the meta column(s))
+        for i, label in enumerate(hdr_list):
+            _hdr(i + 1 + META_COLS + col_offset, label)
 
     data_start = 2   # row 1 is always the header row (meta col "Row" + optional data headers)
 
@@ -4096,6 +4139,13 @@ def api_export_excel(
         remap = {old: new for new, old in enumerate(old_cols)}
         return [{**c, "col_idx": remap[c["col_idx"]]} for c in kept]
 
+    def apply_clips_only(cells):
+        """Keep only rows that carry a clip on at least one of their cells."""
+        if not clips_only:
+            return cells
+        rows_with_clip = {c["row_idx"] for c in cells if c.get("clip") is not None}
+        return [c for c in cells if c["row_idx"] in rows_with_clip]
+
     def load_shapes(jf):
         try:
             return json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
@@ -4131,7 +4181,7 @@ def api_export_excel(
         print(f"[EXCEL] processing page {jfiles[0].name}", flush=True)
         ws = wb.create_sheet(title=stem[:31])
         write_header_row(ws)
-        write_cells(ws, apply_col_filter(shapes_to_cells(load_shapes(jfiles[0]))), base_row=data_start)
+        write_cells(ws, apply_clips_only(apply_col_filter(shapes_to_cells(load_shapes(jfiles[0])))), base_row=data_start)
 
     else:
         # ── Whole document: 1/0 page pattern over the selected sequence ───
@@ -4154,7 +4204,7 @@ def api_export_excel(
             printed = [jf for jf, b in zip(chunk, bits) if b == 1]
             if not printed:
                 continue
-            cells_list = [apply_col_filter(shapes_to_cells(load_shapes(jf)))
+            cells_list = [apply_clips_only(apply_col_filter(shapes_to_cells(load_shapes(jf))))
                           for jf in printed]
             for jf in printed:
                 print(f"[EXCEL] processing {jf.name}", flush=True)
@@ -4165,7 +4215,7 @@ def api_export_excel(
             offsets, coff = [], 0
             for cells in cells_list:
                 offsets.append(coff)
-                coff += max_col_of(cells) + 3
+                coff += max_col_of(cells) + META_COLS + 2
 
             if not headers_written:
                 for o in offsets:
