@@ -1112,7 +1112,10 @@
       The third box holds the <b>zero characters</b>: a cell consisting only
       of these (any dash, underscore, dot…) counts as <b>0</b>, and empty
       cells are always 0. Anything else that isn't a clean number makes the
-      rule fail for that row. Each saved rule appears in the Diagnose
+      rule fail for that row. The last box is an optional <b>page pattern</b>
+      of 1s/0s (e.g. <b>1,0,0</b>) that cycles over pages — 1 = the rule
+      applies, 0 = skip; blank = every page. Skipped pages show no violations
+      and are skipped by Fix rule. Each saved rule appears in the Diagnose
       dropdown as <b>ROW RULE: name</b>; violating internal rows are shaded
       red on the page.
     </div>
@@ -2282,7 +2285,8 @@ function populateRuleDiagOptions() {
     const o = document.createElement('option');
     o.value = `rule:${i}`;
     o.dataset.rule = '1';
-    o.textContent = `ROW RULE: ${rule.name || rule.expr}`;
+    o.textContent = `ROW RULE: ${rule.name || rule.expr}`
+                  + (rule.pattern ? `  [${rule.pattern}]` : '');
     sel.appendChild(o);
   });
   if (diagnosticMode.startsWith('rule:') && !projectRules[parseInt(diagnosticMode.slice(5))]) {
@@ -2311,6 +2315,9 @@ function renderRuleList() {
       <input class="rule-zeros" data-i="${i}" value="${_escHtml(r.zeros ?? DEFAULT_ZERO_CHARS)}"
         title="Zero characters: a cell consisting only of these counts as 0 (empty cells are always 0)"
         style="width:90px;background:#0d1b35;border:1px solid #0f3460;color:#888;border-radius:4px;padding:5px 8px;font-size:0.85rem;font-family:monospace;">
+      <input class="rule-pattern" data-i="${i}" value="${_escHtml(r.pattern || '')}" placeholder="pages 1,0"
+        title="Page pattern: 1 = rule applies, 0 = skip; cycles over pages in order. Blank = every page. E.g. 1,0,0 applies to every 3rd page."
+        style="width:74px;background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;font-family:monospace;">
       <button onclick="deleteRule(${i})" title="Delete rule"
         style="background:none;border:1px solid #c04040;color:#fca5a5;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:0.8rem;">✕</button>
     </div>`).join('')
@@ -2320,10 +2327,11 @@ function _collectRuleInputs() {
   document.querySelectorAll('#rule-list .rule-expr').forEach(el => { projectRules[+el.dataset.i].expr = el.value.trim(); });
   document.querySelectorAll('#rule-list .rule-name').forEach(el => { projectRules[+el.dataset.i].name = el.value.trim(); });
   document.querySelectorAll('#rule-list .rule-zeros').forEach(el => { projectRules[+el.dataset.i].zeros = el.value; });
+  document.querySelectorAll('#rule-list .rule-pattern').forEach(el => { projectRules[+el.dataset.i].pattern = el.value.trim(); });
 }
 function addRule() {
   _collectRuleInputs();
-  projectRules.push({expr: '', name: '', zeros: DEFAULT_ZERO_CHARS});
+  projectRules.push({expr: '', name: '', zeros: DEFAULT_ZERO_CHARS, pattern: ''});
   renderRuleList();
 }
 function deleteRule(i) {
@@ -2337,6 +2345,10 @@ async function saveRules() {
   for (const r of projectRules) {
     if (!/^[\d+\-*/().\s]+=[\d+\-*/().\s]+$/.test(r.expr)) {
       showToast(`Invalid expression: "${r.expr}" — use column numbers, + - * / ( ) and one =`);
+      return;
+    }
+    if (r.pattern && !/^[01](\s*,\s*[01])*$/.test(r.pattern)) {
+      showToast(`Invalid page pattern: "${r.pattern}" — use 1s and 0s separated by commas, e.g. 1,0,0`);
       return;
     }
   }
@@ -2402,11 +2414,22 @@ function _evalRuleExpr(expr, valueAt) {
   return Math.abs(L - R) <= 1e-6;
 }
 
+// Does this rule apply to the current page?  A rule's page pattern is a
+// sequence of 1s/0s (e.g. "1,0,0") that cycles over the pages in order:
+// 1 = rule applies, 0 = skip.  Blank pattern = applies to every page.
+function _ruleAppliesToPage(rule) {
+  const bits = (rule?.pattern || '').split(',').map(s => s.trim()).filter(s => s !== '');
+  if (!bits.length) return true;
+  if (pageIdx < 0) return true;
+  return bits[((pageIdx % bits.length) + bits.length) % bits.length] === '1';
+}
+
 // Scan the page for violations of one rule.  Returns
 // [{superRow, nRows, badRows:[k,...], cols:[{col, idx, values:[...]}]}]
 function _ruleScanPage(rule) {
   const out = [];
   if (!rule?.expr || !pageData?.shapes) return out;
+  if (!_ruleAppliesToPage(rule)) return out;   // pattern says skip this page
   const cols = [...new Set((rule.expr.match(/\d+/g) || []).map(Number))];
   if (!cols.length) return out;
 
@@ -2467,6 +2490,9 @@ function openRuleFix() {
   const ruleIdx = parseInt(diagnosticMode.slice(5), 10);
   const rule    = projectRules[ruleIdx];
   if (!rule) { showToast('Rule not found'); return; }
+  if (!_ruleAppliesToPage(rule)) {
+    showToast(`This rule does not apply to this page (pattern ${rule.pattern})`); return;
+  }
   const violations = _ruleScanPage(rule).map(v => ({...v, proposal: null, status: ''}));
   _rfState = {ruleIdx, rule, violations, running: false};
   document.getElementById('rf-title').textContent =
@@ -2821,8 +2847,11 @@ function computeDiagnostics() {
   const shapes = pageData.shapes;
 
   if (diagnosticMode.startsWith('rule:')) {
-    _computeRuleDiagnostic(parseInt(diagnosticMode.slice(5), 10));
-    if (countEl) countEl.textContent = diagnosticFlagged.size ? `(${diagnosticFlagged.size})` : '';
+    const ri = parseInt(diagnosticMode.slice(5), 10);
+    _computeRuleDiagnostic(ri);
+    if (countEl) countEl.textContent = !_ruleAppliesToPage(projectRules[ri])
+      ? '(n/a)'                                            // pattern skips this page
+      : (diagnosticFlagged.size ? `(${diagnosticFlagged.size})` : '');
     return;
   }
 
