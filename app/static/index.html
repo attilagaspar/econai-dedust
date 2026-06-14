@@ -2281,6 +2281,13 @@ async function loadRules() {
 function populateRuleDiagOptions() {
   const sel = document.getElementById('diagnostic-select');
   [...sel.querySelectorAll('option[data-rule]')].forEach(o => o.remove());
+  if (projectRules.length) {
+    const all = document.createElement('option');
+    all.value = 'rule:all';
+    all.dataset.rule = '1';
+    all.textContent = `ROW RULE: ⚖ all rules (${projectRules.length})`;
+    sel.appendChild(all);
+  }
   projectRules.forEach((rule, i) => {
     const o = document.createElement('option');
     o.value = `rule:${i}`;
@@ -2289,7 +2296,12 @@ function populateRuleDiagOptions() {
                   + (rule.pattern ? `  [${rule.pattern}]` : '');
     sel.appendChild(o);
   });
-  if (diagnosticMode.startsWith('rule:') && !projectRules[parseInt(diagnosticMode.slice(5))]) {
+  if (diagnosticMode.startsWith('rule:') && diagnosticMode !== 'rule:all'
+      && !projectRules[parseInt(diagnosticMode.slice(5))]) {
+    diagnosticMode = 'none';
+    sel.value = 'none';
+  }
+  if (diagnosticMode === 'rule:all' && !projectRules.length) {
     diagnosticMode = 'none';
     sel.value = 'none';
   }
@@ -2463,13 +2475,21 @@ function _ruleScanPage(rule) {
   return out;
 }
 
-function _computeRuleDiagnostic(ruleIdx) {
-  const rule = projectRules[ruleIdx];
-  _ruleScanPage(rule).forEach(v => {
-    v.cols.forEach(({idx}) => {
-      diagnosticFlagged.add(idx);
-      diagnosticRowCounts[idx] = v.badRows.length;   // label = #violated rows
-      diagnosticRuleRows[idx]  = new Set(v.badRows);
+// which: a rule index, or 'all' to union every rule's violations.  Per-rule
+// page patterns are respected (via _ruleScanPage).  When several rules flag
+// the same cell, their violating internal rows are unioned.
+function _computeRuleDiagnostic(which) {
+  const rules = which === 'all'
+    ? projectRules
+    : (projectRules[which] ? [projectRules[which]] : []);
+  rules.forEach(rule => {
+    _ruleScanPage(rule).forEach(v => {
+      v.cols.forEach(({idx}) => {
+        diagnosticFlagged.add(idx);
+        const set = (diagnosticRuleRows[idx] ??= new Set());
+        v.badRows.forEach(k => set.add(k));
+        diagnosticRowCounts[idx] = set.size;   // label = #violated internal rows
+      });
     });
   });
 }
@@ -2486,6 +2506,9 @@ let _rfState = null;   // {ruleIdx, rule, violations:[...], running}
 function openRuleFix() {
   if (!diagnosticMode.startsWith('rule:')) {
     showToast('Select a ROW RULE in the Diagnose dropdown first'); return;
+  }
+  if (diagnosticMode === 'rule:all') {
+    showToast('Fix rule works on one rule at a time — pick a specific rule in the dropdown'); return;
   }
   const ruleIdx = parseInt(diagnosticMode.slice(5), 10);
   const rule    = projectRules[ruleIdx];
@@ -2847,10 +2870,14 @@ function computeDiagnostics() {
   const shapes = pageData.shapes;
 
   if (diagnosticMode.startsWith('rule:')) {
-    const ri = parseInt(diagnosticMode.slice(5), 10);
-    _computeRuleDiagnostic(ri);
-    if (countEl) countEl.textContent = !_ruleAppliesToPage(projectRules[ri])
-      ? '(n/a)'                                            // pattern skips this page
+    const all = diagnosticMode === 'rule:all';
+    _computeRuleDiagnostic(all ? 'all' : parseInt(diagnosticMode.slice(5), 10));
+    // (n/a) when the pattern(s) skip this page entirely
+    const applies = all
+      ? projectRules.some(r => _ruleAppliesToPage(r))
+      : _ruleAppliesToPage(projectRules[parseInt(diagnosticMode.slice(5), 10)]);
+    if (countEl) countEl.textContent = !applies
+      ? '(n/a)'
       : (diagnosticFlagged.size ? `(${diagnosticFlagged.size})` : '');
     return;
   }
