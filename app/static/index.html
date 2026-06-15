@@ -2527,19 +2527,27 @@ function openRuleFix() {
   if (!diagnosticMode.startsWith('rule:')) {
     showToast('Select a ROW RULE in the Diagnose dropdown first'); return;
   }
-  if (diagnosticMode === 'rule:all') {
-    showToast('Fix rule works on one rule at a time — pick a specific rule in the dropdown'); return;
+
+  // Which rule(s) to fix: a single rule, or every rule when "all rules" is on.
+  // Each violation carries its own .rule so the prompt / rule-check use it.
+  const all = diagnosticMode === 'rule:all';
+  const rules = all ? projectRules : [projectRules[parseInt(diagnosticMode.slice(5), 10)]];
+  if (!rules[0]) { showToast('Rule not found'); return; }
+  if (!all && !_ruleAppliesToPage(rules[0])) {
+    showToast(`This rule does not apply to this page (pattern ${rules[0].pattern})`); return;
   }
-  const ruleIdx = parseInt(diagnosticMode.slice(5), 10);
-  const rule    = projectRules[ruleIdx];
-  if (!rule) { showToast('Rule not found'); return; }
-  if (!_ruleAppliesToPage(rule)) {
-    showToast(`This rule does not apply to this page (pattern ${rule.pattern})`); return;
-  }
-  const violations = _ruleScanPage(rule).map(v => ({...v, proposal: null, status: ''}));
-  _rfState = {ruleIdx, rule, violations, running: false};
-  document.getElementById('rf-title').textContent =
-    `🛠 Rule fix — ${rule.name || rule.expr} (${rule.expr})`;
+
+  let violations = [];
+  rules.forEach(rule => {
+    if (!_ruleAppliesToPage(rule)) return;   // respect each rule's page pattern
+    _ruleScanPage(rule).forEach(v =>
+      violations.push({...v, rule, proposal: null, status: ''}));
+  });
+
+  _rfState = {all, violations, running: false};
+  document.getElementById('rf-title').textContent = all
+    ? `🛠 Rule fix — all rules (${rules.length})`
+    : `🛠 Rule fix — ${rules[0].name || rules[0].expr} (${rules[0].expr})`;
   document.getElementById('rf-prompt').value =
     localStorage.getItem('ruleFixPrompt2') || DEFAULT_RULEFIX_PROMPT;
   document.getElementById('rf-chunk').value =
@@ -2596,6 +2604,7 @@ function renderRuleFixList() {
     return `<div style="border:1px solid #0f3460;border-radius:6px;padding:8px 10px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
         <b style="font-size:0.85rem;color:#ccc;">Lattice row ${v.superRow}</b>
+        ${_rfState.all ? `<span style="font-size:0.72rem;color:#8ab;" title="${_escHtml(v.rule.expr)}">[${_escHtml(v.rule.name || v.rule.expr)}]</span>` : ''}
         <span style="font-size:0.75rem;color:#ff5577;">violating line(s): ${v.badRows.map(k => k + 1).join(', ')}</span>
         <span style="font-size:0.75rem;color:#aaa;">${_escHtml(v.status || '')}</span>
         ${v.proposal ? `<span style="font-size:0.75rem;color:${fixOk ? '#4ade80' : '#fbbf24'};">${fixOk ? '✓ proposal satisfies the rule' : '⚠ proposal still violates the rule'}</span>` : ''}
@@ -2669,7 +2678,7 @@ function _rfDrawCropsFor(idx) {
 
 // Does the proposal make the rule hold on every line?
 function _rfProposalOk(v) {
-  const rule = _rfState.rule;
+  const rule = v.rule;
   const val = (c, k) => {
     const prop = v.proposal?.[c]?.[k];
     const cur  = v.cols.find(x => x.col === c)?.values[k];
@@ -2786,7 +2795,7 @@ async function runRuleFixLlm() {
         const r = await fetch(`${API}/api/page/rule-llm?${params}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            prompt: _buildRuleFixPrompt(prompt, _rfState.rule, v, lines),
+            prompt: _buildRuleFixPrompt(prompt, v.rule, v, lines),
             crops,
           }),
         });
