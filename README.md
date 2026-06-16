@@ -136,11 +136,13 @@ Open the editor and check the predicted boxes. Fix any mistakes, adjust boundari
 
 Once the layout is correct, use the toolbar in the editor to run OCR on each cell (or batch-process all pages). The LLM cleaning step uses the OpenAI API to normalize numbers, fix OCR errors, and extract structured fields. Your OpenAI key goes in the settings panel in the editor.
 
-Line-by-line and anchored OCR/LLM runs also record each cell's **internal row structure** — where every text row sits inside the cell, with the OCR / LLM / Human readings stored side by side per row (see [Internal row structure](#internal-row-structure) below).
+Line-by-line and anchored OCR/LLM runs also record each cell's **internal row structure** — where every text row sits inside the cell, with the OCR / LLM / Human readings stored side by side per row (see [Internal row structure](#internal-row-structure) below). The LLM model dropdown includes the GPT-5 family and the o-series reasoning models (calls adapt automatically), and you can also define [**row rules**](#row-rules-validation-between-columns) that arithmetic-check columns and even let the LLM propose fixes.
 
 ### Step 10: Export
 
-Click **Export** in the editor toolbar. This generates an `.xlsx` file preserving the table structure, one row per text line in each cell. Cells with an internal row structure export one Excel row per internal row, with the chosen content layer (e.g. Human > LLM > OCR > PDF) applied per row; in dual-page layout, paired lattice rows are aligned line-for-line.
+Click **Export** in the editor toolbar. This generates an `.xlsx` file preserving the table structure, one row per text line in each cell. Cells with an internal row structure export one Excel row per internal row, with the chosen content layer (e.g. Human > LLM > OCR > PDF) applied per row.
+
+Export options include: a **page pattern** of `1`/`0`s controlling how pages tile onto the sheet (blank = each page stacked vertically; `1,1` = pairs side by side; `1,0` = odd pages only; any 1/0 cycle works), with side-by-side pages aligned rank-by-rank on their printed lattice rows; an optional **Clip column**; and filters for "only cells with an internal row structure" / "only rows that have a clip".
 
 ---
 
@@ -216,6 +218,30 @@ Each annotation can carry an **internal row structure** (`row_struct` in the JSO
 | Project a structure | Anchored OCR/LLM with **Anchor at: Row structure** copies the reference cell's exact dividers onto the rest of the lattice row |
 
 Dividers are always visible (dashed lines on the page, bands on the crop). Moving or resizing a box rescales its rows proportionally. See [WHATS_NEW_INTERNAL_ROWS.md](WHATS_NEW_INTERNAL_ROWS.md) for a hands-on guide.
+
+### Row rules (validation between columns)
+
+**⚖ Rules** opens an editor where you define arithmetic rules between lattice columns, e.g. `1+2=4` ("male + female = all workers"). Each rule has a name, a set of **zero characters** (a cell made only of these — any dash, dot, etc. — counts as 0; empty cells are 0 too), and an optional **page pattern** of `1`/`0`s so the rule only applies to certain pages.
+
+Saved rules appear in the **Diagnose** dropdown as `ROW RULE: <name>`, plus an **all rules** option that unions every rule at once. The rule is evaluated **per internal row**, using the best layer per row (Human > LLM > OCR > PDF); anything that isn't a clean number fails. Violating internal rows are shaded red on the page, so you see exactly which line of which cell breaks the rule. Rules are stored per project and survive restarts.
+
+### Rule fix (LLM-assisted correction)
+
+**🛠 Fix rule** lists every violation of the active rule (or of all rules) on the current page. **▶ Ask LLM** sends, for each violating line, the cell image snippets plus the current readings to the LLM and shows proposed corrections as diffs, with a check of whether the proposal actually makes the rule hold (✓) or not (⚠).
+
+| Control | What it does |
+|---|---|
+| Prompt box | Editable instruction (persisted); the rule and readings are appended automatically |
+| Model picker | Its own model dropdown (defaults to the main LLM model) |
+| Max lines / request | Chunk size; **1 = one line per request** |
+| Per-line checkbox | Only checked lines are written on Apply |
+| **✓ Apply checked** | Writes checked lines to the **LLM layer** (flagged 🛠 as rule-fixed), removes them; unchecked lines stay so you can **Ask LLM** again for a fresh attempt |
+
+Accepted fixes go to the LLM layer, never silently to Human — so the Human layer's "a person verified this" guarantee stays intact, and an existing Human value still wins by layer priority. See [WHATS_NEW_RULES_AND_CLIPS.md](WHATS_NEW_RULES_AND_CLIPS.md) for a hands-on guide to rules, fixing and clips.
+
+### Clips (linking the same data unit across pages)
+
+**🚩 Clips** lets you stamp a numbered, colored flag on **any** annotation to mark that it belongs to the same underlying data unit as an annotation on another page — e.g. a record split across a page break, or a firm description linked to its balance table. A tray across the top of the page shows **➕ new** and any **dangling** flags (placed elsewhere, not yet here); drag a flag onto an annotation, or click a flag then click the annotation. Clipped annotations show a colored badge; click a badge (in clip mode) to remove it. Clips export as a column and can filter the Excel output to only clipped rows.
 
 ### Batch operations
 
