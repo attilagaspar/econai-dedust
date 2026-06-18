@@ -700,6 +700,8 @@
                 title="Export annotations to Excel">↓ Excel</button>
         <button class="nav-btn" id="clip-btn" onclick="toggleClipMode()"
                 title="Clips: stamp a colored flag on an annotation to link the same data unit across pages. Drag a flag from the tray onto an annotation, or click a flag then click an annotation.">🚩 Clips</button>
+        <button class="nav-btn" onclick="openLlmLayout()"
+                title="Magic wand: send the whole page to an LLM and let it propose layout annotation boxes (experimental, for training-data bootstrapping)">🪄 LLM layout</button>
       </div>
     </div>
 
@@ -1172,6 +1174,37 @@
     <div id="rf-list" style="display:flex;flex-direction:column;gap:12px;"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
       <button onclick="closeRuleFix()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- LLM layout (magic wand) modal -->
+<div id="llm-layout-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#16213e;border:1px solid #0f3460;border-radius:8px;padding:18px 20px;width:720px;max-width:94vw;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+    <h3 style="margin:0;color:#e94560;font-size:1rem;">🪄 LLM layout detection <span style="font-size:0.7rem;color:#888;font-weight:400;">(experimental)</span></h3>
+    <div style="font-size:0.75rem;color:#888;line-height:1.5;">
+      Sends the <b>whole current page</b> to the LLM and asks it to return layout
+      boxes in your annotation schema. Parsed boxes are added to the page (Ctrl+Z
+      to undo). LLMs are weak at exact pixel boxes — treat this as a rough
+      bootstrap for training data, then fix in the editor.
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <label style="font-size:0.78rem;color:#aaa;display:flex;align-items:center;gap:4px;">model:
+        <select id="lll-model" class="llm-select" style="font-size:0.78rem;"></select>
+      </label>
+      <label style="font-size:0.78rem;color:#aaa;display:flex;align-items:center;gap:5px;cursor:pointer;">
+        <input type="checkbox" id="lll-clear" style="accent-color:#e94560;"> clear existing shapes first
+      </label>
+      <button id="lll-run-btn" onclick="runLlmLayout()"
+        style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 16px;cursor:pointer;font-size:0.85rem;font-weight:600;">▶ Detect</button>
+      <span id="lll-status" style="font-size:0.78rem;color:#aaa;"></span>
+    </div>
+    <textarea id="lll-prompt" rows="12"
+      style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:6px 8px;font-size:0.8rem;width:100%;box-sizing:border-box;resize:vertical;line-height:1.4;"></textarea>
+    <div style="font-size:0.7rem;color:#666;">Raw LLM reply:</div>
+    <pre id="lll-raw" style="background:#0d1b35;border:1px solid #0f3460;border-radius:4px;padding:6px 8px;font-size:0.72rem;color:#9ab;max-height:160px;overflow:auto;margin:0;white-space:pre-wrap;"></pre>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="closeLlmLayout()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Close</button>
     </div>
   </div>
 </div>
@@ -3053,6 +3086,75 @@ function _clipFlagMouseDown(e, num) {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && _clipArmed != null) { _clipArmed = null; renderClipTray(); }
 });
+
+// ── LLM layout detection (magic wand) ──────────────────────────────────────
+function _llmLayoutDefaultPrompt() {
+  const labels = [...new Set([...(projectLabels || []),
+                              ...((pageData?.shapes || []).map(s => s.label))])]
+                 .filter(Boolean);
+  const labelStr = labels.length ? labels.join(', ')
+                                 : 'the annotation labels used in this project';
+  return `You are a document layout detector. The image is one page of a historical statistical table / register.
+
+Detect every distinct layout region and return them as bounding boxes, using ONLY these labels: ${labelStr}.
+
+Output ONLY a JSON array — no prose, no markdown fences — exactly like:
+[{"label": "<one of the labels above>", "box": [x1, y1, x2, y2]}, ...]
+
+Coordinates are FRACTIONS of the image size: x1,y1 = top-left corner, x2,y2 = bottom-right corner, each between 0 (left/top edge) and 1 (right/bottom edge). Make each box tight around its region. Detect as many regions as you can see.`;
+}
+
+function openLlmLayout() {
+  if (!pages.length || !pageData) { showToast('Load a page first'); return; }
+  const sel = document.getElementById('lll-model');
+  sel.innerHTML = document.getElementById('llm-model').innerHTML;
+  sel.value = localStorage.getItem('llmLayoutModel') || document.getElementById('llm-model').value
+              || sel.value;
+  document.getElementById('lll-prompt').value =
+    localStorage.getItem('llmLayoutPrompt') || _llmLayoutDefaultPrompt();
+  document.getElementById('lll-status').textContent = '';
+  document.getElementById('lll-raw').textContent = '';
+  document.getElementById('lll-clear').checked = false;
+  document.getElementById('llm-layout-modal').style.display = 'flex';
+}
+
+function closeLlmLayout() {
+  document.getElementById('llm-layout-modal').style.display = 'none';
+}
+
+async function runLlmLayout() {
+  if (!pages.length || !pageData) return;
+  const btn    = document.getElementById('lll-run-btn');
+  const status = document.getElementById('lll-status');
+  const model  = document.getElementById('lll-model').value;
+  const prompt = document.getElementById('lll-prompt').value;
+  const clear  = document.getElementById('lll-clear').checked;
+  localStorage.setItem('llmLayoutModel', model);
+  localStorage.setItem('llmLayoutPrompt', prompt);
+  btn.disabled = true; status.textContent = '⟳ asking the LLM…';
+  try {
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, model});
+    const r = await fetch(`${API}/api/page/llm-layout?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt}),
+    });
+    if (!r.ok) { status.textContent = `✕ ${r.status}: ${(await r.text()).slice(0,120)}`; return; }
+    const data = await r.json();
+    document.getElementById('lll-raw').textContent = data.response || '(empty)';
+    if (!data.shapes?.length) { status.textContent = `Parsed 0 boxes (see raw reply)`; return; }
+    pushUndo();
+    if (clear) pageData.shapes = [];
+    data.shapes.forEach(s => pageData.shapes.push(s));
+    await replaceAllShapes();
+    drawOverlay(); refreshDiag(); updatePanel();
+    status.textContent = `✓ added ${data.count} box(es)${clear ? ' (replaced existing)' : ''} — Ctrl+Z to undo`;
+    showToast(`LLM layout: ${data.count} boxes added`);
+  } catch (e) {
+    status.textContent = `✕ ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 function computeDiagnostics() {
   diagnosticFlagged   = new Set();

@@ -463,6 +463,102 @@ def api_rule_llm(
 
 
 # ---------------------------------------------------------------------------
+# Route — LLM layout detection (experimental: whole page -> annotation boxes)
+# ---------------------------------------------------------------------------
+
+class LlmLayoutBody(BaseModel):
+    prompt: str
+
+
+@app.post("/api/page/llm-layout")
+def api_llm_layout(
+    folder: str = Query(...),
+    stem:   str = Query(...),
+    model:  str = Query("gpt-4o"),
+    body:   LlmLayoutBody = ...,
+):
+    """Send the whole page image to the LLM and parse its returned bounding
+    boxes into LabelMe shapes. Coordinates are expected as fractions of the
+    image (0..1); a 0..1000 convention is auto-detected. Returns the parsed
+    shapes (image-pixel points) + the raw reply — the client applies them so
+    undo works."""
+    import base64, io, json as _json, re
+    from PIL import Image as PILImage
+
+    d        = _resolve_folder(folder)
+    img_path = _find_image(d, stem)
+    if img_path is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    img = PILImage.open(str(img_path)).convert("RGB")
+    W, H = img.size
+    # Downscale for the LLM (coords are normalized, so the original W,H still
+    # map correctly); keep aspect ratio, long side <= 2048
+    send = img
+    longest = max(W, H)
+    if longest > 2048:
+        scale = 2048 / longest
+        send = img.resize((max(1, int(W * scale)), max(1, int(H * scale))), PILImage.LANCZOS)
+    buf = io.BytesIO(); send.save(buf, format="JPEG", quality=90)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+
+    content = [
+        {"type": "text", "text": body.prompt},
+        {"type": "image_url",
+         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+    ]
+    try:
+        client = _make_llm_client(model)
+        resp   = _llm_complete(client, model, [{"role": "user", "content": content}], 4096)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    raw = (resp.choices[0].message.content or "").strip()
+
+    # Parse the first JSON array in the reply
+    a, b = raw.find("["), raw.rfind("]")
+    items = []
+    if 0 <= a < b:
+        try:
+            items = _json.loads(raw[a:b + 1])
+        except Exception:
+            items = []
+
+    # Auto-detect coordinate scale: fractions (<=1) vs 0..1000
+    allnums = []
+    for it in items:
+        box = it.get("box") or it.get("bbox") or it.get("points")
+        if isinstance(box, list) and len(box) >= 4:
+            allnums += [float(x) for x in box[:4] if isinstance(x, (int, float))]
+    scale = 1000.0 if (allnums and max(allnums) > 1.5) else 1.0
+
+    shapes = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("label") or it.get("name") or "region").strip()
+        box = it.get("box") or it.get("bbox") or it.get("points")
+        if not (isinstance(box, list) and len(box) >= 4):
+            continue
+        try:
+            x1, y1, x2, y2 = (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
+        except (TypeError, ValueError):
+            continue
+        x1, x2 = sorted((x1 / scale * W, x2 / scale * W))
+        y1, y2 = sorted((y1 / scale * H, y2 / scale * H))
+        x1 = max(0, min(W, x1)); x2 = max(0, min(W, x2))
+        y1 = max(0, min(H, y1)); y2 = max(0, min(H, y2))
+        if x2 - x1 < 1 or y2 - y1 < 1:
+            continue
+        shapes.append({"label": label,
+                       "points": [[round(x1, 1), round(y1, 1)], [round(x2, 1), round(y2, 1)]],
+                       "group_id": None, "shape_type": "rectangle", "flags": {},
+                       "llm_layout": True})
+
+    return {"response": raw, "shapes": shapes, "count": len(shapes),
+            "image_w": W, "image_h": H}
+
+
+# ---------------------------------------------------------------------------
 # Internal row structure (row_struct)
 #
 # Each shape may carry exactly one row_struct describing its internal rows:
