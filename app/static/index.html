@@ -3340,10 +3340,19 @@ async function runLatticeDetectSelection() {
   const subset = sel.map(i => pageData.shapes[i]);
   const labels = [...new Set(subset.map(s => s.label).filter(Boolean))];
   if (!labels.length) { showToast('Selected shapes have no labels'); return; }
+  // Source tables the selection is being carved out of (so we can renumber
+  // their leftovers afterward — a carve is a split, both halves stay clean)
+  const srcTables = [...new Set(subset.map(s => _tableOf(s)).filter(t => t != null))];
   const ids = _latticeTableIds();
   const tid = ids.length ? Math.max(...ids) + 1 : 0;
   pushUndo();
   const n = _latticeDetect(labels, {subset, table: tid});
+  // Re-detect the remainder of each source table so it renumbers contiguously
+  srcTables.forEach(st => {
+    if (st === tid) return;
+    const rest = pageData.shapes.filter(s => (s.table ?? 0) === st && s.super_row != null);
+    if (rest.length) _latticeDetect([...new Set(rest.map(s => s.label))], {subset: rest, table: st});
+  });
   await replaceAllShapes();
   // make the grid + separator tools available
   const gridBtn = document.getElementById('lattice-grid-btn');
@@ -4205,12 +4214,16 @@ function drawOverlay() {
     }
   }
 
-  // Lattice grid overlay — scoped to the active table (select a cell in the
-  // table you want to edit; its grid + separator tools operate on that table)
+  // Lattice grid overlay — draw EVERY table's grid. The active table (the one
+  // containing the selected cell) is bright with interactive resize/merge/sep
+  // handles; other tables are drawn dim and static (click a cell in one to
+  // make it active and editable).
   if (latticeVisible && pageData?.shapes) {
     const _AT = _activeTable();
-    const sShapes = pageData.shapes.filter(s => _tableOf(s)===_AT && s.points?.length>=2);
-    if (sShapes.length > 1) {
+    _latticeTableIds().forEach(tid => {
+      const isActive = tid === _AT;
+      const sShapes = pageData.shapes.filter(s => _tableOf(s)===tid && s.points?.length>=2);
+      if (sShapes.length <= 1) return;
       const rowData={}, colData={};
       sShapes.forEach(s => {
         const r=_shapeRect(s), sr=s.super_row, sc=s.super_column;
@@ -4224,97 +4237,101 @@ function drawOverlay() {
       Object.entries(colData).forEach(([c,d])=>colBands[+c]={left:_median(d.lefts),right:_median(d.rights)});
       const sRows=Object.keys(rowBands).map(Number).sort((a,b)=>a-b);
       const sCols=Object.keys(colBands).map(Number).sort((a,b)=>a-b);
-      if (sRows.length && sCols.length) {
-        const gxL=colBands[sCols[0]].left, gxR=colBands[sCols[sCols.length-1]].right;
-        const gyT=rowBands[sRows[0]].top,   gyB=rowBands[sRows[sRows.length-1]].bot;
-        const inDelMode = latticeSepMode === 'delete';
-        const mkLine=(x1,y1,x2,y2)=>{
-          const p1=imgToScreen(x1,y1),p2=imgToScreen(x2,y2); if(!p1||!p2) return;
-          const l=document.createElementNS('http://www.w3.org/2000/svg','line');
-          l.setAttribute('x1',p1.x); l.setAttribute('y1',p1.y);
-          l.setAttribute('x2',p2.x); l.setAttribute('y2',p2.y);
-          l.setAttribute('stroke', inDelMode ? '#ff4466' : '#00e5ff');
-          l.setAttribute('stroke-width', inDelMode ? '3' : '2.5');
-          l.setAttribute('stroke-opacity','0.75'); l.style.pointerEvents='none';
-          svgOverlay.appendChild(l);
-        };
-        const mkLabel=(ix,iy,txt,anchor='middle')=>{
-          const sp=imgToScreen(ix,iy); if(!sp) return;
-          const t=document.createElementNS('http://www.w3.org/2000/svg','text');
-          t.setAttribute('x',sp.x); t.setAttribute('y',sp.y);
-          t.setAttribute('fill','#00e5ff'); t.setAttribute('font-size','10');
-          t.setAttribute('font-weight','700'); t.setAttribute('text-anchor',anchor);
-          t.style.pointerEvents='none';
-          t.textContent=txt; svgOverlay.appendChild(t);
-        };
-        // Invisible wide hit-area for horizontal boundary → row-resize or merge
-        const mkRowHandle=(yImg,rowAbove,rowBelow)=>{
-          const pL=imgToScreen(gxL,yImg),pR=imgToScreen(gxR,yImg); if(!pL||!pR) return;
-          const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
-          hit.setAttribute('x',pL.x); hit.setAttribute('y',pL.y-5);
-          hit.setAttribute('width',Math.max(0,pR.x-pL.x)); hit.setAttribute('height',10);
-          hit.setAttribute('fill','transparent');
-          hit.style.pointerEvents='all';
-          hit.style.cursor = inDelMode && rowAbove!=null && rowBelow!=null ? 'pointer' : 'row-resize';
-          hit.addEventListener('mousedown',e=>{
-            e.stopPropagation();
-            if (inDelMode) { if (rowAbove!=null&&rowBelow!=null) handleLatticeMergeRow(rowAbove,rowBelow,rowBands,colBands); }
-            else startLatticeRowResize(e,rowAbove,rowBelow);
-          });
-          svgOverlay.appendChild(hit);
-        };
-        // Invisible tall hit-area for vertical boundary → col-resize or merge
-        const mkColHandle=(xImg,colLeft,colRight)=>{
-          const pT=imgToScreen(xImg,gyT),pB=imgToScreen(xImg,gyB); if(!pT||!pB) return;
-          const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
-          hit.setAttribute('x',pT.x-5); hit.setAttribute('y',pT.y);
-          hit.setAttribute('width',10); hit.setAttribute('height',Math.max(0,pB.y-pT.y));
-          hit.setAttribute('fill','transparent');
-          hit.style.pointerEvents='all';
-          hit.style.cursor = inDelMode && colLeft!=null && colRight!=null ? 'pointer' : 'col-resize';
-          hit.addEventListener('mousedown',e=>{
-            e.stopPropagation();
-            if (inDelMode) { if (colLeft!=null&&colRight!=null) handleLatticeMergeCol(colLeft,colRight,rowBands,colBands); }
-            else startLatticeColResize(e,colLeft,colRight);
-          });
-          svgOverlay.appendChild(hit);
-        };
-        // Horizontal lines + row labels + row resize handles
-        sRows.forEach((r,ri) => {
-          const b=rowBands[r];
-          mkLine(gxL,b.top,gxR,b.top);
-          mkLabel(gxL-4,(b.top+b.bot)/2,`${r}`,'end');
-          mkRowHandle(b.top, ri>0?sRows[ri-1]:null, r);
+      if (!(sRows.length && sCols.length)) return;
+      const gxL=colBands[sCols[0]].left, gxR=colBands[sCols[sCols.length-1]].right;
+      const gyT=rowBands[sRows[0]].top,   gyB=rowBands[sRows[sRows.length-1]].bot;
+      const inDelMode = isActive && latticeSepMode === 'delete';
+      const lineCol = !isActive ? '#5fa8c0' : (inDelMode ? '#ff4466' : '#00e5ff');
+      const lineW   = isActive ? (inDelMode ? 3 : 2.5) : 1.2;
+      const lineOp  = isActive ? 0.75 : 0.35;
+      const mkLine=(x1,y1,x2,y2)=>{
+        const p1=imgToScreen(x1,y1),p2=imgToScreen(x2,y2); if(!p1||!p2) return;
+        const l=document.createElementNS('http://www.w3.org/2000/svg','line');
+        l.setAttribute('x1',p1.x); l.setAttribute('y1',p1.y);
+        l.setAttribute('x2',p2.x); l.setAttribute('y2',p2.y);
+        l.setAttribute('stroke', lineCol);
+        l.setAttribute('stroke-width', lineW);
+        l.setAttribute('stroke-opacity', lineOp); l.style.pointerEvents='none';
+        svgOverlay.appendChild(l);
+      };
+      const mkLabel=(ix,iy,txt,anchor='middle')=>{
+        const sp=imgToScreen(ix,iy); if(!sp) return;
+        const t=document.createElementNS('http://www.w3.org/2000/svg','text');
+        t.setAttribute('x',sp.x); t.setAttribute('y',sp.y);
+        t.setAttribute('fill', lineCol); t.setAttribute('font-size','10');
+        t.setAttribute('font-weight','700'); t.setAttribute('text-anchor',anchor);
+        t.setAttribute('opacity', isActive ? 1 : 0.55);
+        t.style.pointerEvents='none';
+        t.textContent=txt; svgOverlay.appendChild(t);
+      };
+      // Interactive handles only on the active table
+      const mkRowHandle=(yImg,rowAbove,rowBelow)=>{
+        if (!isActive) return;
+        const pL=imgToScreen(gxL,yImg),pR=imgToScreen(gxR,yImg); if(!pL||!pR) return;
+        const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
+        hit.setAttribute('x',pL.x); hit.setAttribute('y',pL.y-5);
+        hit.setAttribute('width',Math.max(0,pR.x-pL.x)); hit.setAttribute('height',10);
+        hit.setAttribute('fill','transparent');
+        hit.style.pointerEvents='all';
+        hit.style.cursor = inDelMode && rowAbove!=null && rowBelow!=null ? 'pointer' : 'row-resize';
+        hit.addEventListener('mousedown',e=>{
+          e.stopPropagation();
+          if (inDelMode) { if (rowAbove!=null&&rowBelow!=null) handleLatticeMergeRow(rowAbove,rowBelow,rowBands,colBands); }
+          else startLatticeRowResize(e,rowAbove,rowBelow);
         });
-        mkLine(gxL,gyB,gxR,gyB);
-        mkRowHandle(gyB, sRows[sRows.length-1], null);
-        // Vertical lines + col labels + col resize handles
-        sCols.forEach((c,ci) => {
-          const b=colBands[c];
-          mkLine(b.left,gyT,b.left,gyB);
-          mkLabel(b.left+(colBands[c].right-b.left)/2,gyT-4,`${c}`,'middle');
-          mkColHandle(b.left, ci>0?sCols[ci-1]:null, c);
+        svgOverlay.appendChild(hit);
+      };
+      const mkColHandle=(xImg,colLeft,colRight)=>{
+        if (!isActive) return;
+        const pT=imgToScreen(xImg,gyT),pB=imgToScreen(xImg,gyB); if(!pT||!pB) return;
+        const hit=document.createElementNS('http://www.w3.org/2000/svg','rect');
+        hit.setAttribute('x',pT.x-5); hit.setAttribute('y',pT.y);
+        hit.setAttribute('width',10); hit.setAttribute('height',Math.max(0,pB.y-pT.y));
+        hit.setAttribute('fill','transparent');
+        hit.style.pointerEvents='all';
+        hit.style.cursor = inDelMode && colLeft!=null && colRight!=null ? 'pointer' : 'col-resize';
+        hit.addEventListener('mousedown',e=>{
+          e.stopPropagation();
+          if (inDelMode) { if (colLeft!=null&&colRight!=null) handleLatticeMergeCol(colLeft,colRight,rowBands,colBands); }
+          else startLatticeColResize(e,colLeft,colRight);
         });
-        mkLine(gxR,gyT,gxR,gyB);
-        mkColHandle(gxR, sCols[sCols.length-1], null);
+        svgOverlay.appendChild(hit);
+      };
+      // Horizontal lines + row labels + row resize handles
+      sRows.forEach((r,ri) => {
+        const b=rowBands[r];
+        mkLine(gxL,b.top,gxR,b.top);
+        mkLabel(gxL-4,(b.top+b.bot)/2,`${r}`,'end');
+        mkRowHandle(b.top, ri>0?sRows[ri-1]:null, r);
+      });
+      mkLine(gxL,gyB,gxR,gyB);
+      mkRowHandle(gyB, sRows[sRows.length-1], null);
+      // Vertical lines + col labels + col resize handles
+      sCols.forEach((c,ci) => {
+        const b=colBands[c];
+        mkLine(b.left,gyT,b.left,gyB);
+        mkLabel(b.left+(colBands[c].right-b.left)/2,gyT-4,`${c}`,'middle');
+        mkColHandle(b.left, ci>0?sCols[ci-1]:null, c);
+      });
+      mkLine(gxR,gyT,gxR,gyB);
+      mkColHandle(gxR, sCols[sCols.length-1], null);
 
-        // Lattice sep mode: transparent catcher over entire grid (col/row only — delete uses the line handles)
-        if (latticeSepMode === 'col' || latticeSepMode === 'row') {
-          const ptl=imgToScreen(gxL,gyT), pbr=imgToScreen(gxR,gyB);
-          if (ptl && pbr) {
-            const catcher=document.createElementNS('http://www.w3.org/2000/svg','rect');
-            catcher.setAttribute('x',ptl.x); catcher.setAttribute('y',ptl.y);
-            catcher.setAttribute('width',Math.max(0,pbr.x-ptl.x));
-            catcher.setAttribute('height',Math.max(0,pbr.y-ptl.y));
-            catcher.setAttribute('fill','none'); catcher.setAttribute('stroke','none');
-            catcher.style.pointerEvents='all';
-            catcher.style.cursor=_SEP_CURSOR;
-            catcher.addEventListener('mousedown',e=>{e.stopPropagation();e.preventDefault();handleLatticeSepClick(e,rowBands,colBands);});
-            svgOverlay.appendChild(catcher);
-          }
+      // Lattice sep mode: transparent catcher over the active grid only
+      if (isActive && (latticeSepMode === 'col' || latticeSepMode === 'row')) {
+        const ptl=imgToScreen(gxL,gyT), pbr=imgToScreen(gxR,gyB);
+        if (ptl && pbr) {
+          const catcher=document.createElementNS('http://www.w3.org/2000/svg','rect');
+          catcher.setAttribute('x',ptl.x); catcher.setAttribute('y',ptl.y);
+          catcher.setAttribute('width',Math.max(0,pbr.x-ptl.x));
+          catcher.setAttribute('height',Math.max(0,pbr.y-ptl.y));
+          catcher.setAttribute('fill','none'); catcher.setAttribute('stroke','none');
+          catcher.style.pointerEvents='all';
+          catcher.style.cursor=_SEP_CURSOR;
+          catcher.addEventListener('mousedown',e=>{e.stopPropagation();e.preventDefault();handleLatticeSepClick(e,rowBands,colBands);});
+          svgOverlay.appendChild(catcher);
         }
       }
-    }
+    });
   }
 
   // Ghost outlines for copy-drag (one per mover)
