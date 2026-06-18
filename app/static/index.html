@@ -3919,8 +3919,10 @@ function _latticeCompleteRegion(regionShapes) {
 
 function startLatticeRowResize(e, rowAbove, rowBelow) {
   pushUndo();
+  const AT = _activeTable();
   const adjustments = [], origPts = {};
   pageData.shapes.forEach((s, idx) => {
+    if (_tableOf(s) !== AT) return;                       // only the active table
     if (s.super_row !== rowAbove && s.super_row !== rowBelow) return;
     origPts[idx] = s.points.map(p=>[...p]);
     // rowAbove shapes: drag moves their bottom (max-y) edge
@@ -3932,8 +3934,10 @@ function startLatticeRowResize(e, rowAbove, rowBelow) {
 
 function startLatticeColResize(e, colLeft, colRight) {
   pushUndo();
+  const AT = _activeTable();
   const adjustments = [], origPts = {};
   pageData.shapes.forEach((s, idx) => {
+    if (_tableOf(s) !== AT) return;                       // only the active table
     if (s.super_column !== colLeft && s.super_column !== colRight) return;
     origPts[idx] = s.points.map(p=>[...p]);
     // colLeft shapes: drag moves their right (max-x) edge
