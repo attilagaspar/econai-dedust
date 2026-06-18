@@ -2761,6 +2761,11 @@ async def api_upload_pages(name: str, files: List[UploadFile] = File(...)):
 
 BASE_YAML = Path(__file__).parent.parent / "samples" / "ertesito2" / "fast_rcnn_R_50_FPN_3x.yaml"
 
+# Shared, project-independent authority files (gazetteers / controlled vocabs).
+# Data files here are git-ignored; see authorities/README.md for the schema.
+AUTHORITIES_DIR = Path(__file__).parent.parent / "authorities"
+AUTHORITIES_DIR.mkdir(exist_ok=True)
+
 class PrepareRequest(BaseModel):
     max_iter:      Optional[int]   = None
     base_lr:       Optional[float] = None

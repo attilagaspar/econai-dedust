@@ -10,6 +10,10 @@ build/
 # Project data — entire projects/ folder is local only
 projects/
 
+# Authorities — large reference data, local only; keep docs (README etc.)
+authorities/*
+!authorities/*.md
+
 # Sample data images (keep JSONs if you want, but images are large)
 samples/**/*.jpg
 samples/**/*.jpeg
