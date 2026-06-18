@@ -3675,32 +3675,53 @@ function _latticeMergeRegions(regions) {
   return merged;
 }
 
-function _latticeAssignCoords(regionShapes, tol=10) {
-  // ── Columns: sort by left-x, group shapes whose left edge is within tol of the column's avg left ──
-  // Using left-edge grouping (not centroid) so adjacent cells sharing borders don't bleed into each other.
-  const byX = [...regionShapes].sort((a,b)=>Math.min(...a.points.map(p=>p[0]))-Math.min(...b.points.map(p=>p[0])));
-  const columns = [];
-  for (const s of byX) {
-    const left = Math.min(...s.points.map(p=>p[0]));
-    let placed = false;
-    for (let ci=0; ci<columns.length; ci++) {
-      const avgL = columns[ci].reduce((acc,s2)=>acc+Math.min(...s2.points.map(p=>p[0])),0)/columns[ci].length;
-      if (Math.abs(left - avgL) <= tol) { columns[ci].push(s); s.super_column=ci+1; placed=true; break; }
+// Fraction of the SHORTER interval that two 1-D intervals [a1,a2],[b1,b2] share.
+function _intervalOverlapFrac(a1, a2, b1, b2) {
+  const inter   = Math.max(0, Math.min(a2, b2) - Math.max(a1, b1));
+  const shorter = Math.max(1, Math.min(a2 - a1, b2 - b1));
+  return inter / shorter;
+}
+
+// Group shapes into rows/columns by INTERVAL OVERLAP rather than edge
+// proximity: each shape joins the existing group it overlaps most (>= thresh
+// of the shorter span), else starts a new one. Robust to tall full-height
+// strips (they all overlap vertically → one row) and to slightly-misaligned
+// boxes, while cells merely sharing a border (~0 overlap) never merge.
+function _groupByOverlap(shapes, lo, hi, thresh) {
+  const groups = [];   // {members, los, his, lo, hi}  (lo/hi = median interval)
+  const sorted = [...shapes].sort((a, b) => lo(a) - lo(b));
+  for (const s of sorted) {
+    const sLo = lo(s), sHi = hi(s);
+    let best = -1, bestFrac = thresh;
+    for (let gi = 0; gi < groups.length; gi++) {
+      const f = _intervalOverlapFrac(sLo, sHi, groups[gi].lo, groups[gi].hi);
+      if (f >= bestFrac) { bestFrac = f; best = gi; }
     }
-    if (!placed) { columns.push([s]); s.super_column=columns.length; }
-  }
-  // ── Rows: sort by top-y, group shapes whose top edge is within tol of the row's avg top ──
-  const byY = [...regionShapes].sort((a,b)=>Math.min(...a.points.map(p=>p[1]))-Math.min(...b.points.map(p=>p[1])));
-  const rows = [];
-  for (const s of byY) {
-    const top = Math.min(...s.points.map(p=>p[1]));
-    let placed = false;
-    for (let ri=0; ri<rows.length; ri++) {
-      const avgT = rows[ri].reduce((acc,s2)=>acc+Math.min(...s2.points.map(p=>p[1])),0)/rows[ri].length;
-      if (Math.abs(top - avgT) <= tol) { rows[ri].push(s); s.super_row=ri+1; placed=true; break; }
+    if (best >= 0) {
+      const g = groups[best];
+      g.members.push(s); g.los.push(sLo); g.his.push(sHi);
+      g.lo = _median(g.los); g.hi = _median(g.his);
+    } else {
+      groups.push({ members: [s], los: [sLo], his: [sHi], lo: sLo, hi: sHi });
     }
-    if (!placed) { rows.push([s]); s.super_row=rows.length; }
   }
+  return groups;
+}
+
+function _latticeAssignCoords(regionShapes) {
+  const left  = s => Math.min(...s.points.map(p => p[0]));
+  const right = s => Math.max(...s.points.map(p => p[0]));
+  const top   = s => Math.min(...s.points.map(p => p[1]));
+  const bot   = s => Math.max(...s.points.map(p => p[1]));
+  const TH = 0.5;   // overlap fraction needed to share a row/column
+
+  const cols = _groupByOverlap(regionShapes, left, right, TH)
+                 .sort((a, b) => a.lo - b.lo);
+  cols.forEach((g, i) => g.members.forEach(s => { s.super_column = i + 1; }));
+
+  const rows = _groupByOverlap(regionShapes, top, bot, TH)
+                 .sort((a, b) => a.lo - b.lo);
+  rows.forEach((g, i) => g.members.forEach(s => { s.super_row = i + 1; }));
 }
 
 function _latticeSmoothRegion(regionShapes) {
