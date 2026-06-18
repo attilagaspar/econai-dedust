@@ -2761,10 +2761,19 @@ async def api_upload_pages(name: str, files: List[UploadFile] = File(...)):
 
 BASE_YAML = Path(__file__).parent.parent / "samples" / "ertesito2" / "fast_rcnn_R_50_FPN_3x.yaml"
 
+class PrepareRequest(BaseModel):
+    max_iter:      Optional[int]   = None
+    base_lr:       Optional[float] = None
+    ims_per_batch: Optional[int]   = None
+
+
 @app.post("/api/project/{name}/prepare")
-def api_prepare(name: str):
-    """Convert annotated LabelMe JSONs → COCO JSON + generate training scripts."""
+def api_prepare(name: str, body: Optional[PrepareRequest] = None):
+    """Convert annotated LabelMe JSONs → COCO JSON + generate training scripts.
+    Optional solver params (max_iter / base_lr / ims_per_batch) are hand-edited
+    in the dashboard and baked into the generated train.sh."""
     from app.coco_convert import prepare_training_data
+    body = body or PrepareRequest()
     try:
         cfg  = load_config(name)
         pdir = project_dir(name)
@@ -2774,6 +2783,9 @@ def api_prepare(name: str):
             labels          = cfg["labels"],
             intermediate_dir= pdir / "intermediate",
             base_yaml_path  = BASE_YAML,
+            max_iter        = body.max_iter      or 2000,
+            base_lr         = body.base_lr       or 0.00125,
+            ims_per_batch   = body.ims_per_batch or 2,
         )
         return {"ok": True, **result}
     except FileNotFoundError as e:

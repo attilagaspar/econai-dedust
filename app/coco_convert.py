@@ -73,13 +73,24 @@ def labelme_to_coco(ann_dir: Path, labels: list[str]) -> dict:
 
 def prepare_training_data(project_name: str, ann_dir: Path,
                           labels: list[str], intermediate_dir: Path,
-                          base_yaml_path: Path) -> dict:
+                          base_yaml_path: Path,
+                          max_iter: int = 2000, base_lr: float = 0.00125,
+                          ims_per_batch: int = 2) -> dict:
     """
     1. Convert LabelMe JSONs → COCO annotations.json
     2. Copy + patch the base yaml config (NUM_CLASSES).
-    3. Generate the training .sh script.
+    3. Generate the training .sh script (with hand-editable solver params).
     Returns paths dict.
     """
+    # Guard against junk values from the UI
+    max_iter      = max(1, int(max_iter or 2000))
+    ims_per_batch = max(1, int(ims_per_batch or 2))
+    try:
+        base_lr = float(base_lr)
+    except (TypeError, ValueError):
+        base_lr = 0.00125
+    if base_lr <= 0:
+        base_lr = 0.00125
     intermediate_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. COCO JSON
@@ -132,8 +143,9 @@ python3 train_net.py \\
     --resume \\
     --config-file           {remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml \\
     OUTPUT_DIR  {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/ \\
-    SOLVER.IMS_PER_BATCH 2 \\
-    SOLVER.BASE_LR 0.00125
+    SOLVER.IMS_PER_BATCH {ims_per_batch} \\
+    SOLVER.BASE_LR {base_lr} \\
+    SOLVER.MAX_ITER {max_iter}
 echo "=== Training complete ==="
 """
     sh_path = intermediate_dir / "train.sh"
@@ -164,6 +176,9 @@ echo "=== Inference complete ==="
         "n_annotated":  n_annotated,
         "n_annotations": len(coco["annotations"]),
         "n_classes":    n_classes,
+        "max_iter":     max_iter,
+        "base_lr":      base_lr,
+        "ims_per_batch": ims_per_batch,
     }
 
 

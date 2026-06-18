@@ -432,6 +432,26 @@ function renderDetail() {
         Converts your annotated LabelMe JSONs to COCO format and generates the training &amp; inference scripts.
         Run this after annotating a subset of pages in the editor.
       </p>
+      <div class="btn-row" style="align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;"
+               title="Total training iterations. Small annotated sets converge well before the huge default — e.g. 1500–3000 for ~20 pages.">
+          Iterations
+          <input id="tp-max-iter" type="number" min="1" step="100" value="2000"
+                 style="width:80px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;"
+               title="SOLVER.BASE_LR — learning rate.">
+          Learning rate
+          <input id="tp-base-lr" type="number" min="0" step="0.0001" value="0.00125"
+                 style="width:90px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;"
+               title="SOLVER.IMS_PER_BATCH — images per batch. Raise only if the GPU has spare memory.">
+          Batch size
+          <input id="tp-ims-batch" type="number" min="1" step="1" value="2"
+                 style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        </label>
+      </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
       </div>
@@ -712,10 +732,19 @@ async function prepareTrainingData() {
   if (!activeProj) return;
   const el = document.getElementById('prepare-result');
   el.textContent = 'Converting annotations…';
-  const res  = await fetch(`/api/project/${activeProj.name}/prepare`, { method: 'POST' });
+  const body = {
+    max_iter:      parseInt(document.getElementById('tp-max-iter').value, 10)   || undefined,
+    base_lr:       parseFloat(document.getElementById('tp-base-lr').value)      || undefined,
+    ims_per_batch: parseInt(document.getElementById('tp-ims-batch').value, 10)  || undefined,
+  };
+  const res  = await fetch(`/api/project/${activeProj.name}/prepare`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   const data = await res.json();
   if (data.ok) {
     el.innerHTML = `✓ ${data.n_annotated} annotated pages · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
+      Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch}</code><br>
       COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
     showToast('Training data prepared.');
   } else {
