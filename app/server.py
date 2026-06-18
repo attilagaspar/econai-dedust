@@ -4030,6 +4030,7 @@ def api_export_excel(
                             h=max(1, y2-y1), w=max(1, x2-x1),
                             label=sh.get("label", "?"),
                             clip=sh.get("clip"),
+                            table=sh.get("table") or 0,
                             super_row=sh.get("super_row"),
                             super_col=sh.get("super_column")))
         print(f"[EXCEL] shapes_to_cells: {len(shapes)} shapes in, {len(raw)} with text", flush=True)
@@ -4068,28 +4069,52 @@ def api_export_excel(
             c["row_idx"] = int(c["super_row"]) - 1
             c["col_idx"] = int(c["super_col"]) - 1
 
-        if no_coords:
-            _spatial_cluster_rows(no_coords, 10)
-            _spatial_cluster_cols(no_coords)
+        tables = sorted({c["table"] for c in have_coords})
 
-        all_raw = have_coords + no_coords
-        winner = {}
-        for c in all_raw:
-            k = (c["row_idx"], c["col_idx"])
-            if k not in winner or c["h"] > winner[k]["h"]:
-                winner[k] = c
-
-        if winner:
-            min_row = min(c["row_idx"] for c in winner.values())
-            if min_row != 0:
-                for c in winner.values(): c["row_idx"] -= min_row
+        if len(tables) <= 1:
+            # ── single lattice: original behaviour (merge no_coords spatially) ──
+            if no_coords:
+                _spatial_cluster_rows(no_coords, 10)
+                _spatial_cluster_cols(no_coords)
+            all_raw = have_coords + no_coords
+            winner = {}
+            for c in all_raw:
+                k = (c["row_idx"], c["col_idx"])
+                if k not in winner or c["h"] > winner[k]["h"]:
+                    winner[k] = c
+            if winner:
+                min_row = min(c["row_idx"] for c in winner.values())
+                if min_row != 0:
+                    for c in winner.values(): c["row_idx"] -= min_row
+            cells = list(winner.values())
+        else:
+            # ── multiple lattices on the page: stack tables top-to-bottom ──
+            # (no_coords — titles / free text between tables — are dropped here)
+            def _table_top(t): return min(c["top_y"] for c in have_coords if c["table"] == t)
+            cells, row_offset = [], 0
+            for t in sorted(tables, key=_table_top):
+                winner = {}
+                for c in (x for x in have_coords if x["table"] == t):
+                    k = (c["row_idx"], c["col_idx"])
+                    if k not in winner or c["h"] > winner[k]["h"]:
+                        winner[k] = c
+                ws = list(winner.values())
+                if not ws:
+                    continue
+                min_row = min(c["row_idx"] for c in ws)
+                top = 0
+                for c in ws:
+                    c["row_idx"] = c["row_idx"] - min_row + row_offset
+                    top = max(top, c["row_idx"])
+                cells.extend(ws)
+                row_offset = top + 2          # one blank row between stacked tables
 
         return [dict(row_idx=c["row_idx"],
                      col_idx=c["col_idx"],
                      # Internal row structure is authoritative when present
                      lines=c["row_lines"] if c["row_lines"] else text_to_lines(c["text"]),
                      w_px=c["w"], clip=c.get("clip"))
-                for c in winner.values()]
+                for c in cells]
 
     # ── Helpers for stacking / horizontal page groups ────────────────────────
 
