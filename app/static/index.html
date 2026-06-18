@@ -3766,13 +3766,32 @@ function _latticeCompleteRegion(regionShapes) {
   regionShapes.forEach(s => { labelCount[s.label] = (labelCount[s.label]||0)+1; });
   const mostFreqLabel = Object.entries(labelCount).sort((a,b)=>b[1]-a[1])[0][0];
 
-  let added = 0;
+  // Never fabricate a predicted cell that overlaps an existing shape. A tall
+  // cell spanning several rows of a neighbouring column occupies only one grid
+  // slot, so completion used to stack duplicate boxes over it — which then
+  // needed a manual "remove overlaps" pass. Guard against that here.
+  const existRects = pageData.shapes
+    .filter(s => s.points?.length >= 2)
+    .map(s => { const xs=s.points.map(p=>p[0]), ys=s.points.map(p=>p[1]);
+                return {x1:Math.min(...xs), y1:Math.min(...ys),
+                        x2:Math.max(...xs), y2:Math.max(...ys)}; });
+  const overlapsExisting = (x1,y1,x2,y2) => {
+    const area = Math.max(1, (x2-x1)*(y2-y1));
+    return existRects.some(r => {
+      const ix = Math.max(0, Math.min(x2,r.x2) - Math.max(x1,r.x1));
+      const iy = Math.max(0, Math.min(y2,r.y2) - Math.max(y1,r.y1));
+      return ix*iy > 0.10*area;          // >10% of the predicted cell covered
+    });
+  };
+
+  let added = 0, skipped = 0;
   // Iterate top-to-bottom so "above" lookups can find just-created shapes
   for (let r = minRow; r <= maxRow; r++) {
     for (let c = minCol; c <= maxCol; c++) {
       if (posMap.has(`${r},${c}`)) continue;
       const rb = rowBands[r], cb = colBands[c];
       if (!rb || !cb) continue;
+      if (overlapsExisting(cb.left, rb.top, cb.right, rb.bot)) { skipped++; continue; }
 
       // Type: cell directly above in the same column; fall back to most frequent
       const above = posMap.get(`${r-1},${c}`);
@@ -3790,10 +3809,12 @@ function _latticeCompleteRegion(regionShapes) {
       pageData.shapes.push(newShape);
       regionShapes.push(newShape);          // keep regionShapes in sync for future band updates
       posMap.set(`${r},${c}`, newShape);    // available immediately for "above" on next rows
+      existRects.push({x1:cb.left, y1:rb.top, x2:cb.right, y2:rb.bot}); // avoid stacking later predictions
       added++;
     }
   }
-  if (added) showToast(`Lattice: predicted ${added} missing cell${added>1?'s':''}`, 3000);
+  if (added)   showToast(`Lattice: predicted ${added} missing cell${added>1?'s':''}`
+                         + (skipped ? ` (${skipped} skipped — would overlap)` : ''), 3000);
 }
 
 // ── Lattice resize ────────────────────────────────────────────────────────────
