@@ -24,6 +24,10 @@ paramiko
 # ── Spreadsheet export ───────────────────────────────────────────────────────
 openpyxl
 
+# ── Authority resolver (gazetteer matching) ──────────────────────────────────
+rapidfuzz            # fast fuzzy matching; falls back to stdlib difflib if absent
+unidecode            # accent-folding so OCR-dropped diacritics still match
+
 # ── System utilities ─────────────────────────────────────────────────────────
 psutil
 
