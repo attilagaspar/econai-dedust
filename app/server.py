@@ -4704,6 +4704,54 @@ def api_export_excel(
 
             cur_row += 1 + sum(heights)   # 1 source row + data rows
 
+    # ── Companion sheet: resolved authority entities ──────────────────────────
+    # One row per resolved unit (whole cell, or each internal row), keeping the
+    # ORIGINAL text alongside the resolved name + ID so nothing is lost.
+    def _row_layer_text(r):
+        h = (r.get("human") or "").strip(); o = (r.get("ocr") or "").strip()
+        l = (r.get("llm") or "").strip();   p = (r.get("pdf") or "").strip()
+        if layer == "human":    return h
+        if layer == "ocr":      return o
+        if layer == "llm":      return l
+        if layer == "pdf":      return p
+        if layer == "best_ocr": return h or o or l
+        if layer == "best_pdf": return h or l or o or p
+        return h or l or o
+
+    resolved_recs = []
+    for jf in jfiles:
+        for sh in load_shapes(jf):
+            if selected_types and sh.get("label", "") not in selected_types:
+                continue
+            tbl = sh.get("table") or 0
+            sr, sc = sh.get("super_row"), sh.get("super_column")
+            rows = (sh.get("row_struct") or {}).get("rows") or []
+            if rows:
+                for r in rows:
+                    a = r.get("authority")
+                    if not a:
+                        continue
+                    resolved_recs.append((jf.stem, tbl, sr, sc, r.get("n"),
+                                          _row_layer_text(r), a.get("name"), a.get("id"),
+                                          a.get("type"), a.get("score"), a.get("source")))
+            else:
+                a = sh.get("authority")
+                if not a:
+                    continue
+                resolved_recs.append((jf.stem, tbl, sr, sc, None,
+                                      get_text(sh), a.get("name"), a.get("id"),
+                                      a.get("type"), a.get("score"), a.get("source")))
+
+    if resolved_recs:
+        rs = wb.create_sheet(title="Resolved")
+        hdr = ["page", "table", "row", "col", "internal_row", "original",
+               "resolved_name", "resolved_id", "entity_type", "score", "source"]
+        for ci, h in enumerate(hdr, 1):
+            c = rs.cell(row=1, column=ci, value=h); c.font = _src_font; c.fill = _src_fill
+        for ri, rec in enumerate(resolved_recs, 2):
+            for ci, v in enumerate(rec, 1):
+                rs.cell(row=ri, column=ci, value=v)
+
     if not wb.worksheets:
         wb.create_sheet("Empty")
 

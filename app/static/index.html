@@ -1123,8 +1123,8 @@
           </div>
           <div id="fg-authority-body">
             <div style="display:flex;gap:4px;align-items:center;margin-bottom:5px;">
-              <span style="font-size:10px;color:#778;white-space:nowrap;">Source</span>
-              <select id="auth-file" onchange="onAuthFileChange()" title="Which authority to resolve against (applies to this page)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
+              <span id="auth-file-label" title="Authority applies to this lattice column (or the page for non-lattice cells)" style="font-size:10px;color:#778;white-space:nowrap;">Source</span>
+              <select id="auth-file" onchange="onAuthFileChange()" title="Which authority to resolve against" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
             </div>
             <div id="auth-current" style="font-size:11px;margin-bottom:5px;"></div>
             <div style="display:flex;gap:4px;align-items:center;margin-bottom:5px;">
@@ -1132,7 +1132,10 @@
               <select id="auth-ctx-county" onchange="onAuthCountyChange()" title="Restrict matches to this county (active table)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
               <select id="auth-ctx-district" onchange="onAuthDistrictChange()" title="Restrict matches to this district (active table)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
             </div>
-            <button onclick="resolveAuthority()" style="width:100%;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#cde;padding:5px;cursor:pointer;font-size:11px;">🔎 Resolve</button>
+            <div style="display:flex;gap:4px;">
+              <button onclick="resolveAuthority()" title="Resolve this cell" style="flex:1;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#cde;padding:5px;cursor:pointer;font-size:11px;">🔎 Resolve</button>
+              <button onclick="resolveColumn()" id="auth-col-btn" title="Resolve every cell in this lattice column with this column's authority (best of Human>LLM>OCR>PDF). Cells with internal rows resolve per row. Manual picks kept; empty/1-char skipped." style="flex:1;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:5px;cursor:pointer;font-size:11px;">📋 Resolve column</button>
+            </div>
             <div id="auth-cands" style="margin-top:5px;"></div>
           </div>
         </div>
@@ -5439,7 +5442,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-4 (authority picker) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-5 (per-column + resolve-column + excel) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -8684,9 +8687,21 @@ let _authRootCache  = {};       // authority file -> [root entities]
 const _authChildCache = {};     // `${file}|${parentId}` -> [children]
 let _authListCache  = null;     // {authorities:[{file,authority,entity_types,...}], default}
 
-function _authFile() {
+// Authority is chosen per lattice column (table:super_column) when the cell is
+// a lattice cell, else per page. Effective file = column override → page default.
+function _colKey(shape) {
+  const t = _tableOf(shape);
+  return (t != null && shape?.super_column != null) ? `${t}:${shape.super_column}` : null;
+}
+function _pageAuthFile() {
   return (pageData?.flags?.authority_file) || (_authListCache?.default) || 'places_hu.authority.json';
 }
+function _authFileFor(shape) {
+  const ck = shape ? _colKey(shape) : null;
+  const map = pageData?.flags?.column_authority || {};
+  return (ck && map[ck]) || _pageAuthFile();
+}
+function _authFile() { return _authFileFor(pageData?.shapes?.[selIdx]); }
 async function _ensureAuthList() {
   if (_authListCache) return _authListCache;
   try {
@@ -8766,6 +8781,13 @@ async function refreshAuthorityPanel(shape) {
   }
   _populateAuthTypes();
 
+  // Scope label + column-batch button depend on whether this is a lattice cell
+  const ck = _colKey(shape);
+  const lbl = document.getElementById('auth-file-label');
+  if (lbl) lbl.textContent = ck ? `Source · col ${shape.super_column}` : 'Source · page';
+  const colBtn = document.getElementById('auth-col-btn');
+  if (colBtn) colBtn.style.display = ck ? '' : 'none';
+
   const cur = document.getElementById('auth-current');
   const a = shape.authority;
   if (a) {
@@ -8797,16 +8819,26 @@ async function refreshAuthorityPanel(shape) {
 
 async function onAuthFileChange() {
   const f = document.getElementById('auth-file').value;
+  const shape = pageData.shapes[selIdx];
+  const ck = _colKey(shape);
   if (!pageData.flags) pageData.flags = {};
-  pageData.flags.authority_file = f;
-  pageData.flags.authority_context = {};   // context ids are authority-specific
+  const patch = {authority_context: {}};       // context ids are authority-specific
+  pageData.flags.authority_context = {};
+  if (ck) {                                     // lattice cell → set this column
+    pageData.flags.column_authority = pageData.flags.column_authority || {};
+    pageData.flags.column_authority[ck] = f;
+    patch.column_authority = pageData.flags.column_authority;
+  } else {                                      // free cell → set page default
+    pageData.flags.authority_file = f;
+    patch.authority_file = f;
+  }
   try {
     await fetch(`${API}/api/page/flags?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}`, {
       method: 'PATCH', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({flags: {authority_file: f, authority_context: {}}})
+      body: JSON.stringify({flags: patch})
     });
   } catch (e) { /* best-effort persistence */ }
-  if (selIdx >= 0) await refreshAuthorityPanel(pageData.shapes[selIdx]);
+  if (selIdx >= 0) await refreshAuthorityPanel(shape);
 }
 
 async function _saveAuthCtx(patch) {
@@ -8856,6 +8888,59 @@ async function resolveAuthority() {
     box.innerHTML = `<span style="color:#a55;font-size:10px;">${_escH(String(e))}</span>`;
   }
 }
+// Resolve every cell in the selected cell's lattice column with that column's
+// authority. Cells with internal rows resolve per row; others resolve whole.
+async function resolveColumn() {
+  if (selIdx < 0) return;
+  const sel = pageData.shapes[selIdx];
+  if (!_colKey(sel)) { showToast('Select a lattice cell — “Resolve column” works on a lattice column'); return; }
+  const AT = _tableOf(sel), col = sel.super_column;
+  const type = document.getElementById('auth-type').value;
+  const parent = _authParent();
+  const cells = pageData.shapes.filter(s => _tableOf(s) === AT && s.super_column === col);
+  if (!cells.length) return;
+  const btn = document.getElementById('auth-col-btn');
+  const oldTxt = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  let resolved = 0, kept = 0, skipped = 0, nomatch = 0;
+  try {
+    for (const shape of cells) {
+      const rows = _rsRows(shape);
+      if (rows && rows.length) {
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i];
+          if (r.authority && r.authority.source === 'human') { kept++; continue; }
+          const text = _rsRowBest(shape, i);
+          if (!_rsResolvable(text)) { delete r.authority; skipped++; continue; }
+          const cands = await _resolveText(text, type, parent);
+          if (!cands.length) { delete r.authority; nomatch++; continue; }
+          r.authority = _candToAuth(cands[0], 'auto'); resolved++;
+        }
+      } else if (shape.authority && shape.authority.source === 'human') {
+        kept++;
+      } else {
+        const text = _bestCellText(shape);
+        if (!_rsResolvable(text)) { delete shape.authority; skipped++; continue; }
+        const cands = await _resolveText(text, type, parent);
+        if (!cands.length) { delete shape.authority; nomatch++; continue; }
+        shape.authority = _candToAuth(cands[0], 'auto'); resolved++;
+      }
+    }
+    await replaceAllShapes();
+    if (pageData.shapes[selIdx]) refreshAuthorityPanel(pageData.shapes[selIdx]);
+    drawOverlay(); refreshDiag();
+    showToast(`Column ${col}: ${resolved} resolved`
+      + (kept ? `, ${kept} manual kept` : '')
+      + (nomatch ? `, ${nomatch} no match` : '')
+      + (skipped ? `, ${skipped} skipped` : ''));
+  } catch (e) {
+    console.error('[auth] resolveColumn failed', e);
+    showToast('Auth error: ' + (e?.message || e), 6000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldTxt || '📋 Resolve column'; }
+  }
+}
+
 function _renderAuthCands(cands, q) {
   const box = document.getElementById('auth-cands');
   if (!cands.length) { box.innerHTML = `<span style="color:#a55;font-size:10px;">No match for “${_escH(q.split('\n')[0])}”.</span>`; return; }
