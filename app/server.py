@@ -150,6 +150,34 @@ def _find_image(folder: Path, stem: str) -> Optional[Path]:
     return None
 
 
+def _resolve_pdf_source(ann_dir: Path, pdf_source: str) -> Optional[Path]:
+    """Locate the source PDF for a page on THIS machine.
+
+    `pdf_source` in older JSONs is an absolute path baked in at import time
+    (machine-specific). The PDF itself is copied into <project>/sources/ at
+    import, so we resolve robustly: relative-to-project first, then a basename
+    fallback in sources/ — which repairs the legacy absolute-path JSONs too."""
+    if not pdf_source:
+        return None
+    proj = ann_dir.parent                 # annotations/ -> project root
+    base = Path(pdf_source).name
+    cands = []
+    p = Path(pdf_source)
+    if p.is_absolute():
+        cands.append(p)                   # same machine / unchanged path
+    else:
+        cands += [proj / pdf_source, ann_dir / pdf_source]
+    cands += [proj / "sources" / base, ann_dir / "sources" / base,
+              proj / base, ann_dir / base]
+    for c in cands:
+        try:
+            if c.exists():
+                return c
+        except OSError:
+            pass
+    return None
+
+
 def _page_sort_key(name: str) -> tuple:
     """Sort page_1 < page_2 < ... < page_10 (natural sort)."""
     parts = re.split(r"(\d+)", name)
@@ -871,14 +899,15 @@ def api_rows_pdf_refresh(
     if not rs or not rs.get("rows"):
         raise HTTPException(status_code=400, detail="Shape has no internal row structure")
 
-    pdf_path  = data.get("pdf_source")
     pdf_page  = data.get("pdf_page")
     pdf_scale = data.get("pdf_scale", 2.0)
-    if not pdf_path or pdf_page is None:
+    if not data.get("pdf_source") or pdf_page is None:
         raise HTTPException(status_code=400, detail="No PDF source recorded for this page")
-    pdf_path = Path(pdf_path)
-    if not pdf_path.exists():
-        raise HTTPException(status_code=404, detail=f"Source PDF not found at: {pdf_path}")
+    pdf_path = _resolve_pdf_source(d, data.get("pdf_source"))
+    if pdf_path is None:
+        raise HTTPException(status_code=404,
+            detail=f"Source PDF not found (looked for '{Path(data['pdf_source']).name}' "
+                   f"in the project's sources/ folder)")
 
     doc  = fitz.open(str(pdf_path))
     page = doc[int(pdf_page)]
@@ -939,11 +968,10 @@ def api_pdf_text_layer(
 
     data = json.loads(jf.read_text(encoding="utf-8"))
 
-    pdf_path  = data.get("pdf_source")
     pdf_page  = data.get("pdf_page")
     pdf_scale = data.get("pdf_scale", 2.0)
 
-    if not pdf_path or pdf_page is None:
+    if not data.get("pdf_source") or pdf_page is None:
         raise HTTPException(
             status_code=400,
             detail="No PDF source recorded for this page. "
@@ -951,12 +979,12 @@ def api_pdf_text_layer(
                    "of the app have this information."
         )
 
-    pdf_path = Path(pdf_path)
-    if not pdf_path.exists():
+    pdf_path = _resolve_pdf_source(d, data.get("pdf_source"))
+    if pdf_path is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Source PDF not found at: {pdf_path}\n"
-                   "It may have been moved or deleted."
+            detail=f"Source PDF '{Path(data['pdf_source']).name}' not found in the "
+                   "project's sources/ folder. Re-import the PDF or place it there."
         )
 
     doc  = fitz.open(str(pdf_path))

@@ -48,6 +48,15 @@ def _import_pdf(pdf_path: Path, ann_dir: Path, base: str | None = None) -> list[
     import fitz
     if base is None:
         base = _sanitize(pdf_path.stem)
+    # Store pdf_source RELATIVE to the project root when the PDF lives inside it
+    # (the upload flow copies it to <project>/sources/), so text-layer extraction
+    # works on any machine the shared project is opened on. Fall back to absolute
+    # only for PDFs imported from outside the project (not copied in).
+    proj = ann_dir.parent
+    try:
+        pdf_src = str(pdf_path.resolve().relative_to(proj.resolve())).replace("\\", "/")
+    except ValueError:
+        pdf_src = str(pdf_path.resolve())
     pages = []
     scale    = 2.0
     matrix   = fitz.Matrix(scale, scale)
@@ -61,7 +70,7 @@ def _import_pdf(pdf_path: Path, ann_dir: Path, base: str | None = None) -> list[
         w, h = pix.width, pix.height
         meta = {**EMPTY_LABELME, "imagePath": dest.name,
                 "imageHeight": h, "imageWidth": w,
-                "pdf_source": str(pdf_path.resolve()),
+                "pdf_source": pdf_src,
                 "pdf_page":   i,
                 "pdf_scale":  scale}
         (ann_dir / f"{stem}.json").write_text(
