@@ -1112,9 +1112,9 @@
               <button class="fg-toggle-btn" id="fg-authority-toggle" onclick="toggleFg('fg-authority')" title="Collapse/expand">▾</button>
               <div class="field-label" style="margin-bottom:0;">🏛 Authority</div>
             </div>
-            <select id="auth-type" title="Entity type to resolve to" style="font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;">
-              <option value="">Auto</option>
-              <option value="settlement" selected>Settlement</option>
+            <select id="auth-type" title="Restrict matches to one entity type (All = search counties, districts and settlements)" style="font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;">
+              <option value="" selected>All types</option>
+              <option value="settlement">Settlement</option>
               <option value="district">District</option>
               <option value="county">County</option>
             </select>
