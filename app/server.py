@@ -2990,6 +2990,42 @@ def _load_authority(name: Optional[str] = None) -> dict:
     return index
 
 
+_AUTH_META_CACHE: dict = {}   # filename -> {"mtime", "meta"}
+
+
+def _authority_meta(fname: str) -> dict:
+    """Header metadata for one authority file (no entity indexing). Cached by mtime."""
+    path = AUTHORITIES_DIR / fname
+    mtime = path.stat().st_mtime
+    cached = _AUTH_META_CACHE.get(fname)
+    if cached and cached["mtime"] == mtime:
+        return cached["meta"]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    meta = {
+        "file":           fname,
+        "authority":      data.get("authority"),
+        "version":        data.get("version"),
+        "entity_types":   data.get("entity_types") or [],
+        "slices_present": data.get("slices_present") or [],
+        "counts":         data.get("counts") or {},
+    }
+    _AUTH_META_CACHE[fname] = {"mtime": mtime, "meta": meta}
+    return meta
+
+
+@app.get("/api/authorities")
+def api_list_authorities():
+    """List the *.authority.json files available in AUTHORITIES_DIR with header
+    metadata (entity types, counts). Powers the in-editor authority picker."""
+    out = []
+    for p in sorted(AUTHORITIES_DIR.glob("*.authority.json")):
+        try:
+            out.append(_authority_meta(p.name))
+        except Exception as e:
+            out.append({"file": p.name, "error": str(e)})
+    return {"authorities": out, "default": _AUTH_DEFAULT_FILE}
+
+
 def _auth_is_descendant(by_id: dict, node_id: str, ancestor_id: str) -> bool:
     cur, seen = node_id, set()
     while cur and cur not in seen:
@@ -3063,14 +3099,15 @@ def api_authority_resolve(q: str = Query(...), type: Optional[str] = Query(None)
 @app.get("/api/authority/children")
 def api_authority_children(parent: Optional[str] = Query(None),
                            name: Optional[str] = Query(None)):
-    """List entities directly under `parent` (omit for top-level counties).
-    Powers the cascading county -> district context pickers."""
+    """List entities directly under `parent`; omit `parent` for the roots
+    (entities with no parent — counties for places, top groups for industries).
+    Authority-agnostic, so it powers the context pickers for any authority."""
     index = _load_authority(name)
     by_id = index["by_id"]
     if parent:
         ids = index["children"].get(parent, [])
     else:
-        ids = [i for i, v in by_id.items() if v.get("type") == "county"]
+        ids = [i for i, v in by_id.items() if not v.get("parent")]
     items = sorted((by_id[i] for i in ids if i in by_id),
                    key=lambda v: (v.get("name") or ""))
     return {"parent": parent, "count": len(items), "items": items}

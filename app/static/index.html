@@ -1122,9 +1122,13 @@
             </select>
           </div>
           <div id="fg-authority-body">
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:5px;">
+              <span style="font-size:10px;color:#778;white-space:nowrap;">Source</span>
+              <select id="auth-file" onchange="onAuthFileChange()" title="Which authority to resolve against (applies to this page)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
+            </div>
             <div id="auth-current" style="font-size:11px;margin-bottom:5px;"></div>
             <div style="display:flex;gap:4px;align-items:center;margin-bottom:5px;">
-              <span id="auth-ctx-label" title="Context applies to the active table; narrows matches to this county/district" style="font-size:10px;color:#778;white-space:nowrap;">Ctx</span>
+              <span id="auth-ctx-label" title="Context applies to the active table; narrows matches to a branch of the authority" style="font-size:10px;color:#778;white-space:nowrap;">Ctx</span>
               <select id="auth-ctx-county" onchange="onAuthCountyChange()" title="Restrict matches to this county (active table)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
               <select id="auth-ctx-district" onchange="onAuthDistrictChange()" title="Restrict matches to this district (active table)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
             </div>
@@ -5279,7 +5283,7 @@ function _candToAuth(c, source) {
   };
 }
 async function _resolveText(text, type, parent) {
-  const params = new URLSearchParams({q: text});
+  const params = new URLSearchParams({q: text, name: _authFile()});
   if (type)   params.set('type', type);
   if (parent) params.set('parent', parent);
   try {
@@ -5435,7 +5439,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-3 active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-4 (authority picker) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -8676,8 +8680,22 @@ async function _llmAnchoredOne(shapeIdx, nRows, refIdx = -1) {
 
 // ── Save correction text ─────────────────────────────────────────────────────
 // ── Authority resolver ─────────────────────────────────────────────────────
-let _authCountyCache  = null;   // [{id,name,...}]
-const _authDistrictCache = {};  // countyId -> [{id,name,...}]
+let _authRootCache  = {};       // authority file -> [root entities]
+const _authChildCache = {};     // `${file}|${parentId}` -> [children]
+let _authListCache  = null;     // {authorities:[{file,authority,entity_types,...}], default}
+
+function _authFile() {
+  return (pageData?.flags?.authority_file) || (_authListCache?.default) || 'places_hu.authority.json';
+}
+async function _ensureAuthList() {
+  if (_authListCache) return _authListCache;
+  try {
+    const r = await fetch(`${API}/api/authorities`);
+    _authListCache = r.ok ? await r.json() : {authorities: [], default: 'places_hu.authority.json'};
+  } catch (e) { _authListCache = {authorities: [], default: 'places_hu.authority.json'}; }
+  return _authListCache;
+}
+function _authMeta(file) { return (_authListCache?.authorities || []).find(a => a.file === file) || null; }
 
 function _escH(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
@@ -8698,28 +8716,55 @@ function _bestCellText(shape) {
       || (shape?.pdf_text || '').trim();
 }
 
-async function _ensureCounties() {
-  if (_authCountyCache) return _authCountyCache;
+async function _ensureRoots() {
+  const f = _authFile();
+  if (_authRootCache[f]) return _authRootCache[f];
   try {
-    const r = await fetch(`${API}/api/authority/children`);
-    _authCountyCache = r.ok ? ((await r.json()).items || []) : [];
-  } catch (e) { _authCountyCache = []; }
-  return _authCountyCache;
+    const r = await fetch(`${API}/api/authority/children?name=${encodeURIComponent(f)}`);
+    _authRootCache[f] = r.ok ? ((await r.json()).items || []) : [];
+  } catch (e) { _authRootCache[f] = []; }
+  return _authRootCache[f];
 }
-async function _districtsOf(countyId) {
-  if (!countyId) return [];
-  if (_authDistrictCache[countyId]) return _authDistrictCache[countyId];
+async function _childrenOf(parentId) {
+  if (!parentId) return [];
+  const f = _authFile(), key = `${f}|${parentId}`;
+  if (_authChildCache[key]) return _authChildCache[key];
   try {
-    const r = await fetch(`${API}/api/authority/children?parent=${encodeURIComponent(countyId)}`);
-    _authDistrictCache[countyId] = r.ok ? ((await r.json()).items || []) : [];
-  } catch (e) { _authDistrictCache[countyId] = []; }
-  return _authDistrictCache[countyId];
+    const r = await fetch(`${API}/api/authority/children?parent=${encodeURIComponent(parentId)}&name=${encodeURIComponent(f)}`);
+    _authChildCache[key] = r.ok ? ((await r.json()).items || []) : [];
+  } catch (e) { _authChildCache[key] = []; }
+  return _authChildCache[key];
+}
+function _authCtxLabels() {
+  const et = _authMeta(_authFile())?.entity_types || [];
+  return [et[0] || 'level 1', et[1] || 'level 2'];
+}
+function _populateAuthTypes() {
+  const sel = document.getElementById('auth-type');
+  if (!sel) return;
+  const types = _authMeta(_authFile())?.entity_types || [];
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">All types</option>` +
+    types.map(t => `<option value="${_escH(t)}">${_escH(t.charAt(0).toUpperCase() + t.slice(1))}</option>`).join('');
+  sel.value = types.includes(cur) ? cur : '';
 }
 
 async function refreshAuthorityPanel(shape) {
   const fg = document.getElementById('fg-authority');
   if (!fg) return;
   fg.style.display = 'flex';
+
+  // Authority source picker + type list (driven by the chosen authority)
+  await _ensureAuthList();
+  const fsel = document.getElementById('auth-file');
+  const file = _authFile();
+  if (fsel) {
+    const list = _authListCache.authorities || [];
+    fsel.innerHTML = list.length
+      ? list.map(a => `<option value="${_escH(a.file)}"${a.file === file ? ' selected' : ''}>${_escH(a.authority || a.file)}</option>`).join('')
+      : `<option value="">(no authorities found)</option>`;
+  }
+  _populateAuthTypes();
 
   const cur = document.getElementById('auth-current');
   const a = shape.authority;
@@ -8734,19 +8779,34 @@ async function refreshAuthorityPanel(shape) {
     cur.innerHTML = `<span style="color:#778;">Unresolved</span>`;
   }
 
-  // Per-table context selectors (active table)
+  // Per-table context selectors (active table); labels from the authority's types
+  const [l1, l2] = _authCtxLabels();
   document.getElementById('auth-ctx-label').textContent = `T${_authCtxKey()}`;
   const ctx = _authCtx();
-  const counties = await _ensureCounties();
+  const roots = await _ensureRoots();
   const csel = document.getElementById('auth-ctx-county');
-  csel.innerHTML = `<option value="">— county —</option>` +
-    counties.map(c => `<option value="${_escH(c.id)}"${c.id===ctx.county?' selected':''}>${_escH(c.name)}</option>`).join('');
+  csel.innerHTML = `<option value="">— ${_escH(l1)} —</option>` +
+    roots.map(c => `<option value="${_escH(c.id)}"${c.id===ctx.county?' selected':''}>${_escH(c.name)}</option>`).join('');
   const dsel = document.getElementById('auth-ctx-district');
-  const dists = ctx.county ? await _districtsOf(ctx.county) : [];
-  dsel.innerHTML = `<option value="">— district —</option>` +
-    dists.map(d => `<option value="${_escH(d.id)}"${d.id===ctx.district?' selected':''}>${_escH(d.name)}</option>`).join('');
+  const kids = ctx.county ? await _childrenOf(ctx.county) : [];
+  dsel.innerHTML = `<option value="">— ${_escH(l2)} —</option>` +
+    kids.map(d => `<option value="${_escH(d.id)}"${d.id===ctx.district?' selected':''}>${_escH(d.name)}</option>`).join('');
 
   document.getElementById('auth-cands').innerHTML = '';
+}
+
+async function onAuthFileChange() {
+  const f = document.getElementById('auth-file').value;
+  if (!pageData.flags) pageData.flags = {};
+  pageData.flags.authority_file = f;
+  pageData.flags.authority_context = {};   // context ids are authority-specific
+  try {
+    await fetch(`${API}/api/page/flags?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({flags: {authority_file: f, authority_context: {}}})
+    });
+  } catch (e) { /* best-effort persistence */ }
+  if (selIdx >= 0) await refreshAuthorityPanel(pageData.shapes[selIdx]);
 }
 
 async function _saveAuthCtx(patch) {
@@ -8766,9 +8826,9 @@ async function onAuthCountyChange() {
   const id = csel.value, name = csel.options[csel.selectedIndex]?.text || '';
   await _saveAuthCtx({county: id || null, county_name: id ? name : null, district: null, district_name: null});
   const dsel = document.getElementById('auth-ctx-district');
-  const dists = id ? await _districtsOf(id) : [];
-  dsel.innerHTML = `<option value="">— district —</option>` +
-    dists.map(d => `<option value="${_escH(d.id)}">${_escH(d.name)}</option>`).join('');
+  const kids = id ? await _childrenOf(id) : [];
+  dsel.innerHTML = `<option value="">— ${_escH(_authCtxLabels()[1])} —</option>` +
+    kids.map(d => `<option value="${_escH(d.id)}">${_escH(d.name)}</option>`).join('');
 }
 async function onAuthDistrictChange() {
   const dsel = document.getElementById('auth-ctx-district');
@@ -8785,7 +8845,7 @@ async function resolveAuthority() {
   const type = document.getElementById('auth-type').value;
   const parent = _authParent();
   box.innerHTML = `<span style="color:#778;font-size:10px;">Resolving “${_escH(q.split('\n')[0])}”…</span>`;
-  const params = new URLSearchParams({q});
+  const params = new URLSearchParams({q, name: _authFile()});
   if (type)   params.set('type', type);
   if (parent) params.set('parent', parent);
   try {
@@ -8814,7 +8874,7 @@ async function assignAuthority(id) {
   try {
     const r = await fetch(`${API}/api/page/shape/authority?${params}`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({id, source: 'human'})
+      body: JSON.stringify({id, source: 'human', name: _authFile()})
     });
     if (!r.ok) { showToast(`Assign error ${r.status}`); return; }
     pageData.shapes[selIdx].authority = (await r.json()).authority;
