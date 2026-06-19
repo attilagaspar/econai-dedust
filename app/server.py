@@ -2890,6 +2890,263 @@ BASE_YAML = Path(__file__).parent.parent / "samples" / "ertesito2" / "fast_rcnn_
 AUTHORITIES_DIR = Path(__file__).parent.parent / "authorities"
 AUTHORITIES_DIR.mkdir(exist_ok=True)
 
+
+# ---------------------------------------------------------------------------
+# Authority resolver — match OCR'd place names to gazetteer entity IDs
+# ---------------------------------------------------------------------------
+# Index a *.authority.json (see authorities/README.md) into in-memory lookup
+# structures and fuzzy-match query strings (place names) against every entity
+# name + alias, optionally constrained to descendants of a parent (county /
+# district). rapidfuzz preferred; degrades to difflib if unavailable.
+
+_AUTH_DEFAULT_FILE = "places_hu.authority.json"
+_AUTH_LOCK = threading.Lock()
+_AUTH_CACHE: dict = {}   # filename -> {"mtime": float, "index": dict}
+
+
+def _auth_norm(s: str) -> str:
+    """Casefold, strip punctuation, collapse whitespace — accent-preserving key."""
+    s = (s or "").strip().casefold()
+    s = re.sub(r"[^\w\s]", " ", s, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _auth_fold(s: str) -> str:
+    """Accent-folded key (Vágagyagos -> vagagyagos) — tolerant of OCR dropping diacritics."""
+    try:
+        from unidecode import unidecode
+        s = unidecode(s or "")
+    except Exception:
+        pass
+    return _auth_norm(s)
+
+
+def _auth_entity_view(e: dict) -> dict:
+    """Flatten one authority entity to the fields the editor cares about.
+    Uses the first slice (period-specific name/type/parent + county/district)."""
+    sl = (e.get("slices") or [{}])
+    s0 = sl[0] if sl else {}
+    sattrs = s0.get("attrs") or {}
+    eattrs = e.get("attrs") or {}
+    return {
+        "id":            e.get("id"),
+        "name":          s0.get("name") or e.get("name"),
+        "type":          s0.get("type"),
+        "parent":        s0.get("parent"),
+        "county_name":   sattrs.get("county_name"),
+        "district_name": sattrs.get("district_name"),
+        "lat":           eattrs.get("lat"),
+        "lon":           eattrs.get("lon"),
+        "modern_name":   eattrs.get("modern_name"),
+    }
+
+
+def _build_auth_index(data: dict) -> dict:
+    by_id: dict = {}
+    children: dict = {}
+    pools: dict = {"county": [], "district": [], "settlement": []}
+    for e in data.get("entities", []):
+        v = _auth_entity_view(e)
+        if not v["id"]:
+            continue
+        by_id[v["id"]] = v
+        if v["parent"]:
+            children.setdefault(v["parent"], []).append(v["id"])
+        t = v["type"] or "settlement"
+        cands = [(v["name"], "name")]
+        for a in (e.get("aliases") or []):
+            an = a.get("name")
+            if an:
+                cands.append((an, a.get("source") or "alias"))
+        seen = set()
+        for raw, via in cands:
+            key = _auth_norm(raw)
+            if not key or (key, via) in seen:
+                continue
+            seen.add((key, via))
+            pools.setdefault(t, []).append({
+                "id": v["id"], "raw": raw, "norm": key,
+                "fold": _auth_fold(raw), "via": via, "parent": v["parent"],
+            })
+    return {"by_id": by_id, "children": children, "pools": pools}
+
+
+def _load_authority(name: Optional[str] = None) -> dict:
+    fname = name or _AUTH_DEFAULT_FILE
+    path = AUTHORITIES_DIR / fname
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
+    mtime = path.stat().st_mtime
+    with _AUTH_LOCK:
+        cached = _AUTH_CACHE.get(fname)
+        if cached and cached["mtime"] == mtime:
+            return cached["index"]
+    data = json.loads(path.read_text(encoding="utf-8"))   # built outside lock (slow)
+    index = _build_auth_index(data)
+    with _AUTH_LOCK:
+        _AUTH_CACHE[fname] = {"mtime": mtime, "index": index}
+    return index
+
+
+def _auth_is_descendant(by_id: dict, node_id: str, ancestor_id: str) -> bool:
+    cur, seen = node_id, set()
+    while cur and cur not in seen:
+        if cur == ancestor_id:
+            return True
+        seen.add(cur)
+        cur = (by_id.get(cur) or {}).get("parent")
+    return False
+
+
+def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] = None,
+                     k: int = 8, name: Optional[str] = None) -> list:
+    index = _load_authority(name)
+    by_id = index["by_id"]
+    nq, fq = _auth_norm(q), _auth_fold(q)
+    if not nq:
+        return []
+    types = [type] if (type in index["pools"]) else list(index["pools"].keys())
+    pool = []
+    for t in types:
+        for c in index["pools"][t]:
+            if parent and not _auth_is_descendant(by_id, c["id"], parent):
+                continue
+            pool.append(c)
+    if not pool:
+        return []
+
+    best: dict = {}   # id -> {"score", "via", "matched"}
+
+    def _add(c, score):
+        cur = best.get(c["id"])
+        if not cur or score > cur["score"]:
+            best[c["id"]] = {"score": float(score), "via": c["via"], "matched": c["raw"]}
+
+    for c in pool:                       # exact (accent-preserving) wins outright
+        if c["norm"] == nq:
+            _add(c, 100.0)
+
+    limit = max(k * 5, 50)
+    try:
+        from rapidfuzz import process, fuzz
+        for _, score, i in process.extract(fq, [c["fold"] for c in pool],
+                                            scorer=fuzz.WRatio, limit=limit,
+                                            score_cutoff=55):
+            _add(pool[i], 100.0 if pool[i]["norm"] == nq else score)
+    except ImportError:
+        import difflib
+        for c in pool:
+            if c["norm"] == nq:
+                continue
+            r = difflib.SequenceMatcher(None, fq, c["fold"]).ratio() * 100.0
+            if r >= 55:
+                _add(c, r)
+
+    out = []
+    for cid, m in sorted(best.items(), key=lambda kv: -kv[1]["score"])[:k]:
+        v = by_id.get(cid, {})
+        out.append({**v, "score": round(m["score"], 1),
+                    "via": m["via"], "matched": m["matched"]})
+    return out
+
+
+@app.get("/api/authority/resolve")
+def api_authority_resolve(q: str = Query(...), type: Optional[str] = Query(None),
+                          parent: Optional[str] = Query(None), k: int = Query(8),
+                          name: Optional[str] = Query(None)):
+    """Fuzzy-match a place string against the authority; return top-k candidates."""
+    return {"query": q, "candidates": _authority_match(q, type, parent, k, name)}
+
+
+@app.get("/api/authority/children")
+def api_authority_children(parent: Optional[str] = Query(None),
+                           name: Optional[str] = Query(None)):
+    """List entities directly under `parent` (omit for top-level counties).
+    Powers the cascading county -> district context pickers."""
+    index = _load_authority(name)
+    by_id = index["by_id"]
+    if parent:
+        ids = index["children"].get(parent, [])
+    else:
+        ids = [i for i, v in by_id.items() if v.get("type") == "county"]
+    items = sorted((by_id[i] for i in ids if i in by_id),
+                   key=lambda v: (v.get("name") or ""))
+    return {"parent": parent, "count": len(items), "items": items}
+
+
+@app.get("/api/authority/entity")
+def api_authority_entity(id: str = Query(...), name: Optional[str] = Query(None)):
+    index = _load_authority(name)
+    v = index["by_id"].get(id)
+    if not v:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {id}")
+    return v
+
+
+class AuthorityAssign(BaseModel):
+    id:     Optional[str] = None    # entity id, or null/omitted to clear
+    source: Optional[str] = "human"
+    name:   Optional[str] = None    # authority filename override
+
+
+@app.post("/api/page/shape/authority")
+def api_shape_authority(folder: str = Query(...), stem: str = Query(...),
+                        idx: int = Query(...), body: AuthorityAssign = ...):
+    """Assign (or clear) the resolved authority entity on one shape."""
+    d  = _resolve_folder(folder)
+    jf = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail=f"Shape index {idx} out of range")
+    shape = shapes[idx]
+    if not body.id:
+        shape.pop("authority", None)
+        _write_json(jf, data)
+        return {"ok": True, "authority": None}
+    v = _load_authority(body.name)["by_id"].get(body.id)
+    if not v:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {body.id}")
+    import datetime as _dt
+    shape["authority"] = {
+        "id":            v["id"],
+        "name":          v["name"],
+        "type":          v["type"],
+        "parent":        v["parent"],
+        "county_name":   v.get("county_name"),
+        "district_name": v.get("district_name"),
+        "lat":           v.get("lat"),
+        "lon":           v.get("lon"),
+        "source":        body.source or "human",
+        "ts":            _dt.datetime.utcnow().isoformat() + "Z",
+    }
+    _write_json(jf, data)
+    return {"ok": True, "authority": shape["authority"]}
+
+
+class PageFlagsUpdate(BaseModel):
+    flags: dict
+
+
+@app.patch("/api/page/flags")
+def api_page_flags(folder: str = Query(...), stem: str = Query(...),
+                   body: PageFlagsUpdate = ...):
+    """Merge top-level keys into a page's `flags` object (page-level metadata
+    such as the per-table authority context). Last-writer-wins per key."""
+    d  = _resolve_folder(folder)
+    jf = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+    data = json.loads(jf.read_text(encoding="utf-8"))
+    flags = data.get("flags") or {}
+    flags.update(body.flags or {})
+    data["flags"] = flags
+    _write_json(jf, data)
+    return {"ok": True, "flags": flags}
+
+
 class PrepareRequest(BaseModel):
     max_iter:      Optional[int]   = None
     base_lr:       Optional[float] = None

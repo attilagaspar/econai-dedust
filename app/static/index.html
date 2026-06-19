@@ -1106,6 +1106,30 @@
             </div>
           </div>
         </div>
+        <div class="field-group" id="fg-authority" style="display:none">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-authority-toggle" onclick="toggleFg('fg-authority')" title="Collapse/expand">▾</button>
+              <div class="field-label" style="margin-bottom:0;">🏛 Authority</div>
+            </div>
+            <select id="auth-type" title="Entity type to resolve to" style="font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;">
+              <option value="">Auto</option>
+              <option value="settlement" selected>Settlement</option>
+              <option value="district">District</option>
+              <option value="county">County</option>
+            </select>
+          </div>
+          <div id="fg-authority-body">
+            <div id="auth-current" style="font-size:11px;margin-bottom:5px;"></div>
+            <div style="display:flex;gap:4px;align-items:center;margin-bottom:5px;">
+              <span id="auth-ctx-label" title="Context applies to the active table; narrows matches to this county/district" style="font-size:10px;color:#778;white-space:nowrap;">Ctx</span>
+              <select id="auth-ctx-county" onchange="onAuthCountyChange()" title="Restrict matches to this county (active table)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
+              <select id="auth-ctx-district" onchange="onAuthDistrictChange()" title="Restrict matches to this district (active table)" style="flex:1;min-width:0;font-size:10px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aac;padding:2px;cursor:pointer;"></select>
+            </div>
+            <button onclick="resolveAuthority()" style="width:100%;background:#1a3a6e;border:1px solid #2a4a8e;border-radius:3px;color:#cde;padding:5px;cursor:pointer;font-size:11px;">🔎 Resolve</button>
+            <div id="auth-cands" style="margin-top:5px;"></div>
+          </div>
+        </div>
         <button id="save-btn" onclick="saveCorrection()" disabled>Save (Ctrl+S)</button>
         <button id="delete-btn" onclick="deleteSelectedShape()" style="display:none;background:#7f1d1d;border:none;border-radius:4px;color:#fca5a5;padding:7px;cursor:pointer;font-size:13px;font-weight:600;width:100%;">Delete box (Del)</button>
         <div id="save-status"></div>
@@ -6789,6 +6813,7 @@ function updatePanel() {
       `${selSet.size} shapes selected · ${llmCount} have LLM · ${selSet.size - llmCount} empty`;
     document.getElementById('f-llm-meta').textContent='▶ Run / ▶ All / ✕ operate on all selected shapes';
     document.getElementById('cell-meta').textContent=`${selSet.size} shapes selected`;
+    document.getElementById('fg-authority').style.display='none';
     document.getElementById('save-btn').disabled=true;
     document.getElementById('save-status').textContent='';
     delBtn.style.display=editMode?'block':'none';
@@ -6876,6 +6901,9 @@ function updatePanel() {
   }
 
   document.getElementById('human-input').value=shape.human_output?.human_corrected_text||'';
+
+  // Authority resolver — match the cell's text to a gazetteer entity
+  refreshAuthorityPanel(shape);
 
   // Internal rows: table view replaces the flat text boxes when present
   renderRowTable(shape);
@@ -8401,6 +8429,168 @@ async function _llmAnchoredOne(shapeIdx, nRows, refIdx = -1) {
 }
 
 // ── Save correction text ─────────────────────────────────────────────────────
+// ── Authority resolver ─────────────────────────────────────────────────────
+let _authCountyCache  = null;   // [{id,name,...}]
+const _authDistrictCache = {};  // countyId -> [{id,name,...}]
+
+function _escH(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function _authCtxKey() { return String(_activeTable()); }
+function _authCtx() {
+  return (pageData?.flags?.authority_context || {})[_authCtxKey()] || {};
+}
+function _authParent() {
+  const c = _authCtx();
+  return c.district || c.county || '';   // tightest available constraint
+}
+function _bestCellText(shape) {
+  return (shape?.human_output?.human_corrected_text || '').trim()
+      || (shape?.openai_output?.response || '').trim()
+      || (shape?.tesseract_output?.ocr_text || '').trim()
+      || (shape?.pdf_text || '').trim();
+}
+
+async function _ensureCounties() {
+  if (_authCountyCache) return _authCountyCache;
+  try {
+    const r = await fetch(`${API}/api/authority/children`);
+    _authCountyCache = r.ok ? ((await r.json()).items || []) : [];
+  } catch (e) { _authCountyCache = []; }
+  return _authCountyCache;
+}
+async function _districtsOf(countyId) {
+  if (!countyId) return [];
+  if (_authDistrictCache[countyId]) return _authDistrictCache[countyId];
+  try {
+    const r = await fetch(`${API}/api/authority/children?parent=${encodeURIComponent(countyId)}`);
+    _authDistrictCache[countyId] = r.ok ? ((await r.json()).items || []) : [];
+  } catch (e) { _authDistrictCache[countyId] = []; }
+  return _authDistrictCache[countyId];
+}
+
+async function refreshAuthorityPanel(shape) {
+  const fg = document.getElementById('fg-authority');
+  if (!fg) return;
+  fg.style.display = 'flex';
+
+  const cur = document.getElementById('auth-current');
+  const a = shape.authority;
+  if (a) {
+    const loc = [a.district_name, a.county_name].filter(Boolean).join(', ');
+    cur.innerHTML =
+      `<span style="display:inline-flex;align-items:center;gap:6px;background:#14532d;border:1px solid #166534;border-radius:10px;padding:2px 8px;color:#bbf7d0;">`+
+      `✓ ${_escH(a.name)}${loc ? ` · <span style="color:#86efac;">${_escH(loc)}</span>` : ''}`+
+      `<button onclick="clearAuthority()" title="Clear" style="background:none;border:none;color:#fca5a5;cursor:pointer;padding:0;font-size:12px;line-height:1;">✕</button></span>`+
+      `<div style="color:#667;font-size:9px;margin-top:2px;">${_escH(a.type||'')}${a.score!=null?` · ${a.score}%`:''} · ${_escH(a.source||'human')} · ${_escH(a.id)}</div>`;
+  } else {
+    cur.innerHTML = `<span style="color:#778;">Unresolved</span>`;
+  }
+
+  // Per-table context selectors (active table)
+  document.getElementById('auth-ctx-label').textContent = `T${_authCtxKey()}`;
+  const ctx = _authCtx();
+  const counties = await _ensureCounties();
+  const csel = document.getElementById('auth-ctx-county');
+  csel.innerHTML = `<option value="">— county —</option>` +
+    counties.map(c => `<option value="${_escH(c.id)}"${c.id===ctx.county?' selected':''}>${_escH(c.name)}</option>`).join('');
+  const dsel = document.getElementById('auth-ctx-district');
+  const dists = ctx.county ? await _districtsOf(ctx.county) : [];
+  dsel.innerHTML = `<option value="">— district —</option>` +
+    dists.map(d => `<option value="${_escH(d.id)}"${d.id===ctx.district?' selected':''}>${_escH(d.name)}</option>`).join('');
+
+  document.getElementById('auth-cands').innerHTML = '';
+}
+
+async function _saveAuthCtx(patch) {
+  if (!pageData.flags) pageData.flags = {};
+  if (!pageData.flags.authority_context) pageData.flags.authority_context = {};
+  const k = _authCtxKey();
+  pageData.flags.authority_context[k] = {...(pageData.flags.authority_context[k] || {}), ...patch};
+  try {
+    await fetch(`${API}/api/page/flags?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({flags: {authority_context: pageData.flags.authority_context}})
+    });
+  } catch (e) { /* context is also held in-memory; persistence is best-effort */ }
+}
+async function onAuthCountyChange() {
+  const csel = document.getElementById('auth-ctx-county');
+  const id = csel.value, name = csel.options[csel.selectedIndex]?.text || '';
+  await _saveAuthCtx({county: id || null, county_name: id ? name : null, district: null, district_name: null});
+  const dsel = document.getElementById('auth-ctx-district');
+  const dists = id ? await _districtsOf(id) : [];
+  dsel.innerHTML = `<option value="">— district —</option>` +
+    dists.map(d => `<option value="${_escH(d.id)}">${_escH(d.name)}</option>`).join('');
+}
+async function onAuthDistrictChange() {
+  const dsel = document.getElementById('auth-ctx-district');
+  const id = dsel.value, name = dsel.options[dsel.selectedIndex]?.text || '';
+  await _saveAuthCtx({district: id || null, district_name: id ? name : null});
+}
+
+async function resolveAuthority() {
+  if (selIdx < 0) return;
+  const shape = pageData.shapes[selIdx];
+  const q = _bestCellText(shape);
+  const box = document.getElementById('auth-cands');
+  if (!q) { box.innerHTML = `<span style="color:#a55;font-size:10px;">No text in this cell to resolve.</span>`; return; }
+  const type = document.getElementById('auth-type').value;
+  const parent = _authParent();
+  box.innerHTML = `<span style="color:#778;font-size:10px;">Resolving “${_escH(q.split('\n')[0])}”…</span>`;
+  const params = new URLSearchParams({q});
+  if (type)   params.set('type', type);
+  if (parent) params.set('parent', parent);
+  try {
+    const r = await fetch(`${API}/api/authority/resolve?${params}`);
+    if (!r.ok) { box.innerHTML = `<span style="color:#a55;font-size:10px;">Error ${r.status}: ${_escH((await r.text()).slice(0,80))}</span>`; return; }
+    _renderAuthCands((await r.json()).candidates || [], q);
+  } catch (e) {
+    box.innerHTML = `<span style="color:#a55;font-size:10px;">${_escH(String(e))}</span>`;
+  }
+}
+function _renderAuthCands(cands, q) {
+  const box = document.getElementById('auth-cands');
+  if (!cands.length) { box.innerHTML = `<span style="color:#a55;font-size:10px;">No match for “${_escH(q.split('\n')[0])}”.</span>`; return; }
+  box.innerHTML = cands.map(c => {
+    const loc = [c.district_name, c.county_name].filter(Boolean).join(', ');
+    const sc = c.score >= 95 ? '#22c55e' : c.score >= 80 ? '#eab308' : '#f87171';
+    return `<div onclick='assignAuthority(${JSON.stringify(c.id)})' title="${_escH(c.id)} · matched “${_escH(c.matched||'')}” via ${_escH(c.via||'')}" `+
+      `style="display:flex;justify-content:space-between;gap:6px;align-items:center;padding:3px 5px;border:1px solid #1a3a6e;border-radius:3px;margin-bottom:2px;cursor:pointer;font-size:11px;background:#0d1b35;">`+
+      `<span><b>${_escH(c.name)}</b> <span style="color:#778;font-size:9px;">${_escH(c.type||'')}</span>${loc?`<br><span style="color:#7a8;font-size:9px;">${_escH(loc)}</span>`:''}</span>`+
+      `<span style="color:${sc};font-weight:600;white-space:nowrap;">${c.score}%</span></div>`;
+  }).join('');
+}
+async function assignAuthority(id) {
+  if (selIdx < 0) return;
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx});
+  try {
+    const r = await fetch(`${API}/api/page/shape/authority?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id, source: 'human'})
+    });
+    if (!r.ok) { showToast(`Assign error ${r.status}`); return; }
+    pageData.shapes[selIdx].authority = (await r.json()).authority;
+    refreshAuthorityPanel(pageData.shapes[selIdx]);
+    drawOverlay();
+    showToast(`✓ ${pageData.shapes[selIdx].authority?.name || 'assigned'}`);
+  } catch (e) { showToast(String(e)); }
+}
+async function clearAuthority() {
+  if (selIdx < 0) return;
+  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx});
+  try {
+    await fetch(`${API}/api/page/shape/authority?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: null})
+    });
+  } catch (e) { /* ignore */ }
+  delete pageData.shapes[selIdx].authority;
+  refreshAuthorityPanel(pageData.shapes[selIdx]);
+  drawOverlay();
+}
+
 function copyToHuman(source) {
   const text = source === 'ocr'
     ? document.getElementById('f-ocr').value
