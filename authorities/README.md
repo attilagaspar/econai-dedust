@@ -11,9 +11,15 @@ One file per authority, named `<name>.authority.json` — e.g.
 
 - `places_hu.authority.json` — Hungarian county / district / settlement
   gazetteer (spine = GIStA `IDTel1910`).
+- `industries_hu.authority.json` — 1900-census industry classification
+  (spine = `industry_code_1900_cleaned`). 159 industries (2 with subcodes),
+  English label as the display `name`, every Hungarian raw spelling as an
+  alias (matching is Hungarian; English is also an alias). Built by
+  `build_authority_industries_1900.py` from `industry_schema_1900.csv`, which
+  live with the source data in
+  `kuk-industry-policy/data-sources/firms_per_settlements_from_census/data_release1.0/`.
 
-Future: `industries.authority.json` (versioned taxonomy),
-`firms.authority.json` (entity DB built from multiple sources).
+Future: `firms.authority.json` (entity DB built from multiple sources).
 
 **The data files are git-ignored** (large, regenerated, and grow over time —
 same policy as `projects/`). Only this README is tracked. Obtain or rebuild the
