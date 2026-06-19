@@ -5242,10 +5242,13 @@ function _rsAuthCellHtml(r) {
 // Batch: resolve every row from its best text, skip empty/single-char,
 // keep existing manual picks.
 async function _rsResolveCol() {
-  if (selIdx < 0) return;
+ try {
+  if (selIdx < 0) { showToast('Authority: no cell selected'); return; }
   const shape = pageData.shapes[selIdx];
-  const rows  = _rsRows(shape); if (!rows) return;
-  const type   = document.getElementById('auth-type').value;
+  const rows  = _rsRows(shape);
+  if (!rows || !rows.length) { showToast('Authority: this cell has no internal rows'); return; }
+  showToast(`Resolving ${rows.length} row${rows.length > 1 ? 's' : ''}…`);
+  const type   = document.getElementById('auth-type')?.value || '';
   const parent = _authParent();
   _rsAuthCandsReset();
   let resolved = 0, kept = 0, skipped = 0, nomatch = 0;
@@ -5272,6 +5275,10 @@ async function _rsResolveCol() {
     + (kept ? `, ${kept} manual kept` : '')
     + (nomatch ? `, ${nomatch} no match` : '')
     + (skipped ? `, ${skipped} skipped` : ''));
+ } catch (e) {
+  console.error('[auth] _rsResolveCol failed', e);
+  showToast('Auth error: ' + (e?.message || e), 6000);
+ }
 }
 
 // Click (single) → dropdown of alternatives.  Double-click → inherit from above.
@@ -5280,7 +5287,13 @@ let _rsAuthClickTimer = null;
 function _rsAuthClick(i, ev) {
   const el = ev.currentTarget;
   if (_rsAuthClickTimer) return;
-  _rsAuthClickTimer = setTimeout(() => { _rsAuthClickTimer = null; _rsOpenAuthDropdown(i, el); }, 230);
+  _rsAuthClickTimer = setTimeout(() => {
+    _rsAuthClickTimer = null;
+    _rsOpenAuthDropdown(i, el).catch(e => {
+      console.error('[auth] dropdown failed', e);
+      showToast('Auth error: ' + (e?.message || e), 6000);
+    });
+  }, 230);
 }
 function _rsAuthDbl(i, ev) {
   if (_rsAuthClickTimer) { clearTimeout(_rsAuthClickTimer); _rsAuthClickTimer = null; }
@@ -5288,24 +5301,29 @@ function _rsAuthDbl(i, ev) {
 }
 
 async function _rsInheritAuth(i) {
-  if (selIdx < 0 || i <= 0) return;          // nothing above row 0
+ try {
+  if (selIdx < 0) { showToast('Authority: no cell selected'); return; }
+  if (i <= 0) { showToast('No row above to copy from'); return; }
   const rows = _rsRows(pageData.shapes[selIdx]); if (!rows?.[i]) return;
   const above = rows[i - 1].authority;
-  if (above) rows[i].authority = {...above, source: 'human', ts: new Date().toISOString()};
-  else       delete rows[i].authority;       // ditto of an empty cell = empty
+  if (above) { rows[i].authority = {...above, source: 'human', ts: new Date().toISOString()}; }
+  else       { delete rows[i].authority; showToast('Row above has no resolved entity'); }
   _rsCloseAuthDropdown();
   await saveRowStruct(selIdx);
   renderRowTable(pageData.shapes[selIdx]);
+ } catch (e) { console.error('[auth] inherit failed', e); showToast('Auth error: ' + (e?.message || e), 6000); }
 }
 
 async function _rsAssignRowAuth(i, cand) {
+ try {
   if (selIdx < 0) return;
   const rows = _rsRows(pageData.shapes[selIdx]); if (!rows?.[i]) return;
-  rows[i].authority = cand ? _candToAuth(cand, 'human') : undefined;
   if (!cand) delete rows[i].authority;
+  else       rows[i].authority = _candToAuth(cand, 'human');
   _rsCloseAuthDropdown();
   await saveRowStruct(selIdx);
   renderRowTable(pageData.shapes[selIdx]);
+ } catch (e) { console.error('[auth] assign failed', e); showToast('Auth error: ' + (e?.message || e), 6000); }
 }
 
 function _rsCloseAuthDropdown() {
@@ -5357,6 +5375,8 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   dd.querySelector('.rs-auth-clear')?.addEventListener('click', () => _rsAssignRowAuth(i, null));
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
+
+console.log('%c[econai] authority rows-resolver build-3 active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
