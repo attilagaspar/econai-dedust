@@ -9094,15 +9094,18 @@ async function loadPage(idx) {
   const colSepBtn = document.getElementById('lattice-col-sep-btn');
   const rowSepBtn = document.getElementById('lattice-row-sep-btn');
   const delSepBtn = document.getElementById('lattice-del-sep-btn');
+  const splitBtn  = document.getElementById('lattice-split-btn');
   if (hasLattice) {
     gridBtn.style.display=''; gridBtn.disabled=false;
     colSepBtn.style.display=''; colSepBtn.disabled=false;
     rowSepBtn.style.display=''; rowSepBtn.disabled=false;
     delSepBtn.style.display=''; delSepBtn.disabled=false;
+    if (splitBtn) { splitBtn.style.display=''; splitBtn.disabled=false; }
   } else {
     gridBtn.style.display='none'; latticeVisible=false;
     colSepBtn.style.display='none'; rowSepBtn.style.display='none'; delSepBtn.style.display='none';
-    latticeSepMode=null;
+    if (splitBtn) splitBtn.style.display='none';
+    latticeSepMode=null; latticeSplitMode=false;
   }
   document.getElementById('row-fill-btn').disabled = false;
   document.getElementById('col-fill-btn').disabled = false;
