@@ -659,6 +659,8 @@
                 title="Click inside a lattice row to split it with a horizontal separator">━ Row sep</button>
         <button class="nav-btn" id="lattice-del-sep-btn" onclick="toggleLatticeSepMode('delete')" disabled style="display:none"
                 title="Click a lattice grid line to delete that separator and merge the two adjacent columns/rows">✕ Del sep</button>
+        <button class="nav-btn" id="lattice-split-btn" onclick="toggleLatticeSplitMode()" disabled style="display:none"
+                title="Click an interior grid line to cut this lattice into two separate tables — a vertical line splits left/right, a horizontal line splits top/bottom">✂ Split table</button>
         <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled
                 title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
         <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
@@ -1694,6 +1696,7 @@ const undoStack   = [];          // array of shapes-array snapshots
 let flaggedOverlaps    = new Set(); // indices of shapes with excessive overlap
 let latticeVisible     = false;     // whether to draw lattice grid overlay
 let latticeSepMode     = null;      // 'col' | 'row' | null — lattice separator insertion mode
+let latticeSplitMode   = false;     // click an interior grid line to split the table in two
 let diagnosticMode      = 'none';
 let diagnosticFlagged   = new Set();
 let diagnosticRowCounts = {}; // shape index → line count (for row-mismatch modes)
@@ -3346,6 +3349,8 @@ async function runLatticeDetect() {
   rowSepBtn2.style.display = ''; rowSepBtn2.disabled = false;
   const delSepBtn2 = document.getElementById('lattice-del-sep-btn');
   delSepBtn2.style.display = ''; delSepBtn2.disabled = false;
+  const splitBtn2 = document.getElementById('lattice-split-btn');
+  splitBtn2.style.display = ''; splitBtn2.disabled = false;
   if (!latticeVisible) {
     latticeVisible = true;
     gridBtn.textContent = '📐 Hide Grid';
@@ -3381,7 +3386,7 @@ async function runLatticeDetectSelection() {
   // make the grid + separator tools available
   const gridBtn = document.getElementById('lattice-grid-btn');
   gridBtn.style.display = ''; gridBtn.disabled = false;
-  ['lattice-col-sep-btn', 'lattice-row-sep-btn', 'lattice-del-sep-btn'].forEach(id => {
+  ['lattice-col-sep-btn', 'lattice-row-sep-btn', 'lattice-del-sep-btn', 'lattice-split-btn'].forEach(id => {
     const b = document.getElementById(id); if (b) { b.style.display = ''; b.disabled = false; }
   });
   if (!latticeVisible) { latticeVisible = true; gridBtn.textContent = '📐 Hide Grid'; }
@@ -3398,9 +3403,54 @@ function toggleLatticeGrid() {
 
 function toggleLatticeSepMode(type) {
   latticeSepMode = latticeSepMode === type ? null : type;
+  if (latticeSepMode) latticeSplitMode = false;          // mutually exclusive
   if (latticeSepMode && !latticeVisible) { latticeVisible = true; document.getElementById('lattice-grid-btn').textContent = '📐 Hide Grid'; }
   _updateLatticeSepBtns();
   drawOverlay();
+}
+
+function toggleLatticeSplitMode() {
+  latticeSplitMode = !latticeSplitMode;
+  if (latticeSplitMode) {
+    latticeSepMode = null;                                // mutually exclusive
+    if (!latticeVisible) { latticeVisible = true; document.getElementById('lattice-grid-btn').textContent = '📐 Hide Grid'; }
+  }
+  _updateLatticeSepBtns();
+  drawOverlay();
+}
+
+// Split the active table at an interior grid line into two independent tables.
+// Vertical line between cols (colLeft|colRight): cols >= colRight become a new
+// table (super_column renumbered from 0). Horizontal is the row analogue.
+async function _latticeSplitVert(colLeft, colRight) {
+  const AT = _activeTable();
+  const newT = _latticeTableIds().reduce((m, t) => Math.max(m, t), -1) + 1;
+  pushUndo();
+  let moved = 0;
+  pageData.shapes.forEach(s => {
+    if (_tableOf(s) !== AT) return;
+    if (s.super_column >= colRight) { s.table = newT; s.super_column -= colRight; moved++; }
+  });
+  if (!moved) { undoStack.pop(); showToast('Nothing to split there'); return; }
+  latticeSplitMode = false; _updateLatticeSepBtns();
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast(`Split off table ${newT} (vertical) · ${moved} cells`);
+}
+async function _latticeSplitHoriz(rowAbove, rowBelow) {
+  const AT = _activeTable();
+  const newT = _latticeTableIds().reduce((m, t) => Math.max(m, t), -1) + 1;
+  pushUndo();
+  let moved = 0;
+  pageData.shapes.forEach(s => {
+    if (_tableOf(s) !== AT) return;
+    if (s.super_row >= rowBelow) { s.table = newT; s.super_row -= rowBelow; moved++; }
+  });
+  if (!moved) { undoStack.pop(); showToast('Nothing to split there'); return; }
+  latticeSplitMode = false; _updateLatticeSepBtns();
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast(`Split off table ${newT} (horizontal) · ${moved} cells`);
 }
 
 // Red crosshair cursor for separator insertion modes
@@ -3410,6 +3460,7 @@ function _updateLatticeSepBtns() {
   document.getElementById('lattice-col-sep-btn').classList.toggle('active', latticeSepMode === 'col');
   document.getElementById('lattice-row-sep-btn').classList.toggle('active', latticeSepMode === 'row');
   document.getElementById('lattice-del-sep-btn').classList.toggle('active', latticeSepMode === 'delete');
+  document.getElementById('lattice-split-btn')?.classList.toggle('active', latticeSplitMode);
   // Red crosshair cursor while in insertion mode; restore default when off
   const container = document.getElementById('osd-container');
   if (container) {
@@ -4301,9 +4352,12 @@ function drawOverlay() {
         hit.setAttribute('width',Math.max(0,pR.x-pL.x)); hit.setAttribute('height',10);
         hit.setAttribute('fill','transparent');
         hit.style.pointerEvents='all';
-        hit.style.cursor = inDelMode && rowAbove!=null && rowBelow!=null ? 'pointer' : 'row-resize';
+        const canSplit = latticeSplitMode && rowAbove!=null && rowBelow!=null;
+        hit.style.cursor = canSplit ? 'crosshair'
+                         : (inDelMode && rowAbove!=null && rowBelow!=null) ? 'pointer' : 'row-resize';
         hit.addEventListener('mousedown',e=>{
           e.stopPropagation();
+          if (latticeSplitMode) { if (rowAbove!=null&&rowBelow!=null){ e.preventDefault(); _latticeSplitHoriz(rowAbove,rowBelow); } return; }
           if (inDelMode) { if (rowAbove!=null&&rowBelow!=null) handleLatticeMergeRow(rowAbove,rowBelow,rowBands,colBands); }
           else startLatticeRowResize(e,rowAbove,rowBelow);
         });
@@ -4317,9 +4371,12 @@ function drawOverlay() {
         hit.setAttribute('width',10); hit.setAttribute('height',Math.max(0,pB.y-pT.y));
         hit.setAttribute('fill','transparent');
         hit.style.pointerEvents='all';
-        hit.style.cursor = inDelMode && colLeft!=null && colRight!=null ? 'pointer' : 'col-resize';
+        const canSplit = latticeSplitMode && colLeft!=null && colRight!=null;
+        hit.style.cursor = canSplit ? 'crosshair'
+                         : (inDelMode && colLeft!=null && colRight!=null) ? 'pointer' : 'col-resize';
         hit.addEventListener('mousedown',e=>{
           e.stopPropagation();
+          if (latticeSplitMode) { if (colLeft!=null&&colRight!=null){ e.preventDefault(); _latticeSplitVert(colLeft,colRight); } return; }
           if (inDelMode) { if (colLeft!=null&&colRight!=null) handleLatticeMergeCol(colLeft,colRight,rowBands,colBands); }
           else startLatticeColResize(e,colLeft,colRight);
         });
@@ -4984,7 +5041,9 @@ function renderRowTable(shape) {
            + `title="${_rsLlmRunning ? 'Stop' : 'Re-run the LLM row by row using the current row structure and the active prompt'}">`
            + `${_rsLlmRunning ? '■' : '⟳'}</button></th>`
            + '<th>Human <button class="rs-copy-btn" onclick="_rsMajorityVote()" '
-           + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button></th>'
+           + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button>'
+           + '<button class="rs-copy-btn" onclick="_rsImportFlat(\'human\')" '
+           + 'title="Re-distribute the saved Human text into the current row bands (top-aligned, one line per row). Use after changing the row structure.">⟳</button></th>'
            + '<th>Auth <button class="rs-copy-btn" onclick="_rsResolveCol()" '
            + 'title="Resolve every row against the authority using its best text (Human>LLM>OCR>PDF). Rows that are empty or a single character are skipped; manual picks are kept. Then: click a value to switch to an alternative, or double-click a cell to copy the entity from the row above (ditto marks).">🏛</button></th></tr>';
   for (let i = 0; i < nRows; i++) {
