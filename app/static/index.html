@@ -5259,8 +5259,15 @@ async function _rsResolveCol() {
     r.authority = _candToAuth(cands[0], 'auto');
     resolved++;
   }));
-  await saveRowStruct(selIdx);
+  await saveRowStruct(selIdx);   // replaces shape.row_struct with the server's copy
   renderRowTable(shape);
+  // If we resolved rows but none survived the save, the server stripped the
+  // authority field — i.e. it's running pre-restart code.
+  const persisted = (_rsRows(shape) || []).filter(r => r.authority).length;
+  if (resolved > 0 && persisted === 0) {
+    showToast('⚠ Resolved but the server dropped the values — restart the server (app/server.py changed).', 6000);
+    return;
+  }
   showToast(`Authority: ${resolved} resolved`
     + (kept ? `, ${kept} manual kept` : '')
     + (nomatch ? `, ${nomatch} no match` : '')
