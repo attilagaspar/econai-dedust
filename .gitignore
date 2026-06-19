@@ -10,9 +10,12 @@ build/
 # Project data — entire projects/ folder is local only
 projects/
 
-# Authorities — large reference data, local only; keep docs (README etc.)
+# Authorities — shared reference data, TRACKED in the repo so every clone gets
+# the same canonical IDs. Builders live with their source data, not here.
+# (If an authority grows very large / churns often, move it to Git LFS.)
 authorities/*
 !authorities/*.md
+!authorities/*.authority.json
 
 # Sample data images (keep JSONs if you want, but images are large)
 samples/**/*.jpg

@@ -1,0 +1,7247 @@
+{
+  "authority": "industries_hu",
+  "version": "0.2",
+  "schema": "temporal: entity.slices[] = per-source-year {as_of, source, type, parent, name, attrs}",
+  "spine": "1900 census industry code (industry_code_1900_cleaned)",
+  "entity_types": [
+    "group",
+    "industry"
+  ],
+  "slices_present": [
+    1900
+  ],
+  "generated_from": "industry_schema_1900.csv",
+  "counts": {
+    "entities": 159,
+    "groups": 2,
+    "aliases": 733,
+    "without_english": 6
+  },
+  "entities": [
+    {
+      "id": "I1900-100",
+      "name": "Dyeing and bleaching",
+      "aliases": [
+        {
+          "name": "Vászon és pamutfehérítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kékfestőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Festő és vegytisztítógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dyeing and bleaching",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "100"
+      },
+      "attrs": {
+        "code_1900": "100",
+        "english_name": "Dyeing and bleaching",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Dyeing and bleaching",
+          "attrs": {
+            "name_hu": "Vászon és pamutfehérítés",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-101",
+      "name": "Upholsterer",
+      "aliases": [
+        {
+          "name": "Kárpitos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Upholsterer",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "101"
+      },
+      "attrs": {
+        "code_1900": "101",
+        "english_name": "Upholsterer",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Upholsterer",
+          "attrs": {
+            "name_hu": "Kárpitos",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-102",
+      "name": "Tailor",
+      "aliases": [
+        {
+          "name": "Szabóipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szabó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Női szabó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Férfiszabó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tailor",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "102"
+      },
+      "attrs": {
+        "code_1900": "102",
+        "english_name": "Tailor",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Tailor",
+          "attrs": {
+            "name_hu": "Szabóipar",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-103",
+      "name": "Furrier",
+      "aliases": [
+        {
+          "name": "Szűcs",
+          "source": "census_1900"
+        },
+        {
+          "name": "Furrier",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "103"
+      },
+      "attrs": {
+        "code_1900": "103",
+        "english_name": "Furrier",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Furrier",
+          "attrs": {
+            "name_hu": "Szűcs",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-104",
+      "name": "Linen and undergarment factory",
+      "aliases": [
+        {
+          "name": "Fehérneműgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Linen and undergarment factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "104"
+      },
+      "attrs": {
+        "code_1900": "104",
+        "english_name": "Linen and undergarment factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Linen and undergarment factory",
+          "attrs": {
+            "name_hu": "Fehérneműgyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-106",
+      "name": "Corset factory",
+      "aliases": [
+        {
+          "name": "Mellfűzőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Corset factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "106"
+      },
+      "attrs": {
+        "code_1900": "106",
+        "english_name": "Corset factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Corset factory",
+          "attrs": {
+            "name_hu": "Mellfűzőgyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-109",
+      "name": "Glove factory",
+      "aliases": [
+        {
+          "name": "Kesztyűgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kesztyűgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kesztyűvarrótelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Glove factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "109"
+      },
+      "attrs": {
+        "code_1900": "109",
+        "english_name": "Glove factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Glove factory",
+          "attrs": {
+            "name_hu": "Kesztyűgyártás",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-11",
+      "name": "Iron ore mine",
+      "aliases": [
+        {
+          "name": "Vasbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kénkovandbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasércbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Iron ore mine",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "11"
+      },
+      "attrs": {
+        "code_1900": "11",
+        "english_name": "Iron ore mine",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Iron ore mine",
+          "attrs": {
+            "name_hu": "Vasbányászat",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-110",
+      "name": "Hat factory",
+      "aliases": [
+        {
+          "name": "Kalapgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gyapjúkalapkúpgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hat factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "110"
+      },
+      "attrs": {
+        "code_1900": "110",
+        "english_name": "Hat factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Hat factory",
+          "attrs": {
+            "name_hu": "Kalapgyártás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-112",
+      "name": "Straw hat manufacturing",
+      "aliases": [
+        {
+          "name": "Szalmakalapgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Straw hat manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "112"
+      },
+      "attrs": {
+        "code_1900": "112",
+        "english_name": "Straw hat manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Straw hat manufacturing",
+          "attrs": {
+            "name_hu": "Szalmakalapgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-113",
+      "name": "Artificial flower manufacturing",
+      "aliases": [
+        {
+          "name": "Művirággyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Artificial flower manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "113"
+      },
+      "attrs": {
+        "code_1900": "113",
+        "english_name": "Artificial flower manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Artificial flower manufacturing",
+          "attrs": {
+            "name_hu": "Művirággyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-114",
+      "name": "Shoe factory",
+      "aliases": [
+        {
+          "name": "Cipőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cipész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cipészipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cipőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Shoe factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "114"
+      },
+      "attrs": {
+        "code_1900": "114",
+        "english_name": "Shoe factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Shoe factory",
+          "attrs": {
+            "name_hu": "Cipőgyártás",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-116",
+      "name": "Slipper factory",
+      "aliases": [
+        {
+          "name": "Posztóczipőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Papucsgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Slipper factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "116"
+      },
+      "attrs": {
+        "code_1900": "116",
+        "english_name": "Slipper factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Slipper factory",
+          "attrs": {
+            "name_hu": "Posztóczipőgyár",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-117",
+      "name": "Military equipment manufacturing",
+      "aliases": [
+        {
+          "name": "Bőr és hadfelszerelőipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bőr és hadfelszerelési ipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hadfelszerelési vállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Honvédhadfelszerelési gyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Military equipment manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "117"
+      },
+      "attrs": {
+        "code_1900": "117",
+        "english_name": "Military equipment manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Military equipment manufacturing",
+          "attrs": {
+            "name_hu": "Bőr és hadfelszerelőipar",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-118",
+      "name": "Clothes dyeing and dry cleaning",
+      "aliases": [
+        {
+          "name": "Ruhafestő és tisztító",
+          "source": "census_1900"
+        },
+        {
+          "name": "Clothes dyeing and dry cleaning",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "118"
+      },
+      "attrs": {
+        "code_1900": "118",
+        "english_name": "Clothes dyeing and dry cleaning",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Clothes dyeing and dry cleaning",
+          "attrs": {
+            "name_hu": "Ruhafestő és tisztító",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-119",
+      "name": "Steam laundry",
+      "aliases": [
+        {
+          "name": "Gőzmosóintézet",
+          "source": "census_1900"
+        },
+        {
+          "name": "Steam laundry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "119"
+      },
+      "attrs": {
+        "code_1900": "119",
+        "english_name": "Steam laundry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Steam laundry",
+          "attrs": {
+            "name_hu": "Gőzmosóintézet",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-12",
+      "name": "Copper / non-ferrous metal mine",
+      "aliases": [
+        {
+          "name": "Rézbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ólombányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fémbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rézbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Copper / non-ferrous metal mine",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "12"
+      },
+      "attrs": {
+        "code_1900": "12",
+        "english_name": "Copper / non-ferrous metal mine",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Copper / non-ferrous metal mine",
+          "attrs": {
+            "name_hu": "Rézbányászat",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-121",
+      "name": "Paper and cellulose factory",
+      "aliases": [
+        {
+          "name": "Papírgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fapapírlemezgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Papírgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szalmapapír és lemezgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cellulose és papírgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szalmaanyaggyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cellulose és papírgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Faanyag és papírgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Paper and cellulose factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "121"
+      },
+      "attrs": {
+        "code_1900": "121",
+        "english_name": "Paper and cellulose factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Paper and cellulose factory",
+          "attrs": {
+            "name_hu": "Papírgyár",
+            "n_variants": 9
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-122",
+      "name": "Paper goods and packaging factory",
+      "aliases": [
+        {
+          "name": "Szivarkapapír papirszipka és hüvelygyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Papirdobozgyár és egyéb papíráruk gyártása",
+          "source": "census_1900"
+        },
+        {
+          "name": "Könyvnyomda és papírárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Játékkártyagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Papíráru gyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Paper goods and packaging factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "122"
+      },
+      "attrs": {
+        "code_1900": "122",
+        "english_name": "Paper goods and packaging factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Paper goods and packaging factory",
+          "attrs": {
+            "name_hu": "Szivarkapapír papirszipka és hüvelygyártás",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-123",
+      "name": "Bookbinding",
+      "aliases": [
+        {
+          "name": "Könyvkötő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bookbinding",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "123"
+      },
+      "attrs": {
+        "code_1900": "123",
+        "english_name": "Bookbinding",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Bookbinding",
+          "attrs": {
+            "name_hu": "Könyvkötő",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-124",
+      "name": "Steam flour mill",
+      "aliases": [
+        {
+          "name": "Gőzmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Turbinamalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Malom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rizshántoló és rizskeményítőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Malomipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzmalom és gőzfűrész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Steam flour mill",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "124"
+      },
+      "attrs": {
+        "code_1900": "124",
+        "english_name": "Steam flour mill",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Steam flour mill",
+          "attrs": {
+            "name_hu": "Gőzmalom",
+            "n_variants": 7
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-125",
+      "name": "Bakery",
+      "aliases": [
+        {
+          "name": "Sütő és cukrász",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sütőipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sütöde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pék",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bakery",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "125"
+      },
+      "attrs": {
+        "code_1900": "125",
+        "english_name": "Bakery",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Bakery",
+          "attrs": {
+            "name_hu": "Sütő és cukrász",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-126",
+      "name": "Biscuit / potato processing factory",
+      "aliases": [
+        {
+          "name": "Tésztagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Burgonyazúzótelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Biscuitgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Biscuit / potato processing factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "126"
+      },
+      "attrs": {
+        "code_1900": "126",
+        "english_name": "Biscuit / potato processing factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Biscuit / potato processing factory",
+          "attrs": {
+            "name_hu": "Tésztagyártás",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-127",
+      "name": "Sugar refinery",
+      "aliases": [
+        {
+          "name": "Cukorgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cukorgyártás és cukorfinomítás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cukoripar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cukorgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sugar refinery",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "127"
+      },
+      "attrs": {
+        "code_1900": "127",
+        "english_name": "Sugar refinery",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Sugar refinery",
+          "attrs": {
+            "name_hu": "Cukorgyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-128",
+      "name": "Confectioner / pastry shop",
+      "aliases": [
+        {
+          "name": "Cukrász",
+          "source": "census_1900"
+        },
+        {
+          "name": "Confectioner / pastry shop",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "128"
+      },
+      "attrs": {
+        "code_1900": "128",
+        "english_name": "Confectioner / pastry shop",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Confectioner / pastry shop",
+          "attrs": {
+            "name_hu": "Cukrász",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-129",
+      "name": "Candy and confectionery factory",
+      "aliases": [
+        {
+          "name": "Cukorkagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cukorkagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cukorka csokoládé és dragéegyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Candy and confectionery factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "129"
+      },
+      "attrs": {
+        "code_1900": "129",
+        "english_name": "Candy and confectionery factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Candy and confectionery factory",
+          "attrs": {
+            "name_hu": "Cukorkagyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-13",
+      "name": "Gold and silver mine",
+      "aliases": [
+        {
+          "name": "Ezüstbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Arany és ezüstbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Aranybánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Aranybányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Arany és ezüstbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Arany ezüst és dárdanybánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gold and silver mine",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "13"
+      },
+      "attrs": {
+        "code_1900": "13",
+        "english_name": "Gold and silver mine",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Gold and silver mine",
+          "attrs": {
+            "name_hu": "Ezüstbánya",
+            "n_variants": 6
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-130",
+      "name": "Chocolate and cocoa factory",
+      "aliases": [
+        {
+          "name": "Kakaó és csokoládégyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Csokoládégyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Csokoládégyáros és cukrász",
+          "source": "census_1900"
+        },
+        {
+          "name": "Biscuit és csokoládégyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Chocolate and cocoa factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "130"
+      },
+      "attrs": {
+        "code_1900": "130",
+        "english_name": "Chocolate and cocoa factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Chocolate and cocoa factory",
+          "attrs": {
+            "name_hu": "Kakaó és csokoládégyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-132",
+      "name": "Coffee roasting / substitute coffee",
+      "aliases": [
+        {
+          "name": "Kávépörkölde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pótkávégyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pótkávégyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Coffee roasting / substitute coffee",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "132"
+      },
+      "attrs": {
+        "code_1900": "132",
+        "english_name": "Coffee roasting / substitute coffee",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Coffee roasting / substitute coffee",
+          "attrs": {
+            "name_hu": "Kávépörkölde",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-133",
+      "name": "Military canning factory",
+      "aliases": [
+        {
+          "name": "Katonai konzervgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Military canning factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "133"
+      },
+      "attrs": {
+        "code_1900": "133",
+        "english_name": "Military canning factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Military canning factory",
+          "attrs": {
+            "name_hu": "Katonai konzervgyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-134",
+      "name": "Meat smoking and fat processing",
+      "aliases": [
+        {
+          "name": "Mészáros és hentes",
+          "source": "census_1900"
+        },
+        {
+          "name": "Húsárú és kolbászgár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Húsfüstölőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Füstölthús és zsírgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Meat smoking and fat processing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "134"
+      },
+      "attrs": {
+        "code_1900": "134",
+        "english_name": "Meat smoking and fat processing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Meat smoking and fat processing",
+          "attrs": {
+            "name_hu": "Mészáros és hentes",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-135",
+      "name": "Butcher",
+      "aliases": [
+        {
+          "name": "Mészáros",
+          "source": "census_1900"
+        },
+        {
+          "name": "Butcher",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "135"
+      },
+      "attrs": {
+        "code_1900": "135",
+        "english_name": "Butcher",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Butcher",
+          "attrs": {
+            "name_hu": "Mészáros",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-137",
+      "name": "Salami factory",
+      "aliases": [
+        {
+          "name": "Számlámyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szalámigyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szalámi füstölthús és zsírgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szalámigyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Salami factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "137"
+      },
+      "attrs": {
+        "code_1900": "137",
+        "english_name": "Salami factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Salami factory",
+          "attrs": {
+            "name_hu": "Számlámyártás",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-14",
+      "name": "Iron smelter",
+      "aliases": [
+        {
+          "name": "Vaskohó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vaskohászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vaskohó és szénmű",
+          "source": "census_1900"
+        },
+        {
+          "name": "Iron smelter",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "14"
+      },
+      "attrs": {
+        "code_1900": "14",
+        "english_name": "Iron smelter",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Iron smelter",
+          "attrs": {
+            "name_hu": "Vaskohó",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-141",
+      "name": "Tobacco and cigar factory",
+      "aliases": [
+        {
+          "name": "Dohánygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dohánygyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szivargyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tobacco and cigar factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "141"
+      },
+      "attrs": {
+        "code_1900": "141",
+        "english_name": "Tobacco and cigar factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Tobacco and cigar factory",
+          "attrs": {
+            "name_hu": "Dohánygyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-142",
+      "name": "Brewery and malt house",
+      "aliases": [
+        {
+          "name": "Sör és malátagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sörgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sörfőzde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sörfőzde és malátagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sörgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Malátagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sörfőzés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Brewery and malt house",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "142"
+      },
+      "attrs": {
+        "code_1900": "142",
+        "english_name": "Brewery and malt house",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Brewery and malt house",
+          "attrs": {
+            "name_hu": "Sör és malátagyár",
+            "n_variants": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-143",
+      "name": "Distillery and yeast factory",
+      "aliases": [
+        {
+          "name": "Szeszgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szeszgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szeszfinomítás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szesz és élesztőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Élesztőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szesz és élesztőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szesz élesztő hámuzsirgyártás és szeszfinomító",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szeszfinomítógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Distillery and yeast factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "143"
+      },
+      "attrs": {
+        "code_1900": "143",
+        "english_name": "Distillery and yeast factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Distillery and yeast factory",
+          "attrs": {
+            "name_hu": "Szeszgyártás",
+            "n_variants": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-145",
+      "name": "Liqueur and rum factory",
+      "aliases": [
+        {
+          "name": "Konyakgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Likőr és rumgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ecetszesz likőr rum és cukorkagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Liqueur and rum factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "145"
+      },
+      "attrs": {
+        "code_1900": "145",
+        "english_name": "Liqueur and rum factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Liqueur and rum factory",
+          "attrs": {
+            "name_hu": "Konyakgyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-146",
+      "name": "Sparkling wine factory",
+      "aliases": [
+        {
+          "name": "Pezsgőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sparkling wine factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "146"
+      },
+      "attrs": {
+        "code_1900": "146",
+        "english_name": "Sparkling wine factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Sparkling wine factory",
+          "attrs": {
+            "name_hu": "Pezsgőgyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-147",
+      "name": "Mineral water extraction",
+      "aliases": [
+        {
+          "name": "Ásványvízkiaknázás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mineral water extraction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "147"
+      },
+      "attrs": {
+        "code_1900": "147",
+        "english_name": "Mineral water extraction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Mineral water extraction",
+          "attrs": {
+            "name_hu": "Ásványvízkiaknázás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-15",
+      "name": "Gold, silver and antimony smelter",
+      "aliases": [
+        {
+          "name": "Arany és ezüstkohó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Arany és ezüstkohó zuzda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Antimonkohászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ezüstkohó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gold, silver and antimony smelter",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "15"
+      },
+      "attrs": {
+        "code_1900": "15",
+        "english_name": "Gold, silver and antimony smelter",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Gold, silver and antimony smelter",
+          "attrs": {
+            "name_hu": "Arany és ezüstkohó",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-150",
+      "name": "Waterworks",
+      "aliases": [
+        {
+          "name": "Vízvezeték",
+          "source": "census_1900"
+        },
+        {
+          "name": "Waterworks",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "150"
+      },
+      "attrs": {
+        "code_1900": "150",
+        "english_name": "Waterworks",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Waterworks",
+          "attrs": {
+            "name_hu": "Vízvezeték",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-151",
+      "name": "Cattle fattening",
+      "aliases": [
+        {
+          "name": "Marhahizlalás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Marhahizlalda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cattle fattening",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "151"
+      },
+      "attrs": {
+        "code_1900": "151",
+        "english_name": "Cattle fattening",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cattle fattening",
+          "attrs": {
+            "name_hu": "Marhahizlalás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-152",
+      "name": "Pig fattening",
+      "aliases": [
+        {
+          "name": "Sertéshizlaló",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pig fattening",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "152"
+      },
+      "attrs": {
+        "code_1900": "152",
+        "english_name": "Pig fattening",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Pig fattening",
+          "attrs": {
+            "name_hu": "Sertéshizlaló",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-154",
+      "name": "Petroleum refinery",
+      "aliases": [
+        {
+          "name": "Kőolajfinomítógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőolajfinomítás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőolajfinomító",
+          "source": "census_1900"
+        },
+        {
+          "name": "Petroleum refinery",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "154"
+      },
+      "attrs": {
+        "code_1900": "154",
+        "english_name": "Petroleum refinery",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Petroleum refinery",
+          "attrs": {
+            "name_hu": "Kőolajfinomítógyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-155",
+      "name": "Coal gas / illuminating gas works",
+      "aliases": [
+        {
+          "name": "Légszeszgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Légszeszgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gázgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Világítógyárzás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Világítógázgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Coal gas / illuminating gas works",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "155"
+      },
+      "attrs": {
+        "code_1900": "155",
+        "english_name": "Coal gas / illuminating gas works",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Coal gas / illuminating gas works",
+          "attrs": {
+            "name_hu": "Légszeszgyártás",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-157",
+      "name": "Starch manufacturing",
+      "aliases": [
+        {
+          "name": "Keményítőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Keményítőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Burgonyakeményítő gyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kemenityőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Starch manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "157"
+      },
+      "attrs": {
+        "code_1900": "157",
+        "english_name": "Starch manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Starch manufacturing",
+          "attrs": {
+            "name_hu": "Keményítőgyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-158",
+      "name": "Match factory",
+      "aliases": [
+        {
+          "name": "Gyufagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gyufagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cementgyá",
+          "source": "census_1900"
+        },
+        {
+          "name": "Építészet",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrésztelep és gyufaszálkagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Match factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "158"
+      },
+      "attrs": {
+        "code_1900": "158",
+        "english_name": "Match factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Match factory",
+          "attrs": {
+            "name_hu": "Gyufagyár",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-159",
+      "name": "Glue factory",
+      "aliases": [
+        {
+          "name": "Enyvegyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Glue factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "159"
+      },
+      "attrs": {
+        "code_1900": "159",
+        "english_name": "Glue factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Glue factory",
+          "attrs": {
+            "name_hu": "Enyvegyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-16",
+      "name": "Lignite / coal mine",
+      "aliases": [
+        {
+          "name": "Kőszénbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szénbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőszénbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szénbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lignite / coal mine",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "16"
+      },
+      "attrs": {
+        "code_1900": "16",
+        "english_name": "Lignite / coal mine",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Lignite / coal mine",
+          "attrs": {
+            "name_hu": "Kőszénbánya",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-160",
+      "name": "Tannin and plant extract factory",
+      "aliases": [
+        {
+          "name": "Plantgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tanningyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tannin and plant extract factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "160"
+      },
+      "attrs": {
+        "code_1900": "160",
+        "english_name": "Tannin and plant extract factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Tannin and plant extract factory",
+          "attrs": {
+            "name_hu": "Plantgyár",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-161",
+      "name": "Wood distillation / chemical wood products",
+      "aliases": [
+        {
+          "name": "Falepároló",
+          "source": "census_1900"
+        },
+        {
+          "name": "Chemiai fatermékgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Wood distillation / chemical wood products",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "161"
+      },
+      "attrs": {
+        "code_1900": "161",
+        "english_name": "Wood distillation / chemical wood products",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Wood distillation / chemical wood products",
+          "attrs": {
+            "name_hu": "Falepároló",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-162",
+      "name": "Oil factory",
+      "aliases": [
+        {
+          "name": "Olajgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Olajipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Oil factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "162"
+      },
+      "attrs": {
+        "code_1900": "162",
+        "english_name": "Oil factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Oil factory",
+          "attrs": {
+            "name_hu": "Olajgyár",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-163",
+      "name": "Stearin candle manufacturing",
+      "aliases": [
+        {
+          "name": "Stearingyertya gyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stearin candle manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "163"
+      },
+      "attrs": {
+        "code_1900": "163",
+        "english_name": "Stearin candle manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Stearin candle manufacturing",
+          "attrs": {
+            "name_hu": "Stearingyertya gyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-164",
+      "name": "Explosives factory",
+      "aliases": [
+        {
+          "name": "Robbanóanyaggyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dinamitgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Explosives factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "164"
+      },
+      "attrs": {
+        "code_1900": "164",
+        "english_name": "Explosives factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Explosives factory",
+          "attrs": {
+            "name_hu": "Robbanóanyaggyár",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-166",
+      "name": "Artificial fertiliser factory",
+      "aliases": [
+        {
+          "name": "Műtrágya és enyvgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műtrágya és kénsavgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műtrágyagyár és vegyi termékek gyára",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műtrágyagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műtrágyagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Artificial fertiliser factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "166"
+      },
+      "attrs": {
+        "code_1900": "166",
+        "english_name": "Artificial fertiliser factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Artificial fertiliser factory",
+          "attrs": {
+            "name_hu": "Műtrágya és enyvgyár",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-167",
+      "name": "Asphalt and tar / roofing materials",
+      "aliases": [
+        {
+          "name": "Asphaltgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kátránygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Házfedőpapír faczement és elszigetelőlemezgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Aszfaltgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Asphalt and tar / roofing materials",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "167"
+      },
+      "attrs": {
+        "code_1900": "167",
+        "english_name": "Asphalt and tar / roofing materials",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Asphalt and tar / roofing materials",
+          "attrs": {
+            "name_hu": "Asphaltgyártás",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-168",
+      "name": "Chemical factory / sulphuric acid",
+      "aliases": [
+        {
+          "name": "Vegyi cikkek gyártása",
+          "source": "census_1900"
+        },
+        {
+          "name": "Metallurgiai termékek előállítása",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vegyészeti gyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kénsav és műtrágyagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vegyi czikkek gyártása",
+          "source": "census_1900"
+        },
+        {
+          "name": "Chemical factory / sulphuric acid",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "168"
+      },
+      "attrs": {
+        "code_1900": "168",
+        "english_name": "Chemical factory / sulphuric acid",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Chemical factory / sulphuric acid",
+          "attrs": {
+            "name_hu": "Vegyi cikkek gyártása",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-17",
+      "name": "Petroleum extraction",
+      "aliases": [
+        {
+          "name": "Ásványolajkiaknázás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Petroleum extraction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "17"
+      },
+      "attrs": {
+        "code_1900": "17",
+        "english_name": "Petroleum extraction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Petroleum extraction",
+          "attrs": {
+            "name_hu": "Ásványolajkiaknázás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170",
+      "name": "General construction",
+      "aliases": [
+        {
+          "name": "Építészet",
+          "source": "census_1900"
+        },
+        {
+          "name": "Épitészet",
+          "source": "census_1900"
+        },
+        {
+          "name": "Csatornaépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Építész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Építőanyaggyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gombkötő és zsinórgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vízépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Építési vállalkozó",
+          "source": "census_1900"
+        },
+        {
+          "name": "General construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170"
+      },
+      "attrs": {
+        "code_1900": "170",
+        "english_name": "General construction",
+        "level": "group"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "group",
+          "parent": null,
+          "name": "General construction",
+          "attrs": {
+            "name_hu": "Építészet",
+            "n_variants": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/a",
+      "name": "Road construction",
+      "aliases": [
+        {
+          "name": "Közútépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Útépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Közútépítés és árvízvédelmi építkezés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Road construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/a"
+      },
+      "attrs": {
+        "code_1900": "170/a",
+        "english_name": "Road construction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Road construction",
+          "attrs": {
+            "name_hu": "Közútépítés",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/b",
+      "name": "Railway construction",
+      "aliases": [
+        {
+          "name": "Vasútépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Iparvasútépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Railway construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/b"
+      },
+      "attrs": {
+        "code_1900": "170/b",
+        "english_name": "Railway construction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Railway construction",
+          "attrs": {
+            "name_hu": "Vasútépítés",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/c",
+      "name": "Flood protection and river regulation",
+      "aliases": [
+        {
+          "name": "Vízszabályozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ármentesítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vízszabályozás és ármentesítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Folyamszabályozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Folyamszabályozási vállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vizszabályozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vízlecsapolás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vizszabályozóvállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ármentesités",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ervasszabályozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Armentesités",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vizszabályozás és ármentesítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ármentesítés és belvízszabályozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ármentesítés és vízszabályozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Flood protection and river regulation",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/c"
+      },
+      "attrs": {
+        "code_1900": "170/c",
+        "english_name": "Flood protection and river regulation",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Flood protection and river regulation",
+          "attrs": {
+            "name_hu": "Vízszabályozás",
+            "n_variants": 14
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/d",
+      "name": "Harbour construction",
+      "aliases": [
+        {
+          "name": "Kikötőépítővállalkozó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Harbour construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/d"
+      },
+      "attrs": {
+        "code_1900": "170/d",
+        "english_name": "Harbour construction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Harbour construction",
+          "attrs": {
+            "name_hu": "Kikötőépítővállalkozó",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/f",
+      "name": "Railway bridge construction",
+      "aliases": [
+        {
+          "name": "Vasúti hídépítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Railway bridge construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/f"
+      },
+      "attrs": {
+        "code_1900": "170/f",
+        "english_name": "Railway bridge construction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Railway bridge construction",
+          "attrs": {
+            "name_hu": "Vasúti hídépítés",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/g",
+      "name": "Water supply / pipeline construction",
+      "aliases": [
+        {
+          "name": "Vizvezetékképítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Water supply / pipeline construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/g"
+      },
+      "attrs": {
+        "code_1900": "170/g",
+        "english_name": "Water supply / pipeline construction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Water supply / pipeline construction",
+          "attrs": {
+            "name_hu": "Vizvezetékképítés",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/h",
+      "name": "Agricultural machinery repair",
+      "aliases": [
+        {
+          "name": "Földmunkavállalkozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Agricultural machinery repair",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/h"
+      },
+      "attrs": {
+        "code_1900": "170/h",
+        "english_name": "Agricultural machinery repair",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Agricultural machinery repair",
+          "attrs": {
+            "name_hu": "Földmunkavállalkozás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-170/l",
+      "name": "Bridge construction",
+      "aliases": [
+        {
+          "name": "Hidépités",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bridge construction",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "170/l"
+      },
+      "attrs": {
+        "code_1900": "170/l",
+        "english_name": "Bridge construction",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-170",
+          "name": "Bridge construction",
+          "attrs": {
+            "name_hu": "Hidépités",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-1709",
+      "name": "Vízszabályozás",
+      "aliases": [
+        {
+          "name": "Vízszabályozás",
+          "source": "census_1900"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "1709"
+      },
+      "attrs": {
+        "code_1900": "1709",
+        "english_name": null,
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Vízszabályozás",
+          "attrs": {
+            "name_hu": "Vízszabályozás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-172",
+      "name": "Bricklayer / mason",
+      "aliases": [
+        {
+          "name": "Kőműves",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőmíves",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bricklayer / mason",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "172"
+      },
+      "attrs": {
+        "code_1900": "172",
+        "english_name": "Bricklayer / mason",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Bricklayer / mason",
+          "attrs": {
+            "name_hu": "Kőműves",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-173",
+      "name": "Carpenter / timber framing",
+      "aliases": [
+        {
+          "name": "Ács",
+          "source": "census_1900"
+        },
+        {
+          "name": "Carpenter / timber framing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "173"
+      },
+      "attrs": {
+        "code_1900": "173",
+        "english_name": "Carpenter / timber framing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Carpenter / timber framing",
+          "attrs": {
+            "name_hu": "Ács",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-177",
+      "name": "Szobafestő",
+      "aliases": [
+        {
+          "name": "Szobafestő",
+          "source": "census_1900"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "177"
+      },
+      "attrs": {
+        "code_1900": "177",
+        "english_name": null,
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Szobafestő",
+          "attrs": {
+            "name_hu": "Szobafestő",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-18",
+      "name": "Salt mine",
+      "aliases": [
+        {
+          "name": "Sóbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sóbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Salt mine",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "18"
+      },
+      "attrs": {
+        "code_1900": "18",
+        "english_name": "Salt mine",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Salt mine",
+          "attrs": {
+            "name_hu": "Sóbánya",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-181",
+      "name": "Road paving",
+      "aliases": [
+        {
+          "name": "Kövező",
+          "source": "census_1900"
+        },
+        {
+          "name": "Road paving",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "181"
+      },
+      "attrs": {
+        "code_1900": "181",
+        "english_name": "Road paving",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Road paving",
+          "attrs": {
+            "name_hu": "Kövező",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-182",
+      "name": "Plumbing and water installation",
+      "aliases": [
+        {
+          "name": "Vízvezetékberendezés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Plumbing and water installation",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "182"
+      },
+      "attrs": {
+        "code_1900": "182",
+        "english_name": "Plumbing and water installation",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Plumbing and water installation",
+          "attrs": {
+            "name_hu": "Vízvezetékberendezés",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-186",
+      "name": "House cleaning service",
+      "aliases": [
+        {
+          "name": "Lakástisztító",
+          "source": "census_1900"
+        },
+        {
+          "name": "House cleaning service",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "186"
+      },
+      "attrs": {
+        "code_1900": "186",
+        "english_name": "House cleaning service",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "House cleaning service",
+          "attrs": {
+            "name_hu": "Lakástisztító",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-187",
+      "name": "Waste collection and cartage",
+      "aliases": [
+        {
+          "name": "Szemétfuvarozás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Waste collection and cartage",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "187"
+      },
+      "attrs": {
+        "code_1900": "187",
+        "english_name": "Waste collection and cartage",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Waste collection and cartage",
+          "attrs": {
+            "name_hu": "Szemétfuvarozás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-188",
+      "name": "Printing house and type foundry",
+      "aliases": [
+        {
+          "name": "Könyvnyomda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Nyomdaipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Könyv és könyvonda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Nyomda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Betűöntöde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Printing house and type foundry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "188"
+      },
+      "attrs": {
+        "code_1900": "188",
+        "english_name": "Printing house and type foundry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Printing house and type foundry",
+          "attrs": {
+            "name_hu": "Könyvnyomda",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-189",
+      "name": "Photographer",
+      "aliases": [
+        {
+          "name": "Fényképész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Photographer",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "189"
+      },
+      "attrs": {
+        "code_1900": "189",
+        "english_name": "Photographer",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Photographer",
+          "attrs": {
+            "name_hu": "Fényképész",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-19",
+      "name": "Antimony mine",
+      "aliases": [
+        {
+          "name": "Antimonbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dárdanybányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Antimony mine",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "19"
+      },
+      "attrs": {
+        "code_1900": "19",
+        "english_name": "Antimony mine",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Antimony mine",
+          "attrs": {
+            "name_hu": "Antimonbánya",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-190",
+      "name": "Engraver / rubber stamp maker",
+      "aliases": [
+        {
+          "name": "Vésnök és ruggyantabélyegzőkészitö",
+          "source": "census_1900"
+        },
+        {
+          "name": "Engraver / rubber stamp maker",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "190"
+      },
+      "attrs": {
+        "code_1900": "190",
+        "english_name": "Engraver / rubber stamp maker",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Engraver / rubber stamp maker",
+          "attrs": {
+            "name_hu": "Vésnök és ruggyantabélyegzőkészitö",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-191",
+      "name": "Sculptor",
+      "aliases": [
+        {
+          "name": "Szobrász",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sculptor",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "191"
+      },
+      "attrs": {
+        "code_1900": "191",
+        "english_name": "Sculptor",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Sculptor",
+          "attrs": {
+            "name_hu": "Szobrász",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-193",
+      "name": "Hotel and restaurant",
+      "aliases": [
+        {
+          "name": "Vendéglős",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szálloda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Nemzetközi étkező és hálókocsiállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kávéház",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szálloda és kávés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasárnap és kávés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglős és kávés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglátás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglös",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglő és szállodatulajdonos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szállodás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglős és szállodás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglő és kávéház",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szálloda és vendéglő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szállodás és vendéglős",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szálloda és vendéglö",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglő és szálloda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vendéglős szállodás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hotel and restaurant",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "193"
+      },
+      "attrs": {
+        "code_1900": "193",
+        "english_name": "Hotel and restaurant",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Hotel and restaurant",
+          "attrs": {
+            "name_hu": "Vendéglős",
+            "n_variants": 19
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-194",
+      "name": "Roller mill",
+      "aliases": [
+        {
+          "name": "Hengermalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Malomipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Élelmezési vállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Élelmezési vállalkozó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Roller mill",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "194"
+      },
+      "attrs": {
+        "code_1900": "194",
+        "english_name": "Roller mill",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Roller mill",
+          "attrs": {
+            "name_hu": "Hengermalom",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-197",
+      "name": "Spirits retail",
+      "aliases": [
+        {
+          "name": "Pálinkamérés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Spirits retail",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "197"
+      },
+      "attrs": {
+        "code_1900": "197",
+        "english_name": "Spirits retail",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Spirits retail",
+          "attrs": {
+            "name_hu": "Pálinkamérés",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-198",
+      "name": "Bath and spa",
+      "aliases": [
+        {
+          "name": "Fürdőbérlet",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fürdös",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fürdőberlet",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bath and spa",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "198"
+      },
+      "attrs": {
+        "code_1900": "198",
+        "english_name": "Bath and spa",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Bath and spa",
+          "attrs": {
+            "name_hu": "Fürdőbérlet",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-20",
+      "name": "Iron and steel works",
+      "aliases": [
+        {
+          "name": "Vasgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasöntvénygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vas és acélgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasöntöde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasgyárlás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasgyár és vasöntöde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasöntöde és gépműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Iron and steel works",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "20"
+      },
+      "attrs": {
+        "code_1900": "20",
+        "english_name": "Iron and steel works",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Iron and steel works",
+          "attrs": {
+            "name_hu": "Vasgyár",
+            "n_variants": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-21",
+      "name": "Iron and steel goods manufacturing",
+      "aliases": [
+        {
+          "name": "Vashámor",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szerpőrölyde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kaszagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasszerárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lánczgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Serpenyő és kaszagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasszerárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Aczélárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kovácsipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Iron and steel goods manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "21"
+      },
+      "attrs": {
+        "code_1900": "21",
+        "english_name": "Iron and steel goods manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Iron and steel goods manufacturing",
+          "attrs": {
+            "name_hu": "Vashámor",
+            "n_variants": 9
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-23",
+      "name": "Bell casting and smithery",
+      "aliases": [
+        {
+          "name": "Szerkovács és harangöntö",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szerszámgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bell casting and smithery",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "23"
+      },
+      "attrs": {
+        "code_1900": "23",
+        "english_name": "Bell casting and smithery",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Bell casting and smithery",
+          "attrs": {
+            "name_hu": "Szerkovács és harangöntö",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-24",
+      "name": "File manufacturing",
+      "aliases": [
+        {
+          "name": "Reszelőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "File manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "24"
+      },
+      "attrs": {
+        "code_1900": "24",
+        "english_name": "File manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "File manufacturing",
+          "attrs": {
+            "name_hu": "Reszelőgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-25",
+      "name": "Screw manufacturing",
+      "aliases": [
+        {
+          "name": "Csavargyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Screw manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "25"
+      },
+      "attrs": {
+        "code_1900": "25",
+        "english_name": "Screw manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Screw manufacturing",
+          "attrs": {
+            "name_hu": "Csavargyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-26",
+      "name": "Nail manufacturing",
+      "aliases": [
+        {
+          "name": "Szeggyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Nail manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "26"
+      },
+      "attrs": {
+        "code_1900": "26",
+        "english_name": "Nail manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Nail manufacturing",
+          "attrs": {
+            "name_hu": "Szeggyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-27",
+      "name": "Wire rope and mesh manufacturing",
+      "aliases": [
+        {
+          "name": "Sodronyfonat és szövetgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Wire rope and mesh manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "27"
+      },
+      "attrs": {
+        "code_1900": "27",
+        "english_name": "Wire rope and mesh manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Wire rope and mesh manufacturing",
+          "attrs": {
+            "name_hu": "Sodronyfonat és szövetgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-28",
+      "name": "Cement factory",
+      "aliases": [
+        {
+          "name": "Cementgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cement factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "28"
+      },
+      "attrs": {
+        "code_1900": "28",
+        "english_name": "Cement factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cement factory",
+          "attrs": {
+            "name_hu": "Cementgyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-29",
+      "name": "Cutlery manufacturing",
+      "aliases": [
+        {
+          "name": "Késgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cutlery manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "29"
+      },
+      "attrs": {
+        "code_1900": "29",
+        "english_name": "Cutlery manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cutlery manufacturing",
+          "attrs": {
+            "name_hu": "Késgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-30",
+      "name": "Locksmith / sheet metal goods",
+      "aliases": [
+        {
+          "name": "Épület és műlakatos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vas aczél és lemezárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lakatos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lakatos és lemezárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Géplakatos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lakatos és asztalos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lakatosárugyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Locksmith / sheet metal goods",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "30"
+      },
+      "attrs": {
+        "code_1900": "30",
+        "english_name": "Locksmith / sheet metal goods",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Locksmith / sheet metal goods",
+          "attrs": {
+            "name_hu": "Épület és műlakatos",
+            "n_variants": 7
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-31",
+      "name": "Iron furniture factory",
+      "aliases": [
+        {
+          "name": "Vasbútorgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasbútor gyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasbútorgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Iron furniture factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "31"
+      },
+      "attrs": {
+        "code_1900": "31",
+        "english_name": "Iron furniture factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Iron furniture factory",
+          "attrs": {
+            "name_hu": "Vasbútorgyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-33",
+      "name": "Steel pen and stationery manufacturing",
+      "aliases": [
+        {
+          "name": "Aczélirótoll tollszár és indigómásolópapírgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Steel pen and stationery manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "33"
+      },
+      "attrs": {
+        "code_1900": "33",
+        "english_name": "Steel pen and stationery manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Steel pen and stationery manufacturing",
+          "attrs": {
+            "name_hu": "Aczélirótoll tollszár és indigómásolópapírgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-34",
+      "name": "Gold and silver goods manufacturing",
+      "aliases": [
+        {
+          "name": "Arany és ezüstárúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Ezüstárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gold and silver goods manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "34"
+      },
+      "attrs": {
+        "code_1900": "34",
+        "english_name": "Gold and silver goods manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Gold and silver goods manufacturing",
+          "attrs": {
+            "name_hu": "Arany és ezüstárúgyártás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-35",
+      "name": "Copper and metal goods / foundry",
+      "aliases": [
+        {
+          "name": "Érczöntödék és érczműgyárak",
+          "source": "census_1900"
+        },
+        {
+          "name": "Érczárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rézöntő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rézhámoripar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Réz és érczárugyár s kazánműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Érczöntöde és tüzifecskendőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Réz és fémműves",
+          "source": "census_1900"
+        },
+        {
+          "name": "Horganylemezipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Copper and metal goods / foundry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "35"
+      },
+      "attrs": {
+        "code_1900": "35",
+        "english_name": "Copper and metal goods / foundry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Copper and metal goods / foundry",
+          "attrs": {
+            "name_hu": "Érczöntödék és érczműgyárak",
+            "n_variants": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-36",
+      "name": "Cartridge and ammunition factory",
+      "aliases": [
+        {
+          "name": "Tölténygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Töltényés fémárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Töltenygyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cartridge and ammunition factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "36"
+      },
+      "attrs": {
+        "code_1900": "36",
+        "english_name": "Cartridge and ammunition factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cartridge and ammunition factory",
+          "attrs": {
+            "name_hu": "Tölténygyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-37",
+      "name": "Chandelier and lamp manufacturing",
+      "aliases": [
+        {
+          "name": "Csillár és lámpaarúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Chandelier and lamp manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "37"
+      },
+      "attrs": {
+        "code_1900": "37",
+        "english_name": "Chandelier and lamp manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Chandelier and lamp manufacturing",
+          "attrs": {
+            "name_hu": "Csillár és lámpaarúgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-38",
+      "name": "Lead and tin goods factory",
+      "aliases": [
+        {
+          "name": "Ólom és ónárugyárak",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lead and tin goods factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "38"
+      },
+      "attrs": {
+        "code_1900": "38",
+        "english_name": "Lead and tin goods factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Lead and tin goods factory",
+          "attrs": {
+            "name_hu": "Ólom és ónárugyárak",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-39",
+      "name": "Tinsmithing / sheet metal goods",
+      "aliases": [
+        {
+          "name": "Fém és fényezett lemezárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bádogipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bádogos és lakatos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bádogárugyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tinsmithing / sheet metal goods",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "39"
+      },
+      "attrs": {
+        "code_1900": "39",
+        "english_name": "Tinsmithing / sheet metal goods",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Tinsmithing / sheet metal goods",
+          "attrs": {
+            "name_hu": "Fém és fényezett lemezárúgyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-40",
+      "name": "Metal coffin and metal goods",
+      "aliases": [
+        {
+          "name": "Érczkoporsó és érczárugyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Metal coffin and metal goods",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "40"
+      },
+      "attrs": {
+        "code_1900": "40",
+        "english_name": "Metal coffin and metal goods",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Metal coffin and metal goods",
+          "attrs": {
+            "name_hu": "Érczkoporsó és érczárugyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-41",
+      "name": "Mint",
+      "aliases": [
+        {
+          "name": "Pénzverde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mint",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "41"
+      },
+      "attrs": {
+        "code_1900": "41",
+        "english_name": "Mint",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Mint",
+          "attrs": {
+            "name_hu": "Pénzverde",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-42",
+      "name": "Machine and boiler factory / shipyard",
+      "aliases": [
+        {
+          "name": "Gépjavítóműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gépgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mezei és iparvasúti felszerelések gyára",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gépgyáros és érczöntő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gazdasági gépgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hajógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gazdasági gépjavítóműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dockvállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gépgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hajójavítóműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hajójavítótelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gazdasági gépgyár és vasöntöde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gép és kazángyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gép kazán és hajógyárak",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mezőgazdasági gépgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Machine and boiler factory / shipyard",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "42"
+      },
+      "attrs": {
+        "code_1900": "42",
+        "english_name": "Machine and boiler factory / shipyard",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Machine and boiler factory / shipyard",
+          "attrs": {
+            "name_hu": "Gépjavítóműhely",
+            "n_variants": 15
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-43",
+      "name": "Arms manufacturing",
+      "aliases": [
+        {
+          "name": "Fegyvergyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Arms manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "43"
+      },
+      "attrs": {
+        "code_1900": "43",
+        "english_name": "Arms manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Arms manufacturing",
+          "attrs": {
+            "name_hu": "Fegyvergyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-44",
+      "name": "Railway wagon factory",
+      "aliases": [
+        {
+          "name": "Gép vaggongyár és vasöntöde",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vaggon és gépgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vaggongyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Railway wagon factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "44"
+      },
+      "attrs": {
+        "code_1900": "44",
+        "english_name": "Railway wagon factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Railway wagon factory",
+          "attrs": {
+            "name_hu": "Gép vaggongyár és vasöntöde",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-45",
+      "name": "Sewing machine and bicycle manufacturing",
+      "aliases": [
+        {
+          "name": "Varrógép és kerékpárgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Sewing machine and bicycle manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "45"
+      },
+      "attrs": {
+        "code_1900": "45",
+        "english_name": "Sewing machine and bicycle manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Sewing machine and bicycle manufacturing",
+          "attrs": {
+            "name_hu": "Varrógép és kerékpárgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-46",
+      "name": "Railway repair workshop",
+      "aliases": [
+        {
+          "name": "Vasúti javítóműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasúti műhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fa műhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasúti gépjavítóműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Villamos vasúti műhelyek",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasúti műhelyek",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mozdony és kocsijavító műhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Railway repair workshop",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "46"
+      },
+      "attrs": {
+        "code_1900": "46",
+        "english_name": "Railway repair workshop",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Railway repair workshop",
+          "attrs": {
+            "name_hu": "Vasúti javítóműhely",
+            "n_variants": 7
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-47",
+      "name": "Torpedo factory",
+      "aliases": [
+        {
+          "name": "Torpedógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Torpedo factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "47"
+      },
+      "attrs": {
+        "code_1900": "47",
+        "english_name": "Torpedo factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Torpedo factory",
+          "attrs": {
+            "name_hu": "Torpedógyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-48",
+      "name": "Carriage factory",
+      "aliases": [
+        {
+          "name": "Kocsigyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kocsigyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Carriage factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "48"
+      },
+      "attrs": {
+        "code_1900": "48",
+        "english_name": "Carriage factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Carriage factory",
+          "attrs": {
+            "name_hu": "Kocsigyár",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-49",
+      "name": "Electrotechnical goods manufacturing",
+      "aliases": [
+        {
+          "name": "Elektrotechnikai czikkek gyártása",
+          "source": "census_1900"
+        },
+        {
+          "name": "Electrotechnikai és mechanikai czikkek gyártása",
+          "source": "census_1900"
+        },
+        {
+          "name": "Elektrotechnikai gyár és gépműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kábelgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Electrotechnical goods manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "49"
+      },
+      "attrs": {
+        "code_1900": "49",
+        "english_name": "Electrotechnical goods manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Electrotechnical goods manufacturing",
+          "attrs": {
+            "name_hu": "Elektrotechnikai czikkek gyártása",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-50",
+      "name": "Electric power works",
+      "aliases": [
+        {
+          "name": "Villamvilágítás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Villamtelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Elektromos művek",
+          "source": "census_1900"
+        },
+        {
+          "name": "Villamvilágítási váll",
+          "source": "census_1900"
+        },
+        {
+          "name": "Villamostelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Villamos telepek",
+          "source": "census_1900"
+        },
+        {
+          "name": "Villamossági vállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Electric power works",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "50"
+      },
+      "attrs": {
+        "code_1900": "50",
+        "english_name": "Electric power works",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Electric power works",
+          "attrs": {
+            "name_hu": "Villamvilágítás",
+            "n_variants": 7
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-51",
+      "name": "Organ and piano manufacturing",
+      "aliases": [
+        {
+          "name": "Zongorakészítő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Orgona és harmoniumgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Organ and piano manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "51"
+      },
+      "attrs": {
+        "code_1900": "51",
+        "english_name": "Organ and piano manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Organ and piano manufacturing",
+          "attrs": {
+            "name_hu": "Zongorakészítő",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-52",
+      "name": "Musical instrument maker / sand quarry",
+      "aliases": [
+        {
+          "name": "Hangszergyáros",
+          "source": "census_1900"
+        },
+        {
+          "name": "Homokbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Musical instrument maker / sand quarry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "52"
+      },
+      "attrs": {
+        "code_1900": "52",
+        "english_name": "Musical instrument maker / sand quarry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Musical instrument maker / sand quarry",
+          "attrs": {
+            "name_hu": "Hangszergyáros",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-53",
+      "name": "Scale and balance manufacturing",
+      "aliases": [
+        {
+          "name": "Mérleggyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Scale and balance manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "53"
+      },
+      "attrs": {
+        "code_1900": "53",
+        "english_name": "Scale and balance manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Scale and balance manufacturing",
+          "attrs": {
+            "name_hu": "Mérleggyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-55",
+      "name": "Precision instrument manufacturing",
+      "aliases": [
+        {
+          "name": "Műszergyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mechanikai tanműhely",
+          "source": "census_1900"
+        },
+        {
+          "name": "Precision instrument manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "55"
+      },
+      "attrs": {
+        "code_1900": "55",
+        "english_name": "Precision instrument manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Precision instrument manufacturing",
+          "attrs": {
+            "name_hu": "Műszergyártás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-56",
+      "name": "Limestone quarrying and lime burning",
+      "aliases": [
+        {
+          "name": "Mészégetés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Magnezitégetés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mészégető",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kréta mész és kőipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mészkőbányászat és mészégetőtelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műhabarcsgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Magnezitgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mészbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mészkőbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Limestone quarrying and lime burning",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "56"
+      },
+      "attrs": {
+        "code_1900": "56",
+        "english_name": "Limestone quarrying and lime burning",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Limestone quarrying and lime burning",
+          "attrs": {
+            "name_hu": "Mészégetés",
+            "n_variants": 9
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-561",
+      "name": "Mészkőető",
+      "aliases": [
+        {
+          "name": "Mészkőető",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mész és téglagyár",
+          "source": "census_1900"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "561"
+      },
+      "attrs": {
+        "code_1900": "561",
+        "english_name": null,
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Mészkőető",
+          "attrs": {
+            "name_hu": "Mészkőető",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-57",
+      "name": "Gravel quarry",
+      "aliases": [
+        {
+          "name": "Kavicsbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kavicsbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gravel quarry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "57"
+      },
+      "attrs": {
+        "code_1900": "57",
+        "english_name": "Gravel quarry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Gravel quarry",
+          "attrs": {
+            "name_hu": "Kavicsbánya",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-58",
+      "name": "Cement factory",
+      "aliases": [
+        {
+          "name": "Cementgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cementgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cement factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "58"
+      },
+      "attrs": {
+        "code_1900": "58",
+        "english_name": "Cement factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cement factory",
+          "attrs": {
+            "name_hu": "Cementgyártás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-59",
+      "name": "Cement goods factory",
+      "aliases": [
+        {
+          "name": "Cementárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cement goods factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "59"
+      },
+      "attrs": {
+        "code_1900": "59",
+        "english_name": "Cement goods factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cement goods factory",
+          "attrs": {
+            "name_hu": "Cementárugyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-61",
+      "name": "Stone quarry",
+      "aliases": [
+        {
+          "name": "Kőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőfejtés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gránitkőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gránitkőbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Opálbányászat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kovakőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőfejtővállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bazaltkőbánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rézhámor",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stone quarry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "61"
+      },
+      "attrs": {
+        "code_1900": "61",
+        "english_name": "Stone quarry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Stone quarry",
+          "attrs": {
+            "name_hu": "Kőbánya",
+            "n_variants": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-62",
+      "name": "Stonecutting and grinding",
+      "aliases": [
+        {
+          "name": "Kőőrlemálomtulajdonos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Malomkőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Márványcsiszolótelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőfaragó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőfaragás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stonecutting and grinding",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "62"
+      },
+      "attrs": {
+        "code_1900": "62",
+        "english_name": "Stonecutting and grinding",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Stonecutting and grinding",
+          "attrs": {
+            "name_hu": "Kőőrlemálomtulajdonos",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-63",
+      "name": "Brick and tile factory",
+      "aliases": [
+        {
+          "name": "Téglagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Chamotte és agyagárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőztéglagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tégla és agyagárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Téglagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műtéglagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tégla és kályhagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzteglagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Keramitgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tégla és cserépgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cserep és téglagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cserépgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cserép és téglagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tégla és mészegétő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Donga és talpfagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tégla és keramitgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Horonycserép és gőzfűtésgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőztgőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Agyag és chamotteárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőztelgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Brick and tile factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "63"
+      },
+      "attrs": {
+        "code_1900": "63",
+        "english_name": "Brick and tile factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Brick and tile factory",
+          "attrs": {
+            "name_hu": "Téglagyár",
+            "n_variants": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-64",
+      "name": "Stove and clay goods factory",
+      "aliases": [
+        {
+          "name": "Kályha és agyagárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kályhagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pipagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kályha és terracottagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőanyag és kályhagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stove and clay goods factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "64"
+      },
+      "attrs": {
+        "code_1900": "64",
+        "english_name": "Stove and clay goods factory",
+        "level": "group"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "group",
+          "parent": null,
+          "name": "Stove and clay goods factory",
+          "attrs": {
+            "name_hu": "Kályha és agyagárugyár",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-64/b",
+      "name": "Porcelain and faience factory",
+      "aliases": [
+        {
+          "name": "Kőedény és kályhagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Porczellán és fayencegyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Porczellán és fayenceárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőedénygyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Porczellángyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőedénygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Porcelain and faience factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "64/b"
+      },
+      "attrs": {
+        "code_1900": "64/b",
+        "english_name": "Porcelain and faience factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": "I1900-64",
+          "name": "Porcelain and faience factory",
+          "attrs": {
+            "name_hu": "Kőedény és kályhagyártás",
+            "n_variants": 6
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-65",
+      "name": "Stonecutter",
+      "aliases": [
+        {
+          "name": "Kőfaragó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stonecutter",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "65"
+      },
+      "attrs": {
+        "code_1900": "65",
+        "english_name": "Stonecutter",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Stonecutter",
+          "attrs": {
+            "name_hu": "Kőfaragó",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-66",
+      "name": "Glass factory",
+      "aliases": [
+        {
+          "name": "Üveggyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Üvegfestés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Üveggyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vegygyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Üvegcsiszolás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Glass factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "66"
+      },
+      "attrs": {
+        "code_1900": "66",
+        "english_name": "Glass factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Glass factory",
+          "attrs": {
+            "name_hu": "Üveggyár",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-661",
+      "name": "Üveg és palackgyár",
+      "aliases": [
+        {
+          "name": "Üveg és palackgyár",
+          "source": "census_1900"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "661"
+      },
+      "attrs": {
+        "code_1900": "661",
+        "english_name": null,
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Üveg és palackgyár",
+          "attrs": {
+            "name_hu": "Üveg és palackgyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-67",
+      "name": "Timber sawmill industry",
+      "aliases": [
+        {
+          "name": "Láda és faárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészárúgyár és ácstelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Erdei faipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrésztelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészárugyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Mogyorófaháncs és hordódugógyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészárúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzlűrész gőzfavágó és ácstelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrésztelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasúti talpfakészítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrészgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dongakészítőtelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Erdőipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Dongakészítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vizifűrésztelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Zsindelykészítővállalat",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasúti talpfakészítőtelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrész és ládagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrészárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Talpfakészítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrészgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Erdőipari részvtárs",
+          "source": "census_1900"
+        },
+        {
+          "name": "Donga és vasúti talpfaipar",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fürészárúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Palabánya",
+          "source": "census_1900"
+        },
+        {
+          "name": "Csertörőmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fatűrész és hangszergyártó telep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kőedény és majolikagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fűrésztelep és bútorgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfavágó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Deszkagyár és gőzfűrész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Faipari részvtárs",
+          "source": "census_1900"
+        },
+        {
+          "name": "Erdei faipar és gőzfűrész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Donga és talpfakészítőtelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Deszkagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasúti talpfagyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrész és erdei",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gőzfűrészmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Timber sawmill industry",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "67"
+      },
+      "attrs": {
+        "code_1900": "67",
+        "english_name": "Timber sawmill industry",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Timber sawmill industry",
+          "attrs": {
+            "name_hu": "Láda és faárúgyár",
+            "n_variants": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-68",
+      "name": "Wood impregnation / parquet factory",
+      "aliases": [
+        {
+          "name": "Üveggyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Faburkolat és fatelítőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Wood impregnation / parquet factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "68"
+      },
+      "attrs": {
+        "code_1900": "68",
+        "english_name": "Wood impregnation / parquet factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Wood impregnation / parquet factory",
+          "attrs": {
+            "name_hu": "Üveggyártás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-681",
+      "name": "Üveggyár",
+      "aliases": [
+        {
+          "name": "Üveggyár",
+          "source": "census_1900"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "681"
+      },
+      "attrs": {
+        "code_1900": "681",
+        "english_name": null,
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Üveggyár",
+          "attrs": {
+            "name_hu": "Üveggyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-69",
+      "name": "Parquet factory",
+      "aliases": [
+        {
+          "name": "Parkettagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Parkettgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Parkettagyár és gőzfűrész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Parquet factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "69"
+      },
+      "attrs": {
+        "code_1900": "69",
+        "english_name": "Parquet factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Parquet factory",
+          "attrs": {
+            "name_hu": "Parkettagyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-70",
+      "name": "Barrel making and cooperage",
+      "aliases": [
+        {
+          "name": "Hordógyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kádár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hordógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Barrel making and cooperage",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "70"
+      },
+      "attrs": {
+        "code_1900": "70",
+        "english_name": "Barrel making and cooperage",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Barrel making and cooperage",
+          "attrs": {
+            "name_hu": "Hordógyártás",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-72",
+      "name": "Joinery / furniture factory",
+      "aliases": [
+        {
+          "name": "Bútorgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Asztalos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bútorgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Asztalos és butorgyáros",
+          "source": "census_1900"
+        },
+        {
+          "name": "Műasztalos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bútorgyár és gőzfűrész",
+          "source": "census_1900"
+        },
+        {
+          "name": "Épületasztalos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Oltárépítő",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bútor keményítő és glycosegyár gőzfűrész és gőzmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bútorgyáros és kárpitos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Joinery / furniture factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "72"
+      },
+      "attrs": {
+        "code_1900": "72",
+        "english_name": "Joinery / furniture factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Joinery / furniture factory",
+          "attrs": {
+            "name_hu": "Bútorgyártás",
+            "n_variants": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-74",
+      "name": "Bentwood furniture factory",
+      "aliases": [
+        {
+          "name": "Hajlitottszékgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Faárúgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hajlítottfabútorgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hajlítottfabútorgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Nádszékgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Székgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bentwood furniture factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "74"
+      },
+      "attrs": {
+        "code_1900": "74",
+        "english_name": "Bentwood furniture factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Bentwood furniture factory",
+          "attrs": {
+            "name_hu": "Hajlitottszékgyártás",
+            "n_variants": 6
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-75",
+      "name": "Stick and whip handle manufacturing",
+      "aliases": [
+        {
+          "name": "Ostornyélgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Botgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bortgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stick and whip handle manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "75"
+      },
+      "attrs": {
+        "code_1900": "75",
+        "english_name": "Stick and whip handle manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Stick and whip handle manufacturing",
+          "attrs": {
+            "name_hu": "Ostornyélgyártás",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-76",
+      "name": "Decorative wood goods / gilding",
+      "aliases": [
+        {
+          "name": "Aranyozó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Fadíszműárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Decorative wood goods / gilding",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "76"
+      },
+      "attrs": {
+        "code_1900": "76",
+        "english_name": "Decorative wood goods / gilding",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Decorative wood goods / gilding",
+          "attrs": {
+            "name_hu": "Aranyozó",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-78",
+      "name": "Wooden goods / cork / blinds",
+      "aliases": [
+        {
+          "name": "Parafadugógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rajz és írószergyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Faredőnygyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Faárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Wooden goods / cork / blinds",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "78"
+      },
+      "attrs": {
+        "code_1900": "78",
+        "english_name": "Wooden goods / cork / blinds",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Wooden goods / cork / blinds",
+          "attrs": {
+            "name_hu": "Parafadugógyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-80",
+      "name": "Reed and wicker weaving",
+      "aliases": [
+        {
+          "name": "Székfonás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Nádgyékényszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Reed and wicker weaving",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "80"
+      },
+      "attrs": {
+        "code_1900": "80",
+        "english_name": "Reed and wicker weaving",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Reed and wicker weaving",
+          "attrs": {
+            "name_hu": "Székfonás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-82",
+      "name": "Straw goods manufacturing",
+      "aliases": [
+        {
+          "name": "Szalmalhüvelygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Straw goods manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "82"
+      },
+      "attrs": {
+        "code_1900": "82",
+        "english_name": "Straw goods manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Straw goods manufacturing",
+          "attrs": {
+            "name_hu": "Szalmalhüvelygyár",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-83",
+      "name": "Broom manufacturing",
+      "aliases": [
+        {
+          "name": "Seprögyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cirok és szalmaárúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cirokseprőgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Seprűgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Broom manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "83"
+      },
+      "attrs": {
+        "code_1900": "83",
+        "english_name": "Broom manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Broom manufacturing",
+          "attrs": {
+            "name_hu": "Seprögyártás",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-84",
+      "name": "Basket weaving",
+      "aliases": [
+        {
+          "name": "Kosárfonás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Basket weaving",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "84"
+      },
+      "attrs": {
+        "code_1900": "84",
+        "english_name": "Basket weaving",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Basket weaving",
+          "attrs": {
+            "name_hu": "Kosárfonás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-86",
+      "name": "Leather factory",
+      "aliases": [
+        {
+          "name": "Bőrgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bórgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bőrgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Leather factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "86"
+      },
+      "attrs": {
+        "code_1900": "86",
+        "english_name": "Leather factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Leather factory",
+          "attrs": {
+            "name_hu": "Bőrgyár",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-88",
+      "name": "Leather goods and luggage",
+      "aliases": [
+        {
+          "name": "Bőröndös",
+          "source": "census_1900"
+        },
+        {
+          "name": "Leather goods and luggage",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "88"
+      },
+      "attrs": {
+        "code_1900": "88",
+        "english_name": "Leather goods and luggage",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Leather goods and luggage",
+          "attrs": {
+            "name_hu": "Bőröndös",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-89",
+      "name": "Tinsmith / harness maker",
+      "aliases": [
+        {
+          "name": "Szijgyártó és nyerges",
+          "source": "census_1900"
+        },
+        {
+          "name": "Bádogos",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szijgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Tinsmith / harness maker",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "89"
+      },
+      "attrs": {
+        "code_1900": "89",
+        "english_name": "Tinsmith / harness maker",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Tinsmith / harness maker",
+          "attrs": {
+            "name_hu": "Szijgyártó és nyerges",
+            "n_variants": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-90",
+      "name": "Vasgyártás",
+      "aliases": [
+        {
+          "name": "Vasgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasöntő és gépgyár",
+          "source": "census_1900"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "90"
+      },
+      "attrs": {
+        "code_1900": "90",
+        "english_name": null,
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Vasgyártás",
+          "attrs": {
+            "name_hu": "Vasgyártás",
+            "n_variants": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-91",
+      "name": "Brush and paintbrush manufacturing",
+      "aliases": [
+        {
+          "name": "Kefegyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kefe és meszelőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kefegyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kefe és ecsetgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kefe fém szesz és élesztőgyár és gőzmalom",
+          "source": "census_1900"
+        },
+        {
+          "name": "Brush and paintbrush manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "91"
+      },
+      "attrs": {
+        "code_1900": "91",
+        "english_name": "Brush and paintbrush manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Brush and paintbrush manufacturing",
+          "attrs": {
+            "name_hu": "Kefegyár",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-92",
+      "name": "Rubber goods manufacturing",
+      "aliases": [
+        {
+          "name": "Ruggyantaárúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Rubber goods manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "92"
+      },
+      "attrs": {
+        "code_1900": "92",
+        "english_name": "Rubber goods manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Rubber goods manufacturing",
+          "attrs": {
+            "name_hu": "Ruggyantaárúgyártás",
+            "n_variants": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-93",
+      "name": "Woollen cloth and carpet factory",
+      "aliases": [
+        {
+          "name": "Posztógyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pokrócz és posztógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Posztógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szűrposztógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Posztósok szövetkezete",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gyapjuszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szőnyeggyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gyapjúmosás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Gyapjúárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Woollen cloth and carpet factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "93"
+      },
+      "attrs": {
+        "code_1900": "93",
+        "english_name": "Woollen cloth and carpet factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Woollen cloth and carpet factory",
+          "attrs": {
+            "name_hu": "Posztógyártás",
+            "n_variants": 9
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-94",
+      "name": "Hemp and rope factory",
+      "aliases": [
+        {
+          "name": "Kender és kóczgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kendergerebenezés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kötélgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kenderfonógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vasárnap és kávés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kender és kötélgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kenderkikészítés",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kenderlenögyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kenderáztató és kötélfonógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kenderkóczgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kenderáztató és kenderkikészítőtelep",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kötélverő és tömlőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hemp and rope factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "94"
+      },
+      "attrs": {
+        "code_1900": "94",
+        "english_name": "Hemp and rope factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Hemp and rope factory",
+          "attrs": {
+            "name_hu": "Kender és kóczgyár",
+            "n_variants": 12
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-95",
+      "name": "Cotton / linen / jute spinning and weaving",
+      "aliases": [
+        {
+          "name": "Vitorlavászon és kendergyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Jutafonó és szövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pamutszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Vitorlavászon len és jutagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cérnagyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Len és pamutszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pamutszővögyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Szövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Textilgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pamutfonógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Lenfonó és szövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Pamutfonó és szövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Cotton / linen / jute spinning and weaving",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "95"
+      },
+      "attrs": {
+        "code_1900": "95",
+        "english_name": "Cotton / linen / jute spinning and weaving",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Cotton / linen / jute spinning and weaving",
+          "attrs": {
+            "name_hu": "Vitorlavászon és kendergyár",
+            "n_variants": 12
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-96",
+      "name": "Silk spinning factory",
+      "aliases": [
+        {
+          "name": "Selyemfonóda",
+          "source": "census_1900"
+        },
+        {
+          "name": "Selyemfonógyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Selyemszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Selyemgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Selyemfonó",
+          "source": "census_1900"
+        },
+        {
+          "name": "Silk spinning factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "96"
+      },
+      "attrs": {
+        "code_1900": "96",
+        "english_name": "Silk spinning factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Silk spinning factory",
+          "attrs": {
+            "name_hu": "Selyemfonóda",
+            "n_variants": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-97",
+      "name": "Stocking and knitting factory",
+      "aliases": [
+        {
+          "name": "Szövő és kötőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Harisnyaszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kötött és szövöttiparáruigyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Kötő és szövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Stocking and knitting factory",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "97"
+      },
+      "attrs": {
+        "code_1900": "97",
+        "english_name": "Stocking and knitting factory",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Stocking and knitting factory",
+          "attrs": {
+            "name_hu": "Szövő és kötőgyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-98",
+      "name": "Embroidery / silk weaving / enamel",
+      "aliases": [
+        {
+          "name": "Selyemszövőgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Hímzésgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Zománcozott bádogedénygyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Zománcgyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Embroidery / silk weaving / enamel",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "98"
+      },
+      "attrs": {
+        "code_1900": "98",
+        "english_name": "Embroidery / silk weaving / enamel",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Embroidery / silk weaving / enamel",
+          "attrs": {
+            "name_hu": "Selyemszövőgyár",
+            "n_variants": 4
+          }
+        }
+      ]
+    },
+    {
+      "id": "I1900-99",
+      "name": "Braid and cord manufacturing",
+      "aliases": [
+        {
+          "name": "Paszomántárugyár",
+          "source": "census_1900"
+        },
+        {
+          "name": "Zsinór és paszomántárúgyártás",
+          "source": "census_1900"
+        },
+        {
+          "name": "Braid and cord manufacturing",
+          "source": "english"
+        }
+      ],
+      "xref": {
+        "industry_code_1900": "99"
+      },
+      "attrs": {
+        "code_1900": "99",
+        "english_name": "Braid and cord manufacturing",
+        "level": "industry"
+      },
+      "slices": [
+        {
+          "as_of": 1900,
+          "source": "census_1900",
+          "type": "industry",
+          "parent": null,
+          "name": "Braid and cord manufacturing",
+          "attrs": {
+            "name_hu": "Paszomántárugyár",
+            "n_variants": 2
+          }
+        }
+      ]
+    }
+  ]
+}
