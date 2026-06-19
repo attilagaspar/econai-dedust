@@ -795,6 +795,8 @@ def update_row_struct(
                 row["pdf"] = r["pdf"]
             if r.get("llm_fixed"):
                 row["llm_fixed"] = True
+            if r.get("authority"):          # resolved gazetteer entity (per row)
+                row["authority"] = r["authority"]
             rows.append(row)
         rows.sort(key=lambda r: r["y0"])
         for i, r in enumerate(rows):

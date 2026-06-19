@@ -4984,7 +4984,9 @@ function renderRowTable(shape) {
            + `title="${_rsLlmRunning ? 'Stop' : 'Re-run the LLM row by row using the current row structure and the active prompt'}">`
            + `${_rsLlmRunning ? '■' : '⟳'}</button></th>`
            + '<th>Human <button class="rs-copy-btn" onclick="_rsMajorityVote()" '
-           + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button></th></tr>';
+           + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button></th>'
+           + '<th>Auth <button class="rs-copy-btn" onclick="_rsResolveCol()" '
+           + 'title="Resolve every row against the authority using its best text (Human>LLM>OCR>PDF). Rows that are empty or a single character are skipped; manual picks are kept. Then: click a value to switch to an alternative, or double-click a cell to copy the entity from the row above (ditto marks).">🏛</button></th></tr>';
   for (let i = 0; i < nRows; i++) {
     const r   = rows[i];
     const pdf = (r?.pdf != null) ? r.pdf : (i < pdfShown ? pdfLines[i] : '');
@@ -4992,7 +4994,7 @@ function renderRowTable(shape) {
       // Ghost row: PDF line beyond the row structure
       html += `<tr class="rs-ghost"><td class="rs-n">·</td><td class="rs-img"></td>`
             + `<td title="${_escHtml(pdf)}">${_escHtml(pdf)}</td>`
-            + `<td></td><td></td><td></td></tr>`;
+            + `<td></td><td></td><td></td><td></td></tr>`;
       continue;
     }
     const o = (r.ocr || '').trim(), l = (r.llm || '').trim(), h = (r.human || '').trim();
@@ -5008,7 +5010,9 @@ function renderRowTable(shape) {
           + `<td class="rs-clk" onclick="_rsCopyCell(${i},'llm')" title="${_escHtml(r.llm || '')}${r.llm_fixed ? ' (rule-fix corrected)' : ''} — click to copy to Human">`
           + `${_escHtml(r.llm || '')}${r.llm_fixed ? ' <span style="font-size:9px;" title="Corrected by rule-fix">🛠</span>' : ''}</td>`
           + `<td><input class="rs-human" value="${_escHtml(r.human || '')}" `
-          + `onchange="_rsHumanEdit(${i}, this.value)"></td></tr>`;
+          + `onchange="_rsHumanEdit(${i}, this.value)"></td>`
+          + `<td class="rs-auth rs-clk" onclick="_rsAuthClick(${i}, event)" ondblclick="_rsAuthDbl(${i}, event)" `
+          + `title="Click for alternatives · double-click to copy from row above">${_rsAuthCellHtml(r)}</td></tr>`;
   }
   wrap.innerHTML = html + '</table>';
   _rsDrawCrops();
@@ -5189,6 +5193,162 @@ async function _rsHumanEdit(rowIdx, value) {
   rows[rowIdx].human = value;
   await saveRowStruct(selIdx);
   renderRowTable(pageData.shapes[selIdx]);
+}
+
+// ── Internal-row authority resolution ──────────────────────────────────────
+// Per-row resolved entity lives on row.authority (same shape as shape.authority).
+// Candidate lists for the dropdown are cached in-memory per (shape,row); they are
+// not persisted (re-fetched lazily on demand).
+let _rsAuthCands = {shapeIdx: -1, byRow: {}};
+function _rsAuthCandsReset()      { _rsAuthCands = {shapeIdx: selIdx, byRow: {}}; }
+function _rsAuthCandsSet(i, c)    { if (_rsAuthCands.shapeIdx !== selIdx) _rsAuthCandsReset(); _rsAuthCands.byRow[i] = c; }
+function _rsAuthCandsGet(i)       { return _rsAuthCands.shapeIdx === selIdx ? _rsAuthCands.byRow[i] : null; }
+
+function _rsRowBest(shape, i) {
+  const r = _rsRows(shape)?.[i]; if (!r) return '';
+  return ((r.human || '').trim() || (r.llm || '').trim() || (r.ocr || '').trim()
+          || (r.pdf != null ? r.pdf : _rsPdfVal(shape, i)).trim());
+}
+function _rsResolvable(text) { return (text || '').replace(/\s/g, '').length >= 2; }
+
+function _candToAuth(c, source) {
+  return {
+    id: c.id, name: c.name, type: c.type, parent: c.parent,
+    county_name: c.county_name, district_name: c.district_name,
+    lat: c.lat, lon: c.lon, score: c.score, via: c.via,
+    source, ts: new Date().toISOString(),
+  };
+}
+async function _resolveText(text, type, parent) {
+  const params = new URLSearchParams({q: text});
+  if (type)   params.set('type', type);
+  if (parent) params.set('parent', parent);
+  try {
+    const r = await fetch(`${API}/api/authority/resolve?${params}`);
+    return r.ok ? ((await r.json()).candidates || []) : [];
+  } catch (e) { return []; }
+}
+
+function _rsAuthCellHtml(r) {
+  const a = r.authority;
+  if (a) {
+    const col = a.source === 'human' ? '#86efac' : '#93c5fd';   // green=manual, blue=auto
+    const sc  = a.score != null ? `<sup style="color:#667;font-size:8px;">${a.score}</sup>` : '';
+    return `<span style="color:${col};">${_escHtml(a.name)}</span>${sc}`;
+  }
+  return `<span style="color:#556;">—</span>`;
+}
+
+// Batch: resolve every row from its best text, skip empty/single-char,
+// keep existing manual picks.
+async function _rsResolveCol() {
+  if (selIdx < 0) return;
+  const shape = pageData.shapes[selIdx];
+  const rows  = _rsRows(shape); if (!rows) return;
+  const type   = document.getElementById('auth-type').value;
+  const parent = _authParent();
+  _rsAuthCandsReset();
+  let resolved = 0, kept = 0, skipped = 0, nomatch = 0;
+  await Promise.all(rows.map(async (r, i) => {
+    if (r.authority && r.authority.source === 'human') { kept++; return; }
+    const text = _rsRowBest(shape, i);
+    if (!_rsResolvable(text)) { delete r.authority; skipped++; return; }
+    const cands = await _resolveText(text, type, parent);
+    _rsAuthCandsSet(i, cands);
+    if (!cands.length) { delete r.authority; nomatch++; return; }
+    r.authority = _candToAuth(cands[0], 'auto');
+    resolved++;
+  }));
+  await saveRowStruct(selIdx);
+  renderRowTable(shape);
+  showToast(`Authority: ${resolved} resolved`
+    + (kept ? `, ${kept} manual kept` : '')
+    + (nomatch ? `, ${nomatch} no match` : '')
+    + (skipped ? `, ${skipped} skipped` : ''));
+}
+
+// Click (single) → dropdown of alternatives.  Double-click → inherit from above.
+// A short timer disambiguates the two on the same cell.
+let _rsAuthClickTimer = null;
+function _rsAuthClick(i, ev) {
+  const el = ev.currentTarget;
+  if (_rsAuthClickTimer) return;
+  _rsAuthClickTimer = setTimeout(() => { _rsAuthClickTimer = null; _rsOpenAuthDropdown(i, el); }, 230);
+}
+function _rsAuthDbl(i, ev) {
+  if (_rsAuthClickTimer) { clearTimeout(_rsAuthClickTimer); _rsAuthClickTimer = null; }
+  _rsInheritAuth(i);
+}
+
+async function _rsInheritAuth(i) {
+  if (selIdx < 0 || i <= 0) return;          // nothing above row 0
+  const rows = _rsRows(pageData.shapes[selIdx]); if (!rows?.[i]) return;
+  const above = rows[i - 1].authority;
+  if (above) rows[i].authority = {...above, source: 'human', ts: new Date().toISOString()};
+  else       delete rows[i].authority;       // ditto of an empty cell = empty
+  _rsCloseAuthDropdown();
+  await saveRowStruct(selIdx);
+  renderRowTable(pageData.shapes[selIdx]);
+}
+
+async function _rsAssignRowAuth(i, cand) {
+  if (selIdx < 0) return;
+  const rows = _rsRows(pageData.shapes[selIdx]); if (!rows?.[i]) return;
+  rows[i].authority = cand ? _candToAuth(cand, 'human') : undefined;
+  if (!cand) delete rows[i].authority;
+  _rsCloseAuthDropdown();
+  await saveRowStruct(selIdx);
+  renderRowTable(pageData.shapes[selIdx]);
+}
+
+function _rsCloseAuthDropdown() {
+  document.getElementById('rs-auth-dd')?.remove();
+  document.removeEventListener('mousedown', _rsAuthDocClose, true);
+}
+function _rsAuthDocClose(ev) {
+  if (!ev.target.closest('#rs-auth-dd')) _rsCloseAuthDropdown();
+}
+
+async function _rsOpenAuthDropdown(i, anchorEl) {
+  _rsCloseAuthDropdown();
+  const shape = pageData.shapes[selIdx];
+  const rows  = _rsRows(shape); const r = rows?.[i]; if (!r) return;
+  let cands = _rsAuthCandsGet(i);
+  if (!cands) {
+    const text = _rsRowBest(shape, i);
+    if (!_rsResolvable(text)) { showToast('Row is empty / too short to resolve'); return; }
+    cands = await _resolveText(text, document.getElementById('auth-type').value, _authParent());
+    _rsAuthCandsSet(i, cands);
+  }
+  const dd = document.createElement('div');
+  dd.id = 'rs-auth-dd';
+  dd.style.cssText = 'position:fixed;z-index:2000;background:#0d1b35;border:1px solid #2a4a8e;'
+    + 'border-radius:5px;box-shadow:0 6px 22px rgba(0,0,0,0.55);max-height:50vh;overflow:auto;'
+    + 'min-width:200px;max-width:360px;font-size:11px;padding:3px;';
+  const curId = r.authority?.id;
+  const rows_html = cands.length
+    ? cands.map(c => {
+        const loc = [c.district_name, c.county_name].filter(Boolean).join(', ');
+        const sc  = c.score >= 95 ? '#22c55e' : c.score >= 80 ? '#eab308' : '#f87171';
+        const sel = c.id === curId ? 'background:#14532d;' : '';
+        return `<div class="rs-auth-opt" data-id="${_escHtml(c.id)}" style="display:flex;justify-content:space-between;gap:8px;`
+          + `align-items:center;padding:4px 6px;border-radius:3px;cursor:pointer;${sel}">`
+          + `<span><b style="color:#cde;">${_escHtml(c.name)}</b> <span style="color:#778;font-size:9px;">${_escHtml(c.type || '')}</span>`
+          + `${loc ? `<br><span style="color:#7a8;font-size:9px;">${_escHtml(loc)}</span>` : ''}</span>`
+          + `<span style="color:${sc};font-weight:600;white-space:nowrap;">${c.score}%</span></div>`;
+      }).join('')
+    : `<div style="padding:6px;color:#a55;">No match.</div>`;
+  dd.innerHTML = rows_html
+    + (r.authority ? `<div class="rs-auth-clear" style="padding:4px 6px;border-top:1px solid #1a3a6e;`
+        + `margin-top:3px;color:#fca5a5;cursor:pointer;">✕ Clear</div>` : '');
+  document.body.appendChild(dd);
+  const rect = anchorEl.getBoundingClientRect();
+  dd.style.top  = Math.min(rect.bottom + 2, window.innerHeight - dd.offsetHeight - 6) + 'px';
+  dd.style.left = Math.min(rect.left, window.innerWidth - dd.offsetWidth - 6) + 'px';
+  dd.querySelectorAll('.rs-auth-opt').forEach(opt => opt.onclick = () =>
+    _rsAssignRowAuth(i, cands.find(c => c.id === opt.dataset.id)));
+  dd.querySelector('.rs-auth-clear')?.addEventListener('click', () => _rsAssignRowAuth(i, null));
+  setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
 async function convertToRows() {
