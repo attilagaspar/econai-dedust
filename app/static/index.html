@@ -2685,13 +2685,22 @@ function renderRuleFixList() {
         const hasProp = prop != null;
         const orig = hasProp ? String(prop) : '';                 // the LLM proposal
         const inputVal = hasProp ? String(prop) : (c.values[k] ?? '');
+        // "H" badge when this line already carries a human correction
+        const _sh = pageData.shapes[c.idx];
+        const _hrows = _sh?.row_struct?.rows;
+        const humanVal = _hrows?.[k]
+          ? (_hrows[k].human || '').trim()
+          : ((_sh?.human_output?.human_corrected_text || '').split('\n')[k] || '').trim();
+        const hBadge = humanVal
+          ? `<span title="Already has a Human correction: ${_escHtml(humanVal)}" style="display:inline-block;background:#14532d;color:#bbf7d0;border-radius:3px;font-size:9px;font-weight:700;padding:0 3px;margin-left:4px;">H</span>`
+          : '';
         // Editable correction field: defaults to the LLM proposal (or current
         // reading). Leave = LLM layer; edit = Human layer (border turns amber).
         return `<td style="padding:2px 4px;${_bd}${bg}">`
           + `<canvas class="rf-crop" data-idx="${c.idx}" data-k="${k}" data-n="${v.nRows}"`
           + ` style="display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;"></canvas></td>`
           + `<td style="padding:1px 8px;${_bd}${bg}">`
-          + `<div style="color:#8aa;">${_escHtml(c.values[k] ?? '')}</div>`
+          + `<div style="color:#8aa;">${_escHtml(c.values[k] ?? '')}${hBadge}</div>`
           + `<input class="rf-prop" data-vi="${vi}" data-col="${c.col}" data-k="${k}" data-orig="${_escHtml(orig)}" `
           + `value="${_escHtml(inputVal)}" title="Leave as-is → LLM layer; edit → Human correction" `
           + `style="width:100%;box-sizing:border-box;background:#0d1b35;border:1px solid ${hasProp ? '#2a4a8e' : '#33405f'};border-radius:3px;color:#cde;font:inherit;padding:1px 4px;margin-top:2px;" `
