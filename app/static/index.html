@@ -2666,6 +2666,24 @@ function closeRuleFix() {
   document.getElementById('rule-fix-modal').style.display = 'none';
 }
 
+// Colour a rule-fix correction input by state:
+//   amber  → edited / hand-typed (will be saved as a Human correction)
+//   green  → showing the LLM's proposed value that differs from the reading
+//   neutral→ unchanged
+function _rfMark(inp) {
+  const v = (inp.value || '').trim();
+  const orig = (inp.dataset.orig || '').trim();
+  const cur  = (inp.dataset.cur || '').trim();
+  const edited = orig ? (v !== orig) : (v !== '' && v !== cur);
+  if (edited) {
+    inp.style.borderColor = '#eab308'; inp.style.background = '#3a2e0a'; inp.style.fontWeight = '700';
+  } else if (inp.dataset.changed === '1') {
+    inp.style.borderColor = '#22c55e'; inp.style.background = '#0e2a16'; inp.style.fontWeight = '700';
+  } else {
+    inp.style.borderColor = orig ? '#2a4a8e' : '#33405f'; inp.style.background = '#0d1b35'; inp.style.fontWeight = '400';
+  }
+}
+
 function renderRuleFixList() {
   const wrap = document.getElementById('rf-list');
   if (!_rfState) { wrap.innerHTML = ''; return; }
@@ -2682,9 +2700,12 @@ function renderRuleFixList() {
       const bg  = 'background:rgba(255,0,80,0.10);';
       const cells = v.cols.map(c => {
         const prop = v.proposal?.[c.col]?.[k];
+        const curVal = c.values[k] ?? '';
         const hasProp = prop != null;
         const orig = hasProp ? String(prop) : '';                 // the LLM proposal
-        const inputVal = hasProp ? String(prop) : (c.values[k] ?? '');
+        // LLM proposes a value that differs from the current best guess
+        const changed = hasProp && String(prop).trim() !== String(curVal).trim();
+        const inputVal = hasProp ? String(prop) : curVal;
         // "H" badge when this line already carries a human correction
         const _sh = pageData.shapes[c.idx];
         const _hrows = _sh?.row_struct?.rows;
@@ -2694,17 +2715,24 @@ function renderRuleFixList() {
         const hBadge = humanVal
           ? `<span title="Already has a Human correction: ${_escHtml(humanVal)}" style="display:inline-block;background:#14532d;color:#bbf7d0;border-radius:3px;font-size:9px;font-weight:700;padding:0 3px;margin-left:4px;">H</span>`
           : '';
-        // Editable correction field: defaults to the LLM proposal (or current
-        // reading). Leave = LLM layer; edit = Human layer (border turns amber).
+        // Old value: struck through when the LLM changes it, so old→new reads clearly
+        const curStyle = changed ? 'color:#7a8599;text-decoration:line-through;' : 'color:#8aa;';
+        // Editable correction field. Initial colour: GREEN+bold when the LLM
+        // proposes a different value (draws the eye); neutral otherwise. Editing
+        // it turns it amber (→ Human layer) via _rfMark.
+        const inBorder = changed ? '#22c55e' : (hasProp ? '#2a4a8e' : '#33405f');
+        const inBg     = changed ? '#0e2a16' : '#0d1b35';
+        const inWeight = changed ? 'font-weight:700;' : '';
         return `<td style="padding:2px 4px;${_bd}${bg}">`
           + `<canvas class="rf-crop" data-idx="${c.idx}" data-k="${k}" data-n="${v.nRows}"`
           + ` style="display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;"></canvas></td>`
-          + `<td style="padding:1px 8px;${_bd}${bg}">`
-          + `<div style="color:#8aa;">${_escHtml(c.values[k] ?? '')}${hBadge}</div>`
+          + `<td style="padding:1px 8px;${_bd}${bg}min-width:104px;">`
+          + `<div style="${curStyle}">${_escHtml(curVal)}${hBadge}</div>`
           + `<input class="rf-prop" data-vi="${vi}" data-col="${c.col}" data-k="${k}" data-orig="${_escHtml(orig)}" `
+          + `data-cur="${_escHtml(String(curVal))}" data-changed="${changed ? '1' : '0'}" `
           + `value="${_escHtml(inputVal)}" title="Leave as-is → LLM layer; edit → Human correction" `
-          + `style="width:100%;box-sizing:border-box;background:#0d1b35;border:1px solid ${hasProp ? '#2a4a8e' : '#33405f'};border-radius:3px;color:#cde;font:inherit;padding:1px 4px;margin-top:2px;" `
-          + `oninput="this.style.borderColor=(this.value.trim()===(this.dataset.orig||'').trim()&&this.dataset.orig)?'#2a4a8e':'#eab308';">`
+          + `style="width:100%;min-width:92px;box-sizing:border-box;background:${inBg};border:1px solid ${inBorder};border-radius:3px;color:#cde;${inWeight}font:inherit;padding:2px 5px;margin-top:2px;" `
+          + `oninput="_rfMark(this)">`
           + `</td>`;
       }).join('');
       // Per-line checkbox (default checked) — only checked lines get applied
@@ -5480,7 +5508,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-6 (rule-fix editable→human) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-7 (rule-fix wider + green-change) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
