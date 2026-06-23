@@ -2682,13 +2682,20 @@ function renderRuleFixList() {
       const bg  = 'background:rgba(255,0,80,0.10);';
       const cells = v.cols.map(c => {
         const prop = v.proposal?.[c.col]?.[k];
-        const changed = prop != null && String(prop).trim() !== String(c.values[k] ?? '').trim();
+        const hasProp = prop != null;
+        const orig = hasProp ? String(prop) : '';                 // the LLM proposal
+        const inputVal = hasProp ? String(prop) : (c.values[k] ?? '');
+        // Editable correction field: defaults to the LLM proposal (or current
+        // reading). Leave = LLM layer; edit = Human layer (border turns amber).
         return `<td style="padding:2px 4px;${_bd}${bg}">`
           + `<canvas class="rf-crop" data-idx="${c.idx}" data-k="${k}" data-n="${v.nRows}"`
           + ` style="display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;"></canvas></td>`
           + `<td style="padding:1px 8px;${_bd}${bg}">`
-          + `${_escHtml(c.values[k] ?? '')}`
-          + (changed ? ` <span style="color:#4ade80;">→ ${_escHtml(String(prop))}</span>` : '')
+          + `<div style="color:#8aa;">${_escHtml(c.values[k] ?? '')}</div>`
+          + `<input class="rf-prop" data-vi="${vi}" data-col="${c.col}" data-k="${k}" data-orig="${_escHtml(orig)}" `
+          + `value="${_escHtml(inputVal)}" title="Leave as-is → LLM layer; edit → Human correction" `
+          + `style="width:100%;box-sizing:border-box;background:#0d1b35;border:1px solid ${hasProp ? '#2a4a8e' : '#33405f'};border-radius:3px;color:#cde;font:inherit;padding:1px 4px;margin-top:2px;" `
+          + `oninput="this.style.borderColor=(this.value.trim()===(this.dataset.orig||'').trim()&&this.dataset.orig)?'#2a4a8e':'#eab308';">`
           + `</td>`;
       }).join('');
       // Per-line checkbox (default checked) — only checked lines get applied
@@ -2705,9 +2712,7 @@ function renderRuleFixList() {
         <span style="font-size:0.75rem;color:#aaa;">${_escHtml(v.status || '')}</span>
         ${v.proposal ? `<span style="font-size:0.75rem;color:${fixOk ? '#4ade80' : '#fbbf24'};">${fixOk ? '✓ proposal satisfies the rule' : '⚠ proposal still violates the rule'}</span>` : ''}
         <span style="flex:1;"></span>
-        ${v.proposal
-            ? `<button onclick="applyRuleFix(${vi})" title="Write the checked lines to the LLM layer and remove them; unchecked lines stay so you can re-ask" style="background:#1f7a3d;border:none;color:#fff;border-radius:4px;padding:3px 12px;cursor:pointer;font-size:0.78rem;">✓ Apply checked</button>`
-            : ''}
+        <button onclick="applyRuleFix(${vi})" title="Apply the checked lines: a value left equal to the LLM proposal goes to the LLM layer; an edited (or hand-typed) value goes to Human correction. Applied lines are removed; the rest stay so you can re-ask." style="background:#1f7a3d;border:none;color:#fff;border-radius:4px;padding:3px 12px;cursor:pointer;font-size:0.78rem;">✓ Apply checked</button>
       </div>
       <div style="overflow-x:auto;">
         <table style="border-collapse:collapse;font-size:0.78rem;font-family:monospace;color:#ddd;">
@@ -2923,46 +2928,68 @@ async function runRuleFixLlm() {
 
 async function applyRuleFix(vi) {
   const v = _rfState?.violations[vi];
-  if (!v?.proposal) return;
+  if (!v) return;
 
   // Which displayed lines are checked (default checked)
   const checked = new Set(
     [...document.querySelectorAll(`#rf-list .rf-rowcheck[data-vi="${vi}"]`)]
       .filter(cb => cb.checked).map(cb => +cb.dataset.k));
 
+  // Read the editable correction inputs: per column, per line → {nv, orig}.
+  // nv === orig (the LLM proposal) → LLM layer; otherwise (edited / hand-typed)
+  // → Human layer.
+  const inputsByCol = {};
+  v.cols.forEach(c => {
+    const m = {};
+    document.querySelectorAll(`#rf-list input.rf-prop[data-vi="${vi}"][data-col="${c.col}"]`)
+      .forEach(inp => { m[+inp.dataset.k] = {nv: (inp.value || '').trim(), orig: (inp.dataset.orig || '').trim()}; });
+    inputsByCol[c.col] = m;
+  });
+
   const applied = new Set();   // lines that actually received a change
+  let humanCount = 0, llmCount = 0;
   for (const c of v.cols) {
-    const arr = v.proposal[c.col];
-    if (!arr) continue;
+    const byK = inputsByCol[c.col] || {};
     const shape = pageData.shapes[c.idx];
     const rows  = _rsRows(shape);
     if (rows) {
-      // Accepted fixes go to the LLM layer (it IS LLM output), flagged as
-      // rule-fix.  An existing Human value keeps winning by layer priority.
+      // Per-row routing: accepted LLM proposal → LLM layer (rule-fix flag);
+      // an edited / hand-typed value → Human layer (wins by layer priority).
       let changed = false;
       rows.forEach((r, k) => {
         if (!checked.has(k)) return;
-        const nv  = (arr[k] ?? '').trim();
+        const e = byK[k]; if (!e || !e.nv) return;
         const cur = ((r.human || '').trim() || (r.llm || '').trim()
                   || (r.ocr || '').trim()   || (r.pdf || '').trim());
-        if (nv !== '' && nv !== cur) { r.llm = nv; r.llm_fixed = true; changed = true; applied.add(k); }
+        if (e.nv === cur) return;                         // no change
+        if (e.orig && e.nv === e.orig) { r.llm = e.nv; r.llm_fixed = true; llmCount++; }
+        else                           { r.human = e.nv; humanCount++; }
+        changed = true; applied.add(k);
       });
       if (changed) await saveRowStruct(c.idx);
     } else {
-      // No internal rows: merge the checked changes over the current values
-      // and write the result as the flat LLM response
-      let changed = false;
+      // No internal rows: merge the checked changes over the current values.
+      // If any checked change was edited by hand → write the merged cell to the
+      // Human layer; otherwise write it as the flat LLM response (rule-fix).
+      let changed = false, anyHuman = false;
       const merged = c.values.map((cur, k) => {
-        if (checked.has(k)) {
-          const nv = (arr[k] ?? '').trim();
-          if (nv !== '' && nv !== (cur ?? '').trim()) { applied.add(k); changed = true; return nv; }
-        }
-        return cur ?? '';
+        if (!checked.has(k)) return cur ?? '';
+        const e = byK[k]; if (!e || !e.nv || e.nv === (cur ?? '').trim()) return cur ?? '';
+        applied.add(k); changed = true;
+        if (!(e.orig && e.nv === e.orig)) anyHuman = true;
+        return e.nv;
       });
       if (changed) {
-        if (!shape.openai_output) shape.openai_output = {};
-        shape.openai_output.response = merged.join('\n');
-        shape.openai_output.mode     = 'rulefix';
+        if (anyHuman) {
+          if (!shape.human_output) shape.human_output = {};
+          shape.human_output.human_corrected_text = merged.join('\n');
+          humanCount++;
+        } else {
+          if (!shape.openai_output) shape.openai_output = {};
+          shape.openai_output.response = merged.join('\n');
+          shape.openai_output.mode     = 'rulefix';
+          llmCount++;
+        }
         await replaceAllShapes();
       }
     }
@@ -2979,7 +3006,9 @@ async function applyRuleFix(vi) {
   refreshDiag(); drawOverlay();
   if (v.cols.some(c => c.idx === selIdx)) updatePanel();
   showToast(applied.size
-    ? `Lattice row ${v.superRow}: ${applied.size} line(s) written to LLM layer (rule-fix flag)`
+    ? `Lattice row ${v.superRow}: applied ${applied.size} line(s)`
+      + (humanCount ? ` · ${humanCount} → Human` : '')
+      + (llmCount ? ` · ${llmCount} → LLM` : '')
     : `Lattice row ${v.superRow}: no checked line had a change to apply`);
 }
 
@@ -5442,7 +5471,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-5 (per-column + resolve-column + excel) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-6 (rule-fix editable→human) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
