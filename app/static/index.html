@@ -5343,6 +5343,19 @@ function _rsRowBest(shape, i) {
 }
 function _rsResolvable(text) { return (text || '').replace(/\s/g, '').length >= 2; }
 
+// Ditto marks ("same as the line above") — quotes, dashes, repeat glyphs, or
+// common abbreviations. These should NOT be fuzzy-matched against the whole
+// authority; they inherit the entity from the row above instead.
+function _isDitto(text) {
+  const s = (text || '').trim();
+  if (!s) return false;
+  if (/^[\s.,\-–—―_=~:;"'’‘”“„«»<>]+$/.test(s)) return true;     // only ditto-ish glyphs
+  const w = s.toLowerCase().replace(/[.\s]/g, '');
+  return ['do','dto','ditto','idem','id','ua','uaz','ugyanaz','ugyanott','uo','uott','azelobbi','detto'].includes(w);
+}
+// Copy a resolved entity onto a ditto row (carried from the row above).
+function _dittoCopy(a) { return {...a, source: 'auto', via: 'ditto', ts: new Date().toISOString()}; }
+
 function _candToAuth(c, source) {
   return {
     id: c.id, name: c.name, type: c.type, parent: c.parent,
@@ -5383,27 +5396,47 @@ async function _rsResolveCol() {
   const type   = document.getElementById('auth-type')?.value || '';
   const parent = _authParent();
   _rsAuthCandsReset();
-  let resolved = 0, kept = 0, skipped = 0, nomatch = 0;
+  // Classify each row first so ditto marks never hit the authority lookup.
+  const cls = rows.map((r, i) => {
+    if (r.authority && r.authority.source === 'human') return 'human';
+    const t = _rsRowBest(shape, i);
+    if (_isDitto(t))        return 'ditto';
+    if (!_rsResolvable(t))  return 'skip';
+    return 'name';
+  });
+  // Pass 1: resolve real names in parallel.
   await Promise.all(rows.map(async (r, i) => {
-    if (r.authority && r.authority.source === 'human') { kept++; return; }
-    const text = _rsRowBest(shape, i);
-    if (!_rsResolvable(text)) { delete r.authority; skipped++; return; }
-    const cands = await _resolveText(text, type, parent);
+    if (cls[i] !== 'name') return;
+    const cands = await _resolveText(_rsRowBest(shape, i), type, parent);
     _rsAuthCandsSet(i, cands);
-    if (!cands.length) { delete r.authority; nomatch++; return; }
-    r.authority = _candToAuth(cands[0], 'auto');
-    resolved++;
+    if (!cands.length) { delete r.authority; cls[i] = 'nomatch'; }
+    else                 r.authority = _candToAuth(cands[0], 'auto');
   }));
+  // Pass 2: top-down so ditto rows inherit the entity above (chains included).
+  let resolved = 0, kept = 0, skipped = 0, nomatch = 0, ditto = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (cls[i] === 'human')   { kept++; continue; }
+    if (cls[i] === 'skip')    { delete r.authority; skipped++; continue; }
+    if (cls[i] === 'nomatch') { nomatch++; continue; }
+    if (cls[i] === 'name')    { resolved++; continue; }
+    if (cls[i] === 'ditto') {
+      const above = i > 0 ? rows[i - 1].authority : null;
+      if (above) { r.authority = _dittoCopy(above); ditto++; }
+      else       { delete r.authority; skipped++; }
+    }
+  }
   await saveRowStruct(selIdx);   // replaces shape.row_struct with the server's copy
   renderRowTable(shape);
   // If we resolved rows but none survived the save, the server stripped the
   // authority field — i.e. it's running pre-restart code.
   const persisted = (_rsRows(shape) || []).filter(r => r.authority).length;
-  if (resolved > 0 && persisted === 0) {
+  if ((resolved + ditto) > 0 && persisted === 0) {
     showToast('⚠ Resolved but the server dropped the values — restart the server (app/server.py changed).', 6000);
     return;
   }
   showToast(`Authority: ${resolved} resolved`
+    + (ditto ? `, ${ditto} ditto→above` : '')
     + (kept ? `, ${kept} manual kept` : '')
     + (nomatch ? `, ${nomatch} no match` : '')
     + (skipped ? `, ${skipped} skipped` : ''));
@@ -5508,7 +5541,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-7 (rule-fix wider + green-change) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-8 (ditto skip + inherit, faster matcher) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -8963,39 +8996,54 @@ async function resolveColumn() {
   const AT = _tableOf(sel), col = sel.super_column;
   const type = document.getElementById('auth-type').value;
   const parent = _authParent();
-  const cells = pageData.shapes.filter(s => _tableOf(s) === AT && s.super_column === col);
+  // Reading order top-to-bottom so ditto marks inherit the entity above
+  const cells = pageData.shapes
+    .filter(s => _tableOf(s) === AT && s.super_column === col)
+    .sort((a, b) => (a.super_row ?? 0) - (b.super_row ?? 0));
   if (!cells.length) return;
   const btn = document.getElementById('auth-col-btn');
   const oldTxt = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
-  let resolved = 0, kept = 0, skipped = 0, nomatch = 0;
+  let resolved = 0, kept = 0, skipped = 0, nomatch = 0, ditto = 0;
+  let lastAuth = null;   // nearest resolved entity above (carries across cells)
   try {
+    // One resolvable unit (whole cell, or each internal row) processed in order
+    const resolveUnit = async (getText, getAuth, setAuth, isHuman) => {
+      if (isHuman()) { kept++; const a = getAuth(); if (a) lastAuth = a; return; }
+      const text = getText();
+      if (_isDitto(text)) {
+        if (lastAuth) { setAuth(_dittoCopy(lastAuth)); ditto++; } else { setAuth(null); skipped++; }
+        return;
+      }
+      if (!_rsResolvable(text)) { setAuth(null); skipped++; return; }
+      const cands = await _resolveText(text, type, parent);
+      if (!cands.length) { setAuth(null); nomatch++; return; }
+      const a = _candToAuth(cands[0], 'auto'); setAuth(a); lastAuth = a; resolved++;
+    };
     for (const shape of cells) {
       const rows = _rsRows(shape);
       if (rows && rows.length) {
         for (let i = 0; i < rows.length; i++) {
           const r = rows[i];
-          if (r.authority && r.authority.source === 'human') { kept++; continue; }
-          const text = _rsRowBest(shape, i);
-          if (!_rsResolvable(text)) { delete r.authority; skipped++; continue; }
-          const cands = await _resolveText(text, type, parent);
-          if (!cands.length) { delete r.authority; nomatch++; continue; }
-          r.authority = _candToAuth(cands[0], 'auto'); resolved++;
+          await resolveUnit(
+            () => _rsRowBest(shape, i),
+            () => r.authority,
+            (a) => { if (a) r.authority = a; else delete r.authority; },
+            () => r.authority && r.authority.source === 'human');
         }
-      } else if (shape.authority && shape.authority.source === 'human') {
-        kept++;
       } else {
-        const text = _bestCellText(shape);
-        if (!_rsResolvable(text)) { delete shape.authority; skipped++; continue; }
-        const cands = await _resolveText(text, type, parent);
-        if (!cands.length) { delete shape.authority; nomatch++; continue; }
-        shape.authority = _candToAuth(cands[0], 'auto'); resolved++;
+        await resolveUnit(
+          () => _bestCellText(shape),
+          () => shape.authority,
+          (a) => { if (a) shape.authority = a; else delete shape.authority; },
+          () => shape.authority && shape.authority.source === 'human');
       }
     }
     await replaceAllShapes();
     if (pageData.shapes[selIdx]) refreshAuthorityPanel(pageData.shapes[selIdx]);
     drawOverlay(); refreshDiag();
     showToast(`Column ${col}: ${resolved} resolved`
+      + (ditto ? `, ${ditto} ditto→above` : '')
       + (kept ? `, ${kept} manual kept` : '')
       + (nomatch ? `, ${nomatch} no match` : '')
       + (skipped ? `, ${skipped} skipped` : ''));

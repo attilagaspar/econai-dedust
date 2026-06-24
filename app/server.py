@@ -2970,7 +2970,25 @@ def _build_auth_index(data: dict) -> dict:
                 "id": v["id"], "raw": raw, "norm": key,
                 "fold": _auth_fold(raw), "via": via, "parent": v["parent"],
             })
-    return {"by_id": by_id, "children": children, "pools": pools}
+    # Precompute, once per load, the structures the matcher would otherwise
+    # rebuild on every request: folded-key lists (for rapidfuzz) and exact
+    # normalized-key maps (O(1) exact lookup instead of scanning the pool).
+    folds_by_type = {t: [c["fold"] for c in pool] for t, pool in pools.items()}
+    exact_by_type = {}
+    for t, pool in pools.items():
+        em: dict = {}
+        for c in pool:
+            em.setdefault(c["norm"], []).append(c)
+        exact_by_type[t] = em
+    pool_all, folds_all = [], []
+    for t in pools:
+        pool_all.extend(pools[t]); folds_all.extend(folds_by_type[t])
+    exact_all: dict = {}
+    for c in pool_all:
+        exact_all.setdefault(c["norm"], []).append(c)
+    return {"by_id": by_id, "children": children, "pools": pools,
+            "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
+            "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all}
 
 
 def _load_authority(name: Optional[str] = None) -> dict:
@@ -3043,13 +3061,26 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
     nq, fq = _auth_norm(q), _auth_fold(q)
     if not nq:
         return []
-    types = [type] if (type in index["pools"]) else list(index["pools"].keys())
-    pool = []
-    for t in types:
-        for c in index["pools"][t]:
-            if parent and not _auth_is_descendant(by_id, c["id"], parent):
-                continue
-            pool.append(c)
+    single = type in index["pools"]
+    # Reuse precomputed pool/folds/exact when unfiltered; build a (smaller)
+    # filtered view only when a parent constraint is given.
+    if not parent:
+        if single:
+            pool  = index["pools"][type]
+            folds = index["folds_by_type"][type]
+            emap  = index["exact_by_type"][type]
+        else:
+            pool  = index["pool_all"]
+            folds = index["folds_all"]
+            emap  = index["exact_all"]
+    else:
+        src_types = [type] if single else list(index["pools"].keys())
+        pool, folds = [], []
+        for t in src_types:
+            for c in index["pools"][t]:
+                if _auth_is_descendant(by_id, c["id"], parent):
+                    pool.append(c); folds.append(c["fold"])
+        emap = None
     if not pool:
         return []
 
@@ -3060,15 +3091,23 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
         if not cur or score > cur["score"]:
             best[c["id"]] = {"score": float(score), "via": c["via"], "matched": c["raw"]}
 
-    for c in pool:                       # exact (accent-preserving) wins outright
-        if c["norm"] == nq:
+    # Exact (accent-preserving) wins outright — O(1) via the precomputed map,
+    # or a scan of the (small) parent-filtered pool.
+    if emap is not None:
+        for c in emap.get(nq, []):
             _add(c, 100.0)
+    else:
+        for c in pool:
+            if c["norm"] == nq:
+                _add(c, 100.0)
 
     limit = max(k * 5, 50)
     try:
         from rapidfuzz import process, fuzz
-        for _, score, i in process.extract(fq, [c["fold"] for c in pool],
-                                            scorer=fuzz.WRatio, limit=limit,
+        # folds are already normalized → processor=None skips rapidfuzz's
+        # per-comparison preprocessing (meaningfully faster over a big pool).
+        for _, score, i in process.extract(fq, folds, scorer=fuzz.WRatio,
+                                            processor=None, limit=limit,
                                             score_cutoff=55):
             _add(pool[i], 100.0 if pool[i]["norm"] == nq else score)
     except ImportError:
