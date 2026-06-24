@@ -5435,11 +5435,13 @@ async function _rsResolveCol() {
     showToast('⚠ Resolved but the server dropped the values — restart the server (app/server.py changed).', 6000);
     return;
   }
-  showToast(`Authority: ${resolved} resolved`
+  const _an = _authMeta(_authFile())?.authority || _authFile();
+  showToast(`[${_an}] ${resolved} resolved`
     + (ditto ? `, ${ditto} ditto→above` : '')
     + (kept ? `, ${kept} manual kept` : '')
     + (nomatch ? `, ${nomatch} no match` : '')
-    + (skipped ? `, ${skipped} skipped` : ''));
+    + (skipped ? `, ${skipped} skipped` : '')
+    + (resolved === 0 && ditto === 0 && nomatch > 0 ? ' — wrong authority? check Source' : ''));
  } catch (e) {
   console.error('[auth] _rsResolveCol failed', e);
   showToast('Auth error: ' + (e?.message || e), 6000);
@@ -5541,7 +5543,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-8 (ditto skip + inherit, faster matcher) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-9 (authority name in toast) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -9042,11 +9044,13 @@ async function resolveColumn() {
     await replaceAllShapes();
     if (pageData.shapes[selIdx]) refreshAuthorityPanel(pageData.shapes[selIdx]);
     drawOverlay(); refreshDiag();
-    showToast(`Column ${col}: ${resolved} resolved`
+    const _an = _authMeta(_authFile())?.authority || _authFile();
+    showToast(`Col ${col} [${_an}]: ${resolved} resolved`
       + (ditto ? `, ${ditto} ditto→above` : '')
       + (kept ? `, ${kept} manual kept` : '')
       + (nomatch ? `, ${nomatch} no match` : '')
-      + (skipped ? `, ${skipped} skipped` : ''));
+      + (skipped ? `, ${skipped} skipped` : '')
+      + (resolved === 0 && ditto === 0 && nomatch > 0 ? ' — wrong authority? check Source' : ''));
   } catch (e) {
     console.error('[auth] resolveColumn failed', e);
     showToast('Auth error: ' + (e?.message || e), 6000);
