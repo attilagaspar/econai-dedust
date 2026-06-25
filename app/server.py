@@ -2921,14 +2921,17 @@ AUTHORITIES_DIR.mkdir(exist_ok=True)
 _AUTH_DEFAULT_FILE = "places_hu.authority.json"
 _AUTH_PARENT_BOOST = 12.0    # soft ranking bonus for candidates under the context parent
 _AUTH_MIN_ACCEPT   = 70.0    # batch auto-accept floor: below this = no real string match → don't guess
-_AUTH_STATUS_TOKENS = {"rtv", "tjv"}   # admin-status suffixes to strip (rendezett tanácsú/törvényhatósági jogú város)
 _AUTH_LOCK = threading.Lock()
 
 
-def _auth_strip_status(s: str) -> str:
-    """Drop trailing admin-status tokens ('Szombathely rtv' -> 'szombathely')."""
+def _auth_strip_status(s: str, tokens: set) -> str:
+    """Drop trailing status tokens declared by the authority's `query_strip`
+    (e.g. for places_hu: 'Szombathely rtv' -> 'szombathely'). Authority-specific,
+    so it's read from the file, not hardcoded."""
+    if not tokens:
+        return s
     toks = s.split()
-    while len(toks) > 1 and toks[-1] in _AUTH_STATUS_TOKENS:
+    while len(toks) > 1 and toks[-1] in tokens:
         toks.pop()
     return " ".join(toks) if toks else s
 
@@ -3024,9 +3027,14 @@ def _build_auth_index(data: dict) -> dict:
     exact_all: dict = {}
     for c in pool_all:
         exact_all.setdefault(c["norm"], []).append(c)
+    # Authority-declared query normalization: trailing tokens to strip from a
+    # query before matching (e.g. admin-status suffixes "rtv"/"tjv" for places).
+    strip = {(_auth_norm(t)) for t in (data.get("query_strip") or []) if str(t).strip()}
+    strip.discard("")
     return {"by_id": by_id, "children": children, "pools": pools,
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
-            "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all}
+            "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
+            "strip": strip}
 
 
 def _load_authority(name: Optional[str] = None) -> dict:
@@ -3096,7 +3104,8 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
                      k: int = 8, name: Optional[str] = None) -> list:
     index = _load_authority(name)
     by_id = index["by_id"]
-    nq, fq = _auth_strip_status(_auth_norm(q)), _auth_strip_status(_auth_fold(q))
+    strip = index.get("strip") or set()
+    nq, fq = _auth_strip_status(_auth_norm(q), strip), _auth_strip_status(_auth_fold(q), strip)
     if not nq:
         return []
     single = type in index["pools"]

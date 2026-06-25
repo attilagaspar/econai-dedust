@@ -3,6 +3,7 @@
  "version": "0.2",
  "schema": "temporal: entity.slices[] = per-source-year {as_of, source, type, parent, name, attrs}",
  "spine": "GIStA IDTel1910",
+ "query_strip": ["rtv", "tjv"],
  "entity_types": [
   "county",
   "district",

@@ -21,9 +21,9 @@ One file per authority, named `<name>.authority.json` — e.g.
 
 Future: `firms.authority.json` (entity DB built from multiple sources).
 
-**The data files are git-ignored** (large, regenerated, and grow over time —
-same policy as `projects/`). Only this README is tracked. Obtain or rebuild the
-data and drop it in here; the app loads authorities from this directory.
+**The `*.authority.json` data files are tracked in the repo** so every clone
+resolves against the same canonical IDs. Builders live with their source data,
+not here. (If a file grows very large or churns often, move it to Git LFS.)
 
 ## Schema (temporal, v0.2)
 
@@ -33,6 +33,10 @@ data and drop it in here; the app loads authorities from this directory.
   "version": "0.2",
   "entity_types": ["county", "district", "settlement"],
   "slices_present": [1910],            // source-years currently merged in
+  "query_strip": ["rtv", "tjv"],       // optional: trailing query tokens to drop
+                                       //   before matching (admin-status suffixes
+                                       //   like rendezett tanácsú / törvényhatósági
+                                       //   jogú város). Authority-specific; omit = none.
   "entities": [
     {
       "id": "M0101001",                // stable identity (here: GIStA IDTel1910)
