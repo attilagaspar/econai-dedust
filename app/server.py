@@ -3243,8 +3243,14 @@ def _auth_is_ditto(s: str) -> bool:
     return re.sub(r"[.\s]", "", s.lower()) in _DITTO_WORDS
 
 
+_AUTH_MAX_QLEN = 80   # a single place/industry name is short; longer = not a name
+
+
 def _auth_resolvable(s: str) -> bool:
-    return len(re.sub(r"\s", "", s or "")) >= 2
+    """Worth a lookup: has ≥2 non-space chars and isn't an insanely long blob
+    (a mis-segmented paragraph etc., which would never be a single entity)."""
+    s = (s or "").strip()
+    return len(re.sub(r"\s", "", s)) >= 2 and len(s) <= _AUTH_MAX_QLEN
 
 
 def _auth_layer_text(human, ocr, llm, pdf, layer):

@@ -5436,7 +5436,12 @@ function _rsRowBest(shape, i) {
   return ((r.human || '').trim() || (r.llm || '').trim() || (r.ocr || '').trim()
           || (r.pdf != null ? r.pdf : _rsPdfVal(shape, i)).trim());
 }
-function _rsResolvable(text) { return (text || '').replace(/\s/g, '').length >= 2; }
+// Worth a lookup: ≥2 non-space chars and not an insanely long blob (a
+// mis-segmented paragraph would never be a single place/industry name).
+function _rsResolvable(text) {
+  const s = (text || '').trim();
+  return s.replace(/\s/g, '').length >= 2 && s.length <= 80;
+}
 
 // Ditto marks ("same as the line above") — quotes, dashes, repeat glyphs, or
 // common abbreviations. These should NOT be fuzzy-matched against the whole
@@ -5638,7 +5643,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-11 (batch resolution modal) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-12 (batch + length failsafe) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
