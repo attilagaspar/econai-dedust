@@ -2984,7 +2984,7 @@ async function applyRuleFix(vi) {
   });
 
   const applied = new Set();   // lines that actually received a change
-  let humanCount = 0, llmCount = 0;
+  let humanCount = 0, llmCount = 0, saveOk = true;
   for (const c of v.cols) {
     const byK = inputsByCol[c.col] || {};
     const shape = pageData.shapes[c.idx];
@@ -3003,7 +3003,7 @@ async function applyRuleFix(vi) {
         else                           { r.human = e.nv; humanCount++; }
         changed = true; applied.add(k);
       });
-      if (changed) await saveRowStruct(c.idx);
+      if (changed) saveOk = (await saveRowStruct(c.idx)) && saveOk;
     } else {
       // No internal rows: merge the checked changes over the current values.
       // If any checked change was edited by hand → write the merged cell to the
@@ -3027,9 +3027,20 @@ async function applyRuleFix(vi) {
           shape.openai_output.mode     = 'rulefix';
           llmCount++;
         }
-        await replaceAllShapes();
+        saveOk = (await replaceAllShapes()) && saveOk;
       }
     }
+  }
+
+  // If a write didn't land (e.g. a transient lock), keep the lines so the user
+  // can re-apply — never remove a line we failed to persist.
+  if (applied.size && !saveOk) {
+    v.proposal = null;
+    v.status = '✕ save failed — click Apply checked again';
+    renderRuleFixList(); refreshDiag(); drawOverlay();
+    if (v.cols.some(c => c.idx === selIdx)) updatePanel();
+    showToast(`Lattice row ${v.superRow}: save FAILED — nothing removed, click Apply again`, 6000);
+    return;
   }
 
   // Remove the applied lines; drop the proposal so the remaining (unchecked /
@@ -4999,23 +5010,44 @@ function _rsBandsRel(shape) {
   return rows.map(r => [r.y0 - top, r.y1 - top]);
 }
 
+// Serialize all page-file writes (PATCH rows / PUT shapes) so concurrent
+// operations — e.g. rapid "Apply checked" clicks — can't race on the same
+// JSON (read-modify-write lost updates). Each write waits for the previous.
+let _writeChain = Promise.resolve();
+function _serializeWrite(fn) {
+  const run = _writeChain.then(fn, fn);
+  _writeChain = run.then(() => {}, () => {});   // keep the chain alive on error
+  return run;
+}
+
+// Returns true on a confirmed save, false otherwise.
 async function saveRowStruct(idx, origin = null) {
-  const shape  = pageData.shapes[idx];
-  const rows   = _rsRows(shape) || [];
-  const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx});
-  const r = await fetch(`${API}/api/page/shape/rows?${params}`, {
-    method:'PATCH', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({rows, origin}),
+  return _serializeWrite(async () => {
+    const shape  = pageData.shapes[idx];
+    if (!shape) return false;
+    const rows   = _rsRows(shape) || [];
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx});
+    let ok = false;
+    try {
+      const r = await fetch(`${API}/api/page/shape/rows?${params}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({rows, origin}),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.row_struct) shape.row_struct = data.row_struct;
+        else delete shape.row_struct;
+        _syncFlatLocal(shape);
+        ok = true;
+      } else {
+        showToast(`Row save failed: ${r.status}`);
+      }
+    } catch (e) {
+      showToast(`Row save failed: ${e?.message || e}`);
+    }
+    drawOverlay(); refreshDiag();
+    return ok;
   });
-  if (r.ok) {
-    const data = await r.json();
-    if (data.row_struct) shape.row_struct = data.row_struct;
-    else delete shape.row_struct;
-    _syncFlatLocal(shape);
-  } else {
-    showToast(`Row save failed: ${r.status}`);
-  }
-  drawOverlay(); refreshDiag();
 }
 
 // After a line-by-line / anchored run the server has written row_struct to
@@ -5543,7 +5575,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-9 (authority name in toast) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-10 (serialized writes + apply-save gating) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -5697,10 +5729,16 @@ function _initRowCanvasEditing() {
 document.addEventListener('DOMContentLoaded', _initRowCanvasEditing);
 
 async function replaceAllShapes() {
-  const params=new URLSearchParams({folder,stem:pages[pageIdx].stem});
-  await fetch(`${API}/api/page/shapes?${params}`,{
-    method:'PUT', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({shapes:pageData.shapes}),
+  return _serializeWrite(async () => {
+    const params=new URLSearchParams({folder,stem:pages[pageIdx].stem});
+    try {
+      const r = await fetch(`${API}/api/page/shapes?${params}`,{
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({shapes:pageData.shapes}),
+      });
+      if (!r.ok) { showToast(`Save failed: ${r.status}`); return false; }
+      return true;
+    } catch (e) { showToast(`Save failed: ${e?.message || e}`); return false; }
   });
 }
 
