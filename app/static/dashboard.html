@@ -302,6 +302,26 @@ function errMsg(data) {
 // ============================================================
 loadProjects();
 
+// Persist the training solver fields so they don't silently reset to their
+// defaults (e.g. iterations back to 2000) when the project view is re-rendered.
+// The fields are created dynamically by selectProject(), so we restore after
+// each render and save via a delegated change listener.
+const _TRAIN_PARAM_IDS = ['tp-max-iter', 'tp-base-lr', 'tp-ims-batch', 'tp-num-workers'];
+function _restoreTrainParams() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('trainParams') || '{}'); } catch (e) {}
+  _TRAIN_PARAM_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && saved[id] != null && saved[id] !== '') el.value = saved[id];
+  });
+}
+document.addEventListener('change', (e) => {
+  if (!e.target || !_TRAIN_PARAM_IDS.includes(e.target.id)) return;
+  const cur = {};
+  _TRAIN_PARAM_IDS.forEach(i => { const el = document.getElementById(i); if (el) cur[i] = el.value; });
+  try { localStorage.setItem('trainParams', JSON.stringify(cur)); } catch (e) {}
+});
+
 async function loadProjects() {
   const res  = await fetch('/api/projects');
   const data = await res.json();
@@ -583,6 +603,9 @@ function renderDetail() {
       </div>
     </div>
   `;
+
+  // Restore persisted training solver fields (they reset to defaults on render)
+  _restoreTrainParams();
 
   // Load docker config into the card
   dockerLoad();
