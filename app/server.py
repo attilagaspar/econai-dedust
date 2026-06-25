@@ -2919,7 +2919,28 @@ AUTHORITIES_DIR.mkdir(exist_ok=True)
 # district). rapidfuzz preferred; degrades to difflib if unavailable.
 
 _AUTH_DEFAULT_FILE = "places_hu.authority.json"
+_AUTH_PARENT_BOOST = 12.0    # soft ranking bonus for candidates under the context parent
+_AUTH_MIN_ACCEPT   = 70.0    # batch auto-accept floor: below this = no real string match → don't guess
+_AUTH_STATUS_TOKENS = {"rtv", "tjv"}   # admin-status suffixes to strip (rendezett tanácsú/törvényhatósági jogú város)
 _AUTH_LOCK = threading.Lock()
+
+
+def _auth_strip_status(s: str) -> str:
+    """Drop trailing admin-status tokens ('Szombathely rtv' -> 'szombathely')."""
+    toks = s.split()
+    while len(toks) > 1 and toks[-1] in _AUTH_STATUS_TOKENS:
+        toks.pop()
+    return " ".join(toks) if toks else s
+
+
+def _auth_via_rank(via: str) -> int:
+    """Tie-break preference: primary period name beats period aliases, which
+    beat modern/foreign aliases. Lower = preferred."""
+    if via == "name":
+        return 0
+    if via in ("modern", "english"):
+        return 2
+    return 1
 _AUTH_CACHE: dict = {}   # filename -> {"mtime": float, "index": dict}
 
 
@@ -3075,48 +3096,27 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
                      k: int = 8, name: Optional[str] = None) -> list:
     index = _load_authority(name)
     by_id = index["by_id"]
-    nq, fq = _auth_norm(q), _auth_fold(q)
+    nq, fq = _auth_strip_status(_auth_norm(q)), _auth_strip_status(_auth_fold(q))
     if not nq:
         return []
     single = type in index["pools"]
-    # Reuse precomputed pool/folds/exact when unfiltered; build a (smaller)
-    # filtered view only when a parent constraint is given.
-    if not parent:
-        if single:
-            pool  = index["pools"][type]
-            folds = index["folds_by_type"][type]
-            emap  = index["exact_by_type"][type]
-        else:
-            pool  = index["pool_all"]
-            folds = index["folds_all"]
-            emap  = index["exact_all"]
-    else:
-        src_types = [type] if single else list(index["pools"].keys())
-        pool, folds = [], []
-        for t in src_types:
-            for c in index["pools"][t]:
-                if _auth_is_descendant(by_id, c["id"], parent):
-                    pool.append(c); folds.append(c["fold"])
-        emap = None
+    # Always search the full (cached) pool — `parent` is a SOFT preference
+    # applied at ranking time, not a hard filter (see below).
+    pool  = index["pools"][type]        if single else index["pool_all"]
+    folds = index["folds_by_type"][type] if single else index["folds_all"]
+    emap  = index["exact_by_type"][type] if single else index["exact_all"]
     if not pool:
         return []
 
-    best: dict = {}   # id -> {"score", "via", "matched"}
+    best: dict = {}   # id -> {"score", "via", "matched"}  (score = raw similarity)
 
     def _add(c, score):
         cur = best.get(c["id"])
         if not cur or score > cur["score"]:
             best[c["id"]] = {"score": float(score), "via": c["via"], "matched": c["raw"]}
 
-    # Exact (accent-preserving) wins outright — O(1) via the precomputed map,
-    # or a scan of the (small) parent-filtered pool.
-    if emap is not None:
-        for c in emap.get(nq, []):
-            _add(c, 100.0)
-    else:
-        for c in pool:
-            if c["norm"] == nq:
-                _add(c, 100.0)
+    for c in emap.get(nq, []):           # exact (accent-preserving), O(1)
+        _add(c, 100.0)
 
     limit = max(k * 5, 50)
     try:
@@ -3136,8 +3136,19 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
             if r >= 55:
                 _add(c, r)
 
+    # Parent context is a SOFT preference: a strong string match OUTSIDE the
+    # context (e.g. a district-seat town that lives under the county, not the
+    # district) still beats a weak in-context match, while same-named places are
+    # tie-broken toward the context. `score` stays the raw similarity so callers
+    # can reject low-similarity guesses on real similarity (not the boost).
+    def _sort_key(kv):
+        cid, m = kv
+        boost = _AUTH_PARENT_BOOST if (parent and _auth_is_descendant(by_id, cid, parent)) else 0.0
+        # primary tie-break: adjusted score; secondary: matched via primary name
+        return (-(m["score"] + boost), _auth_via_rank(m["via"]))
+
     out = []
-    for cid, m in sorted(best.items(), key=lambda kv: -kv[1]["score"])[:k]:
+    for cid, m in sorted(best.items(), key=_sort_key)[:k]:
         v = by_id.get(cid, {})
         out.append({**v, "score": round(m["score"], 1),
                     "via": m["via"], "matched": m["matched"]})
@@ -3379,6 +3390,9 @@ def api_authority_batch(folder: str = Query(...), body: AuthorityBatch = ...):
             if body.use_context:
                 c = ctx_map.get(str(tbl)) or {}
                 parent = c.get("district") or c.get("county")
+            # `last` carries the entity for ditto inheritance, but ONLY within a
+            # single lattice cell's internal rows — a ditto in a cell's top row
+            # must not inherit from a different cell. Reset per cell below.
             last = None
 
             def handle(container, text):
@@ -3401,13 +3415,16 @@ def api_authority_batch(folder: str = Query(...), body: AuthorityBatch = ...):
                 if not body.overwrite and cur:
                     pc["kept"] += 1; last = cur; return
                 cands = _authority_match(text, body.type, parent, 1, body.name)
-                if not cands:
+                # Reject low-similarity tops: no real string match → don't guess
+                # (e.g. don't grab a random village just because of the context).
+                if not cands or cands[0].get("score", 0) < _AUTH_MIN_ACCEPT:
                     if container.pop("authority", None) is not None: changed = True
                     pc["nomatch"] += 1; return
                 container["authority"] = _auth_obj_from_cand(cands[0], "auto")
                 last = container["authority"]; pc["resolved"] += 1; changed = True
 
             for _sr, sh in items:
+                last = None                          # ditto never crosses cells
                 rows = (sh.get("row_struct") or {}).get("rows") or []
                 if rows:
                     for r in rows:

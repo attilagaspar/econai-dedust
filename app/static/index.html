@@ -713,8 +713,6 @@
                 title="Auto-correct ±1 line-count mismatches found by Diagnose: remove spurious empty lines or add leading padding">✨ Smart Correct</button>
         <button class="nav-btn" onclick="openExcelExportModal()"
                 title="Export annotations to Excel">↓ Excel</button>
-        <button class="nav-btn" onclick="openAuthBatchModal()"
-                title="Resolve authority entities in batch across pages/columns (page pattern, range, columns, authority)">🏛 Resolve authorities</button>
         <button class="nav-btn" id="clip-btn" onclick="toggleClipMode()"
                 title="Clips: stamp a colored flag on an annotation to link the same data unit across pages. Drag a flag from the tray onto an annotation, or click a flag then click an annotation.">🚩 Clips</button>
         <button class="nav-btn" onclick="openLlmLayout()"
@@ -1297,6 +1295,7 @@
         <option value="anchored_ocr">⚓ Anchored OCR (EasyOCR)</option>
         <option value="anchored_llm">⚓ Anchored LLM</option>
         <option value="convert_rows">⊞ Convert annotations to internal rows</option>
+        <option value="resolve_authority">🏛 Resolve authorities</option>
       </select>
     </div>
     <div>
@@ -1416,6 +1415,33 @@
                style="accent-color:#e94560;width:13px;height:13px;">
         <span>Only run if OCR contains numbers</span>
       </label>
+    </div>
+
+    <!-- Resolve authorities options -->
+    <div id="batch-auth-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row"><span style="white-space:nowrap;">Authority</span>
+        <select id="batch-auth-file" onchange="_batchAuthTypes()" style="flex:1;"></select></label>
+      <label class="row"><span style="white-space:nowrap;">Entity type</span>
+        <select id="batch-auth-type" style="flex:1;"></select></label>
+      <label class="row"><span style="white-space:nowrap;">Source layer</span>
+        <select id="batch-auth-layer" style="flex:1;">
+          <option value="best_llm">Best — human › LLM › OCR</option>
+          <option value="best_ocr">Best — human › OCR › LLM</option>
+          <option value="best_pdf">Best — human › LLM › OCR › PDF</option>
+          <option value="human">Human only</option>
+          <option value="llm">LLM only</option>
+          <option value="ocr">OCR only</option>
+          <option value="pdf">PDF only</option>
+        </select></label>
+      <label class="row">
+        <input type="checkbox" id="batch-auth-overwrite" checked style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Re-resolve cells already auto-resolved (manual picks kept)</span>
+      </label>
+      <label class="row">
+        <input type="checkbox" id="batch-auth-context" checked style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Use each page's county/district context to narrow matches</span>
+      </label>
+      <div style="font-size:10px;color:#555;">Uses the Column filter and Pages above. Ditto marks inherit the entity above within a cell; low-similarity matches are skipped.</div>
     </div>
 
     <!-- Score threshold options -->
@@ -1675,67 +1701,6 @@
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
       <button onclick="closeExcelExportModal()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
       <button onclick="doExcelExport()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">↓ Export</button>
-    </div>
-  </div>
-</div>
-
-<!-- Batch authority resolution modal -->
-<div id="auth-batch-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:3000;align-items:center;justify-content:center;">
-  <div style="background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:24px;min-width:360px;max-width:500px;display:flex;flex-direction:column;gap:16px;box-shadow:0 8px 40px #000a;">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <h3 style="color:#e94560;font-size:1rem;margin:0;">🏛 Resolve authorities (batch)</h3>
-      <button onclick="closeAuthBatchModal()" style="background:none;border:none;color:#888;font-size:1.2rem;cursor:pointer;line-height:1;">✕</button>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Authority</div>
-      <select id="ab-authority" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;"></select>
-      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-top:6px;">Entity type</div>
-      <select id="ab-type" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;"></select>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Pages</div>
-      <input type="text" id="ab-pages" placeholder="e.g. 1-10, 3, 12-  (blank = all)"
-        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
-      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-top:6px;">Page pattern</div>
-      <input type="text" id="ab-pattern" placeholder="e.g. 1,0  ·  1,1,0,0  (blank = every page)"
-        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
-      <div style="font-size:0.7rem;color:#555;">1 = process, 0 = skip; cycles over the selected pages.</div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Columns</div>
-      <input type="text" id="ab-cols" placeholder="e.g. 1, 3-5  (blank = all columns)"
-        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
-      <div style="font-size:0.7rem;color:#555;">Lattice column numbers (1-indexed). Resolve only these columns against the chosen authority.</div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:6px;">
-      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Source text layer</div>
-      <select id="ab-layer" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;">
-        <option value="best_llm">Best — human › LLM › OCR</option>
-        <option value="best_ocr">Best — human › OCR › LLM</option>
-        <option value="best_pdf">Best — human › LLM › OCR › PDF</option>
-        <option value="human">Human correction only</option>
-        <option value="llm">LLM only</option>
-        <option value="ocr">OCR only</option>
-        <option value="pdf">PDF layer only</option>
-      </select>
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
-        <input type="checkbox" id="ab-overwrite" checked style="accent-color:#e94560;width:13px;height:13px;">
-        Re-resolve cells already auto-resolved (manual picks are always kept)
-      </label>
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
-        <input type="checkbox" id="ab-context" checked style="accent-color:#e94560;width:13px;height:13px;">
-        Use each page's county/district context to narrow matches
-      </label>
-    </div>
-
-    <div id="ab-status" style="font-size:0.78rem;color:#8ab;min-height:1em;"></div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
-      <button onclick="closeAuthBatchModal()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
-      <button id="ab-run-btn" onclick="doAuthBatch()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">🏛 Resolve</button>
     </div>
   </div>
 </div>
@@ -5507,6 +5472,7 @@ function _isDitto(text) {
 // Copy a resolved entity onto a ditto row (carried from the row above).
 function _dittoCopy(a) { return {...a, source: 'auto', via: 'ditto', ts: new Date().toISOString()}; }
 
+const _AUTH_MIN_ACCEPT = 70;   // auto-accept floor: below = no real string match → don't guess
 function _candToAuth(c, source) {
   return {
     id: c.id, name: c.name, type: c.type, parent: c.parent,
@@ -5560,7 +5526,7 @@ async function _rsResolveCol() {
     if (cls[i] !== 'name') return;
     const cands = await _resolveText(_rsRowBest(shape, i), type, parent);
     _rsAuthCandsSet(i, cands);
-    if (!cands.length) { delete r.authority; cls[i] = 'nomatch'; }
+    if (!cands.length || cands[0].score < _AUTH_MIN_ACCEPT) { delete r.authority; cls[i] = 'nomatch'; }
     else                 r.authority = _candToAuth(cands[0], 'auto');
   }));
   // Pass 2: top-down so ditto rows inherit the entity above (chains included).
@@ -5652,49 +5618,80 @@ function _rsAuthDocClose(ev) {
   if (!ev.target.closest('#rs-auth-dd')) _rsCloseAuthDropdown();
 }
 
+let _rsDDLastCands = [];   // candidates currently shown in the dropdown
+let _rsDDDebounce  = null;
 async function _rsOpenAuthDropdown(i, anchorEl) {
   _rsCloseAuthDropdown();
   const shape = pageData.shapes[selIdx];
   const rows  = _rsRows(shape); const r = rows?.[i]; if (!r) return;
-  let cands = _rsAuthCandsGet(i);
-  if (!cands) {
-    const text = _rsRowBest(shape, i);
-    if (!_rsResolvable(text)) { showToast('Row is empty / too short to resolve'); return; }
-    cands = await _resolveText(text, document.getElementById('auth-type').value, _authParent());
-    _rsAuthCandsSet(i, cands);
-  }
+  const type = document.getElementById('auth-type').value;
+  const parent = _authParent();
+
   const dd = document.createElement('div');
   dd.id = 'rs-auth-dd';
   dd.style.cssText = 'position:fixed;z-index:2000;background:#0d1b35;border:1px solid #2a4a8e;'
-    + 'border-radius:5px;box-shadow:0 6px 22px rgba(0,0,0,0.55);max-height:50vh;overflow:auto;'
-    + 'min-width:200px;max-width:360px;font-size:11px;padding:3px;';
-  const curId = r.authority?.id;
-  const rows_html = cands.length
-    ? cands.map(c => {
-        const loc = [c.district_name, c.county_name].filter(Boolean).join(', ');
-        const sc  = c.score >= 95 ? '#22c55e' : c.score >= 80 ? '#eab308' : '#f87171';
-        const sel = c.id === curId ? 'background:#14532d;' : '';
-        return `<div class="rs-auth-opt" data-id="${_escHtml(c.id)}" style="display:flex;justify-content:space-between;gap:8px;`
-          + `align-items:center;padding:4px 6px;border-radius:3px;cursor:pointer;${sel}">`
-          + `<span><b style="color:#cde;">${_escHtml(c.name)}</b> <span style="color:#778;font-size:9px;">${_escHtml(c.type || '')}</span>`
-          + `${loc ? `<br><span style="color:#7a8;font-size:9px;">${_escHtml(loc)}</span>` : ''}</span>`
-          + `<span style="color:${sc};font-weight:600;white-space:nowrap;">${c.score}%</span></div>`;
-      }).join('')
-    : `<div style="padding:6px;color:#a55;">No match.</div>`;
-  dd.innerHTML = rows_html
-    + (r.authority ? `<div class="rs-auth-clear" style="padding:4px 6px;border-top:1px solid #1a3a6e;`
-        + `margin-top:3px;color:#fca5a5;cursor:pointer;">✕ Clear</div>` : '');
+    + 'border-radius:5px;box-shadow:0 6px 22px rgba(0,0,0,0.55);max-height:55vh;overflow:auto;'
+    + 'min-width:220px;max-width:380px;font-size:11px;padding:4px;';
+  const initial = _rsRowBest(shape, i) || (r.authority?.name || '');
+  dd.innerHTML =
+    `<input id="rs-auth-dd-search" type="text" placeholder="type to search… (3+ chars)" value="${_escHtml(initial)}" `
+    + `style="width:100%;box-sizing:border-box;background:#16213e;border:1px solid #2a4a8e;border-radius:3px;`
+    + `color:#cde;font:inherit;padding:3px 6px;margin-bottom:4px;">`
+    + `<div id="rs-auth-dd-list"></div>`;
   document.body.appendChild(dd);
   const rect = anchorEl.getBoundingClientRect();
-  dd.style.top  = Math.min(rect.bottom + 2, window.innerHeight - dd.offsetHeight - 6) + 'px';
+  dd.style.top  = Math.min(rect.bottom + 2, window.innerHeight - 60) + 'px';
   dd.style.left = Math.min(rect.left, window.innerWidth - dd.offsetWidth - 6) + 'px';
-  dd.querySelectorAll('.rs-auth-opt').forEach(opt => opt.onclick = () =>
-    _rsAssignRowAuth(i, cands.find(c => c.id === opt.dataset.id)));
-  dd.querySelector('.rs-auth-clear')?.addEventListener('click', () => _rsAssignRowAuth(i, null));
+
+  const listEl = dd.querySelector('#rs-auth-dd-list');
+  const render = (cands) => {
+    _rsDDLastCands = cands || [];
+    const curId = r.authority?.id;
+    listEl.innerHTML = (_rsDDLastCands.length
+      ? _rsDDLastCands.map(c => {
+          const loc = [c.district_name, c.county_name].filter(Boolean).join(', ');
+          const sc  = c.score >= 95 ? '#22c55e' : c.score >= 80 ? '#eab308' : '#f87171';
+          const sel = c.id === curId ? 'background:#14532d;' : '';
+          return `<div class="rs-auth-opt" data-id="${_escHtml(c.id)}" style="display:flex;justify-content:space-between;gap:8px;`
+            + `align-items:center;padding:4px 6px;border-radius:3px;cursor:pointer;${sel}">`
+            + `<span><b style="color:#cde;">${_escHtml(c.name)}</b> <span style="color:#778;font-size:9px;">${_escHtml(c.type || '')}</span>`
+            + `${loc ? `<br><span style="color:#7a8;font-size:9px;">${_escHtml(loc)}</span>` : ''}</span>`
+            + `<span style="color:${sc};font-weight:600;white-space:nowrap;">${c.score}%</span></div>`;
+        }).join('')
+      : `<div style="padding:6px;color:#a55;">No match.</div>`)
+      + (r.authority ? `<div class="rs-auth-clear" style="padding:4px 6px;border-top:1px solid #1a3a6e;`
+          + `margin-top:3px;color:#fca5a5;cursor:pointer;">✕ Clear</div>` : '');
+    listEl.querySelectorAll('.rs-auth-opt').forEach(opt => opt.onclick = () =>
+      _rsAssignRowAuth(i, _rsDDLastCands.find(c => c.id === opt.dataset.id)));
+    listEl.querySelector('.rs-auth-clear')?.addEventListener('click', () => _rsAssignRowAuth(i, null));
+  };
+
+  // Initial list: cached candidates, or resolve the row's best text.
+  let cands = _rsAuthCandsGet(i);
+  if (!cands) {
+    const t = _rsRowBest(shape, i);
+    cands = _rsResolvable(t) ? await _resolveText(t, type, parent) : [];
+    _rsAuthCandsSet(i, cands);
+  }
+  render(cands);
+
+  // Live, debounced search — fires from the 3rd character.
+  const search = dd.querySelector('#rs-auth-dd-search');
+  search.addEventListener('input', () => {
+    const q = search.value.trim();
+    if (_rsDDDebounce) clearTimeout(_rsDDDebounce);
+    if (q.length < 3) return;
+    _rsDDDebounce = setTimeout(async () => {
+      const res = await _resolveText(q, type, parent);
+      // ignore if the dropdown was closed meanwhile
+      if (document.getElementById('rs-auth-dd')) render(res);
+    }, 180);
+  });
+  setTimeout(() => { search.focus(); search.select(); }, 0);
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-13 (resizable Cell inspector) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-14 (batch-in-modal, soft context, typeable dropdown) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -6097,6 +6094,28 @@ function onBatchOpChange() {
   const isAnchored = op === 'anchored_ocr' || op === 'anchored_llm';
   document.getElementById('batch-anchored-opts').style.display          = isAnchored ? 'flex' : 'none';
   document.getElementById('batch-anchored-llm-section').style.display   = op === 'anchored_llm' ? 'flex' : 'none';
+  const isAuth = op === 'resolve_authority';
+  document.getElementById('batch-auth-opts').style.display = isAuth ? 'flex' : 'none';
+  if (isAuth) _batchAuthInit();
+}
+
+async function _batchAuthInit() {
+  await _ensureAuthList();
+  const fsel = document.getElementById('batch-auth-file');
+  if (fsel && !fsel.options.length) {
+    const list = _authListCache.authorities || [];
+    const cur = _authFile();
+    fsel.innerHTML = list.length
+      ? list.map(a => `<option value="${_escHtml(a.file)}"${a.file === cur ? ' selected' : ''}>${_escHtml(a.authority || a.file)}</option>`).join('')
+      : `<option value="">(no authorities found)</option>`;
+  }
+  _batchAuthTypes();
+}
+function _batchAuthTypes() {
+  const file = document.getElementById('batch-auth-file').value;
+  const types = _authMeta(file)?.entity_types || [];
+  document.getElementById('batch-auth-type').innerHTML = `<option value="">All types</option>` +
+    types.map(t => `<option value="${_escHtml(t)}">${_escHtml(t.charAt(0).toUpperCase() + t.slice(1))}</option>`).join('');
 }
 
 function onBatchParityChange(which) {
@@ -6246,6 +6265,42 @@ async function runBatch() {
   if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') await _syncOcrSettings();
 
   const sorted = [...indices].sort((a, b) => a - b);
+
+  // Authority resolution runs server-side in one call (in-process matcher).
+  if (op === 'resolve_authority') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    if (!confirm(`Resolve authorities on ${stems.length} page(s)?`)) return;
+    const payload = {
+      stems,
+      col_filter:  document.getElementById('batch-col-filter').value.trim() || null,
+      name:        document.getElementById('batch-auth-file').value || null,
+      type:        document.getElementById('batch-auth-type').value || null,
+      layer:       document.getElementById('batch-auth-layer').value,
+      overwrite:   document.getElementById('batch-auth-overwrite').checked,
+      use_context: document.getElementById('batch-auth-context').checked,
+    };
+    const btn = document.getElementById('batch-run-btn');
+    const prog = document.getElementById('batch-progress');
+    const old = btn.textContent; btn.disabled = true; btn.textContent = '…';
+    document.getElementById('batch-progress-bar-wrap').style.display = '';
+    if (prog) prog.textContent = `Resolving across ${stems.length} page(s)…`;
+    try {
+      const r = await fetch(`${API}/api/authority/batch?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+      });
+      if (!r.ok) { const m = await r.json().catch(() => ({})); showToast('Batch error: ' + (m.detail || r.status)); return; }
+      const d = await r.json(); const t = d.totals || {};
+      const summary = `${d.pages} page(s) · ${t.resolved||0} resolved`
+        + (t.ditto ? `, ${t.ditto} ditto` : '') + (t.kept ? `, ${t.kept} kept` : '')
+        + (t.nomatch ? `, ${t.nomatch} no match` : '') + (t.skipped ? `, ${t.skipped} skipped` : '');
+      if (prog) prog.textContent = `✓ [${d.authority}] ${summary}`;
+      showToast(`Authority batch: ${summary}`, 5000);
+      if (pageData) { await reloadPageData(); updatePanel(); drawOverlay(); }
+    } catch (e) { showToast('Batch error: ' + (e?.message || e)); }
+    finally { btn.disabled = false; btn.textContent = old; }
+    return;
+  }
 
   if (op === 'clear') {
     if (!confirm(`Clear annotations on ${sorted.length} page(s)? This cannot be undone.`)) return;
@@ -7125,99 +7180,6 @@ async function doExcelExport() {
     showToast('Excel exported ✓');
   } catch(e) {
     alert('Export error: ' + e.message);
-  }
-}
-
-// ── Batch authority resolution ──────────────────────────────────────────────
-async function openAuthBatchModal() {
-  await _ensureAuthList();
-  const asel = document.getElementById('ab-authority');
-  const list = _authListCache.authorities || [];
-  const cur = _authFile();
-  asel.innerHTML = list.length
-    ? list.map(a => `<option value="${_escH(a.file)}"${a.file === cur ? ' selected' : ''}>${_escH(a.authority || a.file)}</option>`).join('')
-    : `<option value="">(no authorities found)</option>`;
-  _abPopulateTypes();
-  asel.onchange = _abPopulateTypes;
-  document.getElementById('ab-status').textContent = '';
-  document.getElementById('auth-batch-modal').style.display = 'flex';
-}
-function closeAuthBatchModal() { document.getElementById('auth-batch-modal').style.display = 'none'; }
-function _abPopulateTypes() {
-  const file = document.getElementById('ab-authority').value;
-  const types = _authMeta(file)?.entity_types || [];
-  document.getElementById('ab-type').innerHTML = `<option value="">All types</option>` +
-    types.map(t => `<option value="${_escH(t)}">${_escH(t.charAt(0).toUpperCase() + t.slice(1))}</option>`).join('');
-}
-
-async function doAuthBatch() {
-  const pattern = document.getElementById('ab-pattern').value.trim();
-  if (pattern && !/^[01](\s*,\s*[01])*$/.test(pattern)) {
-    alert('Page pattern must be 1s and 0s separated by commas, e.g. 1,0'); return;
-  }
-  // Page range → ordered stems (same parsing as the Excel export)
-  const rawPages   = document.getElementById('ab-pages').value.trim();
-  const stemSource = allJsonStems.length ? allJsonStems : pages.map(p => p.stem);
-  const n = stemSource.length;
-  let indices;
-  if (rawPages === '') {
-    indices = new Set([...Array(n).keys()]);
-  } else {
-    indices = new Set();
-    for (const part of rawPages.split(',')) {
-      const s = part.trim(); if (!s) continue;
-      const m = s.match(/^(\d*)-(\d*)$|^(\d+)$/);
-      if (!m) { alert(`Cannot parse: "${s}"`); return; }
-      if (m[3] !== undefined) { const p = parseInt(m[3]) - 1; if (p >= 0 && p < n) indices.add(p); }
-      else {
-        const from = m[1] === '' ? 0 : parseInt(m[1]) - 1;
-        const to   = m[2] === '' ? n - 1 : parseInt(m[2]) - 1;
-        for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) indices.add(i);
-      }
-    }
-  }
-  const stems = [...indices].sort((a, b) => a - b).map(i => stemSource[i]).filter(Boolean);
-  if (!stems.length) { alert('No pages in selected range.'); return; }
-
-  const payload = {
-    stems,
-    pattern:     pattern || null,
-    col_filter:  document.getElementById('ab-cols').value.trim() || null,
-    name:        document.getElementById('ab-authority').value || null,
-    type:        document.getElementById('ab-type').value || null,
-    layer:       document.getElementById('ab-layer').value,
-    overwrite:   document.getElementById('ab-overwrite').checked,
-    use_context: document.getElementById('ab-context').checked,
-  };
-
-  const btn = document.getElementById('ab-run-btn');
-  const status = document.getElementById('ab-status');
-  btn.disabled = true; btn.textContent = '…';
-  status.textContent = `Resolving across ${stems.length} page(s)…`;
-  try {
-    const r = await fetch(`${API}/api/authority/batch?folder=${encodeURIComponent(folder)}`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) {
-      const msg = await r.json().catch(() => ({detail: r.statusText}));
-      status.textContent = '✕ ' + (msg.detail || r.statusText); return;
-    }
-    const d = await r.json();
-    const t = d.totals || {};
-    const summary = `${d.pages} page(s) · ${t.resolved||0} resolved`
-      + (t.ditto ? `, ${t.ditto} ditto→above` : '')
-      + (t.kept ? `, ${t.kept} manual kept` : '')
-      + (t.nomatch ? `, ${t.nomatch} no match` : '')
-      + (t.skipped ? `, ${t.skipped} skipped` : '');
-    status.textContent = `✓ [${d.authority}] ${summary}`;
-    showToast(`Authority batch: ${summary}`, 5000);
-    // Reload the current page so freshly written authorities show
-    if (typeof reloadPageData === 'function') { await reloadPageData(); updatePanel(); drawOverlay(); }
-  } catch (e) {
-    status.textContent = '✕ ' + (e?.message || e);
-  } finally {
-    btn.disabled = false; btn.textContent = '🏛 Resolve';
   }
 }
 
@@ -9257,7 +9219,8 @@ async function resolveColumn() {
   const oldTxt = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   let resolved = 0, kept = 0, skipped = 0, nomatch = 0, ditto = 0;
-  let lastAuth = null;   // nearest resolved entity above (carries across cells)
+  let lastAuth = null;   // nearest resolved entity above — reset per cell (a
+                         // ditto must never inherit from a different lattice cell)
   try {
     // One resolvable unit (whole cell, or each internal row) processed in order
     const resolveUnit = async (getText, getAuth, setAuth, isHuman) => {
@@ -9269,10 +9232,12 @@ async function resolveColumn() {
       }
       if (!_rsResolvable(text)) { setAuth(null); skipped++; return; }
       const cands = await _resolveText(text, type, parent);
-      if (!cands.length) { setAuth(null); nomatch++; return; }
+      // Reject low-similarity tops: no real string match → don't guess.
+      if (!cands.length || cands[0].score < _AUTH_MIN_ACCEPT) { setAuth(null); nomatch++; return; }
       const a = _candToAuth(cands[0], 'auto'); setAuth(a); lastAuth = a; resolved++;
     };
     for (const shape of cells) {
+      lastAuth = null;                       // ditto never crosses a cell boundary
       const rows = _rsRows(shape);
       if (rows && rows.length) {
         for (let i = 0; i < rows.length; i++) {
