@@ -2521,6 +2521,23 @@ def _predict_container() -> str:
 def _train_container() -> str:
     return _docker_cfg()["train_container"]
 
+def _stop_container_gen(srv: dict, passphrase, container: str, tag: str, keep: bool):
+    """Stop a Docker container after a job finishes, yielding SSE log lines.
+    No-op when keep=True. Best-effort: failures are reported, not raised."""
+    if keep:
+        yield f"[{tag}] keep_container set — leaving '{container}' running."
+        return
+    from app import ssh_ops
+    yield f"[{tag}] Job finished — stopping container '{container}'..."
+    try:
+        c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+        _, out, _ = c.exec_command(f"docker stop {container}")
+        out.read()
+        c.close()
+        yield f"[{tag}] Container '{container}' stopped."
+    except Exception as e:
+        yield f"[{tag}] Could not stop container '{container}': {e}"
+
 
 class DockerConfigBody(BaseModel):
     predict_container: Optional[str] = None
@@ -3456,11 +3473,13 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
 # ---------------------------------------------------------------------------
 
 class TrainRequest(BaseModel):
-    passphrase: Optional[str] = None
+    passphrase:     Optional[str] = None
+    keep_container: bool = False        # leave the container running after the job
 
 class InferRequest(BaseModel):
     passphrase:          Optional[str] = None
     skip_image_upload:   bool = False
+    keep_container:      bool = False
 
 
 _SSE_DONE = object()
@@ -3649,6 +3668,24 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             yield from ssh_ops.stream_command(
                 srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
 
+            # Stream ended naturally → the training process has exited (a browser
+            # disconnect closes this generator before reaching here, so a detached
+            # job is never killed). Verify the PID is gone, then stop the
+            # container to free the GPU / host resources.
+            if not body.keep_container:
+                still = _quick(
+                    f"docker exec {_train_container()} bash -c '"
+                    f"pid=$(cat {pid_path} 2>/dev/null); "
+                    f"{{ [ -n \"$pid\" ] && kill -0 $pid 2>/dev/null && echo RUNNING; }} || echo DONE'"
+                    f" 2>/dev/null || echo DONE"
+                )
+                if "RUNNING" in still:
+                    yield "[train] Stream ended but training still running — container left up."
+                else:
+                    yield f"[train] Training finished — stopping container '{_train_container()}'..."
+                    _quick(f"docker stop {_train_container()}")
+                    yield f"[train] Container '{_train_container()}' stopped."
+
         return await _sse_stream(full_gen())
 
     except HTTPException:
@@ -3811,6 +3848,9 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
             yield f"[push] Starting Docker inference (script: {script_path})..."
             yield from ssh_ops.stream_command(srv["host"], srv["user"],
                                               srv["key_path"], docker_cmd, passphrase)
+            # Stream ended naturally → the foreground inference exec finished.
+            yield from _stop_container_gen(srv, passphrase, _predict_container(),
+                                           "infer", body.keep_container)
 
         return await _sse_stream(full_gen())
 
@@ -3974,6 +4014,7 @@ class InferFromRequest(BaseModel):
     passphrase:        Optional[str] = None
     skip_image_upload: bool = False
     threshold:         float = 0.1
+    keep_container:    bool = False
 
 
 @app.post("/api/project/{name}/infer-from/{source}")
@@ -4001,6 +4042,9 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                 )
                 yield from ssh_ops.stream_command(
                     srv["host"], srv["user"], srv["key_path"], cmd, body.passphrase)
+                yield from _stop_container_gen(srv, body.passphrase,
+                                               _predict_container(), "infer-from",
+                                               body.keep_container)
 
         return await _sse_stream(full_gen())
 
