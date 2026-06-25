@@ -3420,13 +3420,14 @@ class PrepareRequest(BaseModel):
     max_iter:      Optional[int]   = None
     base_lr:       Optional[float] = None
     ims_per_batch: Optional[int]   = None
+    num_workers:   Optional[int]   = None
 
 
 @app.post("/api/project/{name}/prepare")
 def api_prepare(name: str, body: Optional[PrepareRequest] = None):
     """Convert annotated LabelMe JSONs → COCO JSON + generate training scripts.
-    Optional solver params (max_iter / base_lr / ims_per_batch) are hand-edited
-    in the dashboard and baked into the generated train.sh."""
+    Optional solver params (max_iter / base_lr / ims_per_batch / num_workers) are
+    hand-edited in the dashboard and baked into the generated train.sh."""
     from app.coco_convert import prepare_training_data
     body = body or PrepareRequest()
     try:
@@ -3441,6 +3442,7 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             max_iter        = body.max_iter      or 2000,
             base_lr         = body.base_lr       or 0.00125,
             ims_per_batch   = body.ims_per_batch or 2,
+            num_workers     = 2 if body.num_workers is None else body.num_workers,
         )
         return {"ok": True, **result}
     except FileNotFoundError as e:

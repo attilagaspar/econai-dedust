@@ -451,6 +451,12 @@ function renderDetail() {
           <input id="tp-ims-batch" type="number" min="1" step="1" value="2"
                  style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
         </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;"
+               title="DATALOADER.NUM_WORKERS — data-loading subprocesses. Lower to 0 if you hit 'Bus error / out of shared memory' (small /dev/shm in the container).">
+          Data workers
+          <input id="tp-num-workers" type="number" min="0" step="1" value="2"
+                 style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        </label>
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
@@ -729,26 +735,34 @@ async function importFromPath() {
 // Prepare training data
 // ============================================================
 async function prepareTrainingData() {
-  if (!activeProj) return;
+  if (!activeProj) return false;
   const el = document.getElementById('prepare-result');
   el.textContent = 'Converting annotations…';
+  const nw = document.getElementById('tp-num-workers')?.value;
   const body = {
     max_iter:      parseInt(document.getElementById('tp-max-iter').value, 10)   || undefined,
     base_lr:       parseFloat(document.getElementById('tp-base-lr').value)      || undefined,
     ims_per_batch: parseInt(document.getElementById('tp-ims-batch').value, 10)  || undefined,
+    num_workers:   (nw === '' || nw == null) ? undefined : parseInt(nw, 10),
   };
-  const res  = await fetch(`/api/project/${activeProj.name}/prepare`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (data.ok) {
-    el.innerHTML = `✓ ${data.n_annotated} annotated pages · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
-      Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch}</code><br>
-      COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
-    showToast('Training data prepared.');
-  } else {
+  try {
+    const res  = await fetch(`/api/project/${activeProj.name}/prepare`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      el.innerHTML = `✓ ${data.n_annotated} annotated pages · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
+        Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch} · NUM_WORKERS=${data.num_workers}</code><br>
+        COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
+      showToast('Training data prepared.');
+      return true;
+    }
     el.textContent = 'Error: ' + (errMsg(data));
+    return false;
+  } catch (e) {
+    el.textContent = 'Error: ' + (e?.message || e);
+    return false;
   }
 }
 
@@ -838,6 +852,12 @@ function startSSE(url, title, passphrase) {
 async function runTrain() {
   if (!activeProj) return;
   await saveServerConfig();
+  // Always re-prepare first so train.sh reflects the CURRENT solver fields
+  // (iterations, LR, batch, workers) and the latest annotations — otherwise a
+  // stale script from an earlier Prepare run would be used.
+  showToast('Preparing training data…');
+  const ok = await prepareTrainingData();
+  if (!ok) { showToast('Prepare failed — training not started'); return; }
   startSSE(`/api/project/${activeProj.name}/train`, '🚀 Training — ' + activeProj.name, getPassphrase());
 }
 
