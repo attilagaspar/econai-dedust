@@ -3225,6 +3225,191 @@ def api_page_flags(folder: str = Query(...), stem: str = Query(...),
     return {"ok": True, "flags": flags}
 
 
+# ---------------------------------------------------------------------------
+# Authority — batch resolution across pages / columns (server-side, in-process)
+# ---------------------------------------------------------------------------
+
+_DITTO_RE = re.compile(r'^[\s.,\-–—―_=~:;"\'’‘”“„«»<>]+$')
+_DITTO_WORDS = {"do", "dto", "ditto", "detto", "idem", "id", "ua", "uaz",
+                "ugyanaz", "ugyanott", "uo", "uott", "azelobbi"}
+
+
+def _auth_is_ditto(s: str) -> bool:
+    s = (s or "").strip()
+    if not s:
+        return False
+    if _DITTO_RE.match(s):
+        return True
+    return re.sub(r"[.\s]", "", s.lower()) in _DITTO_WORDS
+
+
+def _auth_resolvable(s: str) -> bool:
+    return len(re.sub(r"\s", "", s or "")) >= 2
+
+
+def _auth_layer_text(human, ocr, llm, pdf, layer):
+    h, o, l, p = (human or "").strip(), (ocr or "").strip(), (llm or "").strip(), (pdf or "").strip()
+    if layer == "human":    return h
+    if layer == "ocr":      return o
+    if layer == "llm":      return l
+    if layer == "pdf":      return p
+    if layer == "best_ocr": return h or o or l
+    if layer == "best_pdf": return h or l or o or p
+    return h or l or o      # best_llm (default)
+
+
+def _auth_obj_from_cand(cand: dict, source: str) -> dict:
+    import datetime as _dt
+    out = {k: cand.get(k) for k in ("id", "name", "type", "parent",
+                                    "county_name", "district_name", "lat", "lon",
+                                    "score", "via")}
+    out["source"] = source
+    out["ts"] = _dt.datetime.utcnow().isoformat() + "Z"
+    return out
+
+
+def _parse_col_ranges(col_filter: Optional[str]):
+    """1-indexed column spec → predicate on super_column (1-indexed). None = all."""
+    if not col_filter or not col_filter.strip():
+        return None
+    ranges = []
+    for part in col_filter.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            if "-" in part:
+                lo_s, _, hi_s = part.partition("-")
+                lo = int(lo_s) if lo_s.strip() else 1
+                hi = int(hi_s) if hi_s.strip() else None
+                ranges.append((lo, hi))
+            else:
+                v = int(part); ranges.append((v, v))
+        except ValueError:
+            pass
+    return ranges
+
+
+class AuthorityBatch(BaseModel):
+    stems:       List[str] = []            # ordered page stems to consider
+    pattern:     Optional[str] = None      # 1/0 cyclic over stems; 1 = process
+    col_filter:  Optional[str] = None      # 1-indexed lattice columns / ranges
+    name:        Optional[str] = None      # authority filename
+    type:        Optional[str] = None      # restrict to one entity type
+    layer:       str = "best_llm"          # which text layer to read
+    overwrite:   bool = True               # re-resolve auto/empty (human always kept)
+    use_context: bool = True               # use each page's per-table county/district context
+
+
+@app.post("/api/authority/batch")
+def api_authority_batch(folder: str = Query(...), body: AuthorityBatch = ...):
+    """Resolve authority entities across many pages/columns in one server-side
+    pass. Ditto marks inherit the entity above (per column, reading order);
+    empty/1-char cells are skipped; existing manual (human) picks are kept."""
+    d = _resolve_folder(folder)
+    from collections import defaultdict
+
+    # Page selection: cyclic 1/0 pattern over the given ordered stems.
+    stems = [s for s in (body.stems or []) if s]
+    if not stems:
+        stems = [jf.stem for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+    bits = [1 if p.strip() == "1" else 0 for p in (body.pattern or "").split(",") if p.strip() != ""]
+    if not bits:
+        bits = [1]
+    pages = [s for i, s in enumerate(stems) if bits[i % len(bits)] == 1]
+
+    col_ranges = _parse_col_ranges(body.col_filter)
+
+    def col_allowed(sc):
+        if col_ranges is None:
+            return True
+        return any(lo <= sc <= (hi if hi is not None else sc) for lo, hi in col_ranges)
+
+    layer = body.layer or "best_llm"
+    totals = dict(resolved=0, ditto=0, kept=0, skipped=0, nomatch=0)
+    per_page = []
+
+    for stem in pages:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        shapes = data.get("shapes", [])
+        ctx_map = (data.get("flags") or {}).get("authority_context") or {}
+        pc = dict(resolved=0, ditto=0, kept=0, skipped=0, nomatch=0)
+
+        # Group lattice cells by (table, super_column) within the column filter
+        cols = defaultdict(list)
+        for sh in shapes:
+            sr, sc = sh.get("super_row"), sh.get("super_column")
+            if sr is None or sc is None or not col_allowed(int(sc)):
+                continue
+            cols[(sh.get("table") or 0, int(sc))].append((int(sr), sh))
+
+        changed = False
+        for (tbl, sc), items in cols.items():
+            items.sort(key=lambda x: x[0])                 # reading order, top→bottom
+            parent = None
+            if body.use_context:
+                c = ctx_map.get(str(tbl)) or {}
+                parent = c.get("district") or c.get("county")
+            last = None
+
+            def handle(container, text):
+                nonlocal last, changed
+                cur = container.get("authority")
+                if cur and cur.get("source") == "human":
+                    pc["kept"] += 1; last = cur; return
+                if _auth_is_ditto(text):
+                    if last:
+                        container["authority"] = {**last, "source": "auto", "via": "ditto",
+                                                  "ts": _auth_obj_from_cand({}, "auto")["ts"]}
+                        pc["ditto"] += 1; changed = True
+                    else:
+                        if container.pop("authority", None) is not None: changed = True
+                        pc["skipped"] += 1
+                    return
+                if not _auth_resolvable(text):
+                    if container.pop("authority", None) is not None: changed = True
+                    pc["skipped"] += 1; return
+                if not body.overwrite and cur:
+                    pc["kept"] += 1; last = cur; return
+                cands = _authority_match(text, body.type, parent, 1, body.name)
+                if not cands:
+                    if container.pop("authority", None) is not None: changed = True
+                    pc["nomatch"] += 1; return
+                container["authority"] = _auth_obj_from_cand(cands[0], "auto")
+                last = container["authority"]; pc["resolved"] += 1; changed = True
+
+            for _sr, sh in items:
+                rows = (sh.get("row_struct") or {}).get("rows") or []
+                if rows:
+                    for r in rows:
+                        handle(r, _auth_layer_text(r.get("human"), r.get("ocr"),
+                                                   r.get("llm"), r.get("pdf"), layer))
+                    # keep flat fields / row_struct in sync after edits
+                    sh["row_struct"]["rows"] = rows
+                else:
+                    handle(sh, _auth_layer_text(
+                        (sh.get("human_output") or {}).get("human_corrected_text"),
+                        ((sh.get("tesseract_output") or {}).get("ocr_text") or
+                         (sh.get("easyocr_output") or {}).get("ocr_text")),
+                        (sh.get("openai_output") or {}).get("response"),
+                        sh.get("pdf_text"), layer))
+
+        if changed:
+            _write_json(jf, data)
+        for k in totals:
+            totals[k] += pc[k]
+        per_page.append({"stem": stem, **pc})
+
+    return {"ok": True, "pages": len(pages), "totals": totals, "per_page": per_page,
+            "authority": body.name or _AUTH_DEFAULT_FILE}
+
+
 class PrepareRequest(BaseModel):
     max_iter:      Optional[int]   = None
     base_lr:       Optional[float] = None

@@ -702,6 +702,8 @@
                 title="Auto-correct ±1 line-count mismatches found by Diagnose: remove spurious empty lines or add leading padding">✨ Smart Correct</button>
         <button class="nav-btn" onclick="openExcelExportModal()"
                 title="Export annotations to Excel">↓ Excel</button>
+        <button class="nav-btn" onclick="openAuthBatchModal()"
+                title="Resolve authority entities in batch across pages/columns (page pattern, range, columns, authority)">🏛 Resolve authorities</button>
         <button class="nav-btn" id="clip-btn" onclick="toggleClipMode()"
                 title="Clips: stamp a colored flag on an annotation to link the same data unit across pages. Drag a flag from the tray onto an annotation, or click a flag then click an annotation.">🚩 Clips</button>
         <button class="nav-btn" onclick="openLlmLayout()"
@@ -1661,6 +1663,67 @@
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
       <button onclick="closeExcelExportModal()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
       <button onclick="doExcelExport()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">↓ Export</button>
+    </div>
+  </div>
+</div>
+
+<!-- Batch authority resolution modal -->
+<div id="auth-batch-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:3000;align-items:center;justify-content:center;">
+  <div style="background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:24px;min-width:360px;max-width:500px;display:flex;flex-direction:column;gap:16px;box-shadow:0 8px 40px #000a;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="color:#e94560;font-size:1rem;margin:0;">🏛 Resolve authorities (batch)</h3>
+      <button onclick="closeAuthBatchModal()" style="background:none;border:none;color:#888;font-size:1.2rem;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Authority</div>
+      <select id="ab-authority" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;"></select>
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-top:6px;">Entity type</div>
+      <select id="ab-type" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;"></select>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Pages</div>
+      <input type="text" id="ab-pages" placeholder="e.g. 1-10, 3, 12-  (blank = all)"
+        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-top:6px;">Page pattern</div>
+      <input type="text" id="ab-pattern" placeholder="e.g. 1,0  ·  1,1,0,0  (blank = every page)"
+        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
+      <div style="font-size:0.7rem;color:#555;">1 = process, 0 = skip; cycles over the selected pages.</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Columns</div>
+      <input type="text" id="ab-cols" placeholder="e.g. 1, 3-5  (blank = all columns)"
+        style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;width:100%;box-sizing:border-box;" />
+      <div style="font-size:0.7rem;color:#555;">Lattice column numbers (1-indexed). Resolve only these columns against the chosen authority.</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:0.75rem;color:#888;text-transform:uppercase;letter-spacing:.5px;">Source text layer</div>
+      <select id="ab-layer" style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.85rem;">
+        <option value="best_llm">Best — human › LLM › OCR</option>
+        <option value="best_ocr">Best — human › OCR › LLM</option>
+        <option value="best_pdf">Best — human › LLM › OCR › PDF</option>
+        <option value="human">Human correction only</option>
+        <option value="llm">LLM only</option>
+        <option value="ocr">OCR only</option>
+        <option value="pdf">PDF layer only</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="ab-overwrite" checked style="accent-color:#e94560;width:13px;height:13px;">
+        Re-resolve cells already auto-resolved (manual picks are always kept)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.85rem;">
+        <input type="checkbox" id="ab-context" checked style="accent-color:#e94560;width:13px;height:13px;">
+        Use each page's county/district context to narrow matches
+      </label>
+    </div>
+
+    <div id="ab-status" style="font-size:0.78rem;color:#8ab;min-height:1em;"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <button onclick="closeAuthBatchModal()" style="background:none;border:1px solid #444;color:#aaa;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;">Cancel</button>
+      <button id="ab-run-btn" onclick="doAuthBatch()" style="background:#e94560;border:none;color:#fff;border-radius:5px;padding:6px 18px;cursor:pointer;font-size:0.85rem;font-weight:600;">🏛 Resolve</button>
     </div>
   </div>
 </div>
@@ -5575,7 +5638,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-10 (serialized writes + apply-save gating) active', 'color:#86efac');
+console.log('%c[econai] authority rows-resolver build-11 (batch resolution modal) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -7006,6 +7069,99 @@ async function doExcelExport() {
     showToast('Excel exported ✓');
   } catch(e) {
     alert('Export error: ' + e.message);
+  }
+}
+
+// ── Batch authority resolution ──────────────────────────────────────────────
+async function openAuthBatchModal() {
+  await _ensureAuthList();
+  const asel = document.getElementById('ab-authority');
+  const list = _authListCache.authorities || [];
+  const cur = _authFile();
+  asel.innerHTML = list.length
+    ? list.map(a => `<option value="${_escH(a.file)}"${a.file === cur ? ' selected' : ''}>${_escH(a.authority || a.file)}</option>`).join('')
+    : `<option value="">(no authorities found)</option>`;
+  _abPopulateTypes();
+  asel.onchange = _abPopulateTypes;
+  document.getElementById('ab-status').textContent = '';
+  document.getElementById('auth-batch-modal').style.display = 'flex';
+}
+function closeAuthBatchModal() { document.getElementById('auth-batch-modal').style.display = 'none'; }
+function _abPopulateTypes() {
+  const file = document.getElementById('ab-authority').value;
+  const types = _authMeta(file)?.entity_types || [];
+  document.getElementById('ab-type').innerHTML = `<option value="">All types</option>` +
+    types.map(t => `<option value="${_escH(t)}">${_escH(t.charAt(0).toUpperCase() + t.slice(1))}</option>`).join('');
+}
+
+async function doAuthBatch() {
+  const pattern = document.getElementById('ab-pattern').value.trim();
+  if (pattern && !/^[01](\s*,\s*[01])*$/.test(pattern)) {
+    alert('Page pattern must be 1s and 0s separated by commas, e.g. 1,0'); return;
+  }
+  // Page range → ordered stems (same parsing as the Excel export)
+  const rawPages   = document.getElementById('ab-pages').value.trim();
+  const stemSource = allJsonStems.length ? allJsonStems : pages.map(p => p.stem);
+  const n = stemSource.length;
+  let indices;
+  if (rawPages === '') {
+    indices = new Set([...Array(n).keys()]);
+  } else {
+    indices = new Set();
+    for (const part of rawPages.split(',')) {
+      const s = part.trim(); if (!s) continue;
+      const m = s.match(/^(\d*)-(\d*)$|^(\d+)$/);
+      if (!m) { alert(`Cannot parse: "${s}"`); return; }
+      if (m[3] !== undefined) { const p = parseInt(m[3]) - 1; if (p >= 0 && p < n) indices.add(p); }
+      else {
+        const from = m[1] === '' ? 0 : parseInt(m[1]) - 1;
+        const to   = m[2] === '' ? n - 1 : parseInt(m[2]) - 1;
+        for (let i = Math.max(0, from); i <= Math.min(n - 1, to); i++) indices.add(i);
+      }
+    }
+  }
+  const stems = [...indices].sort((a, b) => a - b).map(i => stemSource[i]).filter(Boolean);
+  if (!stems.length) { alert('No pages in selected range.'); return; }
+
+  const payload = {
+    stems,
+    pattern:     pattern || null,
+    col_filter:  document.getElementById('ab-cols').value.trim() || null,
+    name:        document.getElementById('ab-authority').value || null,
+    type:        document.getElementById('ab-type').value || null,
+    layer:       document.getElementById('ab-layer').value,
+    overwrite:   document.getElementById('ab-overwrite').checked,
+    use_context: document.getElementById('ab-context').checked,
+  };
+
+  const btn = document.getElementById('ab-run-btn');
+  const status = document.getElementById('ab-status');
+  btn.disabled = true; btn.textContent = '…';
+  status.textContent = `Resolving across ${stems.length} page(s)…`;
+  try {
+    const r = await fetch(`${API}/api/authority/batch?folder=${encodeURIComponent(folder)}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const msg = await r.json().catch(() => ({detail: r.statusText}));
+      status.textContent = '✕ ' + (msg.detail || r.statusText); return;
+    }
+    const d = await r.json();
+    const t = d.totals || {};
+    const summary = `${d.pages} page(s) · ${t.resolved||0} resolved`
+      + (t.ditto ? `, ${t.ditto} ditto→above` : '')
+      + (t.kept ? `, ${t.kept} manual kept` : '')
+      + (t.nomatch ? `, ${t.nomatch} no match` : '')
+      + (t.skipped ? `, ${t.skipped} skipped` : '');
+    status.textContent = `✓ [${d.authority}] ${summary}`;
+    showToast(`Authority batch: ${summary}`, 5000);
+    // Reload the current page so freshly written authorities show
+    if (typeof reloadPageData === 'function') { await reloadPageData(); updatePanel(); drawOverlay(); }
+  } catch (e) {
+    status.textContent = '✕ ' + (e?.message || e);
+  } finally {
+    btn.disabled = false; btn.textContent = '🏛 Resolve';
   }
 }
 
