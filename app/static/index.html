@@ -1429,6 +1429,15 @@
                  style="width:60px;flex:none;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" />
         </label>
       </div>
+      <label class="row" style="color:#9fd;">
+        <input type="checkbox" id="batch-llm-json" onchange="onBatchLlmJsonToggle()" style="accent-color:#22c55e;width:13px;height:13px;">
+        <span>JSON — structured extraction (one record per annotation)</span>
+      </label>
+      <div id="batch-llm-json-row" style="display:none;align-items:center;gap:6px;">
+        <span style="white-space:nowrap;font-size:12px;color:#aaa;">Schema</span>
+        <select id="batch-llm-schema" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;"></select>
+        <button class="field-run-btn" onclick="reloadSchemas().then(_fillBatchSchemaSelect)" title="Reload schemas">⟳</button>
+      </div>
       <textarea id="batch-llm-prompt" rows="3" placeholder="Prompt…"
         style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
       <div style="display:flex;gap:6px;">
@@ -5732,7 +5741,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority + structured-extraction build-15 (JSON mode) active', 'color:#86efac');
+console.log('%c[econai] structured-extraction build-16 (JSON in Batch LLM) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -6353,7 +6362,9 @@ async function runBatch() {
     if (!confirm(`Run OCR on ${sorted.length} page(s)?`)) return;
   } else if (op === 'llm') {
     if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
-    if (!confirm(`Run LLM on ${sorted.length} page(s)?`)) return;
+    const _bjson = document.getElementById('batch-llm-json').checked;
+    if (_bjson && !document.getElementById('batch-llm-schema').value) { showToast('Pick a schema for JSON mode'); return; }
+    if (!confirm(`Run ${_bjson ? 'JSON extraction' : 'LLM'} on ${sorted.length} page(s)?`)) return;
   } else if (op === 'score_delete') {
     const t = parseFloat(document.getElementById('batch-score-thresh').value);
     if (!confirm(`Delete all shapes with score < ${t} across ${sorted.length} page(s)? This cannot be undone.`)) return;
@@ -6493,6 +6504,13 @@ async function runBatch() {
       const overwrite      = document.getElementById('batch-llm-overwrite').checked;
       const requireOcrNums = document.getElementById('batch-llm-require-ocr-numbers').checked;
       const labelSet       = new Set(selLabels);
+      const jsonOn   = document.getElementById('batch-llm-json').checked;
+      let   schema   = null, schemaName = null;
+      if (jsonOn) {
+        schemaName = document.getElementById('batch-llm-schema').value || null;
+        const s = _projSchemas.find(x => x.name === schemaName);
+        schema = s ? s.schema : null;     // existence validated in the confirm step
+      }
 
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
@@ -6506,12 +6524,12 @@ async function runBatch() {
         if (!labelSet.has(sh.label)) continue;
         if (condFilter !== null && !condFilter.has(si)) continue;
         if (colFilter  !== null && !colFilter.has(si))  continue;
-        if (!overwrite && sh.openai_output?.response) continue;
+        if (!overwrite && (jsonOn ? sh.structured : sh.openai_output?.response)) continue;
         if (requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
         batchLog(`[${stem}] shape ${si} (${sh.label}) row=${sh.super_row} col=${sh.super_column}`);
         try {
-          await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow);
+          await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow, schema, schemaName);
         } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
       }
 
@@ -6899,7 +6917,22 @@ async function _drainSSEVerbose(response, onMsg) {
   }
 }
 
-async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useShadow) {
+async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useShadow, schema = null, schemaName = null) {
+  // JSON / structured mode — whole-annotation (one record per shape)
+  if (schema) {
+    const m = (mode === 'linebyline' || mode === 'anchored') ? 'image' : mode;
+    const p = new URLSearchParams({ folder, stem, idx, model, mode: m, use_shadow: !!useShadow });
+    const r = await fetch(`${API}/api/page/shape/llm?${p}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, json_schema: schema, schema_name: schemaName }),
+    });
+    if (!r.ok) throw new Error(r.status);
+    if (_batchVerbose) {
+      const data = await r.json().catch(() => ({}));
+      batchLog(`  ↳ ${JSON.stringify(data.structured || {}).slice(0, 200)}`);
+    }
+    return;
+  }
   const params = new URLSearchParams({ folder, stem, idx, model, mode, use_shadow: !!useShadow });
   if (mode === 'linebyline') {
     params.set('cell_height', cellHeight);
@@ -8453,6 +8486,21 @@ function onJsonModeToggle() {
   document.getElementById('llm-json-area').style.display = on ? 'flex' : 'none';
   if (on && !_projSchemas.length) reloadSchemas();
   if (selIdx >= 0) renderStructured(pageData.shapes[selIdx]);
+}
+
+// Batch-modal JSON mode (mirrors the inspector toggle, shares _projSchemas)
+function _fillBatchSchemaSelect() {
+  const sel = document.getElementById('batch-llm-schema');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">— select schema —</option>`
+    + _projSchemas.map(s => `<option value="${_escHtml(s.name)}">${_escHtml(s.name)}</option>`).join('');
+  if ([..._projSchemas.map(s => s.name), ''].includes(cur)) sel.value = cur;
+}
+function onBatchLlmJsonToggle() {
+  const on = document.getElementById('batch-llm-json').checked;
+  document.getElementById('batch-llm-json-row').style.display = on ? 'flex' : 'none';
+  if (on) { if (_projSchemas.length) _fillBatchSchemaSelect(); else reloadSchemas().then(_fillBatchSchemaSelect); }
 }
 
 async function reloadSchemas() {
