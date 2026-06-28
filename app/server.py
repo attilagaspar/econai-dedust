@@ -1981,6 +1981,8 @@ def _detect_text_rows(crop_image, cell_height: int = 28) -> list[tuple[int, int]
 
 class LlmRequest(BaseModel):
     prompt: str
+    json_schema: Optional[dict] = None   # when set → structured-output (JSON) mode
+    schema_name: Optional[str] = None    # which project schema was used (for provenance)
 
 
 # Models served locally via ollama (OpenAI-compatible endpoint)
@@ -2014,21 +2016,46 @@ def _is_reasoning_model(model: str) -> bool:
     return m.startswith(("gpt-5", "o1", "o1-", "o3", "o3-", "o4", "o4-"))
 
 
-def _llm_complete(client, model, messages, max_out, temperature=0):
+def _llm_complete(client, model, messages, max_out, temperature=0, response_format=None):
     """Model-family-aware chat completion so reasoning models work alongside
     the classic chat models with one call signature.  Reasoning models get a
     token floor (reasoning tokens count against the budget) and low effort to
-    stay fast/cheap on these simple digit-transcription tasks."""
+    stay fast/cheap on these simple digit-transcription tasks.
+    `response_format` (e.g. a json_schema spec) is passed through when given."""
+    rf = {"response_format": response_format} if response_format else {}
     if _is_reasoning_model(model):
         kwargs = dict(model=model, messages=messages,
-                      max_completion_tokens=max(max_out, 2000))
+                      max_completion_tokens=max(max_out, 2000), **rf)
         try:
             return client.chat.completions.create(reasoning_effort="low", **kwargs)
         except Exception:
             # SDK / model that doesn't accept reasoning_effort — retry without it
             return client.chat.completions.create(**kwargs)
     return client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_out, temperature=temperature)
+        model=model, messages=messages, max_tokens=max_out,
+        temperature=temperature, **rf)
+
+
+def _json_schema_response_format(schema: dict, name: str = "record", strict: bool = True):
+    """Wrap a JSON Schema for OpenAI Structured Outputs."""
+    return {"type": "json_schema",
+            "json_schema": {"name": (name or "record")[:60] or "record",
+                            "strict": strict, "schema": schema}}
+
+
+def _llm_complete_json(client, model, messages, max_out, schema, name):
+    """Structured-output completion: try strict json_schema, then non-strict,
+    then plain json_object (for models/schemas that reject strict mode)."""
+    try:
+        return _llm_complete(client, model, messages, max_out, temperature=0,
+                             response_format=_json_schema_response_format(schema, name, True))
+    except Exception:
+        try:
+            return _llm_complete(client, model, messages, max_out, temperature=0,
+                                 response_format=_json_schema_response_format(schema, name, False))
+        except Exception:
+            return _llm_complete(client, model, messages, max_out, temperature=0,
+                                 response_format={"type": "json_object"})
 
 
 @app.post("/api/page/shape/llm")
@@ -2107,11 +2134,16 @@ def api_llm_cell(
     print(f"[LLM] model={model} mode={mode} dry_run={dry_run} "
           f"prompt={prompt_text!r}", flush=True)
 
+    json_mode = bool(body.json_schema)
     try:
-        client   = _make_llm_client(model)
-        # temperature 0.2 for classic models — a tiny bit of freedom to
-        # self-correct; reasoning models ignore temperature (see _llm_complete)
-        response = _llm_complete(client, model, messages, 1024, temperature=0.2)
+        client = _make_llm_client(model)
+        if json_mode:
+            response = _llm_complete_json(client, model, messages, 2048,
+                                          body.json_schema, body.schema_name or "record")
+        else:
+            # temperature 0.2 for classic models — a tiny bit of freedom to
+            # self-correct; reasoning models ignore temperature (see _llm_complete)
+            response = _llm_complete(client, model, messages, 1024, temperature=0.2)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -2121,6 +2153,29 @@ def api_llm_cell(
     tokens_out  = response.usage.completion_tokens if response.usage else 0
     print(f"[LLM] result={result!r}  tokens={tokens_in}→{tokens_out}", flush=True)
     timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+
+    # ── JSON / structured mode: parse and store on shape["structured"] ───────
+    if json_mode:
+        try:
+            parsed = json.loads(result)
+        except Exception as exc:
+            raise HTTPException(status_code=502,
+                detail=f"LLM did not return valid JSON: {exc}. Raw: {result[:200]}")
+        if not dry_run:
+            prev = shape.get("structured") or {}
+            shape["structured"] = {
+                "schema_name": body.schema_name,
+                "llm":   parsed,
+                # keep an existing human-edited `data` only if the user had one;
+                # otherwise seed it with the fresh LLM output
+                "data":  prev.get("data") if prev.get("edited") else parsed,
+                "edited": bool(prev.get("edited")),
+                "model": model, "ts": timestamp,
+            }
+            _write_json(jf, data)
+        return {"structured": parsed, "schema_name": body.schema_name,
+                "model": model, "mode": mode, "timestamp": timestamp,
+                "tokens_in": tokens_in, "tokens_out": tokens_out}
 
     if not dry_run:
         shape["openai_output"] = {
@@ -3260,6 +3315,88 @@ def api_page_flags(folder: str = Query(...), stem: str = Query(...),
     data["flags"] = flags
     _write_json(jf, data)
     return {"ok": True, "flags": flags}
+
+
+# ---------------------------------------------------------------------------
+# Structured extraction — per-project JSON schemas + per-shape structured data
+# ---------------------------------------------------------------------------
+
+def _schemas_dir(folder: str) -> Path:
+    """Project-level schemas live next to annotations/ at <project>/schemas/."""
+    return _resolve_folder(folder).parent / "schemas"
+
+
+def _safe_schema_name(name: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9_\- ]+", "", (name or "")).strip().replace(" ", "_")
+    return base or "schema"
+
+
+@app.get("/api/schemas")
+def api_list_schemas(folder: str = Query(...)):
+    """List the project's JSON extraction schemas (<project>/schemas/*.json)."""
+    sdir = _schemas_dir(folder)
+    out = []
+    if sdir.exists():
+        for p in sorted(sdir.glob("*.json")):
+            try:
+                out.append({"name": p.stem, "schema": json.loads(p.read_text(encoding="utf-8"))})
+            except Exception as e:
+                out.append({"name": p.stem, "error": str(e)})
+    return {"schemas": out}
+
+
+@app.put("/api/schemas")
+def api_save_schema(folder: str = Query(...), name: str = Query(...),
+                    schema_obj: dict = ...):
+    """Save a JSON schema (the request body IS the schema object)."""
+    sdir = _schemas_dir(folder)
+    sdir.mkdir(parents=True, exist_ok=True)
+    fname = _safe_schema_name(name)
+    (sdir / f"{fname}.json").write_text(
+        json.dumps(schema_obj, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "name": fname}
+
+
+@app.delete("/api/schemas")
+def api_delete_schema(folder: str = Query(...), name: str = Query(...)):
+    p = _schemas_dir(folder) / f"{_safe_schema_name(name)}.json"
+    if p.exists():
+        p.unlink()
+    return {"ok": True}
+
+
+class StructuredSave(BaseModel):
+    data: Optional[dict] = None          # null/omitted to clear
+    schema_name: Optional[str] = None
+
+
+@app.patch("/api/page/shape/structured")
+def api_shape_structured(folder: str = Query(...), stem: str = Query(...),
+                         idx: int = Query(...), body: StructuredSave = ...):
+    """Save the human-edited structured record for a shape (or clear it)."""
+    d  = _resolve_folder(folder)
+    jf = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+    data   = json.loads(jf.read_text(encoding="utf-8"))
+    shapes = data.get("shapes", [])
+    if idx < 0 or idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+    shape = shapes[idx]
+    if body.data is None:
+        shape.pop("structured", None)
+        _write_json(jf, data)
+        return {"ok": True, "structured": None}
+    st = shape.get("structured") or {}
+    st["data"]   = body.data
+    st["edited"] = True
+    if body.schema_name is not None:
+        st["schema_name"] = body.schema_name
+    import datetime as _dt
+    st["ts_edited"] = _dt.datetime.utcnow().isoformat() + "Z"
+    shape["structured"] = st
+    _write_json(jf, data)
+    return {"ok": True, "structured": st}
 
 
 # ---------------------------------------------------------------------------
@@ -5053,6 +5190,47 @@ def api_export_excel(
         for ri, rec in enumerate(resolved_recs, 2):
             for ci, v in enumerate(rec, 1):
                 rs.cell(row=ri, column=ci, value=v)
+
+    # ── Companion sheet: structured (JSON) records, one row per annotation ────
+    def _flatten(obj, prefix=""):
+        """Flatten a nested dict to dotted keys; lists → JSON string."""
+        flat = {}
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                key = f"{prefix}{k}"
+                if isinstance(v, dict):
+                    flat.update(_flatten(v, key + "."))
+                elif isinstance(v, list):
+                    flat[key] = json.dumps(v, ensure_ascii=False)
+                else:
+                    flat[key] = v
+        return flat
+
+    struct_recs, struct_keys = [], []
+    for jf in jfiles:
+        for sh in load_shapes(jf):
+            if selected_types and sh.get("label", "") not in selected_types:
+                continue
+            st = sh.get("structured") or {}
+            rec = st.get("data") if st.get("data") is not None else st.get("llm")
+            if not isinstance(rec, dict):
+                continue
+            flat = _flatten(rec)
+            for k in flat:
+                if k not in struct_keys:
+                    struct_keys.append(k)
+            struct_recs.append({"page": jf.stem, "table": sh.get("table") or 0,
+                                "row": sh.get("super_row"), "col": sh.get("super_column"),
+                                "schema": st.get("schema_name"), **flat})
+    if struct_recs:
+        ss = wb.create_sheet(title="Structured")
+        hdr = ["page", "table", "row", "col", "schema"] + struct_keys
+        for ci, h in enumerate(hdr, 1):
+            c = ss.cell(row=1, column=ci, value=h); c.font = _src_font; c.fill = _src_fill
+        for ri, rec in enumerate(struct_recs, 2):
+            for ci, h in enumerate(hdr, 1):
+                v = rec.get(h)
+                ss.cell(row=ri, column=ci, value=v if (v is None or isinstance(v, (str, int, float, bool))) else str(v))
 
     if not wb.worksheets:
         wb.create_sheet("Empty")

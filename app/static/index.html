@@ -1059,6 +1059,28 @@
               <input type="checkbox" id="llm-use-shadow" style="accent-color:#e94560;cursor:pointer;">
               Use shadow (line-erased) image
             </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#9fd;cursor:pointer;user-select:none;margin-top:2px;">
+              <input type="checkbox" id="llm-json-toggle" onchange="onJsonModeToggle()" style="accent-color:#22c55e;cursor:pointer;">
+              JSON — structured extraction (return a record matching a schema)
+            </label>
+            <div id="llm-json-area" style="display:none;flex-direction:column;gap:3px;margin-top:3px;border:1px solid #1a3a6e;border-radius:4px;padding:5px;">
+              <div style="display:flex;gap:3px;align-items:center;">
+                <span style="font-size:10px;color:#888;white-space:nowrap;">Schema</span>
+                <select id="llm-schema-select" onchange="onSchemaSelect()" title="Project schema (from &lt;project&gt;/schemas/)" style="flex:1;min-width:0;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px;"></select>
+                <button class="field-run-btn" onclick="reloadSchemas()" title="Reload schemas from the project folder">⟳</button>
+                <button class="field-run-btn" id="llm-schema-edit-btn" onclick="toggleSchemaEditor()" title="Show / edit schema">✎</button>
+              </div>
+              <div id="llm-schema-editor-wrap" style="display:none;flex-direction:column;gap:3px;">
+                <textarea id="llm-schema-editor" rows="7" placeholder='{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}' oninput="_validateSchemaEditor()" style="width:100%;box-sizing:border-box;background:#0d1b35;border:1px solid #1a3a6e;border-radius:3px;color:#cde;font-family:monospace;font-size:11px;padding:4px;white-space:pre;overflow:auto;"></textarea>
+                <div id="llm-schema-status" style="font-size:10px;color:#888;min-height:1em;"></div>
+                <div style="display:flex;gap:4px;">
+                  <input id="llm-schema-name" placeholder="schema name" style="flex:1;min-width:0;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px 5px;">
+                  <button class="field-run-btn" onclick="formatSchemaEditor()" title="Pretty-print">{ }</button>
+                  <button class="field-run-btn" onclick="saveSchema()" title="Save to the project's schemas/ folder">💾</button>
+                  <button class="field-run-btn" onclick="deleteSchema()" title="Delete this schema" style="color:#fca5a5;border-color:#c04040;">🗑</button>
+                </div>
+              </div>
+            </div>
             <div id="llm-anchor-source-wrap" style="display:none;align-items:center;gap:5px;margin-top:2px;">
               <span style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.5px;">Anchor at</span>
               <select id="llm-anchor-source" class="llm-select" style="flex:none;">
@@ -1097,6 +1119,25 @@
             <div id="f-llm-meta"></div>
           </div>
           <div id="llm-batch-status" class="batch-status-line"></div>
+        </div>
+        <div class="field-group" id="fg-structured" style="display:none">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;">
+            <div style="display:flex;align-items:center;gap:3px;">
+              <button class="fg-toggle-btn" id="fg-structured-toggle" onclick="toggleFg('fg-structured')" title="Collapse/expand">▾</button>
+              <div class="field-label" style="margin-bottom:0;">🧩 Structured</div>
+            </div>
+            <div style="display:flex;gap:4px;">
+              <button class="field-run-btn" onclick="formatStructured()" title="Pretty-print the JSON">{ }</button>
+              <button class="field-run-btn" id="struct-tree-btn" onclick="toggleStructTree()" title="Toggle tree view">🌳</button>
+              <button class="field-run-btn" onclick="saveStructured()" title="Save the edited record (Human-authoritative)">💾 Save</button>
+            </div>
+          </div>
+          <div id="fg-structured-body">
+            <textarea id="struct-editor" rows="8" placeholder="{ }" oninput="_validateStructEditor()"
+              style="width:100%;box-sizing:border-box;background:#0d1b35;border:1px solid #1a3a6e;border-radius:3px;color:#cde;font-family:monospace;font-size:11px;padding:4px;white-space:pre;overflow:auto;"></textarea>
+            <pre id="struct-tree" style="display:none;background:#0d1b35;border:1px solid #1a3a6e;border-radius:3px;color:#cde;font-size:11px;padding:6px;margin:3px 0 0;max-height:300px;overflow:auto;white-space:pre-wrap;"></pre>
+            <div id="struct-status" style="font-size:10px;color:#888;min-height:1em;margin-top:2px;"></div>
+          </div>
         </div>
         <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:#888;cursor:pointer;user-select:none;">
           <input type="checkbox" id="overwrite-cb" style="accent-color:#e94560;cursor:pointer;">
@@ -5691,7 +5732,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] authority rows-resolver build-14 (batch-in-modal, soft context, typeable dropdown) active', 'color:#86efac');
+console.log('%c[econai] authority + structured-extraction build-15 (JSON mode) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -7380,6 +7421,7 @@ function updatePanel() {
     document.getElementById('f-llm-meta').textContent='▶ Run / ▶ All / ✕ operate on all selected shapes';
     document.getElementById('cell-meta').textContent=`${selSet.size} shapes selected`;
     document.getElementById('fg-authority').style.display='none';
+    document.getElementById('fg-structured').style.display='none';
     document.getElementById('save-btn').disabled=true;
     document.getElementById('save-status').textContent='';
     delBtn.style.display=editMode?'block':'none';
@@ -7470,6 +7512,7 @@ function updatePanel() {
 
   // Authority resolver — match the cell's text to a gazetteer entity
   refreshAuthorityPanel(shape);
+  renderStructured(shape);
 
   // Internal rows: table view replaces the flat text boxes when present
   renderRowTable(shape);
@@ -8399,9 +8442,208 @@ async function runLlmTest() {
 }
 
 // ── LLM send / line-by-line ───────────────────────────────────────────────────
+// ── Structured (JSON) extraction ────────────────────────────────────────────
+let _projSchemas = [];          // [{name, schema}]
+let _structTreeOn = false;
+
+function _jsonModeOn() { return document.getElementById('llm-json-toggle')?.checked; }
+
+function onJsonModeToggle() {
+  const on = _jsonModeOn();
+  document.getElementById('llm-json-area').style.display = on ? 'flex' : 'none';
+  if (on && !_projSchemas.length) reloadSchemas();
+  if (selIdx >= 0) renderStructured(pageData.shapes[selIdx]);
+}
+
+async function reloadSchemas() {
+  try {
+    const r = await fetch(`${API}/api/schemas?folder=${encodeURIComponent(folder)}`);
+    _projSchemas = r.ok ? ((await r.json()).schemas || []) : [];
+  } catch (e) { _projSchemas = []; }
+  const sel = document.getElementById('llm-schema-select');
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">— select schema —</option>`
+    + _projSchemas.map(s => `<option value="${_escHtml(s.name)}">${_escHtml(s.name)}</option>`).join('')
+    + `<option value="__new__">+ new schema…</option>`;
+  if ([..._projSchemas.map(s => s.name), ''].includes(cur)) sel.value = cur;
+}
+
+function onSchemaSelect() {
+  const sel = document.getElementById('llm-schema-select');
+  const v = sel.value;
+  const ed = document.getElementById('llm-schema-editor');
+  const nm = document.getElementById('llm-schema-name');
+  if (v === '__new__') {
+    document.getElementById('llm-schema-editor-wrap').style.display = 'flex';
+    ed.value = '{\n  "type": "object",\n  "additionalProperties": false,\n  "required": [],\n  "properties": {}\n}';
+    nm.value = '';
+    sel.value = '';
+  } else if (v) {
+    const s = _projSchemas.find(x => x.name === v);
+    if (s) { ed.value = JSON.stringify(s.schema, null, 2); nm.value = s.name; }
+  }
+  _validateSchemaEditor();
+}
+
+function toggleSchemaEditor() {
+  const w = document.getElementById('llm-schema-editor-wrap');
+  w.style.display = (w.style.display === 'none' || !w.style.display) ? 'flex' : 'none';
+}
+
+function _activeSchemaObj() {
+  const txt = (document.getElementById('llm-schema-editor').value || '').trim();
+  if (!txt) return null;
+  try { return JSON.parse(txt); } catch (e) { return null; }
+}
+
+function _validateSchemaEditor() {
+  const txt = (document.getElementById('llm-schema-editor').value || '').trim();
+  const st = document.getElementById('llm-schema-status');
+  const ed = document.getElementById('llm-schema-editor');
+  if (!txt) { st.textContent = ''; ed.style.borderColor = '#1a3a6e'; return; }
+  try { JSON.parse(txt); st.textContent = '✓ valid JSON schema'; st.style.color = '#86efac'; ed.style.borderColor = '#22c55e'; }
+  catch (e) { st.textContent = '✕ ' + e.message; st.style.color = '#fca5a5'; ed.style.borderColor = '#e94560'; }
+}
+
+function formatSchemaEditor() {
+  const o = _activeSchemaObj();
+  if (o) document.getElementById('llm-schema-editor').value = JSON.stringify(o, null, 2);
+  _validateSchemaEditor();
+}
+
+async function saveSchema() {
+  const o = _activeSchemaObj();
+  if (!o) { showToast('Schema is not valid JSON'); return; }
+  let name = (document.getElementById('llm-schema-name').value || '').trim();
+  if (!name) { showToast('Give the schema a name'); return; }
+  try {
+    const r = await fetch(`${API}/api/schemas?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(name)}`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(o),
+    });
+    if (!r.ok) { showToast(`Save failed: ${r.status}`); return; }
+    const d = await r.json();
+    await reloadSchemas();
+    document.getElementById('llm-schema-select').value = d.name;
+    showToast(`Schema "${d.name}" saved`);
+  } catch (e) { showToast('Save error: ' + e.message); }
+}
+
+async function deleteSchema() {
+  const name = (document.getElementById('llm-schema-name').value || '').trim();
+  if (!name || !confirm(`Delete schema "${name}"?`)) return;
+  try {
+    await fetch(`${API}/api/schemas?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(name)}`, {method: 'DELETE'});
+    await reloadSchemas();
+    document.getElementById('llm-schema-editor').value = '';
+    document.getElementById('llm-schema-name').value = '';
+    _validateSchemaEditor();
+    showToast(`Schema "${name}" deleted`);
+  } catch (e) { showToast('Delete error: ' + e.message); }
+}
+
+// Lightweight schema conformance check (type / required, recursive) for live feedback
+function _schemaIssues(obj, schema, path = '') {
+  const out = [];
+  if (!schema || typeof schema !== 'object') return out;
+  const here = path || '(root)';
+  const t = schema.type;
+  if (t === 'object') {
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) { out.push(`${here}: expected object`); return out; }
+    (schema.required || []).forEach(k => { if (obj[k] === undefined) out.push(`missing: ${path ? path + '.' : ''}${k}`); });
+    const props = schema.properties || {};
+    for (const k in props) if (obj[k] !== undefined) out.push(..._schemaIssues(obj[k], props[k], (path ? path + '.' : '') + k));
+  } else if (t === 'array') {
+    if (!Array.isArray(obj)) out.push(`${here}: expected array`);
+    else if (schema.items) obj.forEach((el, i) => out.push(..._schemaIssues(el, schema.items, `${path}[${i}]`)));
+  } else if (typeof t === 'string') {
+    const ok = (t === 'string' && typeof obj === 'string')
+      || (t === 'number' && typeof obj === 'number')
+      || (t === 'integer' && Number.isInteger(obj))
+      || (t === 'boolean' && typeof obj === 'boolean')
+      || (t === 'null' && obj === null);
+    if (!ok) out.push(`${here}: should be ${t}`);
+  }
+  return out;
+}
+
+function _jsonHighlight(obj) {
+  const s = _escHtml(JSON.stringify(obj, null, 2));
+  return s
+    .replace(/(&quot;(?:\\.|[^&]|&(?!quot;))*?&quot;)(\s*:)/g, '<span style="color:#9cdcfe">$1</span>$2')
+    .replace(/:\s*(&quot;(?:\\.|[^&]|&(?!quot;))*?&quot;)/g, ': <span style="color:#ce9178">$1</span>')
+    .replace(/\b(-?\d+\.?\d*)\b/g, '<span style="color:#b5cea8">$1</span>')
+    .replace(/\b(true|false|null)\b/g, '<span style="color:#569cd6">$1</span>');
+}
+
+// Show/populate the Structured group for a shape
+function renderStructured(shape) {
+  const fg = document.getElementById('fg-structured');
+  if (!fg) return;
+  const st = shape?.structured;
+  if (!st) { fg.style.display = _jsonModeOn() ? 'flex' : 'none';
+             if (_jsonModeOn()) { document.getElementById('struct-editor').value = ''; document.getElementById('struct-status').textContent = 'No structured record yet — run the LLM in JSON mode.'; }
+             return; }
+  fg.style.display = 'flex';
+  const rec = (st.data !== undefined && st.data !== null) ? st.data : st.llm;
+  document.getElementById('struct-editor').value = JSON.stringify(rec ?? {}, null, 2);
+  _validateStructEditor();
+}
+
+function _validateStructEditor() {
+  const ed = document.getElementById('struct-editor');
+  const st = document.getElementById('struct-status');
+  const txt = (ed.value || '').trim();
+  if (!txt) { st.textContent = ''; ed.style.borderColor = '#1a3a6e'; return; }
+  let obj;
+  try { obj = JSON.parse(txt); }
+  catch (e) { st.innerHTML = `<span style="color:#fca5a5;">✕ ${_escHtml(e.message)}</span>`; ed.style.borderColor = '#e94560'; return; }
+  ed.style.borderColor = '#22c55e';
+  // schema conformance (against the active schema, if any)
+  const schema = _jsonModeOn() ? _activeSchemaObj() : null;
+  const issues = schema ? _schemaIssues(obj, schema) : [];
+  if (issues.length) st.innerHTML = `<span style="color:#eab308;">✓ valid JSON · ⚠ ${issues.length} schema issue(s): ${_escHtml(issues.slice(0, 4).join('; '))}${issues.length > 4 ? '…' : ''}</span>`;
+  else               st.innerHTML = `<span style="color:#86efac;">✓ valid JSON${schema ? ' · matches schema' : ''}</span>`;
+  if (_structTreeOn) document.getElementById('struct-tree').innerHTML = _jsonHighlight(obj);
+}
+
+function formatStructured() {
+  const txt = (document.getElementById('struct-editor').value || '').trim();
+  try { document.getElementById('struct-editor').value = JSON.stringify(JSON.parse(txt), null, 2); } catch (e) {}
+  _validateStructEditor();
+}
+
+function toggleStructTree() {
+  _structTreeOn = !_structTreeOn;
+  const tree = document.getElementById('struct-tree');
+  tree.style.display = _structTreeOn ? 'block' : 'none';
+  document.getElementById('struct-tree-btn').classList.toggle('active', _structTreeOn);
+  if (_structTreeOn) { try { tree.innerHTML = _jsonHighlight(JSON.parse(document.getElementById('struct-editor').value || '{}')); } catch (e) { tree.textContent = '(invalid JSON)'; } }
+}
+
+async function saveStructured() {
+  if (selIdx < 0) return;
+  const txt = (document.getElementById('struct-editor').value || '').trim();
+  let obj; try { obj = JSON.parse(txt); } catch (e) { showToast('Not valid JSON — fix it first'); return; }
+  const shape = pageData.shapes[selIdx];
+  const schema_name = shape.structured?.schema_name || document.getElementById('llm-schema-select')?.value || null;
+  try {
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: selIdx});
+    const r = await fetch(`${API}/api/page/shape/structured?${params}`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({data: obj, schema_name}),
+    });
+    if (!r.ok) { showToast(`Save failed: ${r.status}`); return; }
+    shape.structured = (await r.json()).structured;
+    drawOverlay();
+    showToast('✓ Structured record saved');
+  } catch (e) { showToast('Save error: ' + e.message); }
+}
+
 async function runLlm() {
   if (selIdx < 0 || !pages.length) return;
   const mode = document.getElementById('llm-mode').value;
+  // JSON / structured extraction — whole-annotation, single shape only
+  if (_jsonModeOn()) { runLlmJson(); return; }
   // Anchored uses selected shape as reference — bypass multi-select batch
   if (mode === 'anchored') { runLlmAnchored(); return; }
   if (selSet.size > 1) {
@@ -8446,6 +8688,44 @@ async function runLlm() {
     }
     refreshDiag(); drawOverlay();
     showToast('LLM done' + (myIdx !== selIdx ? ' (navigated away — result saved)' : ''));
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Send';
+  }
+}
+
+async function runLlmJson() {
+  const schema = _activeSchemaObj();
+  if (!schema) { showToast('Select or fix the schema (must be valid JSON)'); return; }
+  let mode = document.getElementById('llm-mode').value;
+  if (mode === 'linebyline' || mode === 'anchored') mode = 'image';   // JSON = whole-annotation
+  const myIdx = selIdx;
+  const btn = document.getElementById('llm-btn');
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const model     = document.getElementById('llm-model').value;
+    const prompt    = document.getElementById('llm-prompt').value.trim();
+    const useShadow = document.getElementById('llm-use-shadow').checked;
+    const schema_name = document.getElementById('llm-schema-select').value
+                     || document.getElementById('llm-schema-name').value || null;
+    if (!prompt) { showToast('Prompt is empty'); return; }
+    const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: myIdx, model, mode, use_shadow: useShadow});
+    const r = await fetch(`${API}/api/page/shape/llm?${params}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt, json_schema: schema, schema_name}),
+    });
+    if (!r.ok) { showToast(`LLM error ${r.status}: ${(await r.text()).slice(0, 160)}`); return; }
+    const data = await r.json();
+    if (!pageData.shapes[myIdx]) { showToast('Done (shape gone)'); return; }
+    const sh = pageData.shapes[myIdx];
+    const prev = sh.structured || {};
+    sh.structured = {
+      schema_name: data.schema_name, llm: data.structured,
+      data: prev.edited ? prev.data : data.structured,   // keep human edits across re-runs
+      edited: !!prev.edited, model: data.model, ts: data.timestamp,
+    };
+    if (myIdx === selIdx) renderStructured(sh);
+    drawOverlay();
+    showToast('Structured extraction done' + (myIdx !== selIdx ? ' (saved)' : ''));
   } finally {
     btn.disabled = false; btn.textContent = '▶ Send';
   }
