@@ -5254,6 +5254,102 @@ def api_export_excel(
 
 
 # ---------------------------------------------------------------------------
+# Structured export — gather per-annotation JSON records across pages, with
+# "propagate forward" for title-type labels (country headers etc.).
+# ---------------------------------------------------------------------------
+
+class JsonExportRequest(BaseModel):
+    stems:       List[str] = []          # ordered pages to export from
+    label_modes: dict = {}               # label -> "export" | "ignore" | "propagate"
+    mode:        str = "single"          # "single" (one file) | "per_annotation" (zip)
+
+
+def _best_shape_text(sh: dict) -> str:
+    h = ((sh.get("human_output") or {}).get("human_corrected_text") or "").strip()
+    l = ((sh.get("openai_output") or {}).get("response") or "").strip()
+    o = ((sh.get("tesseract_output") or {}).get("ocr_text")
+         or (sh.get("easyocr_output") or {}).get("ocr_text") or "").strip()
+    p = (sh.get("pdf_text") or "").strip()
+    return h or l or o or p
+
+
+def _shape_topleft(sh: dict):
+    pts = sh.get("points") or []
+    if not pts:
+        return (0.0, 0.0)
+    ys = [pt[1] for pt in pts]; xs = [pt[0] for pt in pts]
+    return (min(ys), min(xs))
+
+
+@app.post("/api/export/json")
+def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
+    """Export structured (JSON) records across the selected pages.
+
+    Per label, `label_modes` says: export (emit the shape's structured record if
+    it has one), ignore (skip), or propagate (a non-structured title annotation
+    whose text is carried into every later record under a key named after the
+    label, until the next annotation of that label resets it). Records are taken
+    in reading order (top→bottom, then left→right) within each page, pages in the
+    given order. Returns one JSON file (mode=single) or a zip of one file per
+    record (mode=per_annotation)."""
+    import io as _io
+    d = _resolve_folder(folder)
+    modes = body.label_modes or {}
+    stems = [s for s in (body.stems or []) if s] or \
+            [jf.stem for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+
+    carry: dict = {}                 # label -> propagated value (string)
+    records = []                     # list of {data, stem, idx}
+    for stem in stems:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            continue
+        order = sorted(range(len(shapes)), key=lambda i: _shape_topleft(shapes[i]))
+        for i in order:
+            sh = shapes[i]
+            mode = modes.get(sh.get("label", ""))
+            if mode == "propagate":
+                txt = _best_shape_text(sh)
+                if txt:
+                    carry[sh.get("label", "")] = txt
+                else:
+                    carry.pop(sh.get("label", ""), None)
+            elif mode == "export":
+                st = sh.get("structured") or {}
+                rec = st.get("data") if st.get("data") is not None else st.get("llm")
+                if rec is None:
+                    continue                       # "export if exists" — none here
+                merged = {**carry, **rec} if isinstance(rec, dict) else {**carry, "value": rec}
+                records.append({"data": merged, "stem": stem, "idx": i})
+            # else "ignore" / unset → skip
+
+    import datetime as _dt
+    if body.mode == "per_annotation":
+        import zipfile
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for r in records:
+                zf.writestr(f"{r['stem']}__{r['idx']}.json",
+                            json.dumps(r["data"], ensure_ascii=False, indent=2))
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="application/zip", headers={
+            "Content-Disposition": 'attachment; filename="structured_export.zip"',
+            "X-EconAI-Records": str(len(records)),
+        })
+
+    payload = json.dumps([r["data"] for r in records], ensure_ascii=False, indent=2)
+    return StreamingResponse(_io.BytesIO(payload.encode("utf-8")),
+        media_type="application/json", headers={
+            "Content-Disposition": 'attachment; filename="structured_export.json"',
+            "X-EconAI-Records": str(len(records)),
+        })
+
+
+# ---------------------------------------------------------------------------
 # Root — redirect to dashboard
 # ---------------------------------------------------------------------------
 

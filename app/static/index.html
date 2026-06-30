@@ -1337,6 +1337,7 @@
         <option value="anchored_llm">⚓ Anchored LLM</option>
         <option value="convert_rows">⊞ Convert annotations to internal rows</option>
         <option value="resolve_authority">🏛 Resolve authorities</option>
+        <option value="json_export">⇩ JSON export (structured records)</option>
       </select>
     </div>
     <div>
@@ -1492,6 +1493,23 @@
         <span>Use each page's county/district context to narrow matches</span>
       </label>
       <div style="font-size:10px;color:#555;">Uses the Column filter and Pages above. Ditto marks inherit the entity above within a cell; low-similarity matches are skipped.</div>
+    </div>
+
+    <!-- JSON export options -->
+    <div id="batch-jsonexport-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Per annotation type:</div>
+        <div id="batch-jsonexport-labels" style="display:flex;flex-direction:column;gap:4px;"></div>
+        <div style="font-size:10px;color:#555;margin-top:4px;"><b>Export</b> = emit its JSON record (if it has one) · <b>Ignore</b> = skip · <b>Propagate forward</b> = a title (e.g. country); its text is added to every later record under a key named after the label, until the next one of that type.</div>
+      </div>
+      <label class="row">
+        <span style="white-space:nowrap;">Output</span>
+        <select id="batch-jsonexport-mode" style="flex:1;">
+          <option value="single">Single JSON file (array of records)</option>
+          <option value="per_annotation">One file per record (zip)</option>
+        </select>
+      </label>
+      <div style="font-size:10px;color:#555;">Records are taken in reading order (top→bottom, then left→right) within each page, over the Pages range above.</div>
     </div>
 
     <!-- Score threshold options -->
@@ -5741,7 +5759,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] structured-extraction build-16 (JSON in Batch LLM) active', 'color:#86efac');
+console.log('%c[econai] structured-extraction build-17 (JSON export in Batch) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -6147,6 +6165,23 @@ function onBatchOpChange() {
   const isAuth = op === 'resolve_authority';
   document.getElementById('batch-auth-opts').style.display = isAuth ? 'flex' : 'none';
   if (isAuth) _batchAuthInit();
+  const isJsonExp = op === 'json_export';
+  document.getElementById('batch-jsonexport-opts').style.display = isJsonExp ? 'flex' : 'none';
+  if (isJsonExp) _batchPopulateJsonExportLabels();
+}
+
+function _batchPopulateJsonExportLabels() {
+  const labels = [...new Set([...projectLabels, ...(pageData?.shapes || []).map(s => s.label)])].sort();
+  let remembered = {};
+  try { remembered = JSON.parse(localStorage.getItem('batchJsonExportModes') || '{}'); } catch (e) {}
+  const opt = (cur, val, txt) => `<option value="${val}"${cur === val ? ' selected' : ''}>${txt}</option>`;
+  document.getElementById('batch-jsonexport-labels').innerHTML = labels.map(lbl => {
+    const v = remembered[lbl] || 'export';
+    return `<label class="row" style="gap:8px;"><span style="flex:1;min-width:0;">${_escHtml(lbl)}</span>`
+      + `<select data-label="${_escHtml(lbl)}" class="bje-mode" style="flex:none;width:160px;">`
+      + opt(v, 'export', 'Export JSON') + opt(v, 'ignore', 'Ignore') + opt(v, 'propagate', 'Propagate forward')
+      + `</select></label>`;
+  }).join('') || '<div style="color:#555;font-size:11px;">No labels found.</div>';
 }
 
 async function _batchAuthInit() {
@@ -6348,6 +6383,41 @@ async function runBatch() {
       showToast(`Authority batch: ${summary}`, 5000);
       if (pageData) { await reloadPageData(); updatePanel(); drawOverlay(); }
     } catch (e) { showToast('Batch error: ' + (e?.message || e)); }
+    finally { btn.disabled = false; btn.textContent = old; }
+    return;
+  }
+
+  // JSON export — gather structured records server-side; download file/zip.
+  if (op === 'json_export') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    const modes = {};
+    document.querySelectorAll('#batch-jsonexport-labels select.bje-mode')
+      .forEach(s => { modes[s.dataset.label] = s.value; });
+    localStorage.setItem('batchJsonExportModes', JSON.stringify(modes));
+    if (!Object.values(modes).includes('export')) { showToast('Set at least one label to Export'); return; }
+    const outMode = document.getElementById('batch-jsonexport-mode').value;
+    const btn = document.getElementById('batch-run-btn');
+    const prog = document.getElementById('batch-progress');
+    const old = btn.textContent; btn.disabled = true; btn.textContent = '…';
+    document.getElementById('batch-progress-bar-wrap').style.display = '';
+    if (prog) prog.textContent = `Building JSON export from ${stems.length} page(s)…`;
+    try {
+      const r = await fetch(`${API}/api/export/json?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({stems, label_modes: modes, mode: outMode}),
+      });
+      if (!r.ok) { showToast('Export failed: ' + r.status); return; }
+      const n = r.headers.get('X-EconAI-Records') || '?';
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (outMode === 'per_annotation') ? 'structured_export.zip' : 'structured_export.json';
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      if (prog) prog.textContent = `✓ exported ${n} record(s)`;
+      showToast(`JSON export: ${n} record(s)`, 4000);
+    } catch (e) { showToast('Export error: ' + (e?.message || e)); }
     finally { btn.disabled = false; btn.textContent = old; }
     return;
   }
