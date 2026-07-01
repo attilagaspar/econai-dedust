@@ -1988,6 +1988,17 @@ class LlmRequest(BaseModel):
 # Models served locally via ollama (OpenAI-compatible endpoint)
 _LOCAL_MODELS: set[str] = {"qwen2.5vl:7b"}
 
+# Azure model prefix — "azure:gpt-5-mini" routes to Azure OpenAI, strips prefix before the API call
+_AZURE_PREFIX = "azure:"
+
+# TK (institutional GPU server) prefix — "tk:vllm/..." routes to the OpenAI-compatible vllm endpoint
+_TK_PREFIX = "tk:"
+_TK_BASE_URL = "http://193.224.38.28:9000/v1"
+
+def _bare_model(model: str) -> str:
+    """Strip any routing prefix, returning the raw model name for the API call."""
+    return model.removeprefix(_AZURE_PREFIX).removeprefix(_TK_PREFIX)
+
 # Always appended to every LLM prompt to suppress hallucinations on empty/dash cells
 _EMPTY_CELL_GUARD = (
     "\nIf the cell is empty, contains only a dash, or the image shows no readable content, "
@@ -1996,12 +2007,26 @@ _EMPTY_CELL_GUARD = (
 
 def _make_llm_client(model: str):
     """Return an OpenAI-compatible client for the given model.
-    Local models are routed to the ollama server; all others go to OpenAI."""
+    Local models (ollama) → ollama server.
+    azure:-prefixed models → Azure OpenAI (AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY).
+    All others → OpenAI (OPENAI_API_KEY)."""
     import os
     from openai import OpenAI
     if model in _LOCAL_MODELS:
         host = os.environ.get("OLLAMA_HOST", "http://gpu.koren.work:11434")
         return OpenAI(api_key="ollama", base_url=f"{host}/v1")
+    if model.startswith(_AZURE_PREFIX):
+        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        api_key  = os.environ.get("AZURE_OPENAI_API_KEY")
+        if not endpoint or not api_key:
+            raise HTTPException(status_code=500,
+                detail="AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY must be set for azure: models")
+        base = endpoint.rstrip("/")
+        if not base.endswith("/openai/v1"):
+            base += "/openai/v1"
+        return OpenAI(api_key=api_key, base_url=base + "/")
+    if model.startswith(_TK_PREFIX):
+        return OpenAI(api_key="none", base_url=_TK_BASE_URL)
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable is not set")
@@ -2012,7 +2037,7 @@ def _is_reasoning_model(model: str) -> bool:
     """GPT-5 family and the o-series are reasoning models: via chat completions
     they reject `max_tokens` (need `max_completion_tokens`), reject any
     temperature other than the default 1, and burn tokens on hidden reasoning."""
-    m = (model or "").lower()
+    m = _bare_model(model or "").lower()
     return m.startswith(("gpt-5", "o1", "o1-", "o3", "o3-", "o4", "o4-"))
 
 
@@ -2022,6 +2047,7 @@ def _llm_complete(client, model, messages, max_out, temperature=0, response_form
     token floor (reasoning tokens count against the budget) and low effort to
     stay fast/cheap on these simple digit-transcription tasks.
     `response_format` (e.g. a json_schema spec) is passed through when given."""
+    model = _bare_model(model)
     rf = {"response_format": response_format} if response_format else {}
     if _is_reasoning_model(model):
         kwargs = dict(model=model, messages=messages,

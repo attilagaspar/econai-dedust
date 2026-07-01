@@ -1043,6 +1043,16 @@
                   <option value="o4-mini">o4-mini</option>
                   <option value="o3">o3</option>
                 </optgroup>
+                <optgroup label="Azure OpenAI">
+                  <option value="azure:gpt-5-mini">gpt-5-mini (Azure)</option>
+                </optgroup>
+                <optgroup label="Local (TK)">
+                  <option value="tk:vllm/Intel/Qwen3.5-122B-A10B-int4-AutoRound">Qwen3.5 122B</option>
+                  <option value="tk:vllm/Ministral-3-14B-Reasoning-2512-AWQ-4bit">Ministral 14B</option>
+                  <option value="tk:vllm/Qwen3.6-27B-AWQ-INT4">Qwen3.6 27B</option>
+                  <option value="tk:vllm/cyankiwi/Mistral-Medium-3.5-128B-AWQ-INT4">Mistral Medium 3.5 128B</option>
+                  <option value="tk:vllm/mistralai/Mistral-Small-4-119B-2603-NVFP4">Mistral Small 4 119B</option>
+                </optgroup>
                 <optgroup label="Local">
                   <option value="qwen2.5vl:7b">Qwen2.5-VL 7B</option>
                 </optgroup>
@@ -1414,6 +1424,12 @@
           <option value="gpt-4.1">4.1</option>
           <option value="gpt-4o-mini">4o-mini</option>
           <option value="gpt-4o">4o</option>
+          <option value="azure:gpt-5-mini">gpt-5-mini (Azure)</option>
+          <option value="tk:vllm/Intel/Qwen3.5-122B-A10B-int4-AutoRound">Qwen3.5-122B (TK)</option>
+          <option value="tk:vllm/Ministral-3-14B-Reasoning-2512-AWQ-4bit">Ministral-14B (TK)</option>
+          <option value="tk:vllm/Qwen3.6-27B-AWQ-INT4">Qwen3.6-27B (TK)</option>
+          <option value="tk:vllm/cyankiwi/Mistral-Medium-3.5-128B-AWQ-INT4">Mistral-Med-128B (TK)</option>
+          <option value="tk:vllm/mistralai/Mistral-Small-4-119B-2603-NVFP4">Mistral-Sm4-119B (TK)</option>
           <option value="qwen2.5vl:7b">Qwen2.5-VL 7B (local)</option>
         </select>
         <select id="batch-llm-mode" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" onchange="onBatchLlmModeChange()">
@@ -1614,6 +1630,12 @@
           <option value="gpt-4.1">4.1</option>
           <option value="gpt-4o-mini">4o-mini</option>
           <option value="gpt-4o">4o</option>
+          <option value="azure:gpt-5-mini">gpt-5-mini (Azure)</option>
+          <option value="tk:vllm/Intel/Qwen3.5-122B-A10B-int4-AutoRound">Qwen3.5-122B (TK)</option>
+          <option value="tk:vllm/Ministral-3-14B-Reasoning-2512-AWQ-4bit">Ministral-14B (TK)</option>
+          <option value="tk:vllm/Qwen3.6-27B-AWQ-INT4">Qwen3.6-27B (TK)</option>
+          <option value="tk:vllm/cyankiwi/Mistral-Medium-3.5-128B-AWQ-INT4">Mistral-Med-128B (TK)</option>
+          <option value="tk:vllm/mistralai/Mistral-Small-4-119B-2603-NVFP4">Mistral-Sm4-119B (TK)</option>
         </select>
         <textarea id="batch-anchored-prompt" rows="3" placeholder="Prompt…"
           style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
