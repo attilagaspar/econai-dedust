@@ -5759,7 +5759,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] structured-extraction build-17 (JSON export in Batch) active', 'color:#86efac');
+console.log('%c[econai] structured-extraction build-18 (fix divider delete) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -5838,6 +5838,13 @@ function _initRowCanvasEditing() {
     if (selIdx < 0 || !editMode) return;
     const shape = pageData.shapes[selIdx];
     if (_rsDrag) {
+      // Only treat it as a drag once the mouse actually moves — a pure click
+      // (e.g. the first click of a double-click to merge) must NOT save/render,
+      // or it disrupts the dblclick's divider detection.
+      if (!_rsDrag.moved) {
+        if (Math.abs(e.clientY - _rsDrag.startY) < 3) { e.preventDefault(); return; }
+        _rsDrag.moved = true;
+      }
       const rows = _rsRows(shape);
       const i    = _rsDrag.divider;
       const top  = _rsCropTop(shape);
@@ -5866,13 +5873,16 @@ function _initRowCanvasEditing() {
   canvas.addEventListener('mousedown', e => {
     if (selIdx < 0 || !editMode) return;
     const div = _rsNearestDivider(pageData.shapes[selIdx], _rsCropY(e));
-    if (div >= 0) { _rsDrag = {divider: div}; e.preventDefault(); e.stopPropagation(); }
+    if (div >= 0) { _rsDrag = {divider: div, startY: e.clientY, moved: false}; e.preventDefault(); e.stopPropagation(); }
   });
 
   window.addEventListener('mouseup', async () => {
     if (!_rsDrag) return;
+    const moved = _rsDrag.moved;
     _rsDrag = null;
-    if (selIdx >= 0) {
+    // A click that never moved is not a resize — leave the structure untouched
+    // (and don't re-render) so a double-click can merge the divider cleanly.
+    if (moved && selIdx >= 0) {
       await saveRowStruct(selIdx, 'manual');
       renderRowTable(pageData.shapes[selIdx]);
     }
