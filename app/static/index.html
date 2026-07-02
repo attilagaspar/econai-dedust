@@ -672,6 +672,8 @@
                 title="Click a lattice grid line to delete that separator and merge the two adjacent columns/rows">✕ Del sep</button>
         <button class="nav-btn" id="lattice-split-btn" onclick="toggleLatticeSplitMode()" disabled style="display:none"
                 title="Click an interior grid line to cut this lattice into two separate tables — a vertical line splits left/right, a horizontal line splits top/bottom">✂ Split table</button>
+        <button class="nav-btn" id="lattice-del-btn" onclick="deleteActiveLattice()" disabled style="display:none;color:#fca5a5;border-color:#c04040;"
+                title="Delete the active lattice (removes that table's cell annotations). With multiple lattices, only the active one — the one you last clicked a cell in — is removed.">✕ Lattice</button>
         <button class="nav-btn" id="row-fill-btn" onclick="runRowFill()" disabled
                 title="Fill inner gaps in each lattice row with one shape, then re-detect">↔ Row fill</button>
         <button class="nav-btn" id="col-fill-btn" onclick="runColFill()" disabled
@@ -3604,6 +3606,8 @@ async function runLatticeDetect() {
   delSepBtn2.style.display = ''; delSepBtn2.disabled = false;
   const splitBtn2 = document.getElementById('lattice-split-btn');
   splitBtn2.style.display = ''; splitBtn2.disabled = false;
+  const delLatBtn2 = document.getElementById('lattice-del-btn');
+  delLatBtn2.style.display = ''; delLatBtn2.disabled = false;
   if (!latticeVisible) {
     latticeVisible = true;
     gridBtn.textContent = '📐 Hide Grid';
@@ -3639,7 +3643,7 @@ async function runLatticeDetectSelection() {
   // make the grid + separator tools available
   const gridBtn = document.getElementById('lattice-grid-btn');
   gridBtn.style.display = ''; gridBtn.disabled = false;
-  ['lattice-col-sep-btn', 'lattice-row-sep-btn', 'lattice-del-sep-btn', 'lattice-split-btn'].forEach(id => {
+  ['lattice-col-sep-btn', 'lattice-row-sep-btn', 'lattice-del-sep-btn', 'lattice-split-btn', 'lattice-del-btn'].forEach(id => {
     const b = document.getElementById(id); if (b) { b.style.display = ''; b.disabled = false; }
   });
   if (!latticeVisible) { latticeVisible = true; gridBtn.textContent = '📐 Hide Grid'; }
@@ -3704,6 +3708,39 @@ async function _latticeSplitHoriz(rowAbove, rowBelow) {
   await replaceAllShapes();
   drawOverlay(); updatePanel();
   showToast(`Split off table ${newT} (horizontal) · ${moved} cells`);
+}
+
+// Delete the active lattice = remove that table's cell annotations. With
+// multiple lattices, only the active table (the one whose cell is selected, or
+// the first) is removed; the others are left intact.
+async function deleteActiveLattice() {
+  if (!pageData?.shapes) return;
+  const ids = _latticeTableIds();
+  if (!ids.length) { showToast('No lattice on this page'); return; }
+  const AT = _activeTable();
+  const victims = pageData.shapes.filter(s => _tableOf(s) === AT);
+  if (!victims.length) { showToast('No active lattice to delete'); return; }
+  const multi = ids.length > 1;
+  const msg = multi
+    ? `Delete the active lattice (table ${AT}) — ${victims.length} cell annotation(s)? Other lattices on the page are kept.`
+    : `Delete this lattice — ${victims.length} cell annotation(s)?`;
+  if (!confirm(msg)) return;
+  pushUndo();
+  pageData.shapes = pageData.shapes.filter(s => _tableOf(s) !== AT);
+  selSet.clear(); selIdx = -1;
+  latticeSepMode = null; latticeSplitMode = false;
+  await replaceAllShapes();
+  // Hide the lattice toolbar if nothing lattice-y is left on the page
+  if (!pageData.shapes.some(s => s.super_row != null)) {
+    ['lattice-grid-btn', 'lattice-col-sep-btn', 'lattice-row-sep-btn',
+     'lattice-del-sep-btn', 'lattice-split-btn', 'lattice-del-btn'].forEach(id => {
+      const b = document.getElementById(id); if (b) b.style.display = 'none';
+    });
+    latticeVisible = false;
+  }
+  _updateLatticeSepBtns();
+  drawOverlay(); refreshDiag(); updatePanel();
+  showToast(multi ? `Deleted lattice ${AT} · ${victims.length} cells` : `Deleted lattice · ${victims.length} cells`);
 }
 
 // Red crosshair cursor for separator insertion modes
@@ -5781,7 +5818,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
   setTimeout(() => document.addEventListener('mousedown', _rsAuthDocClose, true), 0);
 }
 
-console.log('%c[econai] structured-extraction build-18 (fix divider delete) active', 'color:#86efac');
+console.log('%c[econai] structured-extraction build-19 (delete lattice button) active', 'color:#86efac');
 
 async function convertToRows() {
   if (selIdx < 0 || !pages.length) return;
@@ -10003,16 +10040,19 @@ async function loadPage(idx) {
   const rowSepBtn = document.getElementById('lattice-row-sep-btn');
   const delSepBtn = document.getElementById('lattice-del-sep-btn');
   const splitBtn  = document.getElementById('lattice-split-btn');
+  const delLatBtn = document.getElementById('lattice-del-btn');
   if (hasLattice) {
     gridBtn.style.display=''; gridBtn.disabled=false;
     colSepBtn.style.display=''; colSepBtn.disabled=false;
     rowSepBtn.style.display=''; rowSepBtn.disabled=false;
     delSepBtn.style.display=''; delSepBtn.disabled=false;
     if (splitBtn) { splitBtn.style.display=''; splitBtn.disabled=false; }
+    if (delLatBtn) { delLatBtn.style.display=''; delLatBtn.disabled=false; }
   } else {
     gridBtn.style.display='none'; latticeVisible=false;
     colSepBtn.style.display='none'; rowSepBtn.style.display='none'; delSepBtn.style.display='none';
     if (splitBtn) splitBtn.style.display='none';
+    if (delLatBtn) delLatBtn.style.display='none';
     latticeSepMode=null; latticeSplitMode=false;
   }
   document.getElementById('row-fill-btn').disabled = false;
