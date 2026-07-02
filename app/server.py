@@ -4861,13 +4861,9 @@ def api_export_excel(
         tables = sorted({c["table"] for c in have_coords})
 
         if len(tables) <= 1:
-            # ── single lattice: original behaviour (merge no_coords spatially) ──
-            if no_coords:
-                _spatial_cluster_rows(no_coords, 10)
-                _spatial_cluster_cols(no_coords)
-            all_raw = have_coords + no_coords
+            # ── single lattice: keep the grid from the lattice cells only ──
             winner = {}
-            for c in all_raw:
+            for c in have_coords:
                 k = (c["row_idx"], c["col_idx"])
                 if k not in winner or c["h"] > winner[k]["h"]:
                     winner[k] = c
@@ -4878,7 +4874,6 @@ def api_export_excel(
             cells = list(winner.values())
         else:
             # ── multiple lattices on the page: stack tables top-to-bottom ──
-            # (no_coords — titles / free text between tables — are dropped here)
             def _table_top(t): return min(c["top_y"] for c in have_coords if c["table"] == t)
             cells, row_offset = [], 0
             for t in sorted(tables, key=_table_top):
@@ -4897,6 +4892,28 @@ def api_export_excel(
                     top = max(top, c["row_idx"])
                 cells.extend(ws)
                 row_offset = top + 2          # one blank row between stacked tables
+
+        # ── Interleave non-lattice annotations (titles / headers / free text) by
+        # vertical position so they aren't dropped on lattice pages. Each becomes
+        # its own row at column 0, inserted between the lattice rows it sits among.
+        # (Skipped when there are none → lattice-only pages are unchanged.)
+        if no_coords:
+            row_y = {}
+            for c in cells:
+                row_y.setdefault(c["row_idx"], []).append(c["top_y"])
+            row_y = {r: min(v) for r, v in row_y.items()}
+            for c in cells:
+                c["_pos"] = float(c["row_idx"])
+            for j, c in enumerate(sorted(no_coords, key=lambda x: x["top_y"])):
+                c["col_idx"] = 0
+                rank = sum(1 for y in row_y.values() if y <= c["top_y"])
+                c["_pos"] = (rank - 0.5) + j * 1e-6      # between lattice rows, unique & y-ordered
+            all_cells = cells + no_coords
+            order = sorted({c["_pos"] for c in all_cells})
+            remap = {p: i for i, p in enumerate(order)}
+            for c in all_cells:
+                c["row_idx"] = remap[c["_pos"]]
+            cells = all_cells
 
         return [dict(row_idx=c["row_idx"],
                      col_idx=c["col_idx"],
