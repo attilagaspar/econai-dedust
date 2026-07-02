@@ -4915,6 +4915,9 @@ def api_export_excel(
                 c["row_idx"] = remap[c["_pos"]]
             cells = all_cells
 
+        _n_free = sum(1 for c in cells if c["super_row"] is None or c["super_col"] is None)
+        print(f"[EXCEL] shapes_to_cells returning {len(cells)} cells "
+              f"({len(cells) - _n_free} lattice + {_n_free} non-lattice interleaved)", flush=True)
         return [dict(row_idx=c["row_idx"],
                      col_idx=c["col_idx"],
                      # Internal row structure is authoritative when present
