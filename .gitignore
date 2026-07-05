@@ -43,3 +43,20 @@ Thumbs.db
 # Temp/lock files
 ~$*
 *.tmp
+
+# Server logs & local runtime state
+server*.log
+server.err
+server.out
+app/ocr_settings.json
+
+# Model weights (never in git)
+*.pth
+
+# Stray page images / screenshots dropped at the repo root
+/*.png
+/*.jpg
+/*.jpeg
+
+# Personal research notes
+paper_ideas_separate.md
