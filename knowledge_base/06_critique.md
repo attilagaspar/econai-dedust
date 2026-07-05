@@ -32,9 +32,9 @@ An honest assessment, from big-picture to nitty-gritty. Ordered roughly by how m
 
 ## C. Engineering
 
-**C1. Two monoliths.** `index.html` ~10k lines (one `<script>`), `server.py` ~5.4k lines. No modules, no tests (fixture tests were done ad hoc with throwaway servers during sessions, none are committed). Regressions have happened exactly this way: divider-delete broke when drag logic changed; interleaving broke under the column filter. Every change risks distant breakage that only manual clicking would catch.
+**C1. Two monoliths.** ~~`index.html` ~10k lines~~ — **split 2026-07-05** into an HTML skeleton + 9 ordered JS files + external CSS (identical behavior; verified live). `server.py` (~5.4k lines) remains one module. Tests now exist (see C2) but coverage is thin — the regression risk is reduced, not gone.
 
-**C2. No CI, no pinned deps** (`requirements.txt` unpinned), no smoke test that the server boots and core endpoints round-trip.
+**C2. No CI, no pinned deps.** **Partly fixed 2026-07-05**: `requirements.txt` pinned (`~=` ranges), `tests/` added (17 pytest tests: boot smoke, shape CRUD, rows whitelist, Excel export incl. col-filter exemption, authority matcher on real places_hu). Still no CI runner / pre-commit hook — run `python -m pytest tests -q` before committing backend changes.
 
 **C3. Secrets & clutter.** `config.json` holds SSH key paths per project and syncs via Dropbox; OpenAI/Azure keys entered in the UI end up in local config too. Repo root is accumulating debris (`server.log`, `server.err`, `server_test.log`, stray PNG/JPG, `model_final_census.pth` — a weight file! — all untracked but sitting there); `.gitignore` doesn't cover them.
 

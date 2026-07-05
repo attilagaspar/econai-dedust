@@ -15,7 +15,13 @@ app/
   docker_config.py           container-name config
   static/
     dashboard.html (~1.9k)   project dashboard: import, GPU config, train/infer, params
-    index.html     (~10k)    the annotation/data editor — a single-file SPA
+    index.html     (~1.2k)   the annotation/data editor — HTML skeleton only (split 2026-07-05)
+    css/editor.css           editor styles (extracted from index.html)
+    js/*.js                  editor logic in ordered classic scripts sharing ONE global
+                             scope — load order in index.html is load-bearing:
+                             core.js → rules_clips.js → lattice.js → rows_panel.js →
+                             batch.js → export_ocr.js → llm_structured.js →
+                             authority.js → main.js (init/page loading last)
     validator.html (~2.4k)   older "data lab" batch-cleaning view
 authorities/                 *.authority.json gazetteer files (git-tracked) + README
 projects/<name>/
@@ -43,13 +49,13 @@ Persistence = the LabelMe JSON files themselves; every save rewrites the whole p
 
 ## Frontend
 
-**`index.html`** — one file: OpenSeadragon viewer + SVG overlay + right-side "Cell inspector" panel + toolbar. Contains edit/review modes, lattice tools, internal-rows table, authority panel, structured-JSON editor, rules/rule-fix modals, clips, the ⚙ Batch modal (junk-drawer of batch ops: OCR, LLM, convert, resolve_authority, json_export, Excel-style filters), toasts, undo stack, `_serializeWrite` write queue, `--panel-w` resizable panel, localStorage persistence for many knobs.
+**`index.html` + `js/*.js`** — OpenSeadragon viewer + SVG overlay + right-side "Cell inspector" panel + toolbar. The logic lives in nine ordered classic scripts (see file layout above); they share one global scope, so any function can call any other, but a *load-time* (top-level) call must not target a later file. Contains edit/review modes, lattice tools, internal-rows table, authority panel, structured-JSON editor, rules/rule-fix modals, clips, the ⚙ Batch modal (junk-drawer of batch ops: OCR, LLM, convert, resolve_authority, json_export, Excel-style filters), toasts, undo stack, `_serializeWrite` write queue, `--panel-w` resizable panel, localStorage persistence for many knobs.
 
 **`dashboard.html`** — projects list, import, GPU server + Docker cards, training params (persisted to localStorage `trainParams`), live log modal.
 
 ## Cross-cutting mechanisms & gotchas
 
-- **Stale-cache problem**: browsers cache `index.html`; a `[econai] build-N active` console marker identifies the loaded build. No cache-busting yet.
+- **Stale cache**: fixed — `/static` is served with `Cache-Control: no-cache`, so a plain reload always revalidates. The `[econai] build-N` console marker still exists but is no longer needed as a ritual.
 - **Write races**: all shape/row writes on the client go through a global promise chain (`_serializeWrite`); `saveRowStruct`/`replaceAllShapes` return success booleans and callers must gate on them.
 - **Whitelist trap**: any new per-row field must be added to the rows-PATCH whitelist in server.py, and any new per-shape field survives `PUT /api/page/shapes` only because that route stores shapes verbatim.
 - **Server restarts**: backend edits require restarting `python econai.py serve`; the CLI kills whatever holds the port first.

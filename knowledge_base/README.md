@@ -14,8 +14,8 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 | [07_improvement_roadmap.md](07_improvement_roadmap.md) | Concrete plans to make human–machine interaction faster and shorten raw-data → final-product time |
 
 Conventions for AI assistants:
-- The whole editor is one file: `app/static/index.html` (~10k lines). The backend is `app/server.py` (~5.4k lines). Grep before you assume something doesn't exist — most features do exist but are hard to find.
-- Browsers cache `index.html` aggressively; a `console.log('[econai] … build-N active')` marker at load tells you which build is running. Bump it when editing and tell the user to hard-reload.
+- The editor is `app/static/index.html` (HTML skeleton) + `app/static/js/*.js` — nine ordered classic scripts sharing one global scope (load order in index.html is load-bearing; no load-time calls into later files). Styles in `app/static/css/editor.css`. The backend is `app/server.py` (~5.4k lines). Grep across `js/` before you assume something doesn't exist — most features do exist but are hard to find.
+- Static files are served with `Cache-Control: no-cache`, so a plain reload picks up edits — no hard-reload ritual needed.
 - Page data lives in LabelMe-style JSONs next to the page image; the server rewrites the whole file on every save. Client-side writes are serialized through `_serializeWrite` — never bypass it.
 - `PATCH /api/page/shape/rows` rebuilds rows from a whitelist of fields; any new per-row field must be added to that whitelist or it silently disappears.
 - The user runs the server locally on Windows (`python econai.py serve`), data lives in Dropbox, code in git. Restart the server after backend edits; hard-reload after frontend edits.
