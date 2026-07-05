@@ -24,7 +24,7 @@ An honest assessment, from big-picture to nitty-gritty. Ordered roughly by how m
 
 **B3. Click-heavy micro-corrections.** Fixing one cell = click box → find field in a long right panel → click into value → type → save. The right panel (Cell inspector) has grown into a tall stack of collapsible groups; frequently-used things (Human field, per-row table) share space with rarely-used ones. Keyboard coverage is good for boxes but weak for *content*: no "jump to next disagreeing row and focus its Human field" key.
 
-**B4. Stale-cache whack-a-mole.** Hard-reload + build-marker console checks are a manual ritual; several "bugs" were stale caches. No versioned asset URL / cache-busting despite this having burned hours repeatedly.
+**B4. Stale-cache whack-a-mole.** ~~Hard-reload + build-marker console checks~~ — **fixed 2026-07-05**: `/static` is served with `Cache-Control: no-cache`, so a plain reload always revalidates (cheap 304 when unchanged). Build markers can be retired.
 
 **B5. Trust indicators are binary.** Border colors show *presence* of layers, not *agreement* or confidence. A page can look "all green" and still be wrong. Rule violations show per-line, which is great — but only rules that were manually authored; there is no generic anomaly shading (column type violations, outlier magnitudes, sum-check candidates auto-suggested from headers).
 
@@ -38,7 +38,7 @@ An honest assessment, from big-picture to nitty-gritty. Ordered roughly by how m
 
 **C3. Secrets & clutter.** `config.json` holds SSH key paths per project and syncs via Dropbox; OpenAI/Azure keys entered in the UI end up in local config too. Repo root is accumulating debris (`server.log`, `server.err`, `server_test.log`, stray PNG/JPG, `model_final_census.pth` — a weight file! — all untracked but sitting there); `.gitignore` doesn't cover them.
 
-**C4. Whole-file rewrite per save + Dropbox** = constant sync churn on multi-MB JSONs and a real corruption window (Dropbox syncing a half-written file). No atomic write-then-rename discipline confirmed, no locking.
+**C4. Whole-file rewrite per save + Dropbox.** ~~Corruption window~~ — saves were already crash-atomic (`_write_json`: temp file + `os.replace` with Dropbox/antivirus retry, global write lock). The remaining gap was the read-modify-write race between concurrent *requests* (second tab, batch overlapping a click) — **fixed 2026-07-05** by a middleware serializing mutating `/api/page*` requests per (folder, stem). Long SSE runs stay unserialized by design. Sync churn on multi-MB JSONs remains.
 
 **C5. Performance cliffs.** Authority index rebuilds per file mtime (fine), but pages with hundreds of shapes re-render the whole SVG overlay on each save; batch LLM has no concurrency control surfaced; Excel export loads everything in memory.
 

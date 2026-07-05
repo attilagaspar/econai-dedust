@@ -15,6 +15,7 @@ import json
 import os
 import posixpath
 import re
+import asyncio
 import tempfile
 import threading
 import time
@@ -120,10 +121,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Per-page mutation serialization — handlers do read-modify-write on the page
+# JSON, so two concurrent mutations of the same page (second browser tab,
+# batch op overlapping a click) could each read the old file and the later
+# write would silently erase the earlier change.  _write_json makes each
+# write crash-atomic; this middleware makes the whole request atomic by
+# queueing mutating requests per (folder, stem).  SSE/streaming runs release
+# the lock when the stream starts — long OCR/LLM runs stay unserialized by
+# design (they write once at the end and the client serializes its own ops).
+# ---------------------------------------------------------------------------
+_PAGE_MUT_LOCKS: dict = {}
+_PAGE_MUT_GUARD = threading.Lock()
+
+def _page_mut_lock(folder: str, stem: str):
+    try:
+        fkey = str(Path(folder).resolve()).lower()
+    except OSError:
+        fkey = folder.lower()
+    key = (fkey, stem.lower())
+    with _PAGE_MUT_GUARD:
+        lock = _PAGE_MUT_LOCKS.get(key)
+        if lock is None:
+            lock = _PAGE_MUT_LOCKS[key] = asyncio.Lock()
+    return lock
+
+@app.middleware("http")
+async def _serialize_page_mutations(request, call_next):
+    if request.method in ("PATCH", "POST", "PUT", "DELETE") \
+            and request.url.path.startswith("/api/page"):
+        folder = request.query_params.get("folder")
+        stem   = request.query_params.get("stem")
+        if folder and stem:
+            async with _page_mut_lock(folder, stem):
+                return await call_next(request)
+    return await call_next(request)
+
 # Serve the frontend from app/static/
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+class _NoCacheStaticFiles(StaticFiles):
+    """Static files with Cache-Control: no-cache.
+
+    The browser may keep a copy but must revalidate on every request
+    (a cheap 304 when unchanged), so a plain reload always picks up
+    edits to index.html & co — no more stale-build hard-reload ritual."""
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+app.mount("/static", _NoCacheStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ---------------------------------------------------------------------------
@@ -4922,7 +4971,10 @@ def api_export_excel(
                      col_idx=c["col_idx"],
                      # Internal row structure is authoritative when present
                      lines=c["row_lines"] if c["row_lines"] else text_to_lines(c["text"]),
-                     w_px=c["w"], clip=c.get("clip"))
+                     w_px=c["w"], clip=c.get("clip"),
+                     # free = interleaved non-lattice annotation (title/footer/…);
+                     # exempt from the column filter — it has no real column.
+                     free=(c["super_row"] is None or c["super_col"] is None))
                 for c in cells]
 
     # ── Helpers for stacking / horizontal page groups ────────────────────────
@@ -5077,14 +5129,20 @@ def api_export_excel(
                    for lo, hi in _col_filter_ranges)
 
     def apply_col_filter(cells):
-        """Keep only columns matching _col_filter_ranges and re-index col_idx."""
+        """Keep only columns matching _col_filter_ranges and re-index col_idx.
+
+        Non-lattice annotations interleaved on lattice pages (free=True) are
+        kept no matter what — they sit at column 0 only because they have no
+        real column, so the filter must not drop them."""
         if _col_filter_ranges is None:
             return cells
-        kept = [c for c in cells if _col_matches(c["col_idx"])]
+        kept = [c for c in cells if not c.get("free") and _col_matches(c["col_idx"])]
         # Re-index: sort the kept col indices, map old → new
         old_cols = sorted({c["col_idx"] for c in kept})
         remap = {old: new for new, old in enumerate(old_cols)}
-        return [{**c, "col_idx": remap[c["col_idx"]]} for c in kept]
+        out = [{**c, "col_idx": remap[c["col_idx"]]} for c in kept]
+        out.extend({**c, "col_idx": 0} for c in cells if c.get("free"))
+        return out
 
     def apply_clips_only(cells):
         """Keep only rows that carry a clip on at least one of their cells."""
