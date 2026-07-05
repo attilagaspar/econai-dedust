@@ -984,6 +984,20 @@ function drawOverlay() {
       svgOverlay.appendChild(rect);
     });
 
+    // Authority badge: green dot = fully resolved, amber = partially (rows)
+    const _ab = _authBadgeState(shape);
+    if (_ab) {
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('cx', br.x - 6);
+      dot.setAttribute('cy', tl.y + 6);
+      dot.setAttribute('r', 3.5);
+      dot.setAttribute('fill', _ab === 'full' ? '#22c55e' : '#f59e0b');
+      dot.setAttribute('stroke', '#0d1b35');
+      dot.setAttribute('stroke-width', '1');
+      dot.style.pointerEvents = 'none';
+      svgOverlay.appendChild(dot);
+    }
+
     // Internal row dividers (row_struct) — always visible
     const rsRows = shape.row_struct?.rows;
     if (rsRows?.length > 1) {

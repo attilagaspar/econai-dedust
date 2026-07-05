@@ -11,7 +11,10 @@
 - **Scoping**: per-column authority (`flags.column_authority`) overrides per-page default (`flags.authority_file`).
 - **Batch**: `resolve_authority` op in the ⚙ Batch modal → `POST /api/authority/batch` (in-process, fast), with page pattern, column filter, overwrite policy (human picks always kept), context usage.
 - **Export**: Excel companion sheet **Resolved** (original + resolved_name + resolved_id + type/score/source/coords).
-- **Planned**: 1933/1935 administrative overlay as new temporal slices on the same IDs; HS-heading authority for products; firm authority; canvas tint for resolved cells; LLM disambiguation of near-ties.
+- **Worklist (built 2026-07-05)**: "📋 Unresolved worklist…" in the ⚙ Batch resolve panel → `POST /api/authority/worklist` groups every resolvable-but-unresolved string (same page/column scope as the batch op) by folded form, sorted by frequency, with sample crops + prefilled candidates; picking an entity and hitting Apply (`POST /api/authority/apply_string`) resolves ALL occurrences at once (written source=human, so batches keep it). A 🤖 button per string sends the cell crop + candidates to the LLM (`POST /api/authority/llm_pick`) to disambiguate near-ties.
+- **Alias learning (built 2026-07-05)**: "➕ Alias suggestions…" → `POST /api/authority/alias_candidates` lists human-confirmed strings the authority file doesn't know yet; `POST /api/authority/promote_aliases` appends them as `{"source": "econai_confirmed"}` aliases to the git-tracked file (review the diff before committing). The matcher picks them up automatically (mtime cache).
+- **Canvas badges (built 2026-07-05)**: each shape gets a corner dot — green = fully resolved (shape or all text-bearing rows), amber = partially resolved rows (`_authBadgeState` in authority.js, drawn in `drawOverlay`).
+- **Planned**: 1933/1935 administrative overlay as new temporal slices on the same IDs; HS-heading authority for products; firm authority.
 
 ## 2. Structured (JSON) extraction
 

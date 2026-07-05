@@ -3671,6 +3671,315 @@ def api_authority_batch(folder: str = Query(...), body: AuthorityBatch = ...):
             "authority": body.name or _AUTH_DEFAULT_FILE}
 
 
+# ---------------------------------------------------------------------------
+# Authority — unresolved worklist, apply-by-string, alias promotion, LLM pick
+# ---------------------------------------------------------------------------
+
+def _auth_select_pages(d, stems, pattern):
+    """Ordered stems filtered by the cyclic 1/0 pattern (same as the batch op)."""
+    stems = [s for s in (stems or []) if s]
+    if not stems:
+        stems = [jf.stem for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+    bits = [1 if p.strip() == "1" else 0 for p in (pattern or "").split(",") if p.strip() != ""]
+    if not bits:
+        bits = [1]
+    return [s for i, s in enumerate(stems) if bits[i % len(bits)] == 1]
+
+
+def _auth_iter_units(shapes, col_allowed, layer):
+    """Yield (shape_idx, container, row_n|None, text) for every lattice cell /
+    internal row within the column filter, in reading order per column."""
+    from collections import defaultdict
+    cols = defaultdict(list)
+    for i, sh in enumerate(shapes):
+        sr, sc = sh.get("super_row"), sh.get("super_column")
+        if sr is None or sc is None or not col_allowed(int(sc)):
+            continue
+        cols[(sh.get("table") or 0, int(sc))].append((int(sr), i, sh))
+    for key in sorted(cols):
+        items = cols[key]
+        items.sort(key=lambda x: x[0])
+        for _sr, i, sh in items:
+            rows = (sh.get("row_struct") or {}).get("rows") or []
+            if rows:
+                for r in rows:
+                    yield i, r, r.get("n"), _auth_layer_text(
+                        r.get("human"), r.get("ocr"), r.get("llm"), r.get("pdf"), layer)
+            else:
+                yield i, sh, None, _auth_layer_text(
+                    (sh.get("human_output") or {}).get("human_corrected_text"),
+                    ((sh.get("tesseract_output") or {}).get("ocr_text") or
+                     (sh.get("easyocr_output") or {}).get("ocr_text")),
+                    (sh.get("openai_output") or {}).get("response"),
+                    sh.get("pdf_text"), layer)
+
+
+def _auth_col_pred(col_filter):
+    ranges = _parse_col_ranges(col_filter)
+    if ranges is None:
+        return lambda sc: True
+    return lambda sc: any(lo <= sc <= (hi if hi is not None else sc) for lo, hi in ranges)
+
+
+class AuthorityScanBody(BaseModel):
+    stems:      List[str] = []
+    pattern:    Optional[str] = None
+    col_filter: Optional[str] = None
+    name:       Optional[str] = None       # authority filename
+    type:       Optional[str] = None       # restrict candidate lookup to one type
+    layer:      str = "best_llm"
+
+
+@app.post("/api/authority/worklist")
+def api_authority_worklist(folder: str = Query(...), body: AuthorityScanBody = ...):
+    """Distinct unresolved strings across the selected pages/columns, grouped by
+    folded form and sorted by frequency — fix the most common ones first, once."""
+    from collections import Counter
+    d = _resolve_folder(folder)
+    index = _load_authority(body.name)
+    strip = index.get("strip") or set()
+    pages = _auth_select_pages(d, body.stems, body.pattern)
+    col_allowed = _auth_col_pred(body.col_filter)
+
+    groups: dict = {}   # fold -> {"count", "texts": Counter, "locations": []}
+    for stem in pages:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for i, container, row_n, text in _auth_iter_units(data.get("shapes", []), col_allowed, body.layer):
+            if container.get("authority"):
+                continue
+            if _auth_is_ditto(text) or not _auth_resolvable(text):
+                continue
+            fold = _auth_strip_status(_auth_fold(text), strip)
+            if not fold:
+                continue
+            g = groups.setdefault(fold, {"count": 0, "texts": Counter(), "locations": []})
+            g["count"] += 1
+            g["texts"][text.strip()] += 1
+            if len(g["locations"]) < 20:
+                g["locations"].append({"stem": stem, "idx": i, "row": row_n})
+
+    ordered = sorted(groups.items(), key=lambda kv: -kv[1]["count"])[:500]
+    out = []
+    for fold, g in ordered:
+        display = g["texts"].most_common(1)[0][0]
+        item = {"fold": fold, "text": display, "count": g["count"],
+                "locations": g["locations"]}
+        # Prefill candidates for the most frequent strings (one match per
+        # distinct string — cheap thanks to the cached index).
+        if len(out) < 200:
+            item["candidates"] = _authority_match(display, body.type, None, 5, body.name)
+        out.append(item)
+    return {"groups": out, "distinct": len(groups),
+            "total_unresolved": sum(g["count"] for g in groups.values()),
+            "pages": len(pages), "authority": body.name or _AUTH_DEFAULT_FILE}
+
+
+class AuthorityApplyString(BaseModel):
+    stems:      List[str] = []
+    pattern:    Optional[str] = None
+    col_filter: Optional[str] = None
+    name:       Optional[str] = None
+    layer:      str = "best_llm"
+    fold:       str                        # target folded string from the worklist
+    entity_id:  str                        # chosen entity
+
+
+@app.post("/api/authority/apply_string")
+def api_authority_apply_string(folder: str = Query(...), body: AuthorityApplyString = ...):
+    """Resolve EVERY unresolved cell/row whose folded text equals `fold` to the
+    chosen entity — one human decision applied to all occurrences. Written with
+    source='human' (it is a human decision), so batches keep it."""
+    d = _resolve_folder(folder)
+    index = _load_authority(body.name)
+    strip = index.get("strip") or set()
+    v = index["by_id"].get(body.entity_id)
+    if not v:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {body.entity_id}")
+    proto = _auth_obj_from_cand({**v, "score": 100.0, "via": "worklist"}, "human")
+
+    pages = _auth_select_pages(d, body.stems, body.pattern)
+    col_allowed = _auth_col_pred(body.col_filter)
+    applied, pages_changed = 0, 0
+    for stem in pages:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        changed = False
+        for i, container, row_n, text in _auth_iter_units(data.get("shapes", []), col_allowed, body.layer):
+            if container.get("authority"):
+                continue
+            if _auth_is_ditto(text) or not _auth_resolvable(text):
+                continue
+            if _auth_strip_status(_auth_fold(text), strip) != body.fold:
+                continue
+            container["authority"] = dict(proto)
+            applied += 1
+            changed = True
+        if changed:
+            _write_json(jf, data)
+            pages_changed += 1
+    return {"ok": True, "applied": applied, "pages_changed": pages_changed,
+            "entity": {"id": v["id"], "name": v["name"]}}
+
+
+@app.post("/api/authority/alias_candidates")
+def api_authority_alias_candidates(folder: str = Query(...), body: AuthorityScanBody = ...):
+    """Strings a human resolved to an entity that are NOT yet a name/alias of
+    that entity in the authority file — candidates for alias promotion, so
+    every future project matches them automatically."""
+    from collections import Counter
+    d = _resolve_folder(folder)
+    index = _load_authority(body.name)
+    strip = index.get("strip") or set()
+    known: dict = {}                       # id -> set of known folds
+    for c in index["pool_all"]:
+        known.setdefault(c["id"], set()).add(c["fold"])
+
+    pages = _auth_select_pages(d, body.stems, body.pattern)
+    col_allowed = _auth_col_pred(body.col_filter)
+    cands: dict = {}                       # (id, fold) -> {"count", "texts": Counter, "name"}
+    for stem in pages:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for i, container, row_n, text in _auth_iter_units(data.get("shapes", []), col_allowed, body.layer):
+            a = container.get("authority")
+            if not a or a.get("source") != "human" or a.get("via") == "ditto":
+                continue
+            if _auth_is_ditto(text) or not _auth_resolvable(text):
+                continue
+            eid = a.get("id")
+            if eid not in known:           # belongs to a different authority
+                continue
+            fold = _auth_strip_status(_auth_fold(text), strip)
+            if not fold or fold in known[eid]:
+                continue
+            c = cands.setdefault((eid, fold), {"count": 0, "texts": Counter(),
+                                               "name": a.get("name")})
+            c["count"] += 1
+            c["texts"][text.strip()] += 1
+
+    out = [{"id": eid, "entity_name": c["name"],
+            "alias": c["texts"].most_common(1)[0][0], "count": c["count"]}
+           for (eid, fold), c in sorted(cands.items(), key=lambda kv: -kv[1]["count"])[:300]]
+    return {"candidates": out, "authority": body.name or _AUTH_DEFAULT_FILE}
+
+
+class AuthorityPromote(BaseModel):
+    name:    Optional[str] = None
+    aliases: List[dict] = []               # [{id, alias}]
+
+
+@app.post("/api/authority/promote_aliases")
+def api_authority_promote_aliases(body: AuthorityPromote = ...):
+    """Append human-confirmed aliases to the authority FILE (source
+    'econai_confirmed'). The file is git-tracked — review the diff before
+    committing. The matcher picks the change up automatically (mtime cache)."""
+    fname = body.name or _AUTH_DEFAULT_FILE
+    path = AUTHORITIES_DIR / fname
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    by_id = {e.get("id"): e for e in data.get("entities", [])}
+    added = 0
+    for a in body.aliases:
+        e = by_id.get(a.get("id"))
+        alias = (a.get("alias") or "").strip()
+        if not e or not alias:
+            continue
+        existing = {_auth_norm(x.get("name", "")) for x in (e.get("aliases") or [])}
+        existing.add(_auth_norm(e.get("name") or ""))
+        for sl in (e.get("slices") or []):
+            existing.add(_auth_norm(sl.get("name") or ""))
+        if _auth_norm(alias) in existing:
+            continue
+        e.setdefault("aliases", []).append({"name": alias, "source": "econai_confirmed"})
+        added += 1
+    if added:
+        counts = data.get("counts")
+        if isinstance(counts, dict) and "aliases" in counts:
+            counts["aliases"] = counts["aliases"] + added
+        _write_json(path, data)
+    return {"ok": True, "added": added, "file": fname}
+
+
+class AuthorityLlmPick(BaseModel):
+    stem:       str
+    idx:        int
+    text:       str
+    model:      str = "gpt-4o-mini"
+    candidates: List[dict] = []            # [{id, name, type, county_name, district_name}]
+
+
+@app.post("/api/authority/llm_pick")
+def api_authority_llm_pick(folder: str = Query(...), body: AuthorityLlmPick = ...):
+    """Disambiguate a near-tie: send the cell image + the candidate entities to
+    the LLM and return the id it picks (or none)."""
+    import base64, io as _io
+    from PIL import Image as PILImage
+
+    if not body.candidates:
+        raise HTTPException(status_code=400, detail="No candidates given")
+    d = _resolve_folder(folder)
+    img_path = _find_image(d, body.stem)
+    jf = d / f"{body.stem}.json"
+    if img_path is None or not jf.exists():
+        raise HTTPException(status_code=404, detail="Page not found")
+    shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+    if body.idx < 0 or body.idx >= len(shapes):
+        raise HTTPException(status_code=400, detail="Shape index out of range")
+
+    img = PILImage.open(str(img_path)).convert("RGB")
+    x1, y1, x2, y2 = _shape_bbox(shapes[body.idx])
+    pad = 6
+    crop = img.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
+                     min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
+    if crop.height < 48:
+        scale = 48 / max(1, crop.height)
+        crop = crop.resize((max(1, int(crop.width * scale)), 48), PILImage.LANCZOS)
+    buf = _io.BytesIO(); crop.save(buf, format="JPEG", quality=92)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+
+    lines = []
+    for c in body.candidates:
+        ctx = ", ".join(x for x in (c.get("type"), c.get("county_name"),
+                                    c.get("district_name")) if x)
+        lines.append(f"{c.get('id')}: {c.get('name')} ({ctx})")
+    prompt = (
+        "The image is a cell from a historical Hungarian document. Its OCR "
+        f"reading is: \"{body.text}\".\n"
+        "Which of these gazetteer entries does the cell refer to?\n"
+        + "\n".join(lines)
+        + "\nReply with ONLY the id of the best match, or NONE if none of them fit."
+    )
+    content = [{"type": "text", "text": prompt},
+               {"type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}}]
+    try:
+        client = _make_llm_client(body.model)
+        resp = _llm_complete(client, body.model, [{"role": "user", "content": content}], 256)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    raw = (resp.choices[0].message.content or "").strip()
+    choice = next((c.get("id") for c in body.candidates
+                   if c.get("id") and c.get("id") in raw), None)
+    return {"choice": choice, "raw": raw}
+
+
 class PrepareRequest(BaseModel):
     max_iter:      Optional[int]   = None
     base_lr:       Optional[float] = None

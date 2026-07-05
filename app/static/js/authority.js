@@ -469,3 +469,219 @@ async function runSmartCorrect() {
   showToast(`Smart Correct: fixed ${fixCount} cell${fixCount!==1?'s':''}`);
 }
 
+
+// ── Authority worklist: distinct unresolved strings, fix once → apply to all ──
+let _wlData = null;        // last worklist response
+let _wlMode = null;        // 'worklist' | 'aliases'
+
+function _authWlScope() {
+  // Reuse the ⚙ Batch modal's scope fields (pages, parity, column filter, authority).
+  const indices = _parsePageRange(document.getElementById('batch-pages').value);
+  if (!indices) return null;
+  if (document.getElementById('batch-parity-odd').checked)
+    for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
+  if (document.getElementById('batch-parity-even').checked)
+    for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
+  const stems = [...indices].sort((a, b) => a - b).map(i => pages[i]?.stem).filter(Boolean);
+  return {
+    stems,
+    col_filter: document.getElementById('batch-col-filter').value.trim() || null,
+    name:       document.getElementById('batch-auth-file').value || null,
+    type:       document.getElementById('batch-auth-type').value || null,
+    layer:      document.getElementById('batch-auth-layer').value,
+  };
+}
+
+function closeAuthWorklist() {
+  document.getElementById('auth-worklist-modal').style.display = 'none';
+}
+
+function _wlShow(title) {
+  document.getElementById('auth-wl-title').textContent = title;
+  document.getElementById('auth-wl-summary').textContent = '';
+  document.getElementById('auth-wl-status').textContent = 'Loading…';
+  document.getElementById('auth-wl-list').innerHTML = '';
+  document.getElementById('auth-wl-footer').innerHTML = '';
+  document.getElementById('auth-worklist-modal').style.display = 'flex';
+}
+
+async function openAuthWorklist() {
+  const scope = _authWlScope();
+  if (!scope) return;
+  if (!scope.stems.length) { showToast('No pages in range'); return; }
+  _wlMode = 'worklist';
+  _wlShow('📋 Unresolved worklist');
+  try {
+    const r = await fetch(`${API}/api/authority/worklist?folder=${encodeURIComponent(folder)}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(scope)});
+    if (!r.ok) { const m = await r.json().catch(() => ({})); throw new Error(m.detail || r.status); }
+    _wlData = await r.json();
+    _wlRender(scope);
+  } catch (e) {
+    document.getElementById('auth-wl-status').textContent = '✕ ' + (e?.message || e);
+  }
+}
+
+function _wlCellImg(loc) {
+  const u = `${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(loc.stem)}&idx=${loc.idx}&pad=4`;
+  return `<img src="${u}" title="${_escH(loc.stem)}" style="max-height:44px;max-width:220px;border:1px solid #0f3460;border-radius:3px;background:#fff;">`;
+}
+
+function _wlCandOpts(cands, selectedId) {
+  const opts = (cands || []).map(c => {
+    const ctx = [c.type, c.county_name, c.district_name].filter(Boolean).join(', ');
+    const sel = c.id === selectedId ? ' selected' : '';
+    return `<option value="${_escH(c.id)}"${sel}>${_escH(c.name)} — ${_escH(ctx)} (${Math.round(c.score ?? 0)})</option>`;
+  }).join('');
+  return `<option value="">— pick entity —</option>` + opts;
+}
+
+function _wlRender(scope) {
+  const d = _wlData;
+  document.getElementById('auth-wl-status').textContent = '';
+  document.getElementById('auth-wl-summary').textContent =
+    `${d.total_unresolved} unresolved in ${d.distinct} distinct strings · ${d.pages} page(s) · ${d.authority}`;
+  const list = document.getElementById('auth-wl-list');
+  if (!d.groups.length) { list.innerHTML = '<div style="color:#7ec8a0;font-size:13px;">✓ Nothing unresolved in this scope.</div>'; return; }
+  list.innerHTML = d.groups.map((g, gi) => {
+    const samples = (g.locations || []).slice(0, 2).map(_wlCellImg).join(' ');
+    return `<div class="wl-row" data-gi="${gi}" style="display:flex;align-items:center;gap:8px;background:#091530;border:1px solid #0f3460;border-radius:5px;padding:6px 8px;">
+      <span style="flex:none;min-width:34px;text-align:right;color:#e94560;font-weight:700;font-size:12px;">${g.count}×</span>
+      <span style="flex:none;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e0e0e0;font-size:12px;" title="${_escH(g.text)}">${_escH(g.text)}</span>
+      <span style="flex:none;">${samples}</span>
+      <select class="wl-pick" style="flex:1;min-width:160px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 6px;font-size:12px;">${_wlCandOpts(g.candidates, (g.candidates && g.candidates[0] && g.candidates[0].score >= 85) ? g.candidates[0].id : null)}</select>
+      <input class="wl-search" placeholder="search…" style="flex:none;width:110px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 6px;font-size:12px;">
+      <button class="wl-llm" title="Ask the LLM to pick using the cell image" style="flex:none;background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:4px 8px;font-size:12px;cursor:pointer;">🤖</button>
+      <button class="wl-apply" style="flex:none;background:#1b4d2e;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;">Apply</button>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.wl-row').forEach(row => {
+    const gi = +row.dataset.gi, g = d.groups[gi];
+    const pick = row.querySelector('.wl-pick');
+    // live search from the 3rd character (same behavior as the panel dropdown)
+    let t = null;
+    row.querySelector('.wl-search').addEventListener('input', ev => {
+      const q = ev.target.value.trim();
+      clearTimeout(t);
+      if (q.length < 3) return;
+      t = setTimeout(async () => {
+        try {
+          const p = new URLSearchParams({q, k: '8'});
+          if (scope.name) p.set('name', scope.name);
+          if (scope.type) p.set('type', scope.type);
+          const r = await fetch(`${API}/api/authority/resolve?${p}`);
+          const cands = (await r.json()).candidates || [];
+          g.candidates = cands;
+          pick.innerHTML = _wlCandOpts(cands, cands[0]?.id);
+        } catch (e) {}
+      }, 250);
+    });
+    row.querySelector('.wl-llm').addEventListener('click', async ev => {
+      const btn = ev.target;
+      const cands = (g.candidates || []).slice(0, 5);
+      if (!cands.length) { showToast('No candidates to choose from — search first'); return; }
+      const loc = g.locations && g.locations[0];
+      if (!loc) return;
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        const model = document.getElementById('batch-llm-model')?.value || 'gpt-4o-mini';
+        const r = await fetch(`${API}/api/authority/llm_pick?folder=${encodeURIComponent(folder)}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({stem: loc.stem, idx: loc.idx, text: g.text, model,
+                                candidates: cands.map(c => ({id: c.id, name: c.name, type: c.type,
+                                  county_name: c.county_name, district_name: c.district_name}))})});
+        const m = await r.json();
+        if (!r.ok) throw new Error(m.detail || r.status);
+        if (m.choice) { pick.value = m.choice; showToast('LLM picked: ' + ((cands.find(c => c.id === m.choice) || {}).name || m.choice)); }
+        else showToast('LLM: none of the candidates fit');
+      } catch (e) { showToast('LLM error: ' + (e?.message || e)); }
+      finally { btn.disabled = false; btn.textContent = '🤖'; }
+    });
+    row.querySelector('.wl-apply').addEventListener('click', async ev => {
+      const id = pick.value;
+      if (!id) { showToast('Pick an entity first'); return; }
+      const btn = ev.target; btn.disabled = true; btn.textContent = '…';
+      try {
+        const r = await fetch(`${API}/api/authority/apply_string?folder=${encodeURIComponent(folder)}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({...scope, fold: g.fold, entity_id: id})});
+        const m = await r.json();
+        if (!r.ok) throw new Error(m.detail || r.status);
+        row.style.opacity = '0.55'; row.style.borderColor = '#2e7d4f';
+        btn.textContent = `✓ ${m.applied}`;
+        showToast(`"${g.text}" → ${m.entity.name}: ${m.applied} cell(s) on ${m.pages_changed} page(s)`);
+        if (pageData) { await reloadPageData(); updatePanel(); drawOverlay(); }
+      } catch (e) {
+        showToast('Apply error: ' + (e?.message || e));
+        btn.disabled = false; btn.textContent = 'Apply';
+      }
+    });
+  });
+}
+
+// ── Alias suggestions: confirmed picks the authority file doesn't know yet ──
+async function openAuthAliases() {
+  const scope = _authWlScope();
+  if (!scope) return;
+  if (!scope.stems.length) { showToast('No pages in range'); return; }
+  _wlMode = 'aliases';
+  _wlShow('➕ Alias suggestions');
+  try {
+    const r = await fetch(`${API}/api/authority/alias_candidates?folder=${encodeURIComponent(folder)}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(scope)});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    document.getElementById('auth-wl-status').textContent = '';
+    document.getElementById('auth-wl-summary').textContent =
+      `${d.candidates.length} suggestion(s) · ${d.authority}`;
+    const list = document.getElementById('auth-wl-list');
+    if (!d.candidates.length) {
+      list.innerHTML = '<div style="color:#7ec8a0;font-size:13px;">No new aliases — every confirmed pick is already known to the authority.</div>';
+      return;
+    }
+    list.innerHTML = d.candidates.map((c, i) => `
+      <label style="display:flex;align-items:center;gap:8px;background:#091530;border:1px solid #0f3460;border-radius:5px;padding:6px 8px;cursor:pointer;font-size:12px;color:#e0e0e0;">
+        <input type="checkbox" class="wl-alias" data-i="${i}" checked style="accent-color:#e94560;width:13px;height:13px;">
+        <span style="flex:none;min-width:34px;text-align:right;color:#e94560;font-weight:700;">${c.count}×</span>
+        <span style="flex:none;color:#f0c040;">"${_escH(c.alias)}"</span>
+        <span style="flex:none;color:#666;">→</span>
+        <span style="flex:1;">${_escH(c.entity_name)} <span style="color:#666;font-size:10px;">${_escH(c.id)}</span></span>
+      </label>`).join('');
+    document.getElementById('auth-wl-footer').innerHTML =
+      `<span style="flex:1;font-size:10px;color:#555;align-self:center;">Appends aliases (source: econai_confirmed) to the git-tracked authority file — review the diff before committing.</span>
+       <button onclick="_wlPromote()" style="background:#1b4d2e;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer;">➕ Add selected to authority</button>`;
+    _wlData = d;
+  } catch (e) {
+    document.getElementById('auth-wl-status').textContent = '✕ ' + (e?.message || e);
+  }
+}
+
+async function _wlPromote() {
+  const sel = [...document.querySelectorAll('.wl-alias:checked')]
+    .map(cb => _wlData.candidates[+cb.dataset.i])
+    .map(c => ({id: c.id, alias: c.alias}));
+  if (!sel.length) { showToast('Nothing selected'); return; }
+  try {
+    const r = await fetch(`${API}/api/authority/promote_aliases`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: document.getElementById('batch-auth-file').value || null, aliases: sel})});
+    const m = await r.json();
+    if (!r.ok) throw new Error(m.detail || r.status);
+    showToast(`Added ${m.added} alias(es) to ${m.file} — review with git diff`, 6000);
+    closeAuthWorklist();
+  } catch (e) { showToast('Promote error: ' + (e?.message || e)); }
+}
+
+// ── Canvas badge: is this shape (fully / partly) resolved? ──────────────────
+function _authBadgeState(shape) {
+  const rows = shape.row_struct?.rows;
+  if (rows?.length) {
+    const withText = rows.filter(r =>
+      ((r.human || r.llm || r.ocr || r.pdf) || '').trim().replace(/\s/g, '').length >= 2);
+    const resolved = withText.filter(r => r.authority);
+    if (!resolved.length) return null;
+    return resolved.length >= withText.length ? 'full' : 'part';
+  }
+  return shape.authority ? 'full' : null;
+}

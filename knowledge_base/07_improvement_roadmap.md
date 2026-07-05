@@ -72,13 +72,11 @@ Goal metric: **human minutes per 1,000 verified data cells**, and **days from ra
 
 **Problem** (D1): silent skips; same fix repeated; authority files never learn.
 
-**Plan**
-1. "Unresolved" report: distinct unresolved strings ranked by frequency, each with sample crops; resolve once → applied to all occurrences (string→id memo per project).
-2. Accepted manual picks optionally promoted to `aliases` (source: `econai_confirmed`) in the authority file via an export/merge step (reviewed diff, since authorities are git-tracked).
-3. LLM disambiguation for near-ties (send crop + candidates); canvas tint on resolved/unresolved cells.
-4. Build the **1933/1935 place slice** (`helysegnevtar_1933` project feeds it) and the **HS-heading authority** for product codes — both unblock the actual research datasets.
-
-**Effort**: 1–2 sessions each item; item 4 is data work as much as code.
+**Plan** (items 1–3 **DONE 2026-07-05** — see 05_subsystems.md for the endpoints/UI)
+1. ~~"Unresolved" report~~: worklist modal in the ⚙ Batch resolve panel — distinct unresolved strings by frequency with crops + candidates; Apply resolves all occurrences.
+2. ~~Alias promotion~~: alias-suggestions modal → `econai_confirmed` aliases appended to the git-tracked authority file.
+3. ~~LLM disambiguation + canvas tint~~: 🤖 per-string LLM pick (crop + candidates); green/amber corner dots on resolved/partially-resolved cells.
+4. Build the **1933/1935 place slice** (`helysegnevtar_1933` project feeds it) and the **HS-heading authority** for product codes — both unblock the actual research datasets. **(Remaining — mostly data work.)**
 
 ## P7. Engineering hardening (enables everything above)
 

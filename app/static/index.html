@@ -906,6 +906,11 @@
         <span>Use each page's county/district context to narrow matches</span>
       </label>
       <div style="font-size:10px;color:#555;">Uses the Column filter and Pages above. Ditto marks inherit the entity above within a cell; low-similarity matches are skipped.</div>
+      <div style="display:flex;gap:8px;">
+        <button type="button" onclick="openAuthWorklist()" style="flex:1;background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;">📋 Unresolved worklist…</button>
+        <button type="button" onclick="openAuthAliases()" style="flex:1;background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;">➕ Alias suggestions…</button>
+      </div>
+      <div style="font-size:10px;color:#555;">Worklist = distinct unresolved strings by frequency — pick the entity once, apply to all occurrences. Alias suggestions = your confirmed picks that the authority file doesn't know yet.</div>
     </div>
 
     <!-- JSON export options -->
@@ -1056,6 +1061,20 @@
       <button id="batch-cancel-btn" onclick="closeBatchModal()">Cancel</button>
       <button id="batch-run-btn" onclick="runBatch()">Run</button>
     </div>
+  </div>
+</div>
+
+<!-- Authority worklist / alias-suggestions modal -->
+<div id="auth-worklist-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:2100;align-items:center;justify-content:center;">
+  <div style="background:#0d1b35;border:1px solid #0f3460;border-radius:8px;width:min(1000px,94vw);max-height:90vh;display:flex;flex-direction:column;padding:18px;gap:10px;box-shadow:0 8px 40px #000a;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span id="auth-wl-title" style="font-size:14px;font-weight:700;color:#e0e0e0;flex:1;">📋 Unresolved worklist</span>
+      <span id="auth-wl-summary" style="font-size:11px;color:#888;"></span>
+      <button onclick="closeAuthWorklist()" style="background:none;border:none;color:#aaa;font-size:18px;cursor:pointer;">✕</button>
+    </div>
+    <div id="auth-wl-status" style="font-size:12px;color:#7ec8a0;"></div>
+    <div id="auth-wl-list" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;min-height:120px;"></div>
+    <div id="auth-wl-footer" style="display:flex;gap:8px;justify-content:flex-end;"></div>
   </div>
 </div>
 
