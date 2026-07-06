@@ -2309,6 +2309,8 @@ class LlmBatchSubmit(BaseModel):
     use_shadow:  bool = False
     json_schema: Optional[dict] = None
     schema_name: Optional[str] = None
+    payload:     str = "image"              # per-row content: image | ocr | image+ocr
+    rows_source: str = "auto"               # existing | detect | auto
 
 
 @app.post("/api/llm_batch/submit")
@@ -2361,24 +2363,39 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                 crop_top = max(0, int(y1) - pad)
                 crop = img.crop((max(0, int(x1) - pad), crop_top,
                                  min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
-                rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
-                        or _detect_text_rows(crop, body.cell_height))
+                existing = _existing_row_bands_rel(shape, crop_top, crop.height)
+                if body.rows_source == "existing":
+                    rows = existing            # no structure → cell is skipped
+                elif body.rows_source == "detect":
+                    rows = _detect_text_rows(crop, body.cell_height)
+                else:
+                    rows = existing or _detect_text_rows(crop, body.cell_height)
                 if not rows:
                     continue
+                row_ocr = ([(r.get("ocr") or "") for r in
+                            (shape.get("row_struct") or {}).get("rows") or []]
+                           if (existing and rows is existing) else [])
                 meta[f"{stem}|{idx}"] = {"stem": stem, "idx": idx,
                                          "bands": [[t0 + crop_top, b0 + crop_top]
                                                    for t0, b0 in rows]}
                 row_pad = max(4, body.cell_height // 6)
                 for i, (top, bottom) in enumerate(rows):
-                    rt = max(0, top - row_pad)
-                    rb = min(crop.height, bottom + row_pad)
-                    row_img = crop.crop((0, rt, crop.width, rb))
-                    if row_img.height < 48:
-                        scale = 48 / row_img.height
-                        row_img = row_img.resize((int(row_img.width * scale), 48),
-                                                 PILImage.LANCZOS)
-                    messages = [{"role": "user", "content": [
-                        {"type": "text", "text": body.prompt}, _img_part(row_img)]}]
+                    txt = body.prompt
+                    if body.payload in ("ocr", "image+ocr"):
+                        txt = f"{body.prompt}\n\nOCR text:\n{row_ocr[i] if i < len(row_ocr) else ''}"
+                    content = [{"type": "text", "text": txt}]
+                    if body.payload in ("image", "image+ocr"):
+                        rt = max(0, top - row_pad)
+                        rb = min(crop.height, bottom + row_pad)
+                        row_img = crop.crop((0, rt, crop.width, rb))
+                        if row_img.height < 48:
+                            scale = 48 / row_img.height
+                            row_img = row_img.resize((int(row_img.width * scale), 48),
+                                                     PILImage.LANCZOS)
+                        content.append(_img_part(row_img))
+                    messages = ([{"role": "user", "content": txt}]
+                                if body.payload == "ocr"
+                                else [{"role": "user", "content": content}])
                     lines.append(_llm_batch_line(f"{stem}|{idx}|{i}", body.model,
                                                  messages, 64, 0))
                 continue
@@ -2836,11 +2853,16 @@ async def api_llm_linebyline(
     use_shadow:  bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
     dry_run:     bool = Query(False, description="Return result without writing to JSON (for testing)"),
     cached:      bool = Query(True, description="Reuse identical past answers from the local cache"),
+    payload:     str  = Query("image", description="What the model sees per row: image | ocr | image+ocr"),
+    rows_source: str  = Query("auto", description="Row bands: existing (fail if none) | detect (always re-detect) | auto (existing else detect)"),
     body:        LlmRequest = ...,
 ):
     """
-    Line-by-line LLM: slice the cell into rows using pixel projection, send each
-    row image to OpenAI individually, and stream results as SSE.
+    Per-internal-row LLM: slice the cell into rows and send each row to the
+    LLM individually, streaming results as SSE.  `payload` picks what the
+    model sees (row image, that row's OCR text, or both); `rows_source` picks
+    where the bands come from (the cell's stored structure or fresh pixel
+    detection).
 
     SSE message types:
       {"type": "lines_detected", "count": N, "lines": [[top,bottom], ...]}
@@ -2882,8 +2904,22 @@ async def api_llm_linebyline(
     ))
 
     crop_top = max(0, int(y1) - pad)
-    rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
-            or _detect_text_rows(crop, cell_height))
+    existing = _existing_row_bands_rel(shape, crop_top, crop.height)
+    if rows_source == "existing":
+        if not existing:
+            raise HTTPException(status_code=400,
+                detail="This cell has no internal row structure — pick "
+                       "'re-detect rows' or create the structure first")
+        rows = existing
+    elif rows_source == "detect":
+        rows = _detect_text_rows(crop, cell_height)
+    else:                                   # auto: existing, else detect
+        rows = existing or _detect_text_rows(crop, cell_height)
+    # per-row OCR text is only meaningful when the bands ARE the structure's
+    # rows (index-aligned); freshly detected bands have no per-row OCR
+    row_ocr = ([(r.get("ocr") or "") for r in
+                (shape.get("row_struct") or {}).get("rows") or []]
+               if (existing and rows is existing) else [])
     prompt_text = body.prompt
     # Create the client BEFORE streaming starts: a missing API key / endpoint
     # becomes a clean HTTP 500 the editor can display, not a dead SSE stream.
@@ -2893,39 +2929,39 @@ async def api_llm_linebyline(
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
                            "lines": [list(r) for r in rows]})
 
-        print(f"[LLM/linebyline] model={model} rows={len(rows)} dry_run={dry_run} "
+        print(f"[LLM/linebyline] model={model} rows={len(rows)} payload={payload} "
+              f"rows_source={rows_source} dry_run={dry_run} "
               f"prompt={prompt_text!r}", flush=True)
 
         line_responses: list[str] = []
 
         for i, (top, bottom) in enumerate(rows):
-            # Add a few pixels of vertical breathing room so ascenders /
-            # descenders aren't clipped, then upscale very small rows so the
-            # LLM can read digits reliably.
-            row_pad = max(4, cell_height // 6)
-            rt = max(0, top    - row_pad)
-            rb = min(crop.height, bottom + row_pad)
-            row_img = crop.crop((0, rt, crop.width, rb))
-            # Upscale: aim for at least 48 px tall
-            if row_img.height < 48:
-                scale   = 48 / row_img.height
-                row_img = row_img.resize(
-                    (int(row_img.width * scale), 48), PILImage.LANCZOS
-                )
-            buf = _io.BytesIO()
-            row_img.save(buf, format="JPEG", quality=92)
-            b64 = base64.b64encode(buf.getvalue()).decode()
+            txt = prompt_text
+            if payload in ("ocr", "image+ocr"):
+                txt = f"{prompt_text}\n\nOCR text:\n{row_ocr[i] if i < len(row_ocr) else ''}"
+            content = [{"type": "text", "text": txt}]
+            if payload in ("image", "image+ocr"):
+                # Add a few pixels of vertical breathing room so ascenders /
+                # descenders aren't clipped, then upscale very small rows so
+                # the LLM can read digits reliably.
+                row_pad = max(4, cell_height // 6)
+                rt = max(0, top    - row_pad)
+                rb = min(crop.height, bottom + row_pad)
+                row_img = crop.crop((0, rt, crop.width, rb))
+                if row_img.height < 48:
+                    scale   = 48 / row_img.height
+                    row_img = row_img.resize(
+                        (int(row_img.width * scale), 48), PILImage.LANCZOS
+                    )
+                buf = _io.BytesIO()
+                row_img.save(buf, format="JPEG", quality=92)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                content.append({"type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{b64}",
+                                              "detail": "high"}})
 
-            messages = [{
-                "role": "user",
-                "content": [
-                    {"type": "text",
-                     "text": prompt_text},
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/jpeg;base64,{b64}",
-                                   "detail": "high"}},
-                ],
-            }]
+            messages = ([{"role": "user", "content": txt}] if payload == "ocr"
+                        else [{"role": "user", "content": content}])
             try:
                 resp = _llm_complete(client, model, messages, 64,
                                      use_cache=(cached and not dry_run))

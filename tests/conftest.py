@@ -39,7 +39,13 @@ def _shape(label, x1, y1, x2, y2, text=None, super_row=None, super_col=None,
 
 @pytest.fixture()
 def page_folder(tmp_path):
-    """Folder with page 'p1': a free title, a 2x2 lattice, a free footer."""
+    """Folder with page 'p1': a free title, a 2x2 lattice, a free footer.
+
+    Nested as <project>/annotations like real projects — several features
+    (schemas, batch undo, overnight jobs) write to the folder's PARENT, and a
+    flat tmp_path would share that parent across tests."""
+    tmp_path = tmp_path / "proj" / "annotations"
+    tmp_path.mkdir(parents=True)
     shapes = [
         _shape("header", 100, 10, 500, 40, text="TITLE ROW"),
         _shape("cell", 100, 100, 300, 200, text="A1", super_row=1, super_col=1),

@@ -511,7 +511,8 @@ async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
   const cropRight   = Math.min(imgW, sx2 + pad);
 
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem,
-                                      idx: shapeIdx, model, cell_height: cellHeight});
+                                      idx: shapeIdx, model, cell_height: cellHeight,
+                                      ..._llmRowParams()});
   const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({prompt}),
@@ -642,6 +643,7 @@ async function runLlmLineByLine() {
     const params = new URLSearchParams({
       folder, stem: pages[pageIdx].stem, idx: myIdx,
       model, cell_height: cellHeight, use_shadow: useShadow,
+      ..._llmRowParams(),
     });
     const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
       method: 'POST',

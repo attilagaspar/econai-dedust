@@ -454,7 +454,18 @@
                   <option value="qwen2.5vl:7b">Qwen2.5-VL 7B</option>
                 </optgroup>
               </select>
-              <select id="llm-mode" class="llm-select" title="Input mode" onchange="updateLlmPrompt()">
+              <select id="llm-payload" class="llm-select" title="What the model sees" onchange="_syncLlmMode()">
+                <option value="image">Image</option>
+                <option value="ocr">OCR text</option>
+                <option value="image+ocr">Image + OCR</option>
+              </select>
+              <select id="llm-scope" class="llm-select" title="What one request covers" onchange="_syncLlmMode()">
+                <option value="whole">Whole annotation</option>
+                <option value="rows-keep">Internal rows (keep structure)</option>
+                <option value="rows-detect">Internal rows (re-detect)</option>
+                <option value="anchored">Anchored (project reference)</option>
+              </select>
+              <select id="llm-mode" style="display:none;"><!-- legacy computed value: payload × scope -->
                 <option value="image">Image</option>
                 <option value="image+ocr">Image + OCR</option>
                 <option value="ocr">OCR only</option>
@@ -835,7 +846,17 @@
           <option value="tk:vllm/mistralai/Mistral-Small-4-119B-2603-NVFP4">Mistral-Sm4-119B (TK)</option>
           <option value="qwen2.5vl:7b">Qwen2.5-VL 7B (local)</option>
         </select>
-        <select id="batch-llm-mode" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" onchange="onBatchLlmModeChange()">
+        <select id="batch-llm-payload" title="What the model sees" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" onchange="onBatchLlmModeChange()">
+          <option value="image">Image</option>
+          <option value="ocr">OCR text</option>
+          <option value="image+ocr">Image + OCR</option>
+        </select>
+        <select id="batch-llm-scope" title="What one request covers" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" onchange="onBatchLlmModeChange()">
+          <option value="whole">Whole annotation</option>
+          <option value="rows-keep">Internal rows (keep structure)</option>
+          <option value="rows-detect">Internal rows (re-detect)</option>
+        </select>
+        <select id="batch-llm-mode" style="display:none;"><!-- legacy computed value -->
           <option value="image">Image</option>
           <option value="image+ocr">Image + OCR</option>
           <option value="ocr">OCR only</option>

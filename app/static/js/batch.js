@@ -84,9 +84,11 @@ function openBatchModal() {
   _batchPopulateLabels('batch-llm-halluc-label-checks',      'batchLlmHallucLabels');
   // Sync model/mode from the main LLM panel if available
   const savedModel = localStorage.getItem('llm-model');
-  const savedMode  = localStorage.getItem('llm-mode');
   if (savedModel) document.getElementById('batch-llm-model').value = savedModel;
-  if (savedMode)  { document.getElementById('batch-llm-mode').value = savedMode; onBatchLlmModeChange(); }
+  const sp = localStorage.getItem('llm-payload'), ss = localStorage.getItem('llm-scope');
+  if (sp) document.getElementById('batch-llm-payload').value = sp;
+  if (ss && ss !== 'anchored') document.getElementById('batch-llm-scope').value = ss === 'whole' ? 'whole' : ss;
+  onBatchLlmModeChange();
   const savedPrompt = document.getElementById('llm-prompt')?.value?.trim();
   if (savedPrompt) document.getElementById('batch-llm-prompt').value = savedPrompt;
 
@@ -182,8 +184,22 @@ function onBatchParityChange(which) {
 }
 
 function onBatchLlmModeChange() {
-  const mode = document.getElementById('batch-llm-mode').value;
-  document.getElementById('batch-llm-cellheight-wrap').style.display = mode === 'linebyline' ? '' : 'none';
+  // visible dropdowns: payload (what the model sees) × scope (what one
+  // request covers); the hidden batch-llm-mode keeps the legacy value
+  const p = document.getElementById('batch-llm-payload').value;
+  const s = document.getElementById('batch-llm-scope').value;
+  document.getElementById('batch-llm-mode').value =
+    (s === 'rows-keep' || s === 'rows-detect') ? 'linebyline' : p;
+  // the target row height only matters when rows are re-detected
+  document.getElementById('batch-llm-cellheight-wrap').style.display =
+    s === 'rows-detect' ? '' : 'none';
+}
+
+function _batchRowParams() {
+  const s = document.getElementById('batch-llm-scope').value;
+  return { payload: document.getElementById('batch-llm-payload').value,
+           rows_source: s === 'rows-detect' ? 'detect'
+                      : s === 'rows-keep'   ? 'existing' : 'auto' };
 }
 
 function _computeOverlapsOnShapes(shapes, threshold) {
@@ -480,6 +496,7 @@ async function runBatch() {
             model: s.model, mode: s.mode, prompt: s.prompt,
             cell_height: s.cellHeight, use_shadow: s.useShadow,
             json_schema: s.schema, schema_name: s.schemaName,
+            payload: s.payload, rows_source: s.rows_source,
           }),
         });
         const d = await r.json();
@@ -996,6 +1013,7 @@ function _collectLlmSettings() {
   const s = {
     model:      document.getElementById('batch-llm-model').value,
     mode:       document.getElementById('batch-llm-mode').value,
+    ..._batchRowParams(),                    // payload + rows_source
     prompt:     document.getElementById('batch-llm-prompt').value.trim(),
     cellHeight: parseInt(document.getElementById('batch-llm-cellheight').value) || 26,
     useShadow:      document.getElementById('batch-llm-use-shadow').checked,
@@ -1090,6 +1108,9 @@ async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useSha
   const params = new URLSearchParams({ folder, stem, idx, model, mode, use_shadow: !!useShadow });
   if (mode === 'linebyline') {
     params.set('cell_height', cellHeight);
+    const rp = _batchRowParams();
+    params.set('payload', rp.payload);
+    params.set('rows_source', rp.rows_source);
     const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt }),

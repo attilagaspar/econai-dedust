@@ -1007,11 +1007,14 @@ const LLM_PROMPTS = {
 };
 
 function updateLlmPrompt() {
-  const mode = document.getElementById('llm-mode').value;
-  const el   = document.getElementById('llm-prompt');
+  const mode  = document.getElementById('llm-mode').value;
+  const scope = document.getElementById('llm-scope')?.value;
+  const el    = document.getElementById('llm-prompt');
   const isDefault = Object.values(LLM_PROMPTS).includes(el.value.trim()) || !el.value.trim();
   if (isDefault) el.value = LLM_PROMPTS[mode] || '';
-  document.getElementById('llm-cellheight-wrap').style.display    = mode === 'linebyline' ? 'flex' : 'none';
+  // target row height only matters when rows are (re)detected from pixels
+  document.getElementById('llm-cellheight-wrap').style.display =
+    (mode === 'linebyline' && scope !== 'rows-keep') ? 'flex' : 'none';
   document.getElementById('llm-anchor-source-wrap').style.display = mode === 'anchored'   ? 'flex' : 'none';
   document.getElementById('llm-anchor-cols-wrap').style.display   = mode === 'anchored'   ? 'flex' : 'none';
 }
@@ -1189,17 +1192,49 @@ function refreshAllLineNums() {
   updateLineNums('human-input',  'human-input-lines');
 }
 
+// ── Send × Scope → legacy mode ───────────────────────────────────────────────
+// The visible dropdowns are `llm-payload` (what the model sees) and
+// `llm-scope` (what one request covers); the hidden `llm-mode` select keeps
+// the legacy combined value so every existing consumer works unchanged.
+function _llmModeFrom(payload, scope) {
+  if (scope === 'anchored') return 'anchored';
+  if (scope === 'rows-keep' || scope === 'rows-detect') return 'linebyline';
+  return payload;                               // whole annotation
+}
+function _syncLlmMode() {
+  const p = document.getElementById('llm-payload').value;
+  const s = document.getElementById('llm-scope').value;
+  document.getElementById('llm-mode').value = _llmModeFrom(p, s);
+  localStorage.setItem('llm-payload', p);
+  localStorage.setItem('llm-scope', s);
+  updateLlmPrompt();   // sets prompt text AND shows/hides cell-height input
+}
+// extra query params for /llm/linebyline calls driven by the main panel
+function _llmRowParams() {
+  const s = document.getElementById('llm-scope').value;
+  return { payload: document.getElementById('llm-payload').value,
+           rows_source: s === 'rows-detect' ? 'detect'
+                      : s === 'rows-keep'   ? 'existing' : 'auto' };
+}
+
 // Initialise prompt on first load
 document.addEventListener('DOMContentLoaded', () => {
-  // restore persisted model/mode
+  // restore persisted model/payload/scope (migrating the old llm-mode key)
   const savedModel = localStorage.getItem('llm-model');
-  const savedMode  = localStorage.getItem('llm-mode');
   if (savedModel) document.getElementById('llm-model').value = savedModel;
-  if (savedMode)  document.getElementById('llm-mode').value  = savedMode;
-  updateLlmPrompt();   // sets prompt text AND shows/hides cell-height input
+  let sp = localStorage.getItem('llm-payload');
+  let ss = localStorage.getItem('llm-scope');
+  if (!ss) {
+    const m = localStorage.getItem('llm-mode');
+    if (m === 'linebyline')    { sp = sp || 'image'; ss = 'rows-keep'; }
+    else if (m === 'anchored') { sp = sp || 'image'; ss = 'anchored'; }
+    else if (m)                { sp = m; ss = 'whole'; }
+  }
+  if (sp) document.getElementById('llm-payload').value = sp;
+  if (ss) document.getElementById('llm-scope').value = ss;
+  _syncLlmMode();
   // persist on change
   document.getElementById('llm-model').addEventListener('change', e => localStorage.setItem('llm-model', e.target.value));
-  document.getElementById('llm-mode').addEventListener('change',  e => localStorage.setItem('llm-mode',  e.target.value));
 
   // Scroll sync for line numbers
   [['f-ocr','f-ocr-lines'], ['f-llm-result','f-llm-result-lines'], ['human-input','human-input-lines']]
@@ -1397,6 +1432,9 @@ async function runLlmTest() {
 
       if (mode === 'linebyline') {
         params.set('cell_height', cellHeight);
+        const rp = _llmRowParams();
+        params.set('payload', rp.payload);
+        params.set('rows_source', rp.rows_source);
         const r = await fetch(`${API}/api/page/shape/llm/linebyline?${params}`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({prompt}),
