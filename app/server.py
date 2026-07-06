@@ -2325,6 +2325,9 @@ async def api_llm_linebyline(
     rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
             or _detect_text_rows(crop, cell_height))
     prompt_text = body.prompt
+    # Create the client BEFORE streaming starts: a missing API key / endpoint
+    # becomes a clean HTTP 500 the editor can display, not a dead SSE stream.
+    client = _make_llm_client(model)
 
     def gen():
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
@@ -2333,7 +2336,6 @@ async def api_llm_linebyline(
         print(f"[LLM/linebyline] model={model} rows={len(rows)} dry_run={dry_run} "
               f"prompt={prompt_text!r}", flush=True)
 
-        client = _make_llm_client(model)
         line_responses: list[str] = []
 
         for i, (top, bottom) in enumerate(rows):
@@ -2468,11 +2470,13 @@ async def api_llm_anchored(
                                 else _split_into_n_rows(crop, n_rows))
     prompt_text = body.prompt
 
+    # Fail before the stream starts if the model's API isn't configured.
+    client = _make_llm_client(model)
+
     def gen():
         yield _json.dumps({"type": "lines_detected", "count": len(rows),
                            "lines": [list(r) for r in rows]})
 
-        client = _make_llm_client(model)
         line_responses: list[str] = []
 
         for i, (top, bottom) in enumerate(rows):
@@ -4033,11 +4037,21 @@ _SSE_DONE = object()
 
 
 def _safe_next(it):
-    """Return next item, or _SSE_DONE sentinel — never raises StopIteration."""
+    """Return next item, or _SSE_DONE sentinel — never raises.
+
+    An exception escaping a streaming generator after the response has started
+    kills the connection with no message (ASGI: "response already started"),
+    so any failure is converted into a {"type": "error"} SSE event the client
+    can show. The generator is dead after raising, so the next call returns
+    _SSE_DONE and the stream ends cleanly."""
     try:
         return next(it)
     except StopIteration:
         return _SSE_DONE
+    except HTTPException as exc:
+        return json.dumps({"type": "error", "error": str(exc.detail)})
+    except Exception as exc:
+        return json.dumps({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
 
 
 async def _sse_stream(gen):

@@ -660,14 +660,14 @@ async function _runOcrBatch(targets) {
       } else if (ocrMode === 'easyocr') {
         const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
         const r = await fetch(`${API}/api/page/shape/ocr/easyocr?${params}`, {method: 'POST'});
-        if (!r.ok) throw new Error(r.status);
+        if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
         const data = await r.json();
         pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf, engine: 'easyocr'};
         if (pageData.shapes[i].row_struct) await _refreshShapeRowStruct(i);
       } else {
         const params = new URLSearchParams({folder, stem: pages[pageIdx].stem, idx: i});
         const r = await fetch(`${API}/api/page/shape/ocr?${params}`, {method: 'POST'});
-        if (!r.ok) throw new Error(r.status);
+        if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
         const data = await r.json();
         pageData.shapes[i].tesseract_output = {ocr_text: data.ocr_text, mean_conf: data.mean_conf};
         if (pageData.shapes[i].row_struct) await _refreshShapeRowStruct(i);
@@ -750,6 +750,7 @@ async function runOcrLineByLine(apiPath = '/api/page/shape/ocr/linebyline') {
       for (const chunk of chunks) {
         if (!chunk.startsWith('data: ')) continue;
         let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+        if (msg.type === 'error') { reader.cancel(); showToast('⚠ ' + msg.error, 6000); return; }
 
         if (msg.type === 'lines_detected') {
           lastRowLines  = msg.lines;
@@ -834,7 +835,7 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shap
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem,
                                       idx: shapeIdx, cell_height: cellHeight});
   const r = await fetch(`${API}${apiPath}?${params}`, {method: 'POST'});
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
 
   const reader = r.body.getReader(), decoder = new TextDecoder();
   let buffer = '';
@@ -846,6 +847,7 @@ async function _ocrLineByLineOne(shapeIdx, cellHeight, apiPath = '/api/page/shap
     for (const chunk of chunks) {
       if (!chunk.startsWith('data: ')) continue;
       let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'error') { reader.cancel(); throw new Error(msg.error); }
       if (msg.type === 'lines_detected') {
         lastEmptyRows = new Set();
         llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1, emptyRows: null};
@@ -957,7 +959,7 @@ async function _ocrAnchoredOne(shapeIdx, nRows, refIdx = -1) {
     folder, stem: pages[pageIdx].stem, idx: shapeIdx, n_rows: nRows, ref_idx: refIdx,
   });
   const r = await fetch(`${API}/api/page/shape/ocr/easyocr/anchored?${params}`, {method: 'POST'});
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
 
   const reader = r.body.getReader(), decoder = new TextDecoder();
   let buffer = '';
@@ -969,6 +971,7 @@ async function _ocrAnchoredOne(shapeIdx, nRows, refIdx = -1) {
     for (const chunk of chunks) {
       if (!chunk.startsWith('data: ')) continue;
       let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'error') { reader.cancel(); throw new Error(msg.error); }
       if (msg.type === 'lines_detected') {
         llmProgress = {cropOriginX, cropOriginY, cropRight,
                        lines: msg.lines, activeRow: -1, emptyRows: null};

@@ -460,7 +460,7 @@ async function _drainSse(url, jsonBody) {
     ? { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(jsonBody) }
     : { method: 'POST' };
   const r = await fetch(url, opts);
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
   const reader = r.body.getReader();
   while (true) { const {done} = await reader.read(); if (done) break; }
 }
@@ -490,7 +490,7 @@ async function _llmSingleShape(shapeIdx, model, mode, prompt) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({prompt}),
   });
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
   const data = await r.json();
   pageData.shapes[shapeIdx].openai_output = {
     response: data.response, model: data.model, mode: data.mode, timestamp: data.timestamp,
@@ -516,7 +516,7 @@ async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({prompt}),
   });
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
 
   const reader = r.body.getReader(), decoder = new TextDecoder();
   let buffer = '';
@@ -528,6 +528,7 @@ async function _llmLineByLineOne(shapeIdx, model, prompt, cellHeight) {
     for (const chunk of chunks) {
       if (!chunk.startsWith('data: ')) continue;
       let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'error') { reader.cancel(); throw new Error(msg.error); }
       if (msg.type === 'lines_detected') {
         lastEmptyRows = new Set();
         llmProgress = {cropOriginX, cropOriginY, cropRight, lines: msg.lines, activeRow: -1, emptyRows: null};
@@ -669,6 +670,7 @@ async function runLlmLineByLine() {
         if (!chunk.startsWith('data: ')) continue;
         let msg;
         try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+        if (msg.type === 'error') { reader.cancel(); showToast('⚠ ' + msg.error, 6000); return; }
 
         if (msg.type === 'lines_detected') {
           // Initialise main-image progress overlay (all rows, none active)
@@ -812,7 +814,7 @@ async function _llmAnchoredOne(shapeIdx, nRows, refIdx = -1) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({prompt}),
   });
-  if (!r.ok) throw new Error(r.status);
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
 
   const reader = r.body.getReader(), decoder = new TextDecoder();
   let buffer = '';
@@ -824,6 +826,7 @@ async function _llmAnchoredOne(shapeIdx, nRows, refIdx = -1) {
     for (const chunk of chunks) {
       if (!chunk.startsWith('data: ')) continue;
       let msg; try { msg = JSON.parse(chunk.slice(6)); } catch { continue; }
+      if (msg.type === 'error') { reader.cancel(); throw new Error(msg.error); }
       if (msg.type === 'lines_detected') {
         llmProgress = {cropOriginX, cropOriginY, cropRight,
                        lines: msg.lines, activeRow: -1, emptyRows: null};
