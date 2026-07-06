@@ -428,7 +428,7 @@ async function runBatch() {
     if (_bjson && !document.getElementById('batch-llm-schema').value) { showToast('Pick a schema for JSON mode'); return; }
     if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
     const m = document.getElementById('batch-llm-model').value;
-    if (m.startsWith('tk:') || m.includes(':') && !m.startsWith('azure:')) {
+    if (m.includes(':') && !m.startsWith('azure:') && !m.startsWith('azure-us:')) {
       showToast('Overnight batches need an OpenAI or Azure model'); return;
     }
   } else if (op === 'score_delete') {

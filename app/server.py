@@ -2043,6 +2043,9 @@ _LOCAL_MODELS: set[str] = {"qwen2.5vl:7b"}
 
 # Azure model prefix — "azure:gpt-5-mini" routes to Azure OpenAI, strips prefix before the API call
 _AZURE_PREFIX = "azure:"
+# Second Azure resource ("digitization-US") — its own endpoint + key env vars.
+# On Azure the bare name is the DEPLOYMENT name (e.g. "gpt-5.4-mini-batch").
+_AZURE_US_PREFIX = "azure-us:"
 
 # TK (institutional GPU server) prefix — "tk:vllm/..." routes to the OpenAI-compatible vllm endpoint
 _TK_PREFIX = "tk:"
@@ -2050,7 +2053,9 @@ _TK_BASE_URL = "http://193.224.38.28:9000/v1"
 
 def _bare_model(model: str) -> str:
     """Strip any routing prefix, returning the raw model name for the API call."""
-    return model.removeprefix(_AZURE_PREFIX).removeprefix(_TK_PREFIX)
+    return (model.removeprefix(_AZURE_US_PREFIX)
+                 .removeprefix(_AZURE_PREFIX)
+                 .removeprefix(_TK_PREFIX))
 
 # Always appended to every LLM prompt to suppress hallucinations on empty/dash cells
 _EMPTY_CELL_GUARD = (
@@ -2068,12 +2073,14 @@ def _make_llm_client(model: str):
     if model in _LOCAL_MODELS:
         host = os.environ.get("OLLAMA_HOST", "http://gpu.koren.work:11434")
         return OpenAI(api_key="ollama", base_url=f"{host}/v1")
-    if model.startswith(_AZURE_PREFIX):
-        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-        api_key  = os.environ.get("AZURE_OPENAI_API_KEY")
+    if model.startswith(_AZURE_US_PREFIX) or model.startswith(_AZURE_PREFIX):
+        suffix = "_US" if model.startswith(_AZURE_US_PREFIX) else ""
+        endpoint = os.environ.get(f"AZURE_OPENAI_ENDPOINT{suffix}")
+        api_key  = os.environ.get(f"AZURE_OPENAI_API_KEY{suffix}")
         if not endpoint or not api_key:
             raise HTTPException(status_code=500,
-                detail="AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY must be set for azure: models")
+                detail=f"AZURE_OPENAI_ENDPOINT{suffix} and AZURE_OPENAI_API_KEY{suffix} "
+                       f"must be set for {model.split(':', 1)[0]}: models")
         base = endpoint.rstrip("/")
         if not base.endswith("/openai/v1"):
             base += "/openai/v1"
@@ -2444,7 +2451,9 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
         job = {
             "id": f"job-{len(jobs) + 1}",
             "remote_id": remote.id,
-            "provider": "azure" if body.model.startswith(_AZURE_PREFIX) else "openai",
+            "provider": ("azure-us" if body.model.startswith(_AZURE_US_PREFIX)
+                         else "azure" if body.model.startswith(_AZURE_PREFIX)
+                         else "openai"),
             "model": body.model, "mode": body.mode, "prompt": body.prompt,
             "json": json_mode, "schema_name": body.schema_name,
             "n_requests": len(lines), "n_cells": len(meta),

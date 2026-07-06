@@ -68,6 +68,34 @@ def test_azure_prefix_shares_cache_with_bare_model():
     assert k1 == k2
 
 
+def test_azure_us_prefix_routing(monkeypatch):
+    """azure-us: strips to the deployment name and demands its own env vars."""
+    assert srv._bare_model("azure-us:gpt-5.4-mini-batch") == "gpt-5.4-mini-batch"
+    assert srv._llm_batch_supported("azure-us:gpt-5.4-mini-batch")
+    # stub the openai SDK (not installed in the test env)
+    import sys, types
+
+    class _FakeOpenAI:
+        def __init__(self, api_key=None, base_url=None):
+            self.api_key, self.base_url = api_key, base_url
+    mod = types.ModuleType("openai")
+    mod.OpenAI = _FakeOpenAI
+    monkeypatch.setitem(sys.modules, "openai", mod)
+    # missing _US env vars → clear error naming the right variables
+    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT_US", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY_US", raising=False)
+    import pytest as _pt
+    from fastapi import HTTPException
+    with _pt.raises(HTTPException) as ei:
+        srv._make_llm_client("azure-us:gpt-5.4-mini-batch")
+    assert "AZURE_OPENAI_ENDPOINT_US" in ei.value.detail
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT_US", "https://x.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY_US", "k")
+    c = srv._make_llm_client("azure-us:gpt-5.4-mini-batch")
+    assert "x.openai.azure.com" in str(c.base_url)
+    assert "/openai/v1" in str(c.base_url)
+
+
 def test_merge_shape_fields_concurrent(tmp_path):
     """Two 'parallel' LLM results on the same page must both survive."""
     jf = tmp_path / "p.json"
