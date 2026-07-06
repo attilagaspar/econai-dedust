@@ -2469,8 +2469,13 @@ def api_llm_batch_jobs(folder: str = Query(...), refresh: bool = Query(True)):
         jobs = _llm_jobs_load(folder)
         changed = False
         for j in jobs:
-            if not refresh or j.get("status") in ("completed", "failed", "cancelled",
-                                                  "expired", "applied"):
+            if not refresh:
+                continue
+            terminal = j.get("status") in ("completed", "failed", "cancelled",
+                                           "expired", "applied")
+            # failed jobs get ONE more lookup to fetch the failure reason
+            if terminal and not (j.get("status") == "failed"
+                                 and "status_note" not in j):
                 continue
             try:
                 client = _make_llm_client(j["model"])
@@ -2481,6 +2486,16 @@ def api_llm_batch_jobs(folder: str = Query(...), refresh: bool = Query(True)):
                     j["counts"] = {"completed": getattr(rc, "completed", 0),
                                    "failed": getattr(rc, "failed", 0),
                                    "total": getattr(rc, "total", 0)}
+                # surface the provider's failure reason (e.g. missing Global
+                # Batch deployment) instead of a bare 'failed'
+                errs = getattr(remote, "errors", None)
+                data = getattr(errs, "data", None) if errs else None
+                if data:
+                    j["status_note"] = "; ".join(
+                        f"{getattr(e, 'code', '')}: {getattr(e, 'message', '')}".strip(": ")
+                        for e in data[:3])
+                elif remote.status == "failed" and "status_note" not in j:
+                    j["status_note"] = "no further detail from the provider"
                 changed = True
             except Exception as e:
                 j["status_note"] = f"status check failed: {e}"
