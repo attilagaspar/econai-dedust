@@ -1,0 +1,135 @@
+"""Overnight LLM batch lane (Batch API): submit → status → apply, with the
+provider mocked — verifies the JSONL request building, job manifest, and that
+apply writes results into the pages like the live path.
+"""
+import json
+from types import SimpleNamespace as NS
+
+import pytest
+
+import app.server as srv
+
+
+class _FakeProvider:
+    """Mimics the OpenAI SDK surface the lane uses."""
+    def __init__(self):
+        self.uploaded = None
+        self.status = "in_progress"
+        self.output_lines = []
+        self.cancelled = False
+        outer = self
+
+        class _Files:
+            def create(self, file, purpose):
+                outer.uploaded = file[1].decode("utf-8")
+                assert purpose == "batch"
+                return NS(id="file-in")
+
+            def content(self, fid):
+                assert fid == "file-out"
+                return NS(text="\n".join(outer.output_lines))
+
+        class _Batches:
+            def create(self, input_file_id, endpoint, completion_window):
+                assert input_file_id == "file-in"
+                return NS(id="batch-remote-1", status="validating")
+
+            def retrieve(self, rid):
+                return NS(id=rid, status=outer.status,
+                          output_file_id="file-out" if outer.status == "completed" else None,
+                          request_counts=NS(completed=2, failed=0, total=2))
+
+            def cancel(self, rid):
+                outer.cancelled = True
+                return NS(status="cancelling")
+
+        self.files = _Files()
+        self.batches = _Batches()
+
+
+@pytest.fixture()
+def provider(monkeypatch):
+    p = _FakeProvider()
+    monkeypatch.setattr(srv, "_make_llm_client", lambda model: p)
+    return p
+
+
+def _answer(cid, text):
+    return json.dumps({"custom_id": cid, "error": None,
+                       "response": {"status_code": 200,
+                                    "body": {"choices": [{"message": {"content": text}}]}}})
+
+
+def test_overnight_roundtrip(client, page_folder, provider):
+    # submit two whole-cell requests (ocr mode needs no image work)
+    r = client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
+                    json={"targets": [{"stem": "p1", "idx": 1}, {"stem": "p1", "idx": 2}],
+                          "model": "gpt-4o-mini", "mode": "ocr", "prompt": "read"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["n_requests"] == 2 and d["id"] == "job-1"
+
+    # the uploaded JSONL mirrors the live call's parameters
+    lines = [json.loads(l) for l in provider.uploaded.splitlines()]
+    assert lines[0]["custom_id"] == "p1|1|-1"
+    assert lines[0]["body"]["model"] == "gpt-4o-mini"
+    assert lines[0]["body"]["max_tokens"] == 1024
+    assert lines[0]["url"] == "/v1/chat/completions"
+
+    # job listing refreshes status from the provider
+    r = client.get("/api/llm_batch/jobs", params={"folder": str(page_folder)})
+    j = r.json()["jobs"][0]
+    assert j["status"] == "in_progress" and j["counts"]["total"] == 2
+    assert "meta" not in j          # internals not leaked to the client
+
+    # apply refuses while unfinished
+    r = client.post("/api/llm_batch/apply",
+                    params={"folder": str(page_folder), "job": "job-1"})
+    assert r.status_code == 400
+
+    # complete it and apply
+    provider.status = "completed"
+    provider.output_lines = [_answer("p1|1|-1", "B1-cleaned"),
+                             _answer("p1|2|-1", "A2-cleaned")]
+    r = client.post("/api/llm_batch/apply",
+                    params={"folder": str(page_folder), "job": "job-1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["applied_cells"] == 2
+
+    saved = json.loads((page_folder / "p1.json").read_text(encoding="utf-8"))
+    assert saved["shapes"][1]["openai_output"]["response"] == "B1-cleaned"
+    assert saved["shapes"][2]["openai_output"]["response"] == "A2-cleaned"
+    assert saved["shapes"][1]["openai_output"]["batch_job"] == "job-1"
+
+    # manifest marks it applied
+    r = client.get("/api/llm_batch/jobs", params={"folder": str(page_folder)})
+    assert r.json()["jobs"][0]["status"] == "applied"
+
+
+def test_overnight_cancel(client, page_folder, provider):
+    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
+                json={"targets": [{"stem": "p1", "idx": 1}],
+                      "model": "gpt-4o-mini", "mode": "ocr", "prompt": "read"})
+    r = client.post("/api/llm_batch/cancel",
+                    params={"folder": str(page_folder), "job": "job-1"})
+    assert r.status_code == 200 and provider.cancelled
+    assert r.json()["status"] == "cancelling"
+
+
+def test_overnight_rejects_local_models(client, page_folder, provider):
+    r = client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
+                    json={"targets": [{"stem": "p1", "idx": 1}],
+                          "model": "tk:vllm/whatever", "mode": "ocr", "prompt": "x"})
+    assert r.status_code == 400
+    assert "batch service" in r.json()["detail"]
+
+
+def test_overnight_reasoning_model_body(client, page_folder, provider):
+    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
+                json={"targets": [{"stem": "p1", "idx": 1}],
+                      "model": "azure:gpt-5-mini", "mode": "ocr", "prompt": "x"})
+    body = json.loads(provider.uploaded.splitlines()[0])["body"]
+    assert body["model"] == "gpt-5-mini"            # bare name in the request
+    assert body["max_completion_tokens"] >= 2000    # reasoning-model params
+    assert body["reasoning_effort"] == "low"
+    assert "temperature" not in body

@@ -2240,6 +2240,369 @@ def _merge_shape_fields(jf, idx: int, fields: dict) -> bool:
         return True
 
 
+# ---------------------------------------------------------------------------
+# Overnight LLM batches (OpenAI / Azure Batch API — 50% price, ≤24h)
+# A separate lane from the live batch: requests are packaged into one file,
+# submitted to the provider's batch service, and applied to the pages later.
+# Job manifests live per project in intermediate/llm_batch_jobs.json.
+# ---------------------------------------------------------------------------
+
+_LLM_JOBS_LOCK = threading.Lock()
+
+
+def _llm_jobs_path(folder: str) -> Path:
+    p = _resolve_folder(folder).parent / "intermediate"
+    p.mkdir(exist_ok=True)
+    return p / "llm_batch_jobs.json"
+
+
+def _llm_jobs_load(folder: str) -> list:
+    p = _llm_jobs_path(folder)
+    if not p.exists():
+        return []
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("jobs", [])
+    except Exception:
+        return []
+
+
+def _llm_jobs_save(folder: str, jobs: list):
+    _write_json(_llm_jobs_path(folder), {"jobs": jobs})
+
+
+def _llm_batch_supported(model: str) -> bool:
+    m = (model or "").lower()
+    return not (m.startswith(_TK_PREFIX) or _bare_model(model) in _LOCAL_MODELS)
+
+
+def _llm_batch_line(custom_id: str, model: str, messages, max_out: int,
+                    temperature: float, response_format=None) -> dict:
+    """One JSONL request mirroring _llm_complete_raw's model-family handling."""
+    body = {"model": _bare_model(model), "messages": messages}
+    if response_format:
+        body["response_format"] = response_format
+    if _is_reasoning_model(model):
+        body["max_completion_tokens"] = max(max_out, 2000)
+        body["reasoning_effort"] = "low"
+    else:
+        body["max_tokens"] = max_out
+        body["temperature"] = temperature
+    return {"custom_id": custom_id, "method": "POST",
+            "url": "/v1/chat/completions", "body": body}
+
+
+def _img_part(crop) -> dict:
+    import base64, io as _io
+    buf = _io.BytesIO()
+    crop.save(buf, format="JPEG", quality=92)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return {"type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}}
+
+
+class LlmBatchSubmit(BaseModel):
+    targets:     List[dict]                 # [{stem, idx}]
+    model:       str
+    mode:        str = "image"              # image | image+ocr | ocr | linebyline
+    prompt:      str
+    cell_height: int = 26
+    use_shadow:  bool = False
+    json_schema: Optional[dict] = None
+    schema_name: Optional[str] = None
+
+
+@app.post("/api/llm_batch/submit")
+def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
+    import datetime as _dt
+    from collections import defaultdict
+    from PIL import Image as PILImage
+
+    if not _llm_batch_supported(body.model):
+        raise HTTPException(status_code=400,
+            detail="Overnight batches need an OpenAI-hosted (or Azure) model — "
+                   "TK/local models have no batch service.")
+    if not body.targets:
+        raise HTTPException(status_code=400, detail="No target cells")
+    d = _resolve_folder(folder)
+
+    json_mode = bool(body.json_schema)
+    rf = (_json_schema_response_format(body.json_schema, body.schema_name or "record", True)
+          if json_mode else None)
+
+    lines, meta = [], {}
+    by_stem = defaultdict(list)
+    for t in body.targets:
+        by_stem[t["stem"]].append(int(t["idx"]))
+
+    for stem, idxs in by_stem.items():
+        jf = d / f"{stem}.json"
+        img_path = _find_image(d, stem)
+        if not jf.exists():
+            continue
+        shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        img = None
+        if body.mode in ("image", "image+ocr", "linebyline") and img_path is not None:
+            img = (_get_shadow_page(folder, stem, img_path).convert("RGB")
+                   if body.use_shadow else PILImage.open(str(img_path)).convert("RGB"))
+        for idx in idxs:
+            if idx < 0 or idx >= len(shapes):
+                continue
+            shape = shapes[idx]
+            pts = shape.get("points") or []
+            if not pts:
+                continue
+            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+            x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+            pad = 4
+
+            if body.mode == "linebyline":
+                if img is None:
+                    continue
+                crop_top = max(0, int(y1) - pad)
+                crop = img.crop((max(0, int(x1) - pad), crop_top,
+                                 min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
+                rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
+                        or _detect_text_rows(crop, body.cell_height))
+                if not rows:
+                    continue
+                meta[f"{stem}|{idx}"] = {"stem": stem, "idx": idx,
+                                         "bands": [[t0 + crop_top, b0 + crop_top]
+                                                   for t0, b0 in rows]}
+                row_pad = max(4, body.cell_height // 6)
+                for i, (top, bottom) in enumerate(rows):
+                    rt = max(0, top - row_pad)
+                    rb = min(crop.height, bottom + row_pad)
+                    row_img = crop.crop((0, rt, crop.width, rb))
+                    if row_img.height < 48:
+                        scale = 48 / row_img.height
+                        row_img = row_img.resize((int(row_img.width * scale), 48),
+                                                 PILImage.LANCZOS)
+                    messages = [{"role": "user", "content": [
+                        {"type": "text", "text": body.prompt}, _img_part(row_img)]}]
+                    lines.append(_llm_batch_line(f"{stem}|{idx}|{i}", body.model,
+                                                 messages, 64, 0))
+                continue
+
+            # whole-cell modes (mirrors api_llm_cell)
+            content = []
+            if body.mode in ("image", "image+ocr"):
+                if img is None:
+                    continue
+                crop = img.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
+                                 min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
+                content.append(_img_part(crop))
+            prompt_text = body.prompt
+            ocr_text = (shape.get("tesseract_output") or {}).get("ocr_text", "")
+            if body.mode == "image+ocr" and ocr_text:
+                prompt_text = f"{body.prompt}\n\nOCR text:\n{ocr_text}"
+            elif body.mode == "ocr":
+                prompt_text = f"{body.prompt}\n\n{ocr_text}"
+            content.append({"type": "text", "text": prompt_text})
+            messages = ([{"role": "user", "content": prompt_text}] if body.mode == "ocr"
+                        else [{"role": "user", "content": content}])
+            meta[f"{stem}|{idx}"] = {"stem": stem, "idx": idx}
+            lines.append(_llm_batch_line(
+                f"{stem}|{idx}|-1", body.model, messages,
+                2048 if json_mode else 1024,
+                0 if json_mode else 0.2, rf))
+
+    if not lines:
+        raise HTTPException(status_code=400, detail="No usable requests could be built")
+
+    jsonl = "\n".join(json.dumps(l, ensure_ascii=False) for l in lines)
+    try:
+        client = _make_llm_client(body.model)
+        fobj = client.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
+                                   purpose="batch")
+        remote = client.batches.create(input_file_id=fobj.id,
+                                       endpoint="/v1/chat/completions",
+                                       completion_window="24h")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Batch submit failed: {exc}")
+
+    with _LLM_JOBS_LOCK:
+        jobs = _llm_jobs_load(folder)
+        job = {
+            "id": f"job-{len(jobs) + 1}",
+            "remote_id": remote.id,
+            "provider": "azure" if body.model.startswith(_AZURE_PREFIX) else "openai",
+            "model": body.model, "mode": body.mode, "prompt": body.prompt,
+            "json": json_mode, "schema_name": body.schema_name,
+            "n_requests": len(lines), "n_cells": len(meta),
+            "submitted": _dt.datetime.utcnow().isoformat() + "Z",
+            "status": getattr(remote, "status", "validating"),
+            "meta": meta,
+        }
+        jobs.append(job)
+        _llm_jobs_save(folder, jobs)
+    return {"ok": True, "id": job["id"], "remote_id": remote.id,
+            "n_requests": len(lines), "n_cells": len(meta)}
+
+
+def _llm_job_public(j: dict) -> dict:
+    return {k: v for k, v in j.items() if k not in ("meta", "prompt")}
+
+
+@app.get("/api/llm_batch/jobs")
+def api_llm_batch_jobs(folder: str = Query(...), refresh: bool = Query(True)):
+    """List this project's overnight jobs; live statuses re-checked with the provider."""
+    with _LLM_JOBS_LOCK:
+        jobs = _llm_jobs_load(folder)
+        changed = False
+        for j in jobs:
+            if not refresh or j.get("status") in ("completed", "failed", "cancelled",
+                                                  "expired", "applied"):
+                continue
+            try:
+                client = _make_llm_client(j["model"])
+                remote = client.batches.retrieve(j["remote_id"])
+                j["status"] = remote.status
+                rc = getattr(remote, "request_counts", None)
+                if rc:
+                    j["counts"] = {"completed": getattr(rc, "completed", 0),
+                                   "failed": getattr(rc, "failed", 0),
+                                   "total": getattr(rc, "total", 0)}
+                changed = True
+            except Exception as e:
+                j["status_note"] = f"status check failed: {e}"
+        if changed:
+            _llm_jobs_save(folder, jobs)
+    return {"jobs": [_llm_job_public(j) for j in jobs]}
+
+
+@app.post("/api/llm_batch/cancel")
+def api_llm_batch_cancel(folder: str = Query(...), job: str = Query(...)):
+    with _LLM_JOBS_LOCK:
+        jobs = _llm_jobs_load(folder)
+        j = next((x for x in jobs if x["id"] == job), None)
+        if j is None:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job}")
+        try:
+            client = _make_llm_client(j["model"])
+            remote = client.batches.cancel(j["remote_id"])
+            j["status"] = getattr(remote, "status", "cancelling")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Cancel failed: {exc}")
+        _llm_jobs_save(folder, jobs)
+    return {"ok": True, "status": j["status"]}
+
+
+@app.post("/api/llm_batch/apply")
+def api_llm_batch_apply(folder: str = Query(...), job: str = Query(...)):
+    """Download a completed job's answers and write them into the pages exactly
+    like the live path (openai_output / row_struct / structured)."""
+    import datetime as _dt
+    from collections import defaultdict
+
+    d = _resolve_folder(folder)
+    with _LLM_JOBS_LOCK:
+        jobs = _llm_jobs_load(folder)
+    j = next((x for x in jobs if x["id"] == job), None)
+    if j is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job}")
+
+    try:
+        client = _make_llm_client(j["model"])
+        remote = client.batches.retrieve(j["remote_id"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Job lookup failed: {exc}")
+    if remote.status != "completed":
+        raise HTTPException(status_code=400, detail=f"Job is {remote.status}, not completed")
+    if not getattr(remote, "output_file_id", None):
+        raise HTTPException(status_code=502, detail="Completed job has no output file")
+
+    raw = client.files.content(remote.output_file_id).text
+    answers, failed = {}, []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        cid = rec.get("custom_id", "")
+        resp = rec.get("response") or {}
+        if rec.get("error") or resp.get("status_code") != 200:
+            failed.append(cid)
+            continue
+        try:
+            answers[cid] = (resp["body"]["choices"][0]["message"]["content"] or "").strip()
+        except Exception:
+            failed.append(cid)
+
+    timestamp = _dt.datetime.utcnow().isoformat() + "Z"
+    meta = j.get("meta") or {}
+    mode, json_mode = j.get("mode"), bool(j.get("json"))
+
+    # group per page, write each page once under the merge lock
+    per_stem = defaultdict(dict)          # stem -> idx -> {row -> text}
+    for cid, text in answers.items():
+        stem, idx, row = cid.rsplit("|", 2)
+        per_stem[stem].setdefault(int(idx), {})[int(row)] = text
+
+    applied, bad_json = 0, 0
+    for stem, shapes_res in per_stem.items():
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        with _SHAPE_MERGE_LOCK:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+            shapes = data.get("shapes", [])
+            for idx, rows_res in shapes_res.items():
+                if idx < 0 or idx >= len(shapes):
+                    continue
+                shape = shapes[idx]
+                if mode == "linebyline":
+                    bands = (meta.get(f"{stem}|{idx}") or {}).get("bands") or []
+                    texts = [rows_res.get(i, "") for i in range(len(bands))]
+                    if not bands:
+                        continue
+                    _apply_layer_rows(shape, [tuple(b) for b in bands],
+                                      "llm", texts, "linebyline")
+                    shape["openai_output"] = {
+                        "response": "\n".join(texts), "model": j["model"],
+                        "mode": "linebyline", "timestamp": timestamp,
+                        "lines_detected": len(bands), "batch_job": j["id"],
+                    }
+                elif json_mode:
+                    try:
+                        parsed = json.loads(rows_res.get(-1, ""))
+                    except Exception:
+                        bad_json += 1
+                        continue
+                    prev = shape.get("structured") or {}
+                    shape["structured"] = {
+                        "schema_name": j.get("schema_name"), "llm": parsed,
+                        "data": prev.get("data") if prev.get("edited") else parsed,
+                        "edited": bool(prev.get("edited")),
+                        "model": j["model"], "ts": timestamp, "batch_job": j["id"],
+                    }
+                else:
+                    result = rows_res.get(-1, "")
+                    shape["openai_output"] = {
+                        "response": result, "model": j["model"], "mode": mode,
+                        "timestamp": timestamp, "batch_job": j["id"],
+                    }
+                    _distribute_flat_to_rows(shape, "llm", result)
+                applied += 1
+            _write_json(jf, data)
+
+    with _LLM_JOBS_LOCK:
+        jobs = _llm_jobs_load(folder)
+        j2 = next((x for x in jobs if x["id"] == job), None)
+        if j2 is not None:
+            j2["status"] = "applied"
+            j2["applied_ts"] = timestamp
+            j2["applied_cells"] = applied
+            j2["failed_requests"] = len(failed)
+            _llm_jobs_save(folder, jobs)
+
+    return {"ok": True, "applied_cells": applied, "failed_requests": len(failed),
+            "bad_json": bad_json, "failed_ids": failed[:50]}
+
+
 @app.post("/api/page/shape/llm")
 def api_llm_cell(
     folder:     str  = Query(...),

@@ -61,10 +61,10 @@ Goal metric: **human minutes per 1,000 verified data cells**, and **days from ra
 **Problem** (A6): serial, uncached, full-price LLM usage; multi-stage pipeline never benchmarked against one-shot vision extraction.
 
 **Plan**
-1. Concurrency (asyncio + semaphore, e.g. 8-way) in Batch LLM; response cache keyed on (image hash, prompt hash, model) so re-runs are free.
-2. OpenAI **Batch API** path for overnight jobs (50% cost) — fits the workflow: queue in the evening, review queue in the morning.
-3. Benchmark harness: for N gold pages, compare (a) current pipeline, (b) vision model whole-page → structured JSON (Type B) or → per-cell values keyed by lattice coordinates (Type A), on accuracy and cost. If (b) is close, use it to *pre-fill* layers and let P1's queue absorb the errors.
-4. Promote the "magic wand" from experimental using the benchmark results — possibly replacing GPU layout training for new projects with few pages (where annotating 30 pages + training costs more than vision-LLM inference on 300).
+1. ~~Concurrency + response cache~~ — **DONE 2026-07-06**: ⚙ Batch LLM runs N requests in flight ("Parallel requests" knob, default 6); identical requests answered from a local sqlite cache (`.llm_cache.sqlite`); LLM endpoints use per-shape merge writes so same-page parallelism is safe.
+2. ~~Batch API overnight lane~~ — **DONE 2026-07-06**: op "🌙 LLM — overnight batch (half price)" in the ⚙ modal: server packages requests (incl. line-by-line row slicing) into a JSONL, submits via OpenAI/Azure Batch API, tracks jobs per project (`intermediate/llm_batch_jobs.json`), Apply writes results like the live path, Cancel supported. Azure needs a Global Batch deployment of the model.
+3. Benchmark harness: for N gold pages, compare (a) current pipeline, (b) vision model whole-page → structured JSON (Type B) or → per-cell values keyed by lattice coordinates (Type A), on accuracy and cost. If (b) is close, use it to *pre-fill* layers and let P1's queue absorb the errors. **(Remaining.)**
+4. Promote the "magic wand" from experimental using the benchmark results — possibly replacing GPU layout training for new projects with few pages (where annotating 30 pages + training costs more than vision-LLM inference on 300). **(Remaining.)**
 
 **Effort**: 1 session for concurrency+cache; 2–3 for benchmark. **Payoff**: cost ↓, wall-clock ↓, and possibly deleting a whole pipeline stage for small projects.
 

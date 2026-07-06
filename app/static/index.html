@@ -733,6 +733,7 @@
         <option value="ocr_tesseract">OCR — Tesseract</option>
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
         <option value="llm">LLM</option>
+        <option value="llm_batchapi">🌙 LLM — overnight batch (half price)</option>
         <option value="score_delete">Delete shapes below score threshold</option>
         <option value="clear_ocr">✕ Remove OCR results</option>
         <option value="pdf_text_layer">PDF text layer extraction</option>
@@ -836,7 +837,7 @@
           <option value="linebyline">Line-by-line</option>
         </select>
       </div>
-      <label class="row" title="How many cells are sent to the LLM at the same time. Higher = faster; lower it if you hit rate limits.">
+      <label class="row" id="batch-llm-parallel-wrap" title="How many cells are sent to the LLM at the same time. Higher = faster; lower it if you hit rate limits.">
         <span style="white-space:nowrap;">Parallel requests</span>
         <input type="number" id="batch-llm-parallel" value="6" min="1" max="16" style="width:60px;flex:none;" />
       </label>
@@ -883,6 +884,16 @@
                style="accent-color:#e94560;width:13px;height:13px;">
         <span>Only run if OCR contains numbers</span>
       </label>
+    </div>
+
+    <!-- Overnight (Batch API) jobs -->
+    <div id="batch-overnight-opts" style="display:none;flex-direction:column;gap:8px;">
+      <div style="font-size:10px;color:#555;">Requests are packaged and handed to the provider's batch service: half price, done within 24h (usually much sooner). You can close the browser after submitting. Azure models need a <b>Global Batch</b> deployment of the model in the Azure portal.</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:11px;color:#aaa;flex:1;">Overnight jobs</span>
+        <button type="button" onclick="_refreshOvernightJobs()" style="background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">↻ Refresh</button>
+      </div>
+      <div id="batch-overnight-jobs" style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;"></div>
     </div>
 
     <!-- Resolve authorities options -->

@@ -118,7 +118,12 @@ function onBatchOpChange() {
   const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
   document.getElementById('batch-ocr-opts').style.display       = isOcr            ? 'flex' : 'none';
   document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
-  document.getElementById('batch-llm-opts').style.display       = op === 'llm'          ? 'flex' : 'none';
+  const isLlmOp = op === 'llm' || op === 'llm_batchapi';
+  document.getElementById('batch-llm-opts').style.display       = isLlmOp ? 'flex' : 'none';
+  document.getElementById('batch-llm-parallel-wrap').style.display = op === 'llm' ? '' : 'none';
+  document.getElementById('batch-overnight-opts').style.display = op === 'llm_batchapi' ? 'flex' : 'none';
+  document.getElementById('batch-run-btn').textContent = op === 'llm_batchapi' ? '🌙 Submit job' : 'Run';
+  if (op === 'llm_batchapi') _refreshOvernightJobs();
   document.getElementById('batch-score-opts').style.display     = op === 'score_delete' ? 'flex' : 'none';
   document.getElementById('batch-clear-ocr-opts').style.display = op === 'clear_ocr'         ? 'flex' : 'none';
   document.getElementById('batch-clear-llm-opts').style.display          = op === 'clear_llm'          ? 'flex' : 'none';
@@ -400,6 +405,14 @@ async function runBatch() {
     const _bjson = document.getElementById('batch-llm-json').checked;
     if (_bjson && !document.getElementById('batch-llm-schema').value) { showToast('Pick a schema for JSON mode'); return; }
     if (!confirm(`Run ${_bjson ? 'JSON extraction' : 'LLM'} on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'llm_batchapi') {
+    const _bjson = document.getElementById('batch-llm-json').checked;
+    if (_bjson && !document.getElementById('batch-llm-schema').value) { showToast('Pick a schema for JSON mode'); return; }
+    if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
+    const m = document.getElementById('batch-llm-model').value;
+    if (m.startsWith('tk:') || m.includes(':') && !m.startsWith('azure:')) {
+      showToast('Overnight batches need an OpenAI or Azure model'); return;
+    }
   } else if (op === 'score_delete') {
     const t = parseFloat(document.getElementById('batch-score-thresh').value);
     if (!confirm(`Delete all shapes with score < ${t} across ${sorted.length} page(s)? This cannot be undone.`)) return;
@@ -437,6 +450,45 @@ async function runBatch() {
   _batchVerbose = document.getElementById('batch-verbose').checked;
   const verboseEl = _batchLogEl();
   if (verboseEl) { verboseEl.textContent = ''; verboseEl.style.display = _batchVerbose ? 'block' : 'none'; }
+
+  // Overnight lane: package everything and hand it to the provider's batch
+  // service (half price, done within 24h) — nothing runs in this browser.
+  if (op === 'llm_batchapi') {
+    const s = _collectLlmSettings();
+    const tasks = await _collectLlmTargets(sorted, s, progText);
+    let msg;
+    if (!tasks.length) {
+      msg = 'No matching cells — nothing submitted.';
+    } else if (!confirm(`Submit ${tasks.length} cell(s) as an overnight batch (half price, done within 24h)?`)) {
+      msg = 'Submission cancelled.';
+    } else {
+      progText.textContent = `Submitting ${tasks.length} cell(s)…`;
+      try {
+        const r = await fetch(`${API}/api/llm_batch/submit?folder=${encodeURIComponent(folder)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targets: tasks.map(t => ({ stem: t.stem, idx: t.si })),
+            model: s.model, mode: s.mode, prompt: s.prompt,
+            cell_height: s.cellHeight, use_shadow: s.useShadow,
+            json_schema: s.schema, schema_name: s.schemaName,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || r.status);
+        msg = `🌙 Submitted ${d.n_requests} request(s) (${d.n_cells} cell(s)) as ${d.id}. You can close the browser.`;
+        showToast(msg, 7000);
+      } catch (e) { msg = `✕ Submit failed: ${e.message}`; showToast(msg, 7000); }
+    }
+    progText.style.color = msg.startsWith('✕') ? '#ff9800' : '#4caf50';
+    progText.textContent = msg;
+    progBar.style.width = '100%';
+    _batchRunning = false;
+    document.getElementById('batch-run-btn').textContent   = '🌙 Submit job';
+    document.getElementById('batch-run-btn').disabled      = false;
+    document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+    _refreshOvernightJobs();
+    return;
+  }
 
   // LLM runs through its own parallel path (N requests in flight at once —
   // the server's per-shape merge writes make same-page concurrency safe).
@@ -925,33 +977,34 @@ async function _drainSSEVerbose(response, onMsg) {
   }
 }
 
-async function _runBatchLlmParallel(sorted, progText, progBar) {
+function _collectLlmSettings() {
   const checks = document.querySelectorAll('#batch-llm-label-checks input[type=checkbox]');
   const remembered = {};
   const selLabels  = [];
   checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
   localStorage.setItem('batchLlmLabels', JSON.stringify(remembered));
 
-  const model      = document.getElementById('batch-llm-model').value;
-  const mode       = document.getElementById('batch-llm-mode').value;
-  const prompt     = document.getElementById('batch-llm-prompt').value.trim();
-  const cellHeight = parseInt(document.getElementById('batch-llm-cellheight').value) || 26;
-  const useShadow      = document.getElementById('batch-llm-use-shadow').checked;
-  const overwrite      = document.getElementById('batch-llm-overwrite').checked;
-  const requireOcrNums = document.getElementById('batch-llm-require-ocr-numbers').checked;
-  const labelSet       = new Set(selLabels);
-  const jsonOn   = document.getElementById('batch-llm-json').checked;
-  let   schema   = null, schemaName = null;
-  if (jsonOn) {
-    schemaName = document.getElementById('batch-llm-schema').value || null;
-    const s = _projSchemas.find(x => x.name === schemaName);
-    schema = s ? s.schema : null;     // existence validated in the confirm step
+  const s = {
+    model:      document.getElementById('batch-llm-model').value,
+    mode:       document.getElementById('batch-llm-mode').value,
+    prompt:     document.getElementById('batch-llm-prompt').value.trim(),
+    cellHeight: parseInt(document.getElementById('batch-llm-cellheight').value) || 26,
+    useShadow:      document.getElementById('batch-llm-use-shadow').checked,
+    overwrite:      document.getElementById('batch-llm-overwrite').checked,
+    requireOcrNums: document.getElementById('batch-llm-require-ocr-numbers').checked,
+    labelSet:       new Set(selLabels),
+    jsonOn:  document.getElementById('batch-llm-json').checked,
+    schema:  null, schemaName: null,
+  };
+  if (s.jsonOn) {
+    s.schemaName = document.getElementById('batch-llm-schema').value || null;
+    const sch = _projSchemas.find(x => x.name === s.schemaName);
+    s.schema = sch ? sch.schema : null;   // existence validated in the confirm step
   }
-  const conc = Math.max(1, Math.min(16,
-    parseInt(document.getElementById('batch-llm-parallel')?.value) || 6));
-  localStorage.setItem('batchLlmParallel', String(conc));
+  return s;
+}
 
-  // Phase 1 — collect every (page, shape) target across the selected pages
+async function _collectLlmTargets(sorted, s, progText) {
   const tasks = [];
   for (const idx of sorted) {
     if (_batchStop) break;
@@ -963,14 +1016,26 @@ async function _runBatchLlmParallel(sorted, progText, progBar) {
     const colFilter  = _computeColumnFilter(shapes);
     for (let si = 0; si < shapes.length; si++) {
       const sh = shapes[si];
-      if (!labelSet.has(sh.label)) continue;
+      if (!s.labelSet.has(sh.label)) continue;
       if (condFilter !== null && !condFilter.has(si)) continue;
       if (colFilter  !== null && !colFilter.has(si))  continue;
-      if (!overwrite && (jsonOn ? sh.structured : sh.openai_output?.response)) continue;
-      if (requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
+      if (!s.overwrite && (s.jsonOn ? sh.structured : sh.openai_output?.response)) continue;
+      if (s.requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
       tasks.push({ stem, si, label: sh.label, row: sh.super_row, col: sh.super_column });
     }
   }
+  return tasks;
+}
+
+async function _runBatchLlmParallel(sorted, progText, progBar) {
+  const s = _collectLlmSettings();
+  const { model, mode, prompt, cellHeight, useShadow, schema, schemaName } = s;
+  const conc = Math.max(1, Math.min(16,
+    parseInt(document.getElementById('batch-llm-parallel')?.value) || 6));
+  localStorage.setItem('batchLlmParallel', String(conc));
+
+  // Phase 1 — collect every (page, shape) target across the selected pages
+  const tasks = await _collectLlmTargets(sorted, s, progText);
   if (!tasks.length) return { done: 0, total: 0, errors: 0 };
   batchLog(`${tasks.length} cell(s) to process, ${conc} in parallel`);
 
@@ -1066,3 +1131,77 @@ async function _batchOcrShape(stem, idx, op, cellHeight) {
   }
 }
 
+
+// ── Overnight (Batch API) jobs list ──────────────────────────────────────────
+async function _refreshOvernightJobs() {
+  const box = document.getElementById('batch-overnight-jobs');
+  if (!box) return;
+  box.innerHTML = '<div style="color:#555;font-size:11px;">Loading…</div>';
+  try {
+    const r = await fetch(`${API}/api/llm_batch/jobs?folder=${encodeURIComponent(folder)}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    const jobs = (d.jobs || []).slice().reverse();   // newest first
+    if (!jobs.length) {
+      box.innerHTML = '<div style="color:#555;font-size:11px;">No overnight jobs yet for this project.</div>';
+      return;
+    }
+    const chip = st => {
+      const c = { completed: '#22c55e', applied: '#22c55e', failed: '#e94560',
+                  cancelled: '#e94560', expired: '#e94560' }[st] || '#f0c040';
+      return `<span style="color:${c};font-weight:700;">${_escHtml(st)}</span>`;
+    };
+    box.innerHTML = jobs.map(j => {
+      const when = (j.submitted || '').replace('T', ' ').slice(0, 16);
+      const counts = j.counts ? ` · ${j.counts.completed}/${j.counts.total} done`
+        + (j.counts.failed ? `, ${j.counts.failed} failed` : '') : '';
+      const applied = j.status === 'applied'
+        ? ` · ✓ ${j.applied_cells} cell(s) written` + (j.failed_requests ? `, ${j.failed_requests} request(s) failed` : '')
+        : '';
+      const btns = [];
+      if (j.status === 'completed')
+        btns.push(`<button onclick="_ovApply('${j.id}', this)" style="background:#1b4d2e;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">⬇ Apply results</button>`);
+      if (['validating', 'in_progress', 'finalizing', 'queued'].includes(j.status))
+        btns.push(`<button onclick="_ovCancel('${j.id}', this)" style="background:#5c1f2e;border:1px solid #8e2f47;color:#e0e0e0;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">✕ Cancel</button>`);
+      return `<div style="display:flex;align-items:center;gap:8px;background:#091530;border:1px solid #0f3460;border-radius:5px;padding:5px 8px;font-size:11px;color:#aaa;">
+        <span style="flex:none;color:#e0e0e0;font-weight:700;">${_escHtml(j.id)}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+          ${when} · ${_escHtml(j.model)} · ${_escHtml(j.mode)}${j.json ? ' · JSON' : ''} · ${j.n_cells} cell(s)${counts}${applied}
+          ${j.status_note ? ` · <span style=\"color:#ff9800;\">${_escHtml(j.status_note)}</span>` : ''}
+        </span>
+        ${chip(j.status)} ${btns.join(' ')}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    box.innerHTML = `<div style="color:#e94560;font-size:11px;">✕ ${_escHtml(e.message || String(e))}</div>`;
+  }
+}
+
+async function _ovApply(jobId, btn) {
+  if (!confirm(`Write ${jobId}'s results into the pages? Existing human edits are kept.`)) return;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch(`${API}/api/llm_batch/apply?folder=${encodeURIComponent(folder)}&job=${encodeURIComponent(jobId)}`,
+                          { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    showToast(`⬇ ${jobId}: ${d.applied_cells} cell(s) written`
+      + (d.failed_requests ? `, ${d.failed_requests} request(s) failed` : '')
+      + (d.bad_json ? `, ${d.bad_json} invalid JSON` : ''), 7000);
+    if (pageData) { await reloadPageData(); updatePanel(); drawOverlay(); }
+  } catch (e) { showToast('Apply failed: ' + (e.message || e), 7000); }
+  _refreshOvernightJobs();
+}
+
+async function _ovCancel(jobId, btn) {
+  if (!confirm(`Cancel ${jobId}? Requests already completed are still billed and can be applied.`)) return;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch(`${API}/api/llm_batch/cancel?folder=${encodeURIComponent(folder)}&job=${encodeURIComponent(jobId)}`,
+                          { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    showToast(`✕ ${jobId} → ${d.status}`);
+  } catch (e) { showToast('Cancel failed: ' + (e.message || e), 7000); }
+  _refreshOvernightJobs();
+}
