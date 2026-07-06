@@ -836,6 +836,10 @@
           <option value="linebyline">Line-by-line</option>
         </select>
       </div>
+      <label class="row" title="How many cells are sent to the LLM at the same time. Higher = faster; lower it if you hit rate limits.">
+        <span style="white-space:nowrap;">Parallel requests</span>
+        <input type="number" id="batch-llm-parallel" value="6" min="1" max="16" style="width:60px;flex:none;" />
+      </label>
       <div id="batch-llm-cellheight-wrap" style="display:none;">
         <label class="row">
           <span style="white-space:nowrap;">Target row height (px)</span>

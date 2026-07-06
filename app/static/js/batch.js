@@ -102,6 +102,8 @@ function openBatchModal() {
   document.getElementById('batch-run-btn').textContent = 'Run';
   document.getElementById('batch-run-btn').disabled = false;
   document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+  const parEl = document.getElementById('batch-llm-parallel');
+  if (parEl) parEl.value = localStorage.getItem('batchLlmParallel') || '6';
   document.getElementById('batch-modal').classList.add('show');
 }
 
@@ -436,6 +438,23 @@ async function runBatch() {
   const verboseEl = _batchLogEl();
   if (verboseEl) { verboseEl.textContent = ''; verboseEl.style.display = _batchVerbose ? 'block' : 'none'; }
 
+  // LLM runs through its own parallel path (N requests in flight at once —
+  // the server's per-shape merge writes make same-page concurrency safe).
+  if (op === 'llm') {
+    const r = await _runBatchLlmParallel(sorted, progText, progBar);
+    progBar.style.width  = '100%';
+    progText.style.color = _batchStop ? '#ff9800' : '#4caf50';
+    progText.textContent = _batchStop
+      ? `Stopped after ${r.done}/${r.total} cell(s).`
+      : `Done — ${r.done} cell(s)` + (r.errors ? `, ${r.errors} error(s)` : '') + '.';
+    _batchRunning = false;
+    document.getElementById('batch-run-btn').textContent   = 'Run';
+    document.getElementById('batch-run-btn').disabled      = false;
+    document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+    await reloadPageData(); refreshDiag(); drawOverlay(); updatePanel();
+    return;
+  }
+
   let done = 0;
   for (const idx of sorted) {
     if (_batchStop) break;
@@ -521,50 +540,6 @@ async function runBatch() {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shapes }),
       });
-
-    } else if (op === 'llm') {
-      const checks = document.querySelectorAll('#batch-llm-label-checks input[type=checkbox]');
-      const remembered = {};
-      const selLabels  = [];
-      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
-      localStorage.setItem('batchLlmLabels', JSON.stringify(remembered));
-
-      const model      = document.getElementById('batch-llm-model').value;
-      const mode       = document.getElementById('batch-llm-mode').value;
-      const prompt     = document.getElementById('batch-llm-prompt').value.trim();
-      const cellHeight = parseInt(document.getElementById('batch-llm-cellheight').value) || 26;
-      const useShadow      = document.getElementById('batch-llm-use-shadow').checked;
-      const overwrite      = document.getElementById('batch-llm-overwrite').checked;
-      const requireOcrNums = document.getElementById('batch-llm-require-ocr-numbers').checked;
-      const labelSet       = new Set(selLabels);
-      const jsonOn   = document.getElementById('batch-llm-json').checked;
-      let   schema   = null, schemaName = null;
-      if (jsonOn) {
-        schemaName = document.getElementById('batch-llm-schema').value || null;
-        const s = _projSchemas.find(x => x.name === schemaName);
-        schema = s ? s.schema : null;     // existence validated in the confirm step
-      }
-
-      const res    = await fetch(`${API}/api/page?${params}`);
-      const pdata  = await res.json();
-      const shapes = pdata.shapes || [];
-      const condFilter = _computeConditionFilter(shapes);
-      const colFilter  = _computeColumnFilter(shapes);
-
-      for (let si = 0; si < shapes.length; si++) {
-        if (_batchStop) break;
-        const sh = shapes[si];
-        if (!labelSet.has(sh.label)) continue;
-        if (condFilter !== null && !condFilter.has(si)) continue;
-        if (colFilter  !== null && !colFilter.has(si))  continue;
-        if (!overwrite && (jsonOn ? sh.structured : sh.openai_output?.response)) continue;
-        if (requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
-        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
-        batchLog(`[${stem}] shape ${si} (${sh.label}) row=${sh.super_row} col=${sh.super_column}`);
-        try {
-          await _batchLlmShape(stem, si, model, mode, prompt, cellHeight, useShadow, schema, schemaName);
-        } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
-      }
 
     } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
       const checks    = document.querySelectorAll('#batch-ocr-label-checks input[type=checkbox]');
@@ -948,6 +923,78 @@ async function _drainSSEVerbose(response, onMsg) {
     }
     if (_batchStop) { reader.cancel(); break; }
   }
+}
+
+async function _runBatchLlmParallel(sorted, progText, progBar) {
+  const checks = document.querySelectorAll('#batch-llm-label-checks input[type=checkbox]');
+  const remembered = {};
+  const selLabels  = [];
+  checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+  localStorage.setItem('batchLlmLabels', JSON.stringify(remembered));
+
+  const model      = document.getElementById('batch-llm-model').value;
+  const mode       = document.getElementById('batch-llm-mode').value;
+  const prompt     = document.getElementById('batch-llm-prompt').value.trim();
+  const cellHeight = parseInt(document.getElementById('batch-llm-cellheight').value) || 26;
+  const useShadow      = document.getElementById('batch-llm-use-shadow').checked;
+  const overwrite      = document.getElementById('batch-llm-overwrite').checked;
+  const requireOcrNums = document.getElementById('batch-llm-require-ocr-numbers').checked;
+  const labelSet       = new Set(selLabels);
+  const jsonOn   = document.getElementById('batch-llm-json').checked;
+  let   schema   = null, schemaName = null;
+  if (jsonOn) {
+    schemaName = document.getElementById('batch-llm-schema').value || null;
+    const s = _projSchemas.find(x => x.name === schemaName);
+    schema = s ? s.schema : null;     // existence validated in the confirm step
+  }
+  const conc = Math.max(1, Math.min(16,
+    parseInt(document.getElementById('batch-llm-parallel')?.value) || 6));
+  localStorage.setItem('batchLlmParallel', String(conc));
+
+  // Phase 1 — collect every (page, shape) target across the selected pages
+  const tasks = [];
+  for (const idx of sorted) {
+    if (_batchStop) break;
+    const stem = pages[idx].stem;
+    progText.textContent = `Scanning page ${idx + 1}/${pages.length} — ${stem}`;
+    const res    = await fetch(`${API}/api/page?${new URLSearchParams({ folder, stem })}`);
+    const shapes = (await res.json()).shapes || [];
+    const condFilter = _computeConditionFilter(shapes);
+    const colFilter  = _computeColumnFilter(shapes);
+    for (let si = 0; si < shapes.length; si++) {
+      const sh = shapes[si];
+      if (!labelSet.has(sh.label)) continue;
+      if (condFilter !== null && !condFilter.has(si)) continue;
+      if (colFilter  !== null && !colFilter.has(si))  continue;
+      if (!overwrite && (jsonOn ? sh.structured : sh.openai_output?.response)) continue;
+      if (requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
+      tasks.push({ stem, si, label: sh.label, row: sh.super_row, col: sh.super_column });
+    }
+  }
+  if (!tasks.length) return { done: 0, total: 0, errors: 0 };
+  batchLog(`${tasks.length} cell(s) to process, ${conc} in parallel`);
+
+  // Phase 2 — worker pool: `conc` requests in flight until the queue drains
+  let done = 0, errors = 0, next = 0;
+  const worker = async () => {
+    while (!_batchStop) {
+      const t = tasks[next++];
+      if (!t) return;
+      batchLog(`[${t.stem}] shape ${t.si} (${t.label}) row=${t.row} col=${t.col}`);
+      try {
+        await _batchLlmShape(t.stem, t.si, model, mode, prompt, cellHeight, useShadow, schema, schemaName);
+      } catch (e) {
+        errors++;
+        batchLog(`  ✕ [${t.stem}#${t.si}] ${e.message}`);
+      }
+      done++;
+      progText.textContent = `LLM ${done}/${tasks.length} cell(s)`
+        + (errors ? ` · ${errors} error(s)` : '') + ` · ${conc} in flight`;
+      progBar.style.width = `${Math.round((done / tasks.length) * 100)}%`;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(conc, tasks.length) }, worker));
+  return { done, total: tasks.length, errors };
 }
 
 async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useShadow, schema = null, schemaName = null) {

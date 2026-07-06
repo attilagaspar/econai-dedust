@@ -149,7 +149,11 @@ def _page_mut_lock(folder: str, stem: str):
 @app.middleware("http")
 async def _serialize_page_mutations(request, call_next):
     if request.method in ("PATCH", "POST", "PUT", "DELETE") \
-            and request.url.path.startswith("/api/page"):
+            and request.url.path.startswith("/api/page") \
+            and not request.url.path.startswith("/api/page/shape/llm"):
+        # LLM endpoints are exempt: they run in parallel by design and use
+        # merge-safe per-shape writes (_merge_shape_fields) instead of
+        # whole-document read-modify-write.
         folder = request.query_params.get("folder")
         stem   = request.query_params.get("stem")
         if folder and stem:
@@ -2090,12 +2094,61 @@ def _is_reasoning_model(model: str) -> bool:
     return m.startswith(("gpt-5", "o1", "o1-", "o3", "o3-", "o4", "o4-"))
 
 
-def _llm_complete(client, model, messages, max_out, temperature=0, response_format=None):
-    """Model-family-aware chat completion so reasoning models work alongside
-    the classic chat models with one call signature.  Reasoning models get a
-    token floor (reasoning tokens count against the budget) and low effort to
-    stay fast/cheap on these simple digit-transcription tasks.
-    `response_format` (e.g. a json_schema spec) is passed through when given."""
+# ── LLM response cache ───────────────────────────────────────────────────────
+# Answers already paid for are reused: keyed on the full request (model,
+# messages incl. image bytes, token budget, temperature, response_format).
+# Opt-in per call (use_cache=True) — bulk/batch endpoints use it so re-runs
+# are instant and free; interactive "give me a fresh attempt" paths (rule fix,
+# LLM test modal) don't.
+_LLM_CACHE_PATH = Path(__file__).parent.parent / ".llm_cache.sqlite"
+_LLM_CACHE_LOCK = threading.Lock()
+
+
+def _llm_cache_conn():
+    import sqlite3
+    conn = sqlite3.connect(str(_LLM_CACHE_PATH))
+    conn.execute("CREATE TABLE IF NOT EXISTS cache ("
+                 "key TEXT PRIMARY KEY, content TEXT, model TEXT,"
+                 "tokens_in INT, tokens_out INT, ts TEXT)")
+    return conn
+
+
+def _llm_cache_key(model, messages, max_out, temperature, response_format):
+    import hashlib
+    blob = json.dumps([_bare_model(model), messages, max_out, temperature,
+                       response_format], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _llm_cache_get(key):
+    from types import SimpleNamespace
+    try:
+        with _LLM_CACHE_LOCK, _llm_cache_conn() as conn:
+            row = conn.execute("SELECT content, tokens_in, tokens_out "
+                               "FROM cache WHERE key=?", (key,)).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return SimpleNamespace(
+        cached=True,
+        choices=[SimpleNamespace(message=SimpleNamespace(content=row[0]))],
+        usage=SimpleNamespace(prompt_tokens=row[1] or 0,
+                              completion_tokens=row[2] or 0))
+
+
+def _llm_cache_put(key, model, content, tokens_in, tokens_out):
+    import datetime as _dt
+    try:
+        with _LLM_CACHE_LOCK, _llm_cache_conn() as conn:
+            conn.execute("INSERT OR REPLACE INTO cache VALUES (?,?,?,?,?,?)",
+                         (key, content, _bare_model(model), tokens_in, tokens_out,
+                          _dt.datetime.utcnow().isoformat() + "Z"))
+    except Exception as e:
+        print(f"[llm-cache] write failed: {e}", flush=True)
+
+
+def _llm_complete_raw(client, model, messages, max_out, temperature=0, response_format=None):
     model = _bare_model(model)
     rf = {"response_format": response_format} if response_format else {}
     if _is_reasoning_model(model):
@@ -2111,6 +2164,36 @@ def _llm_complete(client, model, messages, max_out, temperature=0, response_form
         temperature=temperature, **rf)
 
 
+def _llm_complete(client, model, messages, max_out, temperature=0,
+                  response_format=None, use_cache=False):
+    """Model-family-aware chat completion so reasoning models work alongside
+    the classic chat models with one call signature.  Reasoning models get a
+    token floor (reasoning tokens count against the budget) and low effort to
+    stay fast/cheap on these simple digit-transcription tasks.
+    `response_format` (e.g. a json_schema spec) is passed through when given.
+    With use_cache=True an identical past request is answered from the local
+    cache (free, instant); the response then has .cached == True."""
+    key = None
+    if use_cache:
+        key = _llm_cache_key(model, messages, max_out, temperature, response_format)
+        hit = _llm_cache_get(key)
+        if hit is not None:
+            return hit
+    resp = _llm_complete_raw(client, model, messages, max_out, temperature, response_format)
+    if key is not None:
+        content = None
+        try:
+            content = resp.choices[0].message.content
+        except Exception:
+            pass
+        if content:
+            u = getattr(resp, "usage", None)
+            _llm_cache_put(key, model, content,
+                           getattr(u, "prompt_tokens", 0) if u else 0,
+                           getattr(u, "completion_tokens", 0) if u else 0)
+    return resp
+
+
 def _json_schema_response_format(schema: dict, name: str = "record", strict: bool = True):
     """Wrap a JSON Schema for OpenAI Structured Outputs."""
     return {"type": "json_schema",
@@ -2118,19 +2201,43 @@ def _json_schema_response_format(schema: dict, name: str = "record", strict: boo
                             "strict": strict, "schema": schema}}
 
 
-def _llm_complete_json(client, model, messages, max_out, schema, name):
+def _llm_complete_json(client, model, messages, max_out, schema, name, use_cache=False):
     """Structured-output completion: try strict json_schema, then non-strict,
     then plain json_object (for models/schemas that reject strict mode)."""
     try:
         return _llm_complete(client, model, messages, max_out, temperature=0,
-                             response_format=_json_schema_response_format(schema, name, True))
+                             response_format=_json_schema_response_format(schema, name, True),
+                             use_cache=use_cache)
     except Exception:
         try:
             return _llm_complete(client, model, messages, max_out, temperature=0,
-                                 response_format=_json_schema_response_format(schema, name, False))
+                                 response_format=_json_schema_response_format(schema, name, False),
+                                 use_cache=use_cache)
         except Exception:
             return _llm_complete(client, model, messages, max_out, temperature=0,
-                                 response_format={"type": "json_object"})
+                                 response_format={"type": "json_object"},
+                                 use_cache=use_cache)
+
+
+# ── Merge-safe shape writes ──────────────────────────────────────────────────
+# Parallel LLM runs on the SAME page each hold their own copy of the page
+# JSON; writing the whole document back would clobber sibling results. This
+# re-reads the file and writes only the given fields of one shape.
+_SHAPE_MERGE_LOCK = threading.Lock()
+
+
+def _merge_shape_fields(jf, idx: int, fields: dict) -> bool:
+    with _SHAPE_MERGE_LOCK:
+        try:
+            data = json.loads(Path(jf).read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        shapes = data.get("shapes", [])
+        if idx < 0 or idx >= len(shapes):
+            return False
+        shapes[idx].update(fields)
+        _write_json(jf, data)
+        return True
 
 
 @app.post("/api/page/shape/llm")
@@ -2142,6 +2249,7 @@ def api_llm_cell(
     mode:       str  = Query("image", description="image | image+ocr | ocr | linebyline"),
     use_shadow: bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
     dry_run:    bool = Query(False, description="Return result without writing to JSON (for testing)"),
+    cached:     bool = Query(True, description="Reuse an identical past answer from the local cache"),
     body:       LlmRequest = ...,
 ):
     """Send a cell to an LLM and store the result in the page JSON."""
@@ -2210,23 +2318,28 @@ def api_llm_cell(
           f"prompt={prompt_text!r}", flush=True)
 
     json_mode = bool(body.json_schema)
+    use_cache = cached and not dry_run
     try:
         client = _make_llm_client(model)
         if json_mode:
             response = _llm_complete_json(client, model, messages, 2048,
-                                          body.json_schema, body.schema_name or "record")
+                                          body.json_schema, body.schema_name or "record",
+                                          use_cache=use_cache)
         else:
             # temperature 0.2 for classic models — a tiny bit of freedom to
             # self-correct; reasoning models ignore temperature (see _llm_complete)
-            response = _llm_complete(client, model, messages, 1024, temperature=0.2)
+            response = _llm_complete(client, model, messages, 1024, temperature=0.2,
+                                     use_cache=use_cache)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
+    from_cache  = bool(getattr(response, "cached", False))
     raw_content = response.choices[0].message.content
     result      = (raw_content or "").strip()
     tokens_in   = response.usage.prompt_tokens     if response.usage else 0
     tokens_out  = response.usage.completion_tokens if response.usage else 0
-    print(f"[LLM] result={result!r}  tokens={tokens_in}→{tokens_out}", flush=True)
+    print(f"[LLM] result={result!r}  tokens={tokens_in}→{tokens_out}"
+          + ("  (cache hit)" if from_cache else ""), flush=True)
     timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
     # ── JSON / structured mode: parse and store on shape["structured"] ───────
@@ -2247,10 +2360,12 @@ def api_llm_cell(
                 "edited": bool(prev.get("edited")),
                 "model": model, "ts": timestamp,
             }
-            _write_json(jf, data)
+            # merge-write: parallel runs on the same page must not clobber
+            _merge_shape_fields(jf, idx, {"structured": shape["structured"]})
         return {"structured": parsed, "schema_name": body.schema_name,
                 "model": model, "mode": mode, "timestamp": timestamp,
-                "tokens_in": tokens_in, "tokens_out": tokens_out}
+                "tokens_in": tokens_in, "tokens_out": tokens_out,
+                "cached": from_cache}
 
     if not dry_run:
         shape["openai_output"] = {
@@ -2260,11 +2375,15 @@ def api_llm_cell(
             "timestamp": timestamp,
         }
         _distribute_flat_to_rows(shape, "llm", result)
-        _write_json(jf, data)
+        fields = {"openai_output": shape["openai_output"]}
+        if shape.get("row_struct"):
+            fields["row_struct"] = shape["row_struct"]
+        _merge_shape_fields(jf, idx, fields)
 
     return {"response": result, "model": model, "mode": mode,
             "timestamp": timestamp, "prompt_sent": prompt_text,
-            "tokens_in": tokens_in, "tokens_out": tokens_out}
+            "tokens_in": tokens_in, "tokens_out": tokens_out,
+            "cached": from_cache}
 
 
 @app.post("/api/page/shape/llm/linebyline")
@@ -2276,6 +2395,7 @@ async def api_llm_linebyline(
     cell_height: int  = Query(28, description="Expected height of one text row in pixels"),
     use_shadow:  bool = Query(False, description="Use OCR shadow (line-erased) image instead of original"),
     dry_run:     bool = Query(False, description="Return result without writing to JSON (for testing)"),
+    cached:      bool = Query(True, description="Reuse identical past answers from the local cache"),
     body:        LlmRequest = ...,
 ):
     """
@@ -2367,7 +2487,8 @@ async def api_llm_linebyline(
                 ],
             }]
             try:
-                resp = _llm_complete(client, model, messages, 64)
+                resp = _llm_complete(client, model, messages, 64,
+                                     use_cache=(cached and not dry_run))
                 text = (resp.choices[0].message.content or "").strip()
             except Exception as exc:
                 text = f"[error: {exc}]"
@@ -2389,7 +2510,10 @@ async def api_llm_linebyline(
                 "timestamp":      timestamp,
                 "lines_detected": len(rows),
             }
-            _write_json(jf, data_doc)
+            fields = {"openai_output": shape["openai_output"]}
+            if shape.get("row_struct"):
+                fields["row_struct"] = shape["row_struct"]
+            _merge_shape_fields(jf, idx, fields)   # parallel-safe per-shape write
 
         yield _json.dumps({"type": "done", "response": combined,
                            "model": model, "timestamp": timestamp,
@@ -2422,6 +2546,7 @@ async def api_llm_anchored(
     model:      str  = Query("gpt-4o-mini"),
     use_shadow: bool = Query(False),
     ref_idx:    int  = Query(-1, description="Project this shape's row_struct bands instead of the histogram split"),
+    cached:     bool = Query(True, description="Reuse identical past answers from the local cache"),
     body:       LlmRequest = ...,
 ):
     """
@@ -2499,7 +2624,7 @@ async def api_llm_anchored(
                     "url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
             ]}]
             try:
-                resp = _llm_complete(client, model, messages, 64)
+                resp = _llm_complete(client, model, messages, 64, use_cache=cached)
                 text = (resp.choices[0].message.content or "").strip()
             except Exception as exc:
                 text = f"[error: {exc}]"
@@ -2520,7 +2645,10 @@ async def api_llm_anchored(
             "timestamp":      timestamp,
             "lines_detected": len(rows),
         }
-        _write_json(jf, data_doc)
+        fields = {"openai_output": shape["openai_output"]}
+        if shape.get("row_struct"):
+            fields["row_struct"] = shape["row_struct"]
+        _merge_shape_fields(jf, idx, fields)   # parallel-safe per-shape write
         yield _json.dumps({"type": "done", "response": combined,
                            "model": model, "timestamp": timestamp})
 

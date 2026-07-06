@@ -49,6 +49,7 @@ server*.log
 server.err
 server.out
 app/ocr_settings.json
+.llm_cache.sqlite
 
 # Model weights (never in git)
 *.pth
