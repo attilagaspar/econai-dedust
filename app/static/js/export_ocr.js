@@ -408,8 +408,11 @@ function buildLegend() {
   });
   const combo=document.createElement('div'); combo.className='legend-item';
   const o=STATUS_BORDER.ocr;
-  combo.innerHTML=`<div class="legend-swatch" style="background:transparent;outline:${o.width}px solid ${o.color};outline-offset:-${o.width}px;box-shadow:inset 0 0 0 ${o.width+1}px ${STATUS_BORDER.llm.color}"></div><span>OCR+LLM</span>`;
+  combo.innerHTML=`<div class="legend-swatch" style="background:transparent;outline:${o.width}px solid ${o.color};outline-offset:-${o.width}px;box-shadow:inset 0 0 0 ${o.width+1}px ${STATUS_BORDER.llm.color}"></div><span>OCR+LLM agree</span>`;
   legend.appendChild(combo);
+  const dis=document.createElement('div'); dis.className='legend-item';
+  dis.innerHTML=`${legendSwatch({fill:'transparent',border:'#f59e0b',borderWidth:3})}<span>OCR≠LLM — check</span>`;
+  legend.appendChild(dis);
 }
 
 // ── Selection & panel ────────────────────────────────────────────────────────

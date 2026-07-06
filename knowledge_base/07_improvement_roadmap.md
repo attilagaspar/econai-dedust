@@ -91,13 +91,13 @@ Goal metric: **human minutes per 1,000 verified data cells**, and **days from ra
 
 **Effort**: ~2–3 sessions spread out; items 1, 2, 5 immediately.
 
-## P8. UX polish backlog (cheap, cumulative)
+## P8. UX polish backlog — **DONE 2026-07-06** (except panel-group pinning)
 
-- Tooltips with names + shortcuts on every emoji button; a `?` overlay listing shortcuts; a Ctrl+K command palette (fuzzy list of all actions — solves discoverability outright).
-- Saved **batch presets** ("recipes") in the ⚙ modal; one click re-runs "OCR + LLM + resolve places col 2, odd pages".
-- Batch **dry-run** ("would change 412 cells on 37 pages") + one-shot batch undo (snapshot the affected JSONs to a `.undo/` folder before running).
-- Right panel: pin frequently used groups, collapse state persisted (partially exists), "focus Human field" hotkey.
-- Border shading by *agreement* not just presence (green only when layers agree or Human set).
+- ~~Ctrl+K command palette~~: searchable list of every visible button; `?` opens a shortcut cheatsheet; `H` focuses the Human field (flat textarea or first rows-table cell).
+- ~~Batch presets~~: 💾 recipes in the ⚙ modal (all settings incl. label checkboxes, per project, localStorage).
+- ~~Batch dry-run + undo~~: 👁 Preview counts affected cells without writing; every writing batch first snapshots the selected pages to a zip (`intermediate/batch_undo.zip`, one generation); ↩ Undo last batch restores them.
+- ~~Agreement borders~~: amber border when OCR and LLM disagree and no human has looked (legend updated); presence colors otherwise unchanged.
+- Remaining (minor): pin frequently-used panel groups to the top.
 
 ---
 

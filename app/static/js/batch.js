@@ -104,6 +104,7 @@ function openBatchModal() {
   document.getElementById('batch-cancel-btn').textContent = 'Cancel';
   const parEl = document.getElementById('batch-llm-parallel');
   if (parEl) parEl.value = localStorage.getItem('batchLlmParallel') || '6';
+  _refreshBatchPresets();
   document.getElementById('batch-modal').classList.add('show');
 }
 
@@ -326,6 +327,7 @@ async function runBatch() {
     const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
     if (!stems.length) { showToast('No pages in range'); return; }
     if (!confirm(`Resolve authorities on ${stems.length} page(s)?`)) return;
+    await _batchTakeSnapshot(stems, 'resolve_authority');
     const payload = {
       stems,
       col_filter:  document.getElementById('batch-col-filter').value.trim() || null,
@@ -450,6 +452,13 @@ async function runBatch() {
   _batchVerbose = document.getElementById('batch-verbose').checked;
   const verboseEl = _batchLogEl();
   if (verboseEl) { verboseEl.textContent = ''; verboseEl.style.display = _batchVerbose ? 'block' : 'none'; }
+
+  // Snapshot for one-step undo before anything writes (submissions and
+  // exports don't modify pages — no snapshot needed for those).
+  if (op !== 'json_export' && op !== 'llm_batchapi') {
+    progText.textContent = 'Snapshotting pages for undo…';
+    await _batchTakeSnapshot(sorted.map(i => pages[i]?.stem).filter(Boolean), op);
+  }
 
   // Overnight lane: package everything and hand it to the provider's batch
   // service (half price, done within 24h) — nothing runs in this browser.
@@ -1204,4 +1213,155 @@ async function _ovCancel(jobId, btn) {
     showToast(`✕ ${jobId} → ${d.status}`);
   } catch (e) { showToast('Cancel failed: ' + (e.message || e), 7000); }
   _refreshOvernightJobs();
+}
+
+// ── Batch presets (recipes): every setting of this dialog, saved by name ────
+const _LABEL_CONTAINERS = ['batch-label-checks', 'batch-ocr-label-checks',
+  'batch-llm-label-checks', 'batch-score-label-checks',
+  'batch-clear-ocr-label-checks', 'batch-clear-llm-label-checks',
+  'batch-llm-halluc-label-checks'];
+
+function _batchPresetsKey() { return 'batchPresets::' + folder; }
+function _batchPresetsLoad() {
+  try { return JSON.parse(localStorage.getItem(_batchPresetsKey()) || '{}'); }
+  catch (e) { return {}; }
+}
+function _refreshBatchPresets(selected) {
+  const sel = document.getElementById('batch-preset');
+  if (!sel) return;
+  const names = Object.keys(_batchPresetsLoad()).sort();
+  sel.innerHTML = '<option value="">— recipes —</option>'
+    + names.map(n => `<option value="${_escHtml(n)}"${n === selected ? ' selected' : ''}>${_escHtml(n)}</option>`).join('');
+}
+
+function _batchSettingsSnapshot() {
+  const s = { inputs: {}, labels: {} };
+  document.querySelectorAll('#batch-modal-body input[id], #batch-modal-body select[id], #batch-modal-body textarea[id]')
+    .forEach(el => {
+      if (el.id === 'batch-preset') return;
+      s.inputs[el.id] = el.type === 'checkbox' ? { c: el.checked } : { v: el.value };
+    });
+  for (const cid of _LABEL_CONTAINERS) {
+    s.labels[cid] = {};
+    document.querySelectorAll(`#${cid} input[type=checkbox]`)
+      .forEach(cb => { s.labels[cid][cb.value] = cb.checked; });
+  }
+  return s;
+}
+
+function _batchSettingsRestore(s) {
+  for (const [id, v] of Object.entries(s.inputs || {})) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if ('c' in v) el.checked = v.c; else el.value = v.v;
+  }
+  for (const [cid, map] of Object.entries(s.labels || {})) {
+    document.querySelectorAll(`#${cid} input[type=checkbox]`)
+      .forEach(cb => { if (cb.value in map) cb.checked = map[cb.value]; });
+  }
+  onBatchOpChange();
+  if (typeof onBatchLlmModeChange === 'function') onBatchLlmModeChange();
+}
+
+function saveBatchPreset() {
+  const cur = document.getElementById('batch-preset').value;
+  const name = prompt('Recipe name:', cur || '');
+  if (!name || !name.trim()) return;
+  const p = _batchPresetsLoad();
+  p[name.trim()] = _batchSettingsSnapshot();
+  localStorage.setItem(_batchPresetsKey(), JSON.stringify(p));
+  _refreshBatchPresets(name.trim());
+  showToast(`💾 Recipe "${name.trim()}" saved`);
+}
+
+function applyBatchPreset() {
+  const name = document.getElementById('batch-preset').value;
+  if (!name) return;
+  const p = _batchPresetsLoad()[name];
+  if (!p) return;
+  _batchSettingsRestore(p);
+  showToast(`Recipe "${name}" applied — check the page range, then Run`);
+}
+
+function deleteBatchPreset() {
+  const name = document.getElementById('batch-preset').value;
+  if (!name) { showToast('Pick a recipe to delete'); return; }
+  if (!confirm(`Delete recipe "${name}"?`)) return;
+  const p = _batchPresetsLoad();
+  delete p[name];
+  localStorage.setItem(_batchPresetsKey(), JSON.stringify(p));
+  _refreshBatchPresets();
+}
+
+// ── Preview: count what a batch would touch, write nothing ──────────────────
+function _batchSelectedIndices() {
+  const indices = _parsePageRange(document.getElementById('batch-pages').value);
+  if (!indices) return null;
+  if (document.getElementById('batch-parity-odd').checked)
+    for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
+  if (document.getElementById('batch-parity-even').checked)
+    for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
+  return [...indices].sort((a, b) => a - b);
+}
+
+async function previewBatch() {
+  const op = document.getElementById('batch-op').value;
+  const sorted = _batchSelectedIndices();
+  const progText = document.getElementById('batch-progress');
+  if (!sorted || !sorted.size && !sorted.length) { progText.textContent = 'No pages in range.'; return; }
+  progText.style.color = '';
+  if (op === 'llm' || op === 'llm_batchapi') {
+    const s = _collectLlmSettings();
+    const tasks = await _collectLlmTargets(sorted, s, progText);
+    const ow = s.overwrite ? ' (Overwrite ON — existing results will be replaced)'
+                           : ' (cells that already have results are skipped)';
+    progText.textContent = `👁 Would send ${tasks.length} cell(s) on ${sorted.length} page(s) to ${s.model}${ow}. Nothing was changed.`;
+  } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
+    const labelSet = new Set([...document.querySelectorAll('#batch-ocr-label-checks input:checked')].map(cb => cb.value));
+    const overwrite = document.getElementById('batch-ocr-overwrite').checked;
+    let n = 0;
+    for (const idx of sorted) {
+      const stem = pages[idx].stem;
+      progText.textContent = `Scanning ${stem}…`;
+      const res = await fetch(`${API}/api/page?${new URLSearchParams({ folder, stem })}`);
+      const shapes = (await res.json()).shapes || [];
+      const condFilter = _computeConditionFilter(shapes);
+      const colFilter  = _computeColumnFilter(shapes);
+      shapes.forEach((sh, si) => {
+        if (!labelSet.has(sh.label)) return;
+        if (condFilter !== null && !condFilter.has(si)) return;
+        if (colFilter  !== null && !colFilter.has(si))  return;
+        if (!overwrite && sh.tesseract_output?.ocr_text) return;
+        n++;
+      });
+    }
+    progText.textContent = `👁 Would OCR ${n} cell(s) on ${sorted.length} page(s). Nothing was changed.`;
+  } else {
+    progText.textContent = `👁 Would run "${op}" on ${sorted.length} page(s). Nothing was changed.`;
+  }
+}
+
+// ── One-step batch undo ──────────────────────────────────────────────────────
+async function _batchTakeSnapshot(stems, op) {
+  try {
+    await fetch(`${API}/api/batch_snapshot?folder=${encodeURIComponent(folder)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stems, op }),
+    });
+  } catch (e) { /* snapshot failure must never block the batch */ }
+}
+
+async function undoLastBatch() {
+  try {
+    const r = await fetch(`${API}/api/batch_snapshot?folder=${encodeURIComponent(folder)}`);
+    const m = (await r.json()).snapshot;
+    if (!m) { showToast('No batch snapshot to restore'); return; }
+    const when = (m.ts || '').replace('T', ' ').slice(0, 16);
+    if (!confirm(`Restore ${m.pages} page(s) to their state before "${m.op}" (${when})?\nEverything done to them since — including manual edits — is rolled back.`)) return;
+    const r2 = await fetch(`${API}/api/batch_snapshot/restore?folder=${encodeURIComponent(folder)}`, { method: 'POST' });
+    const d = await r2.json();
+    if (!r2.ok) throw new Error(d.detail || r2.status);
+    showToast(`↩ Restored ${d.restored} page(s)`);
+    if (pageData) { await reloadPageData(); refreshDiag(); drawOverlay(); updatePanel(); }
+  } catch (e) { showToast('Undo failed: ' + (e.message || e), 6000); }
 }

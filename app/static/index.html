@@ -724,6 +724,11 @@
 <div id="batch-modal">
   <div id="batch-modal-body">
     <h3>⚙ Batch Process</h3>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="batch-preset" onchange="applyBatchPreset()" style="flex:1;" title="Saved recipes: every setting in this dialog, restored in one click"></select>
+      <button type="button" onclick="saveBatchPreset()" title="Save the current settings as a named recipe" style="background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:4px 9px;font-size:12px;cursor:pointer;">💾</button>
+      <button type="button" onclick="deleteBatchPreset()" title="Delete the selected recipe" style="background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:4px 9px;font-size:12px;cursor:pointer;">🗑</button>
+    </div>
     <div>
       <label class="row" style="margin-bottom:4px;">Operation</label>
       <select id="batch-op" onchange="onBatchOpChange()">
@@ -1073,6 +1078,8 @@
     <pre id="batch-verbose-log" style="display:none;background:#060f20;border:1px solid #0f3460;border-radius:4px;padding:8px;font-size:10px;color:#7ec8a0;font-family:monospace;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;"></pre>
 
     <div id="batch-modal-btns">
+      <button id="batch-undo-btn" onclick="undoLastBatch()" title="Restore the pages to their state before the last batch run" style="margin-right:auto;">↩ Undo last batch</button>
+      <button id="batch-preview-btn" onclick="previewBatch()" title="Count what this batch would touch, without changing anything">👁 Preview</button>
       <button id="batch-cancel-btn" onclick="closeBatchModal()">Cancel</button>
       <button id="batch-run-btn" onclick="runBatch()">Run</button>
     </div>

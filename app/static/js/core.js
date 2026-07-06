@@ -448,16 +448,32 @@ const STATUS_BORDER = {
   ocr:   { color:'#ffe066', width:2   },
   none:  { color:'#888888', width:1.5 },
 };
+// OCR and LLM both exist but read the text differently — and no human has
+// looked yet. These are the cells worth a second glance (amber border).
+function _layersDisagree(shape) {
+  const norm = t => (t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const rows = shape.row_struct?.rows;
+  if (rows?.length) {
+    return rows.some(r => (r.ocr || '').trim() && (r.llm || '').trim()
+                          && norm(r.ocr) !== norm(r.llm));
+  }
+  const o = shape.tesseract_output?.ocr_text, l = shape.openai_output?.response;
+  return !!(o?.trim() && l?.trim() && norm(o) !== norm(l));
+}
+
 function statusBorders(shape, selected) {
   const hasHuman = !!shape.human_output?.human_corrected_text;
   const hasLLM   = !!shape.openai_output?.response;
   const hasOCR   = !!shape.tesseract_output?.ocr_text;
   if (selected && !editMode) return [{ color:'#ffffff', width:3, inset:0 }];
   if (hasHuman)         return [{ ...STATUS_BORDER.human, inset:0 }];
-  if (hasLLM && hasOCR) return [
-    { ...STATUS_BORDER.ocr, inset:0 },
-    { ...STATUS_BORDER.llm, inset: STATUS_BORDER.ocr.width + 1 },
-  ];
+  if (hasLLM && hasOCR) {
+    if (_layersDisagree(shape)) return [{ color:'#f59e0b', width:3, inset:0 }];
+    return [
+      { ...STATUS_BORDER.ocr, inset:0 },
+      { ...STATUS_BORDER.llm, inset: STATUS_BORDER.ocr.width + 1 },
+    ];
+  }
   if (hasLLM) return [{ ...STATUS_BORDER.llm, inset:0 }];
   if (hasOCR) return [{ ...STATUS_BORDER.ocr, inset:0 }];
   return [{ ...STATUS_BORDER.none, inset:0 }];
@@ -725,3 +741,130 @@ function _parseColSet(str) {
   return col => ranges.some(([lo, hi]) => col >= lo && col <= hi);
 }
 
+
+// ── Command palette (Ctrl+K) — every visible button, searchable ──────────────
+let _cpEl = null, _cpSel = 0, _cpItems = [];
+
+function _cpCollect() {
+  const out = [];
+  document.querySelectorAll('button').forEach(b => {
+    if (!b.offsetParent) return;                       // hidden (closed modals etc.)
+    const label = (b.title || b.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!label || label.length > 70) return;
+    out.push({ label, el: b });
+  });
+  return out;
+}
+
+function _cpEnsure() {
+  if (_cpEl) return _cpEl;
+  _cpEl = document.createElement('div');
+  _cpEl.id = 'cmd-palette';
+  _cpEl.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:4000;align-items:flex-start;justify-content:center;padding-top:12vh;';
+  _cpEl.innerHTML = `
+    <div style="background:#0d1b35;border:1px solid #16588e;border-radius:8px;width:min(520px,92vw);box-shadow:0 8px 40px #000c;overflow:hidden;">
+      <input id="cmd-palette-q" placeholder="Type a command… (Esc to close)"
+             style="width:100%;box-sizing:border-box;background:#091530;border:none;border-bottom:1px solid #0f3460;color:#e0e0e0;padding:10px 12px;font-size:14px;outline:none;">
+      <div id="cmd-palette-list" style="max-height:46vh;overflow-y:auto;"></div>
+    </div>`;
+  _cpEl.addEventListener('mousedown', e => { if (e.target === _cpEl) _cpClose(); });
+  document.body.appendChild(_cpEl);
+  const q = _cpEl.querySelector('#cmd-palette-q');
+  q.addEventListener('input', () => { _cpSel = 0; _cpRender(); });
+  q.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { _cpClose(); e.stopPropagation(); }
+    else if (e.key === 'ArrowDown') { _cpSel = Math.min(_cpSel + 1, _cpFiltered().length - 1); _cpRender(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp')   { _cpSel = Math.max(_cpSel - 1, 0); _cpRender(); e.preventDefault(); }
+    else if (e.key === 'Enter') {
+      const it = _cpFiltered()[_cpSel];
+      if (it) { _cpClose(); it.el.click(); }
+      e.preventDefault();
+    }
+  });
+  return _cpEl;
+}
+
+function _cpFiltered() {
+  const q = (document.getElementById('cmd-palette-q')?.value || '').toLowerCase().trim();
+  if (!q) return _cpItems;
+  const words = q.split(/\s+/);
+  return _cpItems.filter(it => words.every(w => it.label.toLowerCase().includes(w)));
+}
+
+function _cpRender() {
+  const list = document.getElementById('cmd-palette-list');
+  const items = _cpFiltered().slice(0, 40);
+  if (_cpSel >= items.length) _cpSel = Math.max(0, items.length - 1);
+  list.innerHTML = items.map((it, i) =>
+    `<div class="cp-item" data-i="${i}" style="padding:7px 12px;font-size:13px;color:#e0e0e0;cursor:pointer;${i === _cpSel ? 'background:#0f3460;' : ''}">${it.label.replace(/</g, '&lt;')}</div>`
+  ).join('') || '<div style="padding:10px 12px;color:#555;font-size:12px;">No matching command.</div>';
+  list.querySelectorAll('.cp-item').forEach(d => {
+    d.addEventListener('mousedown', e => {
+      const it = items[+d.dataset.i];
+      _cpClose(); it.el.click(); e.preventDefault();
+    });
+  });
+}
+
+function _cpOpen() {
+  _cpEnsure();
+  _cpItems = _cpCollect();
+  _cpSel = 0;
+  _cpEl.style.display = 'flex';
+  const q = document.getElementById('cmd-palette-q');
+  q.value = ''; _cpRender(); q.focus();
+}
+
+function _cpClose() { if (_cpEl) _cpEl.style.display = 'none'; }
+
+// ── '?' shortcut cheatsheet ──────────────────────────────────────────────────
+let _shEl = null;
+function _shToggle() {
+  if (_shEl && _shEl.style.display !== 'none') { _shEl.style.display = 'none'; return; }
+  if (!_shEl) {
+    _shEl = document.createElement('div');
+    _shEl.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:4000;display:flex;align-items:center;justify-content:center;';
+    const row = (k, d) => `<tr><td style="padding:2px 14px 2px 0;color:#f0c040;white-space:nowrap;font-family:monospace;">${k}</td><td style="padding:2px 0;color:#ccc;">${d}</td></tr>`;
+    _shEl.innerHTML = `<div style="background:#0d1b35;border:1px solid #16588e;border-radius:8px;padding:18px 24px;max-height:84vh;overflow-y:auto;box-shadow:0 8px 40px #000c;">
+      <div style="font-size:14px;font-weight:700;color:#e0e0e0;margin-bottom:10px;">Keyboard shortcuts <span style="color:#555;font-weight:400;">(? to close)</span></div>
+      <table style="font-size:12px;border-collapse:collapse;">
+        ${row('N / M', 'Next / previous page')}
+        ${row('← → ↑ ↓', 'Move between lattice cells')}
+        ${row('E', 'Toggle edit / review mode')}
+        ${row('A', 'Select all shapes')}
+        ${row('Del', 'Delete selected shape(s)')}
+        ${row('Ctrl+Z', 'Undo (50 steps)')}
+        ${row('Ctrl+S', 'Save human correction')}
+        ${row('Ctrl+C / Ctrl+V', 'Copy / paste shapes')}
+        ${row('Ctrl+←→↑↓', 'Clone shape flush-adjacent')}
+        ${row('Ctrl+drag', 'Rubber-band select')}
+        ${row('Right-drag', 'Copy shape to new position')}
+        ${row('P / O', 'Stamp selection 1 / 2 page(s) back')}
+        ${row('H', 'Focus the Human correction field')}
+        ${row('Ctrl+K', 'Command palette (every button, searchable)')}
+        ${row('?', 'This cheatsheet')}
+        ${row('Esc', 'Close modal / cancel drawing')}
+      </table></div>`;
+    _shEl.addEventListener('mousedown', e => { if (e.target === _shEl) _shEl.style.display = 'none'; });
+    document.body.appendChild(_shEl);
+  }
+  _shEl.style.display = 'flex';
+}
+
+// Ctrl+K, ?, H — registered here (core.js) so they exist on every page state.
+document.addEventListener('keydown', e => {
+  const inField = /INPUT|TEXTAREA|SELECT/.test(e.target?.tagName || '');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault(); _cpOpen(); return;
+  }
+  if (inField) return;
+  if (e.key === '?') { e.preventDefault(); _shToggle(); }
+  else if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // focus the Human field: the flat textarea, or (cells with internal rows)
+    // the first Human cell of the rows table
+    const ta = document.getElementById('human-input');
+    if (ta && ta.offsetParent) { e.preventDefault(); ta.focus(); ta.select(); return; }
+    const cell = document.querySelector('input.rs-human');
+    if (cell && cell.offsetParent) { e.preventDefault(); cell.focus(); cell.select(); }
+  }
+});

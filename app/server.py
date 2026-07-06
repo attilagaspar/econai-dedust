@@ -2603,6 +2603,83 @@ def api_llm_batch_apply(folder: str = Query(...), job: str = Query(...)):
             "bad_json": bad_json, "failed_ids": failed[:50]}
 
 
+# ---------------------------------------------------------------------------
+# Batch undo — one-generation snapshot of the page JSONs a batch is about to
+# touch (a zip in the project's intermediate/), restorable with one click.
+# ---------------------------------------------------------------------------
+
+_BATCH_UNDO_LOCK = threading.Lock()
+
+
+def _batch_undo_path(folder: str) -> Path:
+    p = _resolve_folder(folder).parent / "intermediate"
+    p.mkdir(exist_ok=True)
+    return p / "batch_undo.zip"
+
+
+class BatchSnapshotBody(BaseModel):
+    stems: List[str]
+    op:    str = ""
+
+
+@app.post("/api/batch_snapshot")
+def api_batch_snapshot(folder: str = Query(...), body: BatchSnapshotBody = ...):
+    """Snapshot the given pages' JSONs before a batch runs (replaces the
+    previous snapshot — one undo generation)."""
+    import datetime as _dt
+    import zipfile
+    d = _resolve_folder(folder)
+    stems = [s for s in body.stems if s][:2000]
+    with _BATCH_UNDO_LOCK:
+        zp = _batch_undo_path(folder)
+        n = 0
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+            for stem in stems:
+                jf = d / f"{stem}.json"
+                if jf.exists():
+                    z.writestr(f"{stem}.json", jf.read_text(encoding="utf-8"))
+                    n += 1
+            z.writestr("_meta.json", json.dumps({
+                "ts": _dt.datetime.utcnow().isoformat() + "Z",
+                "op": body.op, "pages": n}))
+    return {"ok": True, "pages": n}
+
+
+@app.get("/api/batch_snapshot")
+def api_batch_snapshot_meta(folder: str = Query(...)):
+    import zipfile
+    zp = _batch_undo_path(folder)
+    if not zp.exists():
+        return {"snapshot": None}
+    try:
+        with zipfile.ZipFile(zp) as z:
+            return {"snapshot": json.loads(z.read("_meta.json").decode("utf-8"))}
+    except Exception:
+        return {"snapshot": None}
+
+
+@app.post("/api/batch_snapshot/restore")
+def api_batch_snapshot_restore(folder: str = Query(...)):
+    """Restore every page in the snapshot to its pre-batch state."""
+    import zipfile
+    d = _resolve_folder(folder)
+    zp = _batch_undo_path(folder)
+    if not zp.exists():
+        raise HTTPException(status_code=404, detail="No batch snapshot to restore")
+    restored = 0
+    with _BATCH_UNDO_LOCK, zipfile.ZipFile(zp) as z:
+        for name in z.namelist():
+            if name == "_meta.json" or not name.endswith(".json"):
+                continue
+            try:
+                data = json.loads(z.read(name).decode("utf-8"))
+            except Exception:
+                continue
+            _write_json(d / name, data)      # atomic per page
+            restored += 1
+    return {"ok": True, "restored": restored}
+
+
 @app.post("/api/page/shape/llm")
 def api_llm_cell(
     folder:     str  = Query(...),
