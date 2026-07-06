@@ -61,3 +61,7 @@ app/ocr_settings.json
 
 # Personal research notes
 paper_ideas_separate.md
+
+# Benchmark outputs (reports & raw model replies stay local)
+benchmarks/vision_benchmark_*.md
+benchmarks/raw_*.json
