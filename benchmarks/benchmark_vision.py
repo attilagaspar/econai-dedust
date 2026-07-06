@@ -52,16 +52,18 @@ PRICES = {"gpt-5-mini": (0.25, 2.00), "gpt-5-nano": (0.05, 0.40),
           "gpt-5": (1.25, 10.00)}
 
 PROMPT = (
-    "The image is a full page from a 1930s Hungarian statistical publication "
-    "containing a printed table. Transcribe the table body.\n"
+    "The image is a horizontal strip cut from a page of a 1930s Hungarian "
+    "statistical publication containing a printed table. It may start or end "
+    "mid-table. Transcribe every table data line visible in the strip.\n"
     "Return ONLY a JSON object: {\"rows\": [[...], [...], ...]} — one entry per "
-    "printed text line of the table body, each entry a list of strings, one "
-    "per table column, left to right. Rules:\n"
-    "- skip the column-header rows; transcribe data lines only\n"
+    "printed text line, each entry a list of strings, one per table column, "
+    "left to right. Rules:\n"
+    "- skip column-header rows and page titles; transcribe data lines only\n"
     "- copy numbers and names EXACTLY as printed (Hungarian diacritics too)\n"
     "- an empty cell is \"\" — never drop or merge columns\n"
     "- dashes/ditto marks: copy the character you see (e.g. \"-\", \"—\")\n"
-    "- do not summarize, do not skip lines, transcribe every data line"
+    "- do not summarize, do not skip lines, transcribe every data line\n"
+    "- a line cut in half at the strip's top or bottom edge: skip it"
 )
 
 
@@ -132,42 +134,78 @@ def gold_tables(jf: Path):
 
 # ── Vision call ──────────────────────────────────────────────────────────────
 
-def page_b64(folder: Path, stem: str, max_side: int) -> str:
+def page_strips(folder: Path, stem: str, max_side: int):
+    """Cut the page into overlapping horizontal strips so digits stay legible.
+
+    Providers cap vision input around ~2048px; a whole dense page squeezed to
+    that is unreadable (first run: names transcribed, EVERY digit column
+    empty). Strips are full-width, ~half-width tall, 60px overlap; each is
+    downscaled to max_side on its own — so effective resolution is ~n_strips
+    times higher."""
     from PIL import Image
     img_path = _find_image(folder, stem)
     if img_path is None:
         raise SystemExit(f"image not found for {stem}")
     img = Image.open(str(img_path)).convert("RGB")
-    if max(img.size) > max_side:
-        sc = max_side / max(img.size)
-        img = img.resize((int(img.width * sc), int(img.height * sc)), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=92)
-    return base64.b64encode(buf.getvalue()).decode()
+    W, H = img.size
+    strip_h = max(400, int(W * 0.55))
+    overlap = 60
+    strips = []
+    y = 0
+    while y < H:
+        strip = img.crop((0, y, W, min(H, y + strip_h)))
+        if max(strip.size) > max_side:
+            sc = max_side / max(strip.size)
+            strip = strip.resize((int(strip.width * sc), int(strip.height * sc)),
+                                 Image.LANCZOS)
+        buf = io.BytesIO()
+        strip.save(buf, format="JPEG", quality=92)
+        strips.append(base64.b64encode(buf.getvalue()).decode())
+        if y + strip_h >= H:
+            break
+        y += strip_h - overlap
+    return strips
 
 
-def run_vision(model: str, b64: str):
+def _dedupe_boundary(acc, new_rows):
+    """Drop the new strip's leading rows already seen at the end of `acc`
+    (the strips overlap by design)."""
+    tail_keys = [row_key(r) for r in acc[-8:]]
+    i = 0
+    while i < len(new_rows) and row_key(new_rows[i]) in tail_keys:
+        i += 1
+    return new_rows[i:]
+
+
+def run_vision(model: str, strips):
     client = _make_llm_client(model)
-    messages = [{"role": "user", "content": [
-        {"type": "text", "text": PROMPT},
-        {"type": "image_url",
-         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
-    ]}]
-    resp = _llm_complete(client, model, messages, 16000, temperature=0,
-                         response_format={"type": "json_object"}, use_cache=True)
-    raw = (resp.choices[0].message.content or "").strip()
-    u = getattr(resp, "usage", None)
-    tokens = (getattr(u, "prompt_tokens", 0) if u else 0,
-              getattr(u, "completion_tokens", 0) if u else 0)
-    a, b = raw.find("{"), raw.rfind("}")
-    rows = []
-    if 0 <= a < b:
-        try:
-            rows = json.loads(raw[a:b + 1]).get("rows") or []
-        except Exception:
-            pass
-    rows = [[str(c) for c in r] for r in rows if isinstance(r, list)]
-    return rows, raw, tokens, bool(getattr(resp, "cached", False))
+    all_rows, raws = [], []
+    tin = tout = 0
+    cached_all = True
+    for b64 in strips:
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": PROMPT},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"}},
+        ]}]
+        resp = _llm_complete(client, model, messages, 16000, temperature=0,
+                             response_format={"type": "json_object"}, use_cache=True)
+        raw = (resp.choices[0].message.content or "").strip()
+        raws.append(raw)
+        u = getattr(resp, "usage", None)
+        tin += getattr(u, "prompt_tokens", 0) if u else 0
+        tout += getattr(u, "completion_tokens", 0) if u else 0
+        cached_all = cached_all and bool(getattr(resp, "cached", False))
+        a, b = raw.find("{"), raw.rfind("}")
+        rows = []
+        if 0 <= a < b:
+            try:
+                rows = json.loads(raw[a:b + 1]).get("rows") or []
+            except Exception:
+                pass
+        rows = [[str(c) for c in r] for r in rows if isinstance(r, list)]
+        all_rows.extend(_dedupe_boundary(all_rows, rows))
+    return all_rows, "\n----\n".join(raws), (tin, tout), cached_all
 
 
 # ── Alignment + scoring ──────────────────────────────────────────────────────
@@ -331,10 +369,10 @@ def main():
                                 for c in r["gold"]])
                 tokens, cached, raw = (0, 0), True, ""
             else:
-                print(f"  → {model} reading the page…", flush=True)
-                b64 = page_b64(folder, stem, args.max_side)
+                strips = page_strips(folder, stem, args.max_side)
+                print(f"  → {model} reading the page in {len(strips)} strip(s)…", flush=True)
                 try:
-                    got, raw, tokens, cached = run_vision(model, b64)
+                    got, raw, tokens, cached = run_vision(model, strips)
                 except Exception as e:
                     msg = f"  ✕ {model}: {e}"
                     print(msg); report.append(f"| {model} | ✕ {e} | | | | | |")
