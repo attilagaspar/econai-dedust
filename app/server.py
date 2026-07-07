@@ -850,6 +850,8 @@ def update_row_struct(
                 row["llm_fixed"] = True
             if r.get("authority"):          # resolved gazetteer entity (per row)
                 row["authority"] = r["authority"]
+            if r.get("blank"):              # structural blank (ink scan)
+                row["blank"] = True
             rows.append(row)
         rows.sort(key=lambda r: r["y0"])
         for i, r in enumerate(rows):
@@ -2723,6 +2725,141 @@ def api_batch_snapshot_restore(folder: str = Query(...)):
             _write_json(d / name, data)      # atomic per page
             restored += 1
     return {"ok": True, "restored": restored}
+
+
+# ---------------------------------------------------------------------------
+# Structural-blank detection — a FREE, local ink scan (no API). Lattice grids
+# generate cells that are blank BY DESIGN (e.g. a district-header row over
+# settlement columns). OCR yields dashes/noise on them and LLM hallucinates +
+# wastes money. This marks inkless cells/rows `blank:true` so batches skip
+# them and export emits them as missing (not a dash, not a zero).
+# Ink test ported verbatim from the client _classifyEmptyRowBands (Otsu on the
+# shadow crop, capped at 180; trim 3px borders; count pixels below threshold).
+# ---------------------------------------------------------------------------
+
+_BLANK_BORDER_PAD = 3
+_BLANK_MIN_INK    = 1     # ink pixels below Otsu → NOT blank (a dash ≈ 15-40)
+
+
+def _otsu_threshold_np(gray) -> int:
+    import numpy as np
+    hist = np.bincount(gray.astype(np.uint8).ravel(), minlength=256).astype(np.float64)
+    n = gray.size
+    total = float((np.arange(256) * hist).sum())
+    sumB = wB = 0.0
+    max_var, thr = 0.0, 128
+    for i in range(256):
+        wB += hist[i]
+        if wB == 0:
+            continue
+        wF = n - wB
+        if wF == 0:
+            break
+        sumB += i * hist[i]
+        mB = sumB / wB
+        mF = (total - sumB) / wF
+        v = wB * wF * (mB - mF) ** 2
+        if v > max_var:
+            max_var, thr = v, i
+    return thr
+
+
+def _band_has_ink(gray, y0: int, y1: int, otsu: int) -> bool:
+    y0 = max(0, y0 + _BLANK_BORDER_PAD)
+    y1 = min(gray.shape[0], y1 - _BLANK_BORDER_PAD)
+    if y1 <= y0:
+        return True   # too thin to judge → treat as non-blank (safe: never auto-skip)
+    # <= (not <) so ink sitting exactly at the Otsu split still counts — errs
+    # toward "has ink", i.e. never wrongly marks a real cell blank
+    return int((gray[y0:y1] <= otsu).sum()) >= _BLANK_MIN_INK
+
+
+class MarkBlanksBody(BaseModel):
+    stems:      List[str] = []
+    col_filter: Optional[str] = None
+
+
+@app.post("/api/batch/mark_blanks")
+def api_mark_blanks(folder: str = Query(...), body: MarkBlanksBody = ...):
+    """Ink-scan lattice cells over the given pages; mark blank cells/rows so
+    OCR/LLM batches skip them and export treats them as missing. Idempotent:
+    re-running clears the flag where ink is now present."""
+    import numpy as np
+    from PIL import Image as PILImage
+
+    d = _resolve_folder(folder)
+    col_ranges = _parse_col_ranges(body.col_filter)
+
+    def col_ok(sc):
+        if col_ranges is None:
+            return True
+        return any(lo <= sc <= (hi if hi is not None else sc) for lo, hi in col_ranges)
+
+    stems = [s for s in (body.stems or []) if s] or \
+            [jf.stem for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+    totals = dict(cells_blank=0, cells_inked=0, rows_blank=0, scanned=0)
+    per_page = []
+
+    for stem in stems:
+        jf = d / f"{stem}.json"
+        img_path = _find_image(d, stem)
+        if not jf.exists() or img_path is None:
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        try:
+            page_img = _get_shadow_page(folder, stem, img_path).convert("L")
+        except Exception:
+            page_img = PILImage.open(str(img_path)).convert("L")
+        page = np.asarray(page_img)
+        iw = page.shape[1]; ih = page.shape[0]
+        changed = False
+        pc = dict(cells_blank=0, cells_inked=0, rows_blank=0, scanned=0)
+
+        for sh in data.get("shapes", []):
+            sr, sc = sh.get("super_row"), sh.get("super_column")
+            if sr is None or sc is None or not col_ok(int(sc)):
+                continue
+            x1, y1, x2, y2 = _shape_bbox(sh)
+            cx1, cy1 = max(0, int(x1)), max(0, int(y1))
+            cx2, cy2 = min(iw, int(x2)), min(ih, int(y2))
+            if cx2 <= cx1 + 2 or cy2 <= cy1 + 2:
+                continue
+            crop = page[cy1:cy2, cx1:cx2]
+            otsu = min(_otsu_threshold_np(crop), 180)
+            pc["scanned"] += 1
+
+            rows = (sh.get("row_struct") or {}).get("rows") or []
+            if rows:
+                all_blank = True
+                for r in rows:
+                    ry0 = int(round(r["y0"] - cy1)); ry1 = int(round(r["y1"] - cy1))
+                    blank = not _band_has_ink(crop, ry0, ry1, otsu)
+                    if blank and not r.get("blank"):
+                        r["blank"] = True; changed = True; pc["rows_blank"] += 1
+                    elif not blank and r.get("blank"):
+                        r.pop("blank", None); changed = True
+                    all_blank = all_blank and blank
+                if all_blank and not sh.get("blank"):
+                    sh["blank"] = True; changed = True; pc["cells_blank"] += 1
+                elif not all_blank and sh.get("blank"):
+                    sh.pop("blank", None); changed = True; pc["cells_inked"] += 1
+            else:
+                blank = not _band_has_ink(crop, 0, crop.shape[0], otsu)
+                if blank and not sh.get("blank"):
+                    sh["blank"] = True; changed = True; pc["cells_blank"] += 1
+                elif not blank and sh.get("blank"):
+                    sh.pop("blank", None); changed = True; pc["cells_inked"] += 1
+
+        if changed:
+            _write_json(jf, data)
+        for k in totals:
+            totals[k] += pc[k]
+        per_page.append({"stem": stem, **pc})
+
+    return {"ok": True, "pages": len(per_page), "totals": totals, "per_page": per_page}
 
 
 @app.post("/api/page/shape/llm")
@@ -5710,6 +5847,9 @@ def api_export_excel(
 
     def get_text(shape):
         human = (shape.get("human_output") or {}).get("human_corrected_text") or ""
+        # structural blank → missing (empty), unless a human explicitly overrode it
+        if shape.get("blank"):
+            return human.strip()
         ocr   = ((shape.get("tesseract_output") or {}).get("ocr_text") or
                  (shape.get("easyocr_output")   or {}).get("ocr_text") or "")
         llm   = (shape.get("openai_output") or {}).get("response") or ""
@@ -5739,6 +5879,8 @@ def api_export_excel(
 
         def pick(r):
             h = (r.get("human") or "").strip()
+            if r.get("blank"):      # structural blank → missing (human wins)
+                return h
             o = (r.get("ocr")   or "").strip()
             l = (r.get("llm")   or "").strip()
             p = (r.get("pdf")   or "").strip()

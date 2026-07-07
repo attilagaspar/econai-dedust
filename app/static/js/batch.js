@@ -226,6 +226,18 @@ function _computeConditionFilter(shapes) {
   const cond = document.getElementById('batch-condition').value;
   if (cond === 'none') return null;
 
+  if (cond === 'skip_blank') {
+    // keep only shapes NOT marked as a structural blank (whole cell blank, or
+    // — for cells with internal rows — every row blank)
+    const flagged = new Set();
+    shapes.forEach((s, i) => {
+      const rows = s.row_struct?.rows;
+      const allBlank = rows?.length ? rows.every(r => r.blank) : !!s.blank;
+      if (!allBlank) flagged.add(i);
+    });
+    return flagged;
+  }
+
   if (cond === 'pdf_has_digits' || cond === 'pdf_has_chars' || cond === 'pdf_has_any') {
     // "meaningful" PDF layer: at least one digit, or at least 3 Unicode letters
     const hasDigit  = t => /\d/.test(t);
@@ -474,6 +486,34 @@ async function runBatch() {
   if (op !== 'json_export' && op !== 'llm_batchapi') {
     progText.textContent = 'Snapshotting pages for undo…';
     await _batchTakeSnapshot(sorted.map(i => pages[i]?.stem).filter(Boolean), op);
+  }
+
+  // Structural-blank ink scan — one server-side call (free, local, no API).
+  if (op === 'mark_blanks') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    progText.textContent = `Ink-scanning ${stems.length} page(s)…`;
+    try {
+      const r = await fetch(`${API}/api/batch/mark_blanks?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stems,
+          col_filter: document.getElementById('batch-col-filter').value.trim() || null }),
+      });
+      const dd = await r.json();
+      if (!r.ok) throw new Error(dd.detail || r.status);
+      const t = dd.totals || {};
+      progText.style.color = '#4caf50';
+      progText.textContent = `✓ ${dd.pages} page(s) · ${t.scanned} cell(s) scanned · `
+        + `${t.cells_blank} blank cell(s), ${t.rows_blank} blank row(s) marked`
+        + (t.cells_inked ? `, ${t.cells_inked} un-marked (ink returned)` : '');
+      showToast(`Ink scan: ${t.cells_blank} blank cell(s) marked on ${dd.pages} page(s)`, 5000);
+    } catch (e) { progText.style.color = '#ff9800'; progText.textContent = '✕ ' + (e.message || e); }
+    _batchRunning = false;
+    document.getElementById('batch-run-btn').textContent = 'Run';
+    document.getElementById('batch-run-btn').disabled = false;
+    document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    return;
   }
 
   // Overnight lane: package everything and hand it to the provider's batch

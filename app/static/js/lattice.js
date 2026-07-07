@@ -998,6 +998,20 @@ function drawOverlay() {
       svgOverlay.appendChild(dot);
     }
 
+    // Structural-blank marker: a small grey ∅ at bottom-left of blank cells
+    const _rowsB = shape.row_struct?.rows;
+    const _blank = _rowsB?.length ? _rowsB.every(r => r.blank) : !!shape.blank;
+    if (_blank) {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', tl.x + 4);
+      t.setAttribute('y', br.y - 4);
+      t.setAttribute('font-size', '11');
+      t.setAttribute('fill', '#8a94a6');
+      t.textContent = '∅';
+      t.style.pointerEvents = 'none';
+      svgOverlay.appendChild(t);
+    }
+
     // Internal row dividers (row_struct) — always visible
     const rsRows = shape.row_struct?.rows;
     if (rsRows?.length > 1) {

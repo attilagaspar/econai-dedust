@@ -751,6 +751,7 @@
         <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice + snap + overlaps</option>
         <option value="ocr_tesseract">OCR — Tesseract</option>
         <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
+        <option value="mark_blanks">🚫 Mark structural blanks (ink scan — free, no API)</option>
         <option value="llm">LLM</option>
         <option value="llm_batchapi">🌙 LLM — overnight batch (half price)</option>
         <option value="score_delete">Delete shapes below score threshold</option>
@@ -771,6 +772,7 @@
       <label class="row" style="margin-bottom:4px;">Condition <span style="font-size:10px;color:#555;font-weight:400;">(which shapes to process)</span></label>
       <select id="batch-condition" style="width:100%;">
         <option value="none">— all shapes —</option>
+        <option value="skip_blank">Skip structural blanks (cells marked blank by the ink scan)</option>
         <option value="ocr_row_minority">OCR row mismatch — minority only (red in diagnostic)</option>
         <option value="pdf_has_digits">PDF layer has numbers</option>
         <option value="pdf_has_chars">PDF layer has characters (≥3 letters)</option>
