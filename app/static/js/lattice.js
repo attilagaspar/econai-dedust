@@ -1569,6 +1569,9 @@ function drawOverlay() {
       svgOverlay.appendChild(t);
     });
   }
+
+  // Review-queue pinpoint (big arrow + pulsing ring on the current item)
+  if (typeof _drawReviewPointer === 'function') _drawReviewPointer();
 }
 
 // ── Image bounds helper ──────────────────────────────────────────────────────

@@ -771,6 +771,8 @@
     <input id="rev-input" placeholder="best guess (Enter accepts)" autocomplete="off"
            style="flex:none;width:220px;background:#0d1b35;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:7px 9px;font-size:14px;">
     <span id="rev-why" style="flex:none;font-size:11px;color:#f0c040;white-space:nowrap;"></span>
+    <label style="flex:none;font-size:11px;color:#9fb0c8;white-space:nowrap;cursor:pointer;user-select:none;" title="Big animated arrow pinpointing the cell — turn on when a cell needs a real fix (e.g. bad row structure)">
+      <input type="checkbox" id="rev-pinpoint" onchange="_revTogglePinpoint(this.checked)"> 🎯 Pinpoint</label>
     <span id="rev-loc" style="flex:1;font-size:11px;color:#667;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
     <span style="font-size:10px;color:#556;white-space:nowrap;">Enter accept · ↓ skip · U undo · Esc quit</span>
     <span id="rev-counter" style="flex:none;font-size:12px;color:#e0e0e0;font-weight:700;white-space:nowrap;"></span>

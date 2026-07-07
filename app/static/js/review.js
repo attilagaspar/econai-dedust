@@ -47,6 +47,70 @@ async function verifyAndAdvance() {
 
 // ── P1: review queue ─────────────────────────────────────────────────────────
 let _revQueue = [], _revPos = 0, _revActive = false, _revUndo = null;
+let _revPinpoint = false;   // big animated arrow at the current item
+let _revTarget = null;      // {stem, idx, y0, y1} — read by drawOverlay
+
+function _revTogglePinpoint(on) {
+  _revPinpoint = !!on;
+  try { localStorage.setItem('revPinpoint', on ? '1' : '0'); } catch (e) {}
+  drawOverlay();
+}
+
+// Drawn at the end of drawOverlay (lattice.js). Big pulsing arrow + ring on the
+// current review item, so a cell that needs real work is impossible to miss.
+function _drawReviewPointer() {
+  if (!_revPinpoint || !_revActive || !_revTarget) return;
+  if (!pageData || !pages[pageIdx] || (pages[pageIdx].stem || pages[pageIdx]) !== _revTarget.stem) return;
+  const sh = pageData.shapes[_revTarget.idx];
+  if (!sh?.points?.length) return;
+  const xs = sh.points.map(p => p[0]), ys = sh.points.map(p => p[1]);
+  const y0 = _revTarget.y0 != null ? _revTarget.y0 : Math.min(...ys);
+  const y1 = _revTarget.y1 != null ? _revTarget.y1 : Math.max(...ys);
+  const tl = imgToScreen(Math.min(...xs), y0);
+  const br = imgToScreen(Math.max(...xs), y1);
+  if (!tl || !br) return;
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const cx = (tl.x + br.x) / 2;
+
+  // pulsing ring around the cell/row band
+  const ring = document.createElementNS(SVGNS, 'rect');
+  ring.setAttribute('x', tl.x - 4); ring.setAttribute('y', tl.y - 4);
+  ring.setAttribute('width', Math.max(2, br.x - tl.x + 8));
+  ring.setAttribute('height', Math.max(2, br.y - tl.y + 8));
+  ring.setAttribute('fill', 'none');
+  ring.setAttribute('stroke', '#ff3b6b');
+  ring.setAttribute('stroke-width', '3');
+  ring.setAttribute('rx', '3');
+  ring.style.pointerEvents = 'none';
+  const a1 = document.createElementNS(SVGNS, 'animate');
+  a1.setAttribute('attributeName', 'stroke-width');
+  a1.setAttribute('values', '2;6;2'); a1.setAttribute('dur', '0.9s');
+  a1.setAttribute('repeatCount', 'indefinite');
+  ring.appendChild(a1);
+  const a2 = document.createElementNS(SVGNS, 'animate');
+  a2.setAttribute('attributeName', 'stroke-opacity');
+  a2.setAttribute('values', '1;0.35;1'); a2.setAttribute('dur', '0.9s');
+  a2.setAttribute('repeatCount', 'indefinite');
+  ring.appendChild(a2);
+  svgOverlay.appendChild(ring);
+
+  // big arrow above the cell, bobbing down toward it
+  const size = 26;
+  const tipY = tl.y - 6;
+  const arrow = document.createElementNS(SVGNS, 'path');
+  arrow.setAttribute('d',
+    `M ${cx - size} ${tipY - size} L ${cx + size} ${tipY - size} L ${cx} ${tipY} Z`);
+  arrow.setAttribute('fill', '#ff3b6b');
+  arrow.setAttribute('stroke', '#fff');
+  arrow.setAttribute('stroke-width', '2');
+  arrow.style.pointerEvents = 'none';
+  const bob = document.createElementNS(SVGNS, 'animateTransform');
+  bob.setAttribute('attributeName', 'transform'); bob.setAttribute('type', 'translate');
+  bob.setAttribute('values', '0 -8;0 2;0 -8'); bob.setAttribute('dur', '0.7s');
+  bob.setAttribute('repeatCount', 'indefinite');
+  arrow.appendChild(bob);
+  svgOverlay.appendChild(arrow);
+}
 
 function openReview() {
   if (!pages.length) { showToast('Open a project first'); return; }
@@ -81,6 +145,8 @@ async function startReview() {
     if (!_revQueue.length) { showToast('✓ Nothing flagged in this scope.'); return; }
     _revActive = true;
     document.getElementById('review-strip').style.display = 'block';
+    const pinEl = document.getElementById('rev-pinpoint');
+    if (pinEl) { pinEl.checked = localStorage.getItem('revPinpoint') === '1'; _revPinpoint = pinEl.checked; }
     showToast(`${_revQueue.length} cell(s) to review`);
     await _revShow();
   } catch (e) { showToast('Review error: ' + (e.message || e)); }
@@ -102,6 +168,7 @@ async function _revShow() {
   if (it.y0 != null && it.y1 != null) u += `&y0=${it.y0}&y1=${it.y1}`;
   document.getElementById('rev-crop').src = u;
   // navigate the canvas to the item's page and highlight the cell
+  _revTarget = { stem: it.stem, idx: it.idx, y0: it.y0, y1: it.y1 };
   const pi = _revStemIdx(it.stem);
   if (pi >= 0 && pi !== pageIdx) { await loadPage(pi); }
   if (pi >= 0) { selIdx = it.idx; selSet = new Set([it.idx]); drawOverlay(); }
@@ -151,7 +218,9 @@ function _revFinish() {
 }
 function _revClose() {
   _revActive = false;
+  _revTarget = null;
   document.getElementById('review-strip').style.display = 'none';
+  drawOverlay();   // clear the pointer
 }
 
 // keyboard: only while the strip is open. Enter accept, ↓ skip, U undo, Esc quit.
