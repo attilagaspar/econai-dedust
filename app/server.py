@@ -2737,8 +2737,12 @@ def api_batch_snapshot_restore(folder: str = Query(...)):
 # shadow crop, capped at 180; trim 3px borders; count pixels below threshold).
 # ---------------------------------------------------------------------------
 
-_BLANK_BORDER_PAD = 3
-_BLANK_MIN_INK    = 1     # ink pixels below Otsu → NOT blank (a dash ≈ 15-40)
+_BLANK_BORDER_PAD = 4     # px trimmed on ALL FOUR sides — excludes residual
+                          # table border lines the shadow didn't fully erase
+                          # (vertical borders were the main false-"has ink")
+_BLANK_MIN_INK    = 4     # ink pixels below Otsu → NOT blank. A dash ≈ 15-40,
+                          # so 4 tolerates a few stray border/dust pixels while
+                          # still keeping any real mark.
 
 
 def _otsu_threshold_np(gray) -> int:
@@ -2765,13 +2769,15 @@ def _otsu_threshold_np(gray) -> int:
 
 
 def _band_has_ink(gray, y0: int, y1: int, otsu: int) -> bool:
-    y0 = max(0, y0 + _BLANK_BORDER_PAD)
-    y1 = min(gray.shape[0], y1 - _BLANK_BORDER_PAD)
+    p = _BLANK_BORDER_PAD
+    y0 = max(0, y0 + p)
+    y1 = min(gray.shape[0], y1 - p)
+    x0 = min(p, gray.shape[1] // 4)              # trim left/right borders too
+    x1 = max(x0 + 1, gray.shape[1] - p)
     if y1 <= y0:
         return True   # too thin to judge → treat as non-blank (safe: never auto-skip)
-    # <= (not <) so ink sitting exactly at the Otsu split still counts — errs
-    # toward "has ink", i.e. never wrongly marks a real cell blank
-    return int((gray[y0:y1] <= otsu).sum()) >= _BLANK_MIN_INK
+    region = gray[y0:y1, x0:x1]
+    return int((region <= otsu).sum()) >= _BLANK_MIN_INK
 
 
 class MarkBlanksBody(BaseModel):

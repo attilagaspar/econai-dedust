@@ -344,6 +344,40 @@ async function saveCorrection() {
   refreshDiag(); drawOverlay();
 }
 
+// ── Structural blank: manual toggle on the selected cell ────────────────────
+function _shapeIsBlank(sh) {
+  const rows = sh?.row_struct?.rows;
+  return rows?.length ? rows.every(r => r.blank) : !!sh?.blank;
+}
+
+async function toggleBlank() {
+  if (selIdx < 0 || !pageData?.shapes[selIdx]) return;
+  const sh = pageData.shapes[selIdx];
+  const makeBlank = !_shapeIsBlank(sh);
+  const rows = sh.row_struct?.rows;
+  if (rows?.length) {
+    rows.forEach(r => { if (makeBlank) r.blank = true; else delete r.blank; });
+  }
+  if (makeBlank) sh.blank = true; else delete sh.blank;
+  const ok = await replaceAllShapes();
+  if (ok) {
+    showToast(makeBlank ? '∅ Marked blank' : 'Blank mark removed');
+    updateBlankBtn(); drawOverlay(); refreshDiag();
+  }
+}
+
+function updateBlankBtn() {
+  const btn = document.getElementById('blank-btn');
+  if (!btn) return;
+  const sh = pageData?.shapes?.[selIdx];
+  if (selIdx < 0 || !sh) { btn.disabled = true; btn.textContent = '∅ Mark blank (B)'; return; }
+  btn.disabled = false;
+  const isB = _shapeIsBlank(sh);
+  btn.textContent = isB ? '∅ Un-mark blank (B)' : '∅ Mark blank (B)';
+  btn.style.background = isB ? '#3a3320' : '#1a2740';
+  btn.style.borderColor = isB ? '#8a7a3a' : '#3a4a6a';
+}
+
 // ── Smart Correct ────────────────────────────────────────────────────────────
 
 function _applyHumanCorrection(shape, text) {

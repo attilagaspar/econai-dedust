@@ -443,6 +443,7 @@ function updatePanel() {
     return;
   }
   noSel.style.display='none'; content.style.display='flex';
+  if (typeof updateBlankBtn === 'function') updateBlankBtn();
 
   // Multi-selection: show simplified panel (label + delete only)
   if (selSet.size > 1) {

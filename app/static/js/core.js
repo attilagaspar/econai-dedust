@@ -841,6 +841,7 @@ function _shToggle() {
         ${row('Right-drag', 'Copy shape to new position')}
         ${row('P / O', 'Stamp selection 1 / 2 page(s) back')}
         ${row('H', 'Focus the Human correction field')}
+        ${row('B', 'Mark / un-mark the cell as a structural blank')}
         ${row('Ctrl+K', 'Command palette (every button, searchable)')}
         ${row('?', 'This cheatsheet')}
         ${row('Esc', 'Close modal / cancel drawing')}
@@ -866,5 +867,10 @@ document.addEventListener('keydown', e => {
     if (ta && ta.offsetParent) { e.preventDefault(); ta.focus(); ta.select(); return; }
     const cell = document.querySelector('input.rs-human');
     if (cell && cell.offsetParent) { e.preventDefault(); cell.focus(); cell.select(); }
+  }
+  else if ((e.key === 'b' || e.key === 'B') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (typeof selIdx !== 'undefined' && selIdx >= 0 && typeof toggleBlank === 'function') {
+      e.preventDefault(); toggleBlank();
+    }
   }
 });
