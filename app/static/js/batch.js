@@ -1031,7 +1031,8 @@ function _collectLlmSettings() {
   return s;
 }
 
-async function _collectLlmTargets(sorted, s, progText) {
+async function _collectLlmTargets(sorted, s, progText, stats = null) {
+  const tally = k => { if (stats) stats[k] = (stats[k] || 0) + 1; };
   const tasks = [];
   for (const idx of sorted) {
     if (_batchStop) break;
@@ -1043,11 +1044,15 @@ async function _collectLlmTargets(sorted, s, progText) {
     const colFilter  = _computeColumnFilter(shapes);
     for (let si = 0; si < shapes.length; si++) {
       const sh = shapes[si];
-      if (!s.labelSet.has(sh.label)) continue;
-      if (condFilter !== null && !condFilter.has(si)) continue;
-      if (colFilter  !== null && !colFilter.has(si))  continue;
-      if (!s.overwrite && (s.jsonOn ? sh.structured : sh.openai_output?.response)) continue;
-      if (s.requireOcrNums && !/\d/.test(sh.tesseract_output?.ocr_text || '')) continue;
+      if (!s.labelSet.has(sh.label)) { tally('label not selected'); continue; }
+      if (condFilter !== null && !condFilter.has(si)) { tally('condition filter'); continue; }
+      if (colFilter  !== null && !colFilter.has(si))  { tally('column filter'); continue; }
+      if (!s.overwrite && (s.jsonOn ? sh.structured : sh.openai_output?.response)) {
+        tally('already has a result (Overwrite off)'); continue;
+      }
+      const ocrTxt = sh.tesseract_output?.ocr_text || sh.easyocr_output?.ocr_text
+        || ((sh.row_struct?.rows || []).map(r => r.ocr || '').join('\n'));
+      if (s.requireOcrNums && !/\d/.test(ocrTxt)) { tally('no digits in OCR'); continue; }
       tasks.push({ stem, si, label: sh.label, row: sh.super_row, col: sh.super_column });
     }
   }
@@ -1333,10 +1338,11 @@ async function previewBatch() {
   progText.style.color = '';
   if (op === 'llm' || op === 'llm_batchapi') {
     const s = _collectLlmSettings();
-    const tasks = await _collectLlmTargets(sorted, s, progText);
-    const ow = s.overwrite ? ' (Overwrite ON — existing results will be replaced)'
-                           : ' (cells that already have results are skipped)';
-    progText.textContent = `👁 Would send ${tasks.length} cell(s) on ${sorted.length} page(s) to ${s.model}${ow}. Nothing was changed.`;
+    const stats = {};
+    const tasks = await _collectLlmTargets(sorted, s, progText, stats);
+    const skipped = Object.entries(stats).map(([k, v]) => `${v} × ${k}`).join(', ');
+    progText.textContent = `👁 Would send ${tasks.length} cell(s) on ${sorted.length} page(s) to ${s.model}.`
+      + (skipped ? ` Skipped: ${skipped}.` : '') + ' Nothing was changed.';
   } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
     const labelSet = new Set([...document.querySelectorAll('#batch-ocr-label-checks input:checked')].map(cb => cb.value));
     const overwrite = document.getElementById('batch-ocr-overwrite').checked;
