@@ -94,6 +94,13 @@ def test_azure_us_prefix_routing(monkeypatch):
     c = srv._make_llm_client("azure-us:gpt-5.4-mini-batch")
     assert "x.openai.azure.com" in str(c.base_url)
     assert "/openai/v1" in str(c.base_url)
+    # a mispasted portal "Target URI" (full path + api-version) is normalized
+    # to the bare resource host, so files/batches resolve (no 404)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT_US",
+        "https://x.openai.azure.com/openai/deployments/gpt-5.4-mini-batch/"
+        "chat/completions?api-version=2024-10-01-preview")
+    c = srv._make_llm_client("azure-us:gpt-5.4-mini-batch")
+    assert str(c.base_url).rstrip("/") == "https://x.openai.azure.com/openai/v1"
 
 
 def test_merge_shape_fields_concurrent(tmp_path):

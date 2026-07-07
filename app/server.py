@@ -2081,9 +2081,13 @@ def _make_llm_client(model: str):
             raise HTTPException(status_code=500,
                 detail=f"AZURE_OPENAI_ENDPOINT{suffix} and AZURE_OPENAI_API_KEY{suffix} "
                        f"must be set for {model.split(':', 1)[0]}: models")
-        base = endpoint.rstrip("/")
-        if not base.endswith("/openai/v1"):
-            base += "/openai/v1"
+        # Normalize to scheme://host only — the portal's "Target URI" includes
+        # a full path + api-version query (…/openai/deployments/…/chat/
+        # completions?api-version=…); appending /openai/v1 to THAT yields a
+        # 404. Keep just the resource host so files/batches resolve.
+        from urllib.parse import urlparse
+        u = urlparse(endpoint if "://" in endpoint else "https://" + endpoint)
+        base = f"{u.scheme or 'https'}://{u.netloc}/openai/v1"
         return OpenAI(api_key=api_key, base_url=base + "/")
     if model.startswith(_TK_PREFIX):
         return OpenAI(api_key="none", base_url=_TK_BASE_URL)
