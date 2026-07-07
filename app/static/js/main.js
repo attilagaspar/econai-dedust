@@ -134,6 +134,9 @@ async function loadPage(idx) {
   if (gridBtn.style.display!=='none') gridBtn.textContent = latticeVisible ? '📐 Hide Grid' : '📐 Show Grid';
   _clipArmed = null;
   renderClipTray();   // tray contents depend on the current page
+  const revBtn = document.getElementById('review-btn');
+  if (revBtn) revBtn.disabled = false;
+  if (typeof _syncStatusChip === 'function') _syncStatusChip();
 }
 
 function goPage(delta) { const n=pageIdx+delta; if(n>=0&&n<pages.length) loadPage(n); }

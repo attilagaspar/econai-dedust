@@ -842,6 +842,8 @@ function _shToggle() {
         ${row('P / O', 'Stamp selection 1 / 2 page(s) back')}
         ${row('H', 'Focus the Human correction field')}
         ${row('B', 'Mark / un-mark the cell as a structural blank')}
+        ${row('V', 'Verify this page & jump to the next unverified page')}
+        ${row('⚡', 'Review button: step through only the suspect cells')}
         ${row('Ctrl+K', 'Command palette (every button, searchable)')}
         ${row('?', 'This cheatsheet')}
         ${row('Esc', 'Close modal / cancel drawing')}
@@ -871,6 +873,11 @@ document.addEventListener('keydown', e => {
   else if ((e.key === 'b' || e.key === 'B') && !e.ctrlKey && !e.metaKey && !e.altKey) {
     if (typeof selIdx !== 'undefined' && selIdx >= 0 && typeof toggleBlank === 'function') {
       e.preventDefault(); toggleBlank();
+    }
+  }
+  else if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (typeof verifyAndAdvance === 'function' && pages?.length) {
+      e.preventDefault(); verifyAndAdvance();
     }
   }
 });

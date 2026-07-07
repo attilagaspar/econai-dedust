@@ -4,6 +4,12 @@ Goal metric: **human minutes per 1,000 verified data cells**, and **days from ra
 
 ---
 
+## STATUS: P1 + P3 built 2026-07-07
+
+Review queue and page-status scoreboard shipped together. Editor: **⚡ Review** button → setup modal (signals: OCR≠LLM disagreement, numeric column outliers, unverified; page/column scope; skip-verified) → `POST /api/review/queue` returns a severity-ranked flat list of suspect units → a docked **review strip** walks them (Enter=accept best guess into Human, type to correct, ↓ skip, U undo, Esc quit; canvas navigates + highlights each item; row-band crop snippet). Page status in `flags.status` (predicted/corrected/verified/problem) via the status dropdown in the nav bar and the **V** hotkey (verify + jump to next unverified). Dashboard shows a per-project **Review progress** bar from `GET /api/project/status`. Structural-blank cells are excluded from the queue. Signals are JSON-only (no API). Known gaps: rule-violation and unresolved-authority signals not yet wired in; multi-line whole cells (no row_struct) flatten awkwardly in the single-line strip input (skip them). Tests in test_review.py.
+
+---
+
 ## P1. Review Queue — triage-driven human attention *(highest leverage)*
 
 **Problem** (critique A1, B3, B5): humans spend most time finding suspect cells, not fixing them.

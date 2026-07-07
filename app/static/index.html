@@ -24,6 +24,13 @@
   </span>
   <button class="nav-btn" id="next-btn" onclick="goPage(+1)" disabled>&#8594;</button>
   <select id="page-select" onchange="goPageByIndex(this.value)" style="display:none;background:#0f3460;border:1px solid #444;border-radius:3px;color:#fff;padding:2px 6px;font-size:12px;"></select>
+  <select id="page-status" onchange="setPageStatus(this.value)" title="Page review status"
+          style="background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:11px;padding:2px 4px;margin-left:6px;">
+    <option value="predicted">● predicted</option>
+    <option value="corrected">● corrected</option>
+    <option value="verified">✓ verified</option>
+    <option value="problem">⚠ problem</option>
+  </select>
   <div style="flex:1"></div>
   <button onclick="openPromptPalette()"
           style="background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aaa;padding:2px 9px;cursor:pointer;font-size:11px;"
@@ -90,6 +97,8 @@
                 title="Toggle between review and edit mode (E)">Review mode</button>
         <button class="nav-btn" id="ocr-view-btn" onclick="toggleOcrView()" disabled
                 title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
+        <button class="nav-btn" id="review-btn" onclick="openReview()" disabled
+                title="Review queue: step through only the suspect cells across the project (⚡)">⚡ Review</button>
         <span style="font-size:11px;color:#666;">Diagnose:</span>
         <select id="diagnostic-select" onchange="onDiagnosticChange()"
                 style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 5px;font-size:11px;">
@@ -735,6 +744,39 @@
   </div>
 </div>
 
+<!-- Review queue setup modal -->
+<div id="review-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:2100;align-items:center;justify-content:center;">
+  <div style="background:#0d1b35;border:1px solid #16588e;border-radius:8px;width:min(460px,92vw);padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 8px 40px #000a;">
+    <div style="font-size:14px;font-weight:700;color:#e0e0e0;">⚡ Review queue</div>
+    <div style="font-size:11px;color:#888;">Steps through only the suspect cells across the project. Enter = accept the best guess into Human · type to correct · ↓ skip · U undo · Esc close.</div>
+    <div style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#ccc;">
+      <label><input type="checkbox" class="rev-sig" value="disagree" checked> OCR ≠ LLM disagreement</label>
+      <label><input type="checkbox" class="rev-sig" value="outlier" checked> Numeric outliers (per column)</label>
+      <label><input type="checkbox" class="rev-sig" value="unverified"> Unverified cells (no human check yet)</label>
+    </div>
+    <label style="font-size:12px;color:#ccc;">Pages <input id="rev-pages" placeholder="blank = all" style="width:120px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:3px 6px;font-size:12px;"></label>
+    <label style="font-size:12px;color:#ccc;">Columns <input id="rev-cols" placeholder="blank = all" style="width:120px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:3px 6px;font-size:12px;"></label>
+    <label style="font-size:12px;color:#ccc;"><input type="checkbox" id="rev-skip-verified" checked> skip pages already marked verified</label>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closeReviewModal()" style="background:#1a2740;border:1px solid #3a4a6a;color:#c8d0e0;border-radius:4px;padding:6px 12px;font-size:12px;cursor:pointer;">Cancel</button>
+      <button onclick="startReview()" style="background:#1b4d2e;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:6px 14px;font-size:12px;cursor:pointer;">Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review strip (docked at the bottom during a review session) -->
+<div id="review-strip" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:1500;background:#0b1426;border-top:2px solid #16588e;padding:8px 12px;box-shadow:0 -4px 20px #0008;">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <img id="rev-crop" style="max-height:52px;max-width:280px;border:1px solid #0f3460;border-radius:3px;background:#fff;">
+    <input id="rev-input" placeholder="best guess (Enter accepts)" autocomplete="off"
+           style="flex:none;width:220px;background:#0d1b35;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:7px 9px;font-size:14px;">
+    <span id="rev-why" style="flex:none;font-size:11px;color:#f0c040;white-space:nowrap;"></span>
+    <span id="rev-loc" style="flex:1;font-size:11px;color:#667;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    <span style="font-size:10px;color:#556;white-space:nowrap;">Enter accept · ↓ skip · U undo · Esc quit</span>
+    <span id="rev-counter" style="flex:none;font-size:12px;color:#e0e0e0;font-weight:700;white-space:nowrap;"></span>
+  </div>
+</div>
+
 <!-- Batch process modal -->
 <div id="batch-modal">
   <div id="batch-modal-body">
@@ -1284,6 +1326,7 @@
 <script src="js/export_ocr.js"></script>
 <script src="js/llm_structured.js"></script>
 <script src="js/authority.js"></script>
+<script src="js/review.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

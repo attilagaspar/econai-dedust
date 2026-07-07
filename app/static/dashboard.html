@@ -415,6 +415,12 @@ function renderDetail() {
       </div>
     </div>
 
+    <!-- Review progress board -->
+    <div class="card">
+      <h3>Review progress</h3>
+      <div id="review-board" style="font-size:13px;color:#888;">Loading…</div>
+    </div>
+
     <!-- Import pages -->
     <div class="card">
       <h3>Import Pages</h3>
@@ -607,6 +613,9 @@ function renderDetail() {
   // Restore persisted training solver fields (they reset to defaults on render)
   _restoreTrainParams();
 
+  // Review progress board (P3)
+  loadReviewBoard();
+
   // Load docker config into the card
   dockerLoad();
 
@@ -614,6 +623,31 @@ function renderDetail() {
   if (pl.job) {
     document.getElementById('job-cmd').value = pl.job.command || '';
     startJobPolling();
+  }
+}
+
+async function loadReviewBoard() {
+  const el = document.getElementById('review-board');
+  if (!el || !activeProj) return;
+  const folder = encodeURIComponent(activeProj.annotations_path.replaceAll('\\', '/'));
+  try {
+    const r = await fetch(`/api/project/status?folder=${folder}`);
+    const d = await r.json();
+    const c = d.counts, total = d.total || 1;
+    const seg = (n, color) => n ? `<div style="width:${(100 * n / total).toFixed(1)}%;background:${color};"></div>` : '';
+    el.innerHTML = `
+      <div style="display:flex;height:16px;border-radius:4px;overflow:hidden;background:#0b1426;border:1px solid #22304a;">
+        ${seg(c.verified, '#22c55e')}${seg(c.corrected, '#f0c040')}${seg(c.problem, '#e94560')}${seg(c.predicted, '#3a4a6a')}
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px;">
+        <span style="color:#22c55e;">✓ ${c.verified} verified</span>
+        <span style="color:#f0c040;">● ${c.corrected} corrected</span>
+        <span style="color:#e94560;">⚠ ${c.problem} problem</span>
+        <span style="color:#8a94a6;">● ${c.predicted} unreviewed</span>
+        <span style="color:#667;">— ${total} pages, ${(100 * c.verified / total).toFixed(0)}% verified</span>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<span style="color:#e94560;">Could not load status.</span>';
   }
 }
 

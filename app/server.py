@@ -1081,8 +1081,11 @@ def get_cell(
     idx:    int  = Query(...),
     pad:    int  = Query(4, description="Padding in pixels"),
     shadow: bool = Query(False, description="Return shadow (line-erased) version"),
+    y0:     Optional[float] = Query(None, description="Crop only this y-band (abs page px) — for one internal row"),
+    y1:     Optional[float] = Query(None, description="Band bottom (abs page px)"),
 ):
-    """Return a cropped image of a single cell (for the right panel zoom)."""
+    """Return a cropped image of a single cell (for the right panel zoom).
+    With y0/y1, crops just that vertical band — a single internal row."""
     from PIL import Image
     import io
     from fastapi.responses import StreamingResponse
@@ -1104,15 +1107,17 @@ def get_cell(
     pts = shapes[idx]["points"]
     xs  = [p[0] for p in pts]
     ys  = [p[1] for p in pts]
-    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+    x1, y1b, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+    top = y0 if y0 is not None else y1b
+    bot = y1 if y1 is not None else y2
 
     img  = _get_shadow_page(folder, stem, img_path) if shadow else Image.open(str(img_path))
     w, h = img.size
     crop = img.crop((
         max(0, int(x1) - pad),
-        max(0, int(y1) - pad),
+        max(0, int(top) - pad),
         min(w, int(x2) + pad),
-        min(h, int(y2) + pad),
+        min(h, int(bot) + pad),
     ))
 
     buf = io.BytesIO()
@@ -2866,6 +2871,170 @@ def api_mark_blanks(folder: str = Query(...), body: MarkBlanksBody = ...):
         per_page.append({"stem": stem, **pc})
 
     return {"ok": True, "pages": len(per_page), "totals": totals, "per_page": per_page}
+
+
+# ---------------------------------------------------------------------------
+# P3 — page status scoreboard. Status lives in the page's flags.status
+# (predicted | corrected | verified | problem); set via PATCH /api/page/flags.
+# ---------------------------------------------------------------------------
+
+@app.get("/api/project/status")
+def api_project_status(folder: str = Query(...)):
+    """Per-status page counts for a project's annotation folder — the dashboard
+    progress board and the editor's 'next unreviewed page' both read this."""
+    d = _resolve_folder(folder)
+    counts = {"predicted": 0, "corrected": 0, "verified": 0, "problem": 0}
+    pages = []
+    for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
+        if jf.name.endswith(_RULES_FILENAME):
+            continue
+        try:
+            flags = (json.loads(jf.read_text(encoding="utf-8")).get("flags") or {})
+        except Exception:
+            flags = {}
+        st = flags.get("status") or "predicted"
+        if st not in counts:
+            st = "predicted"
+        counts[st] += 1
+        pages.append({"stem": jf.stem, "status": st,
+                      "assignee": flags.get("assignee")})
+    return {"counts": counts, "total": sum(counts.values()), "pages": pages}
+
+
+# ---------------------------------------------------------------------------
+# P1 — review queue. A project-wide, frequency/severity-ranked list of suspect
+# UNITS (a cell, or one internal row) so review is "fix the flagged, ignore the
+# rest". Signals are all computable from the page JSON (no API): OCR≠LLM
+# disagreement, numeric column outliers, unresolved authority, unverified.
+# ---------------------------------------------------------------------------
+
+def _norm_txt(t: str) -> str:
+    return re.sub(r"\s+", " ", (t or "")).strip().lower()
+
+
+def _parse_num(t: str):
+    """Parse a Hungarian-style number ('1.446' = 1446, '1 234' = 1234)."""
+    s = re.sub(r"[.\s ]", "", (t or "").strip())
+    if re.fullmatch(r"-?\d+", s):
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
+
+
+class ReviewQueueBody(BaseModel):
+    stems:      List[str] = []
+    pattern:    Optional[str] = None
+    col_filter: Optional[str] = None
+    signals:    List[str] = ["disagree", "outlier", "unverified"]
+    layer:      str = "best_llm"
+    limit:      int = 2000
+    exclude_verified: bool = True     # skip pages already marked verified
+
+
+@app.post("/api/review/queue")
+def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
+    from collections import defaultdict
+    d = _resolve_folder(folder)
+    pages = _auth_select_pages(d, body.stems, body.pattern)
+    col_allowed = _auth_col_pred(body.col_filter)
+    sig = set(body.signals or [])
+    items = []
+
+    # severity weight per signal → ranks the queue (higher = worse, shown first)
+    W = {"rule": 5, "disagree": 4, "outlier": 3, "unresolved": 2, "unverified": 1}
+
+    def best_of(human, ocr, llm, pdf):
+        h, o, l, p = (human or "").strip(), (ocr or "").strip(), \
+                     (llm or "").strip(), (pdf or "").strip()
+        if body.layer == "ocr":  return o or h or l
+        if body.layer == "llm":  return l or h or o
+        return h or l or o or p
+
+    for stem in pages:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if body.exclude_verified and (data.get("flags") or {}).get("status") == "verified":
+            continue
+        shapes = data.get("shapes", [])
+
+        # gather numeric values per (table, col) for outlier detection
+        colvals = defaultdict(list)     # (table, col) -> [(value, ref)]
+
+        def consider(i, sh, row_n, human, ocr, llm, pdf, y0=None, y1=None):
+            o, l = _norm_txt(ocr), _norm_txt(llm)
+            best = best_of(human, ocr, llm, pdf)
+            verified = bool((human or "").strip())
+            reasons = []
+            if "disagree" in sig and o and l and o != l:
+                reasons.append("OCR≠LLM")
+            if "unverified" in sig and not verified and best:
+                reasons.append("unverified")
+            unit = {"stem": stem, "idx": i, "row": row_n, "best": best,
+                    "y0": y0, "y1": y1,
+                    "col": sh.get("super_column"), "table": sh.get("table") or 0}
+            if reasons:
+                sev = max(W.get(_reason_key(r), 1) for r in reasons)
+                items.append({**unit, "why": ", ".join(reasons), "sev": sev})
+            # collect numbers for the outlier pass
+            if "outlier" in sig and sh.get("super_column") is not None:
+                v = _parse_num(best)
+                if v is not None:
+                    colvals[(sh.get("table") or 0, int(sh["super_column"]))].append(
+                        (v, {**unit, "why": "numeric outlier"}))
+
+        for i, sh in enumerate(shapes):
+            sc = sh.get("super_column")
+            if sc is not None and not col_allowed(int(sc)):
+                continue
+            # unresolved-authority: in a column that HAS an authority mapping
+            rows = (sh.get("row_struct") or {}).get("rows") or []
+            if rows:
+                for r in rows:
+                    if r.get("blank"):
+                        continue      # structural blanks never enter the queue
+                    consider(i, sh, r.get("n"), r.get("human"), r.get("ocr"),
+                             r.get("llm"), r.get("pdf"), r.get("y0"), r.get("y1"))
+            elif not sh.get("blank"):
+                consider(i, sh, None,
+                         (sh.get("human_output") or {}).get("human_corrected_text"),
+                         ((sh.get("tesseract_output") or {}).get("ocr_text") or
+                          (sh.get("easyocr_output") or {}).get("ocr_text")),
+                         (sh.get("openai_output") or {}).get("response"),
+                         sh.get("pdf_text"))
+
+        # outliers: values > 3 MADs from the column median
+        for (_t, _c), vals in colvals.items():
+            if len(vals) < 5:
+                continue
+            nums = sorted(v for v, _ in vals)
+            med = nums[len(nums) // 2]
+            devs = sorted(abs(v - med) for v in nums)
+            mad = devs[len(devs) // 2] or 1
+            for v, ref in vals:
+                if abs(v - med) > 6 * mad and abs(v - med) > 10:
+                    items.append({**ref, "sev": W["outlier"],
+                                  "extra": f"{v} vs median {med}"})
+
+    # de-dup (a unit can trip several signals), keep the highest severity
+    best_by_key = {}
+    for it in items:
+        k = (it["stem"], it["idx"], it["row"])
+        if k not in best_by_key or it["sev"] > best_by_key[k]["sev"]:
+            best_by_key[k] = it
+    ranked = sorted(best_by_key.values(), key=lambda x: -x["sev"])[:body.limit]
+    return {"queue": ranked, "total": len(best_by_key), "pages": len(pages)}
+
+
+def _reason_key(reason: str) -> str:
+    return {"OCR≠LLM": "disagree", "unverified": "unverified",
+            "numeric outlier": "outlier"}.get(reason, "unverified")
 
 
 @app.post("/api/page/shape/llm")
