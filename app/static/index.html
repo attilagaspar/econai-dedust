@@ -301,6 +301,7 @@
           <div id="f-label" class="field-value" style="display:none">—</div>
           <select id="f-label-select" class="field-value" style="display:none;cursor:pointer;background:#0f3460;color:#fff;border:1px solid #e94560;" onchange="changeLabel(this.value)"></select>
         </div>
+        <button id="blank-btn" onclick="toggleBlank()" title="Mark this cell (or all selected cells) as a structural blank — no data by design. Batches skip it, export leaves it empty. Shortcut: B" style="background:#1a2740;border:1px solid #3a4a6a;color:#c8d0e0;padding:7px;cursor:pointer;font-size:12px;width:100%;">∅ Mark blank (B)</button>
         <div class="field-group" id="fg-score" style="display:none">
           <div class="field-label">Score</div>
           <div id="f-score" class="field-value">—</div>
@@ -613,7 +614,6 @@
             <div id="auth-cands" style="margin-top:5px;"></div>
           </div>
         </div>
-        <button id="blank-btn" onclick="toggleBlank()" title="Mark this cell as a structural blank (no data by design) — batches skip it, export leaves it empty. Shortcut: B" style="background:#1a2740;border:1px solid #3a4a6a;color:#c8d0e0;padding:7px;cursor:pointer;font-size:12px;width:100%;">∅ Mark blank (B)</button>
         <button id="save-btn" onclick="saveCorrection()" disabled>Save (Ctrl+S)</button>
         <button id="delete-btn" onclick="deleteSelectedShape()" style="display:none;background:#7f1d1d;border:none;border-radius:4px;color:#fca5a5;padding:7px;cursor:pointer;font-size:13px;font-weight:600;width:100%;">Delete box (Del)</button>
         <div id="save-status"></div>
