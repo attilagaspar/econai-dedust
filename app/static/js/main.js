@@ -89,14 +89,17 @@ async function loadFolder() {
 }
 
 async function loadPage(idx) {
-  pageIdx=idx; selIdx=-1; selSet.clear(); editMode=false; dragState=null; flaggedOverlaps=new Set();
+  // Preserve edit/review mode across page changes (don't drop the user out of
+  // edit mode when they navigate); selection & drag still reset per page.
+  const wasEdit = editMode;
+  pageIdx=idx; selIdx=-1; selSet.clear(); editMode=wasEdit; dragState=null; flaggedOverlaps=new Set();
   document.getElementById('prev-btn').disabled=idx===0;
   document.getElementById('next-btn').disabled=idx===pages.length-1;
   document.getElementById('page-num-input').value = idx + 1;
   document.getElementById('page-total').textContent = `/ ${pages.length}`;
   document.getElementById('page-select').value=idx;
-  document.getElementById('mode-btn').textContent='Review mode';
-  document.getElementById('mode-btn').classList.remove('active');
+  document.getElementById('mode-btn').textContent = editMode ? 'Edit mode' : 'Review mode';
+  document.getElementById('mode-btn').classList.toggle('active', editMode);
   updatePanel();
   await reloadPageData();
   viewer.open({type:'image',url:`${API}/api/image?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[idx].stem)}${loadPage._bust ? '&t='+Date.now() : ''}`});
