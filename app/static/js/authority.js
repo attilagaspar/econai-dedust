@@ -350,18 +350,27 @@ function _shapeIsBlank(sh) {
   return rows?.length ? rows.every(r => r.blank) : !!sh?.blank;
 }
 
+function _blankTargets() {
+  // the whole current selection (rubber-band / Ctrl-click), else the primary cell
+  const idxs = selSet && selSet.size > 1 ? [...selSet] : (selIdx >= 0 ? [selIdx] : []);
+  return idxs.filter(i => pageData?.shapes?.[i]);
+}
+
 async function toggleBlank() {
-  if (selIdx < 0 || !pageData?.shapes[selIdx]) return;
-  const sh = pageData.shapes[selIdx];
-  const makeBlank = !_shapeIsBlank(sh);
-  const rows = sh.row_struct?.rows;
-  if (rows?.length) {
-    rows.forEach(r => { if (makeBlank) r.blank = true; else delete r.blank; });
-  }
-  if (makeBlank) sh.blank = true; else delete sh.blank;
+  const idxs = _blankTargets();
+  if (!idxs.length) return;
+  // mixed selection → mark all blank; all already blank → un-mark all
+  const makeBlank = !idxs.every(i => _shapeIsBlank(pageData.shapes[i]));
+  idxs.forEach(i => {
+    const sh = pageData.shapes[i];
+    const rows = sh.row_struct?.rows;
+    if (rows?.length) rows.forEach(r => { if (makeBlank) r.blank = true; else delete r.blank; });
+    if (makeBlank) sh.blank = true; else delete sh.blank;
+  });
   const ok = await replaceAllShapes();
   if (ok) {
-    showToast(makeBlank ? '∅ Marked blank' : 'Blank mark removed');
+    const n = idxs.length;
+    showToast(makeBlank ? `∅ Marked ${n} blank` : `Blank mark removed (${n})`);
     updateBlankBtn(); drawOverlay(); refreshDiag();
   }
 }
@@ -369,13 +378,15 @@ async function toggleBlank() {
 function updateBlankBtn() {
   const btn = document.getElementById('blank-btn');
   if (!btn) return;
-  const sh = pageData?.shapes?.[selIdx];
-  if (selIdx < 0 || !sh) { btn.disabled = true; btn.textContent = '∅ Mark blank (B)'; return; }
+  const idxs = _blankTargets();
+  if (!idxs.length) { btn.disabled = true; btn.textContent = '∅ Mark blank (B)'; return; }
   btn.disabled = false;
-  const isB = _shapeIsBlank(sh);
-  btn.textContent = isB ? '∅ Un-mark blank (B)' : '∅ Mark blank (B)';
-  btn.style.background = isB ? '#3a3320' : '#1a2740';
-  btn.style.borderColor = isB ? '#8a7a3a' : '#3a4a6a';
+  const multi = idxs.length > 1;
+  const allB = idxs.every(i => _shapeIsBlank(pageData.shapes[i]));
+  const suffix = multi ? ` ${idxs.length} (B)` : ' (B)';
+  btn.textContent = (allB ? '∅ Un-mark blank' : '∅ Mark blank') + suffix;
+  btn.style.background = allB ? '#3a3320' : '#1a2740';
+  btn.style.borderColor = allB ? '#8a7a3a' : '#3a4a6a';
 }
 
 // ── Smart Correct ────────────────────────────────────────────────────────────
