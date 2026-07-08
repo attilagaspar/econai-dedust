@@ -5,7 +5,25 @@ A browser-based tool for turning large collections of scanned historical documen
 **What you need:**
 - A Windows/Mac/Linux laptop to run the web app
 - A GPU server with SSH access (for training the layout model and running inference)
-- An OpenAI API key (optional — only for LLM cleaning step)
+- An OpenAI / Azure OpenAI API key (optional — only for LLM steps)
+
+---
+
+## What's new
+
+Highlights of major additions (newest first). Small fixes aren't listed here.
+
+**2026-07 — review, structure, and cost overhaul**
+- **⚡ Review queue** — step through *only* the suspect cells across a whole project (OCR≠LLM disagreements, numeric column outliers, unverified cells), worst-first, in a docked strip: **Enter** accepts the best guess into Human, type to correct, **↓** skip, **U** undo. Optional **🎯 Pinpoint** draws a big arrow on the current cell. A cell with a Human value is considered resolved and never re-appears. See [Review queue](#review-queue).
+- **Page status scoreboard** — every page carries a status (`predicted → corrected → verified → problem`); a dropdown in the nav bar and the **V** key (verify + jump to next unverified) set it, and the dashboard shows a per-project **Review progress** bar. See [Page status](#page-status).
+- **Structure vs content, separated** — **⊞ Build internal row structure** is now the single place row geometry is decided (free, local): detect rows per cell, *or* project one anchor column's structure across the lattice row; row count from the image or a content layer's line count. Content is then a separate OCR/LLM pass with **Scope = "Internal rows (keep structure)"**. The old *Anchored OCR / Anchored LLM* batch ops are gone (subsumed). See [Build row structure](#build-row-structure).
+- **LLM Send × Scope** — the LLM mode is now two choices: **Send** (Image / OCR text / Image+OCR) and **Scope** (Whole annotation / Internal rows: keep structure / re-detect). See [OCR & LLM](#step-9-ocr-and-llm-cleaning).
+- **🌙 Overnight LLM batches** — submit a whole project's LLM cleaning to the OpenAI/Azure Batch API at **half price** (done within 24h); live submit progress, auto-split under the 200 MB file limit, per-job Apply/Cancel/Remove. See [Overnight batches](#overnight-llm-batches).
+- **Faster & cheaper live LLM** — batch LLM runs several requests in parallel, and identical requests are served from a local response cache (re-runs are free).
+- **🚫 Structural blanks** — a free ink scan marks cells that are blank by design; batches skip them and export emits them as missing (not a dash). Mark/un-mark by hand with **B**. See [Structural blanks](#structural-blanks).
+- **🏛 Authority resolver** — resolve OCR'd strings to canonical entity IDs (places, industries) at annotation time, per cell / per column / in batch, with an **unresolved-strings worklist** (fix once, apply everywhere) and confirmed-alias promotion. See [Authority resolver](#authority-resolver).
+- **🧩 Structured (JSON) extraction** — one annotation → a schema-conforming JSON record, with a per-project schema editor and a JSON export op. See [Structured extraction](#structured-json-extraction).
+- **Command palette (Ctrl+K)** and a **?** shortcut cheatsheet; batch **recipes**, **👁 Preview**, and one-step **batch undo**.
 
 ---
 
@@ -134,15 +152,19 @@ Open the editor and check the predicted boxes. Fix any mistakes, adjust boundari
 
 ### Step 9: OCR and LLM cleaning
 
-Once the layout is correct, use the toolbar in the editor to run OCR on each cell (or batch-process all pages). The LLM cleaning step uses the OpenAI API to normalize numbers, fix OCR errors, and extract structured fields. Your OpenAI key goes in the settings panel in the editor.
+Once the layout is correct, run OCR on each cell (or batch-process all pages), then LLM cleaning to normalize numbers, fix OCR errors, or extract fields. LLM steps use OpenAI or Azure OpenAI; keys come from environment variables (`OPENAI_API_KEY`, or `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY`).
 
-Line-by-line and anchored OCR/LLM runs also record each cell's **internal row structure** — where every text row sits inside the cell, with the OCR / LLM / Human readings stored side by side per row (see [Internal row structure](#internal-row-structure) below). The LLM model dropdown includes the GPT-5 family and the o-series reasoning models (calls adapt automatically), and you can also define [**row rules**](#row-rules-validation-between-columns) that arithmetic-check columns and even let the LLM propose fixes.
+The LLM panel and the Batch LLM op both offer two independent choices:
+- **Send** — what the model sees: `Image`, `OCR text`, or `Image + OCR`.
+- **Scope** — what one request covers: `Whole annotation`, `Internal rows (keep structure)` (reads into each cell's existing row bands), or `Internal rows (re-detect)`.
+
+Working per internal row records/uses each cell's **internal row structure** — where every text row sits, with the OCR / LLM / Human readings stored side by side per row (see [Internal row structure](#internal-row-structure)). The model dropdown includes the GPT-5 family and o-series reasoning models (calls adapt automatically); you can also define [**row rules**](#row-rules-validation-between-columns) that arithmetic-check columns and let the LLM propose fixes. For big or overnight jobs see [Overnight batches](#overnight-llm-batches); to run cheap models cheaply, live Batch LLM parallelizes requests and caches identical ones.
 
 ### Step 10: Export
 
 Click **Export** in the editor toolbar. This generates an `.xlsx` file preserving the table structure, one row per text line in each cell. Cells with an internal row structure export one Excel row per internal row, with the chosen content layer (e.g. Human > LLM > OCR > PDF) applied per row.
 
-Export options include: a **page pattern** of `1`/`0`s controlling how pages tile onto the sheet (blank = each page stacked vertically; `1,1` = pairs side by side; `1,0` = odd pages only; any 1/0 cycle works), with side-by-side pages aligned rank-by-rank on their printed lattice rows; an optional **Clip column**; and filters for "only cells with an internal row structure" / "only rows that have a clip".
+Export options include: a **page pattern** of `1`/`0`s controlling how pages tile onto the sheet (blank = each page stacked vertically; `1,1` = pairs side by side; `1,0` = odd pages only; any 1/0 cycle works), with side-by-side pages aligned rank-by-rank on their printed lattice rows; a 1-indexed range-aware **column filter** (`3`, `2-4`, `3-`, `-5`, `1,3,5`) that still keeps free (non-lattice) annotations; an optional **Clip column**; and filters for "only cells with an internal row structure" / "only rows that have a clip". Cells marked as [structural blanks](#structural-blanks) export as empty. When authorities or structured records are present, companion **Resolved** and **Structured** sheets are added.
 
 ---
 
@@ -207,17 +229,29 @@ Each annotation can carry an **internal row structure** (`row_struct` in the JSO
 
 | Feature | Where |
 |---|---|
-| Structures are created automatically | Any line-by-line or anchored OCR/LLM run |
-| Convert a legacy cell | **⊞ Convert** in the right panel (best layer's line count + histogram split) |
-| Convert in bulk | Batch op **⊞ Convert annotations to internal rows** |
+| Structures are created automatically | Any per-internal-row OCR/LLM run |
+| Convert one legacy cell | **⊞ Convert** in the right panel (best layer's line count + histogram split) |
+| Build in bulk | Batch op **⊞ Build internal row structure** (see [below](#build-row-structure)) |
 | Table view | Selecting a structured cell shows `# · crop · PDF · OCR · LLM · Human`; green = layers agree, red = conflict; Human editable inline |
 | Copy to Human | Click any PDF/OCR/LLM value (one row) or **⤓H** in a header (whole column) |
 | Majority vote | **⚖** fills Human where the sources agree (2-of-3 rule) |
-| Re-pull a column | **⟳** per column — PDF re-clipped per row band, EasyOCR / LLM rerun over the current bands |
+| **⟳ Redistribute** | Per column — reflow the existing flat text (or Human) into the current row bands, one line per row. No re-running, no API cost. Use after editing the structure. |
+| **🔍 Re-run** | Per OCR/LLM column — re-run line-by-line extraction over the current bands (LLM button toggles to ■ to stop) |
 | Edit dividers | Edit mode, on the cell crop: drag a divider; double-click a (red-highlighted) divider = merge; double-click a band = split |
-| Project a structure | Anchored OCR/LLM with **Anchor at: Row structure** copies the reference cell's exact dividers onto the rest of the lattice row |
 
 Dividers are always visible (dashed lines on the page, bands on the crop). Moving or resizing a box rescales its rows proportionally. See [WHATS_NEW_INTERNAL_ROWS.md](WHATS_NEW_INTERNAL_ROWS.md) for a hands-on guide.
+
+### Build row structure
+
+The batch op **⊞ Build internal row structure (detect / anchor-project)** is the one place row geometry is decided — free, local, no API. Then extract content separately with OCR/LLM at **Scope = "Internal rows (keep structure)"**.
+
+| Control | What it does |
+|---|---|
+| **Rows from** | `Image only` (auto-detect the row count from pixels) or a content layer (`Best / Human / LLM / OCR / PDF`) whose line count fixes the number of rows |
+| **Anchor column pattern** | *Blank* → detect rows independently in every cell. Otherwise a cyclic per-page list of the anchor `super_column`; its detected structure is **projected** onto the other columns of the same lattice row. An empty slot skips that page — e.g. `8,,2,1` |
+| **Overwrite** | Rebuild cells that already have a structure |
+
+This replaced the former *Anchored OCR / Anchored LLM* batch ops (which mixed structure and content in one paid pass). A single-cell "Anchored" scope still exists in the LLM panel for one-offs.
 
 ### Row rules (validation between columns)
 
@@ -243,9 +277,48 @@ Accepted fixes go to the LLM layer, never silently to Human — so the Human lay
 
 **🚩 Clips** lets you stamp a numbered, colored flag on **any** annotation to mark that it belongs to the same underlying data unit as an annotation on another page — e.g. a record split across a page break, or a firm description linked to its balance table. A tray across the top of the page shows **➕ new** and any **dangling** flags (placed elsewhere, not yet here); drag a flag onto an annotation, or click a flag then click the annotation. Clipped annotations show a colored badge; click a badge (in clip mode) to remove it. Clips export as a column and can filter the Excel output to only clipped rows.
 
+### Review queue
+
+**⚡ Review** builds a project-wide, worst-first to-do list of *suspect* cells so you fix flagged cells instead of scanning every page. Pick the signals — **OCR≠LLM disagreement**, **numeric column outliers**, **unverified** — plus page/column scope. A strip docks at the bottom and walks the queue:
+
+| Key | Action |
+|---|---|
+| **Enter** | Accept the shown best guess into Human, advance |
+| type then Enter | Write your correction into Human, advance |
+| **↓** | Skip |
+| **U** | Undo the last accept |
+| **Esc** | Close |
+
+The canvas follows each item; tick **🎯 Pinpoint** for a big animated arrow + ring on the exact cell (handy when a cell needs real work, e.g. a bad row structure). A cell that has a Human value counts as resolved and won't come back — so accepting is also the one-keystroke "yes, correct" gesture, and progress persists across sessions and reviewers.
+
+### Page status
+
+Every page carries a **status**: `predicted → corrected → verified → problem`. Set it from the dropdown next to the page number, or press **V** to mark the current page verified and jump to the next unverified one. The dashboard shows a per-project **Review progress** bar. Export can warn on unverified pages.
+
+### Structural blanks
+
+Lattice grids create cells that are blank *by design* (e.g. a district-header row over settlement columns). The batch op **🚫 Mark structural blanks** runs a free, local ink scan and flags inkless cells; the condition **"Skip structural blanks"** then keeps OCR/LLM (and their cost) off them, and export emits them as **missing** (not a dash, not a zero). Mark or un-mark a cell (or a whole selection) by hand with **B** (or the **∅** button in the inspector).
+
+### Authority resolver
+
+**🏛 Authority** resolves an OCR'd string to a canonical entity ID from a shared gazetteer (`authorities/*.authority.json` — places, industries, …) *at annotation time*, so different sources join on stable IDs. Resolve a single cell or internal row, a whole lattice column, or in batch across pages (ditto marks inherit the entity above; low-similarity matches are skipped). County/district context per table sharpens matches. The **Unresolved worklist** groups every unresolved string by frequency so you pick the entity once and apply it to all occurrences, and confirmed picks can be promoted into the authority file as aliases. A companion **Resolved** sheet in the Excel export carries the original text + resolved name + ID.
+
+### Structured (JSON) extraction
+
+For non-table documents (e.g. one firm record per annotation): toggle **JSON** on an LLM call and attach a per-project JSON **schema** (`<project>/schemas/*.json`, edited and live-validated in the panel). The LLM returns a schema-conforming object stored on the annotation, editable as text with validity + conformance checks. The Batch **⇩ JSON export** op collects records in reading order across a page range, with per-label modes: **export**, **ignore**, or **propagate forward** (e.g. a country header attached to every following record until the next one). Output is a single JSON array or a zip of per-record files.
+
 ### Batch operations
 
-The toolbar has a **Batch** button that lets you run operations (overlap removal, lattice correction, OCR, LLM cleaning, anchored OCR/LLM, conversion to internal rows) across all pages at once with a live progress log, page/parity/condition/column filters, and an anchor-column pattern that may contain empty slots to skip pages (e.g. `8,,2,1`).
+The toolbar's **Batch** button runs operations across many pages at once with page/parity/condition/column filters and a live progress log. Available ops include: overlap removal + lattice correction, OCR (Tesseract / EasyOCR line-by-line), LLM (live), **🌙 LLM overnight batch**, **⊞ Build internal row structure**, **🏛 Resolve authorities**, **🚫 Mark structural blanks**, **⇩ JSON export**, score-delete, result-clearing, and short-line stripping.
+
+- **Column filter** is 1-indexed and range-aware: `3` = col 3, `2-4` = 2/3/4, `3-` = 3 to end, `-5` = 1 to 5, `1,3,5` = list.
+- **Recipes** — save every setting of the dialog as a named recipe (💾) and re-apply it later; per project.
+- **👁 Preview** counts exactly what an op would touch (and why cells are skipped) without changing anything.
+- **↩ Undo last batch** restores the pages a writing batch modified (snapshotted just before it ran).
+
+### Overnight LLM batches
+
+The Batch op **🌙 LLM — overnight batch (half price)** hands the whole job to the OpenAI / Azure **Batch API**: half price, finished within 24 hours (often sooner). You can close the browser after submitting. It streams live build/upload progress and **auto-splits** a big job into multiple sub-jobs under the provider's 200 MB file limit. Each job appears in a list with its live status and buttons to **⬇ Apply results** (writes them into the pages exactly like the live path), **✕ Cancel** (while running), or **🗑 remove** (finished). Requires an OpenAI or Azure model; Azure needs a **Global Batch** deployment of the model, and a second Azure resource can be reached with an `azure-us:` model prefix (`AZURE_OPENAI_ENDPOINT_US` / `AZURE_OPENAI_API_KEY_US`).
 
 ---
 
@@ -352,6 +425,9 @@ Arrow keys only move within the lattice. If no lattice cell is selected, or ther
 | **Ctrl+C** | Copy selected shape(s) |
 | **Ctrl+V** | Paste (offset by 10 px) |
 | **Ctrl + ←/→/↑/↓** | Clone selected shape flush-adjacent in that direction |
+| **H** | Focus the Human correction field |
+| **B** | Mark / un-mark the selected cell(s) as a structural blank |
+| **V** | Verify this page & jump to the next unverified page |
 
 ### Stamping across pages
 | Key | Action |
@@ -359,7 +435,9 @@ Arrow keys only move within the lattice. If no lattice cell is selected, or ther
 | **P** | Stamp selection onto the previous page |
 | **O** | Stamp selection 2 pages back |
 
-### Modals & modes
+### Help & modes
 | Key | Action |
 |---|---|
+| **Ctrl+K** | Command palette — every button, searchable |
+| **?** | Keyboard-shortcut cheatsheet |
 | **Escape** | Close open modal / cancel current drawing mode |
