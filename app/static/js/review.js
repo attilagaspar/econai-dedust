@@ -194,15 +194,33 @@ async function _revAccept() {
     const sh = pageData.shapes[it.idx];
     _revUndo = { pos: _revPos, stem: it.stem, idx: it.idx, row: it.row,
                  prev: JSON.parse(JSON.stringify(sh)) };
+    // Accepting an EMPTY value means "I checked — there is nothing here":
+    // mark the unit a structural blank, or the queue (which requires a
+    // non-empty Human to consider a unit reviewed) would re-flag it forever.
+    const isEmpty = !val.trim();
     let ok = false;
     if (it.row && sh.row_struct?.rows) {
       const r = sh.row_struct.rows.find(x => x.n === it.row);
-      if (r) { r.human = val; }
+      if (r) {
+        r.human = val;
+        if (isEmpty) r.blank = true; else delete r.blank;
+      }
       ok = await saveRowStruct(it.idx);
-    } else {
+      if (ok !== false && isEmpty) showToast('∅ marked blank (nothing here)', 2000);
+    } else if (isEmpty) {
       sh.human_output = sh.human_output || {};
       sh.human_output.human_corrected_text = val;
-      ok = await patchShape(it.idx, { human_corrected_text: val });
+      sh.blank = true;
+      ok = await replaceAllShapes();      // patchShape can't carry the blank flag
+      if (ok !== false) showToast('∅ marked blank (nothing here)', 2000);
+    } else {
+      const wasBlank = !!sh.blank;
+      delete sh.blank;
+      sh.human_output = sh.human_output || {};
+      sh.human_output.human_corrected_text = val;
+      // patchShape can't remove the blank flag — use a full write when needed
+      ok = wasBlank ? await replaceAllShapes()
+                    : await patchShape(it.idx, { human_corrected_text: val });
     }
     if (ok === false) {   // save failed — stay on this item, don't advance
       showToast('✕ Save failed — press Enter to retry', 4000);
