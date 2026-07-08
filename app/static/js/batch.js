@@ -132,15 +132,22 @@ function onBatchOpChange() {
   document.getElementById('batch-clear-llm-opts').style.display          = op === 'clear_llm'          ? 'flex' : 'none';
   document.getElementById('batch-clear-llm-halluc-opts').style.display = op === 'clear_llm_hallucinations' ? 'flex' : 'none';
   document.getElementById('batch-strip-opts').style.display               = op === 'strip_short_lines'   ? 'flex' : 'none';
-  const isAnchored = op === 'anchored_ocr' || op === 'anchored_llm';
-  document.getElementById('batch-anchored-opts').style.display          = isAnchored ? 'flex' : 'none';
-  document.getElementById('batch-anchored-llm-section').style.display   = op === 'anchored_llm' ? 'flex' : 'none';
+  document.getElementById('batch-rowsbuild-opts').style.display = op === 'convert_rows' ? 'flex' : 'none';
+  if (op === 'convert_rows') _syncRowsBuildCellHeight();
   const isAuth = op === 'resolve_authority';
   document.getElementById('batch-auth-opts').style.display = isAuth ? 'flex' : 'none';
   if (isAuth) _batchAuthInit();
   const isJsonExp = op === 'json_export';
   document.getElementById('batch-jsonexport-opts').style.display = isJsonExp ? 'flex' : 'none';
   if (isJsonExp) _batchPopulateJsonExportLabels();
+}
+
+// target row height only matters when rows are detected from the image;
+// layer-count sources fix the count and split by histogram
+function _syncRowsBuildCellHeight() {
+  const src = document.getElementById('batch-rowsbuild-source')?.value;
+  const wrap = document.getElementById('batch-rowsbuild-cellheight-wrap');
+  if (wrap) wrap.style.display = (src === 'image') ? '' : 'none';
 }
 
 function _batchPopulateJsonExportLabels() {
@@ -479,13 +486,6 @@ async function runBatch() {
     if (!confirm(`Strip short lines from ${fieldLabel} text on ${sorted.length} page(s)?`)) return;
   } else if (op === 'trim_overlaps') {
     if (!confirm(`Trim overlapping annotation pairs on ${sorted.length} page(s)?`)) return;
-  } else if (op === 'anchored_ocr' || op === 'anchored_llm') {
-    const pat = document.getElementById('batch-anchored-pattern').value.trim();
-    if (!pat) { showToast('Enter an anchor column pattern'); return; }
-    if (op === 'anchored_llm' && !document.getElementById('batch-anchored-prompt').value.trim()) {
-      showToast('Prompt is empty'); return;
-    }
-    if (!confirm(`Run ${op === 'anchored_ocr' ? 'anchored EasyOCR' : 'anchored LLM'} on ${sorted.length} page(s)?`)) return;
   }
 
   _batchRunning = true;
@@ -526,6 +526,42 @@ async function runBatch() {
         + `${t.cells_blank} blank cell(s), ${t.rows_blank} blank row(s) marked`
         + (t.cells_inked ? `, ${t.cells_inked} un-marked (ink returned)` : '');
       showToast(`Ink scan: ${t.cells_blank} blank cell(s) marked on ${dd.pages} page(s)`, 5000);
+    } catch (e) { progText.style.color = '#ff9800'; progText.textContent = '✕ ' + (e.message || e); }
+    _batchRunning = false;
+    document.getElementById('batch-run-btn').textContent = 'Run';
+    document.getElementById('batch-run-btn').disabled = false;
+    document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    return;
+  }
+
+  // Build internal row structure (detect / anchor-project) — one server call.
+  if (op === 'convert_rows') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    const payload = {
+      stems,
+      col_filter: document.getElementById('batch-col-filter').value.trim() || null,
+      anchor_pattern: document.getElementById('batch-rowsbuild-anchor').value.trim() || null,
+      source: document.getElementById('batch-rowsbuild-source').value,
+      cell_height: parseInt(document.getElementById('batch-rowsbuild-cellheight').value) || 26,
+      overwrite: document.getElementById('batch-rowsbuild-overwrite').checked,
+    };
+    progText.textContent = `Building row structure on ${stems.length} page(s)…`;
+    try {
+      const r = await fetch(`${API}/api/rows/build?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const dd = await r.json();
+      if (!r.ok) throw new Error(dd.detail || r.status);
+      const t = dd.totals || {};
+      progText.style.color = '#4caf50';
+      progText.textContent = `✓ ${t.pages} page(s) · ${t.built} detected`
+        + (t.projected ? `, ${t.projected} projected` : '')
+        + (t.skipped ? `, ${t.skipped} skipped` : '')
+        + (t.no_rows ? `, ${t.no_rows} no-rows` : '');
+      showToast(`Row structure: ${t.built + t.projected} cell(s) built on ${t.pages} page(s)`, 5000);
     } catch (e) { progText.style.color = '#ff9800'; progText.textContent = '✕ ' + (e.message || e); }
     _batchRunning = false;
     document.getElementById('batch-run-btn').textContent = 'Run';
@@ -933,111 +969,6 @@ async function runBatch() {
       }
       progText.textContent = `Page ${idx + 1}/${pages.length} — trimmed ${trimmed} overlapping pair(s)`;
 
-    } else if (op === 'convert_rows') {
-      const res    = await fetch(`${API}/api/page?${params}`);
-      const pdata  = await res.json();
-      const shapes = pdata.shapes || [];
-      const condFilter = _computeConditionFilter(shapes);
-      const colFilter  = _computeColumnFilter(shapes);
-      let converted = 0, skipped = 0;
-
-      for (let si = 0; si < shapes.length; si++) {
-        if (_batchStop) break;
-        const sh = shapes[si];
-        if (condFilter !== null && !condFilter.has(si)) continue;
-        if (colFilter  !== null && !colFilter.has(si))  continue;
-        if (sh.row_struct?.rows?.length) { skipped++; continue; }   // already converted
-        const text = sh.human_output?.human_corrected_text
-                  || sh.openai_output?.response
-                  || sh.tesseract_output?.ocr_text;
-        if (!text?.trim()) continue;
-        progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length}`;
-        try {
-          const p2 = new URLSearchParams({folder, stem, idx: si});
-          const r2 = await fetch(`${API}/api/page/shape/rows/convert?${p2}`, {method: 'POST'});
-          if (r2.ok) {
-            converted++;
-            if (_batchVerbose) batchLog(`[${stem}] shape ${si}: → ${(await r2.json()).rows} rows`);
-          } else if (_batchVerbose) {
-            batchLog(`[${stem}] shape ${si}: ✕ ${r2.status}`);
-          }
-        } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
-      }
-      progText.textContent = `Page ${idx + 1}/${pages.length} — converted ${converted}, skipped ${skipped}`;
-
-    } else if (op === 'anchored_ocr' || op === 'anchored_llm') {
-      // Empty slots (e.g. "8,,2,1") are skip positions: that page in the
-      // cycle is left untouched but still advances the pattern
-      const pattern    = document.getElementById('batch-anchored-pattern').value
-                           .split(',').map(s => { const n = parseInt(s.trim()); return n > 0 ? n : null; });
-      const anchorCol  = pattern[done % pattern.length];   // 1-indexed super_column, or null = skip
-      if (anchorCol == null) {
-        progText.textContent = `Page ${idx + 1}/${pages.length} — skipped (empty pattern slot)`;
-        batchLog(`[${stem}] skipped — empty slot in anchor pattern`);
-        done++;
-        continue;
-      }
-      const anchorSrc  = document.getElementById('batch-anchored-source').value;
-      const overwrite  = document.getElementById('batch-anchored-overwrite').checked;
-      const model      = op === 'anchored_llm' ? document.getElementById('batch-anchored-model').value : '';
-      const prompt     = op === 'anchored_llm' ? document.getElementById('batch-anchored-prompt').value.trim() : '';
-      const useShadow  = op === 'anchored_llm' ? document.getElementById('batch-anchored-use-shadow').checked : false;
-
-      const res   = await fetch(`${API}/api/page?${params}`);
-      const pdata = await res.json();
-      const shps  = pdata.shapes || [];
-
-      // Group by (table, super_row) so multiple lattices on a page anchor independently
-      const rowMap = {};
-      shps.forEach((s, i) => {
-        if (s.super_row == null) return;
-        (rowMap[`${s.table ?? 0}:${s.super_row}`] ??= []).push({s, i});
-      });
-
-      let shapesDone = 0;
-      for (const entries of Object.values(rowMap)) {
-        if (_batchStop) break;
-        const anchorEntry = entries.find(e => e.s.super_column === anchorCol);
-        if (!anchorEntry) continue;
-        const anchorShape = anchorEntry.s;
-        let nRows, refIdx = -1;
-        if (anchorSrc === 'structure') {
-          const refRows = anchorShape.row_struct?.rows;
-          if (!refRows?.length) continue;       // anchor has no structure — skip row
-          nRows  = refRows.length;
-          refIdx = anchorEntry.i;
-        } else {
-          const refText = anchorSrc === 'human' ? anchorShape.human_output?.human_corrected_text
-                        : anchorSrc === 'llm'   ? anchorShape.openai_output?.response
-                        : anchorSrc === 'pdf'   ? anchorShape.pdf_text
-                        :                         anchorShape.tesseract_output?.ocr_text;
-          if (!refText?.trim()) continue;
-          nRows = _lineCount(refText);
-          if (nRows < 1) continue;
-        }
-
-        for (const {s, i} of entries) {
-          if (_batchStop) break;
-          if (i === anchorEntry.i) continue;   // skip the anchor shape itself
-          if (!overwrite) {
-            const hasResult = op === 'anchored_ocr'
-              ? !!s.tesseract_output?.ocr_text
-              : !!s.openai_output?.response;
-            if (hasResult) continue;
-          }
-          try {
-            if (op === 'anchored_ocr') {
-              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows, ref_idx: refIdx});
-              await _drainSse(`${API}/api/page/shape/ocr/easyocr/anchored?${p}`);
-            } else {
-              const p = new URLSearchParams({folder, stem, idx: i, n_rows: nRows, model, use_shadow: useShadow, ref_idx: refIdx});
-              await _drainSse(`${API}/api/page/shape/llm/anchored?${p}`, {prompt});
-            }
-            shapesDone++;
-          } catch(e) { showToast(`Shape ${i} on ${stem}: ${e.message}`); }
-        }
-      }
-      progText.textContent = `Page ${idx + 1}/${pages.length} — ${shapesDone} shapes processed (anchor col ${anchorCol})`;
     }
 
     done++;

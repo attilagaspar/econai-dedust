@@ -806,9 +806,7 @@
         <option value="clear_llm_hallucinations">✕ Clear LLM hallucinations</option>
         <option value="strip_short_lines">✂ Remove short lines from text</option>
         <option value="trim_overlaps">✂ Trim overlaps</option>
-        <option value="anchored_ocr">⚓ Anchored OCR (EasyOCR)</option>
-        <option value="anchored_llm">⚓ Anchored LLM</option>
-        <option value="convert_rows">⊞ Convert annotations to internal rows</option>
+        <option value="convert_rows">⊞ Build internal row structure (detect / anchor-project)</option>
         <option value="resolve_authority">🏛 Resolve authorities</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
       </select>
@@ -1093,59 +1091,37 @@
       </div>
     </div>
 
-    <!-- Anchored OCR / LLM options -->
-    <div id="batch-anchored-opts" style="display:none;flex-direction:column;gap:10px;">
-      <label class="row">
-        <span style="white-space:nowrap;">Anchor column pattern</span>
-        <input type="text" id="batch-anchored-pattern" placeholder="e.g. 1, 2  or  1, 2, 3, 4"
+    <!-- Build internal row structure (detect / anchor-project) -->
+    <div id="batch-rowsbuild-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div style="font-size:10px;color:#555;line-height:1.5;">This is the one place row geometry is decided — free, local, no API. Extract content afterwards with OCR/LLM and Scope = "Internal rows (keep structure)".</div>
+      <label class="row"><span style="white-space:nowrap;">Rows from</span>
+        <select id="batch-rowsbuild-source" onchange="_syncRowsBuildCellHeight()" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="image">Image only (auto-detect count)</option>
+          <option value="best">Best layer's line count (Human › LLM › OCR › PDF)</option>
+          <option value="human">Human line count</option>
+          <option value="llm">LLM line count</option>
+          <option value="ocr">OCR line count</option>
+          <option value="pdf">PDF line count</option>
+        </select>
+      </label>
+      <div id="batch-rowsbuild-cellheight-wrap">
+        <label class="row"><span style="white-space:nowrap;">Target row height (px)</span>
+          <input type="number" id="batch-rowsbuild-cellheight" value="26" min="10" max="200" style="width:60px;flex:none;" />
+        </label>
+      </div>
+      <label class="row"><span style="white-space:nowrap;">Anchor column pattern</span>
+        <input type="text" id="batch-rowsbuild-anchor" placeholder="blank = detect every cell"
           style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;" />
       </label>
       <div style="font-size:10px;color:#555;line-height:1.5;margin-top:-6px;">
-        Comma-separated column numbers (super_column). Cycles per page in batch order.<br>
-        E.g. <em>1,2</em> → page 1 anchors col 1, page 2 anchors col 2, page 3 anchors col 1 …
+        <b>Blank</b> → detect rows independently in every cell.<br>
+        Otherwise a cyclic per-page list of the <b>anchor super_column</b>; its detected structure is projected onto the other columns of the same lattice row. An empty slot skips that page.<br>
+        E.g. <em>8,,2,1</em> → page 1 anchors col 8, page 2 skipped, page 3 anchors col 2, page 4 anchors col 1, then repeats.
       </div>
       <label class="row">
-        <span>Anchor at</span>
-        <select id="batch-anchored-source" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
-          <option value="ocr">OCR</option>
-          <option value="llm">LLM</option>
-          <option value="human">Human</option>
-          <option value="pdf">PDF</option>
-          <option value="structure">Row structure</option>
-        </select>
+        <input type="checkbox" id="batch-rowsbuild-overwrite" style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Overwrite cells that already have a row structure</span>
       </label>
-      <label class="row">
-        <input type="checkbox" id="batch-anchored-overwrite" style="accent-color:#e94560;width:13px;height:13px;">
-        <span>Overwrite existing results</span>
-      </label>
-      <!-- LLM-only sub-section -->
-      <div id="batch-anchored-llm-section" style="display:none;flex-direction:column;gap:8px;">
-        <select id="batch-anchored-model" style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
-          <option value="gpt-4.1-mini">4.1-mini</option>
-          <option value="gpt-5-nano">5-nano</option>
-          <option value="gpt-4.1-nano">4.1-nano</option>
-          <option value="gpt-4.1">4.1</option>
-          <option value="gpt-4o-mini">4o-mini</option>
-          <option value="gpt-4o">4o</option>
-          <option value="azure:gpt-5-mini">gpt-5-mini (Azure)</option>
-<option value="azure:gpt-4o-mini">gpt-4o-mini (Azure, batch-capable)</option>
-<option value="azure:o4-mini">o4-mini (Azure, batch-capable)</option>
-<option value="azure-us:gpt-5.4-mini-batch">gpt-5.4-mini-batch (Azure US, overnight)</option>
-          <option value="tk:vllm/Intel/Qwen3.5-122B-A10B-int4-AutoRound">Qwen3.5-122B (TK)</option>
-          <option value="tk:vllm/Ministral-3-14B-Reasoning-2512-AWQ-4bit">Ministral-14B (TK)</option>
-          <option value="tk:vllm/Qwen3.6-27B-AWQ-INT4">Qwen3.6-27B (TK)</option>
-          <option value="tk:vllm/cyankiwi/Mistral-Medium-3.5-128B-AWQ-INT4">Mistral-Med-128B (TK)</option>
-          <option value="tk:vllm/mistralai/Mistral-Small-4-119B-2603-NVFP4">Mistral-Sm4-119B (TK)</option>
-        </select>
-        <textarea id="batch-anchored-prompt" rows="3" placeholder="Prompt…"
-          style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
-        <button onclick="openPromptPalette(true, 'batch-anchored-prompt')"
-          style="align-self:flex-start;background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;">📋 Prompt palette</button>
-        <label class="row">
-          <input type="checkbox" id="batch-anchored-use-shadow" style="accent-color:#e94560;width:13px;height:13px;">
-          <span>Use shadow (line-erased) image</span>
-        </label>
-      </div>
     </div>
 
     <label class="row" style="margin-top:4px;">

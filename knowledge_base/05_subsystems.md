@@ -27,6 +27,14 @@
 - Paris catalog schema captures serial_number, name, kind, address, products[] with `original`/`english`/`hs4_code`/`hs4_label` (HS 4-digit chosen over CPV/CN/PRODCOM), exhibit_location, awards[], notes. LLM-assigned HS codes are approximate → needs an HS authority + resolve step.
 - **Deferred**: schema-driven form UI (instead of raw JSON text), multiple records per annotation.
 
+## 2b. Row structure vs content (the separation, built 2026-07-08)
+
+Row **geometry** and **content** are separate concerns, decided in separate steps:
+- **Structure** — the ⚙ Batch op **"⊞ Build internal row structure (detect / anchor-project)"** → `POST /api/rows/build` (free, local, no API). Row count comes from the image (`source=image`, auto-detect) or a content layer's line count (`best`/`human`/`llm`/`ocr`/`pdf` → `_split_into_n_rows`). Blank `anchor_pattern` = detect every cell independently; a cyclic pattern of anchor `super_column`s (e.g. `8,,2,1`, empty slot skips the page) detects the anchor cell's rows once per lattice row and **projects** them onto the row's other columns (`_project_abs_bands`). `overwrite` gates cells that already have a structure; structural blanks are skipped. This is the ONE place row bands are set.
+- **Content** — OCR/LLM with **Scope = "Internal rows (keep structure)"** reads into those bands (paid; overnight-able).
+
+This **replaced the old ⚓ Anchored OCR / ⚓ Anchored LLM batch ops**, which conflated structure + content in one paid pass. The single-cell interactive "Anchored" scope in the LLM panel still uses the `/api/page/shape/{ocr,llm}/anchored` endpoints (unchanged). `_set_row_struct` redistributes each flat layer into rows when line counts match; `_sync_flat_from_rows` only writes a flat layer back when a row has text, so a mismatched rebuild never destroys flat human text.
+
 ## 3. Row rules & rule fix
 
 - Rules: arithmetic constraints between lattice columns (`1+2=4`), per-rule zero-characters and page pattern; evaluated **per internal row** on the best layer; violations shade the exact line red; "all rules" union.

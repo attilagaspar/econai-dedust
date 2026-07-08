@@ -2954,6 +2954,191 @@ def api_mark_blanks(folder: str = Query(...), body: MarkBlanksBody = ...):
 
 
 # ---------------------------------------------------------------------------
+# Row-structure builder — the SINGLE authoritative structure step (free,
+# local, no API). Detects internal rows per cell, OR projects one anchor
+# column's structure across the lattice row. Row count comes from the image
+# (auto) or from a chosen content layer's line count. Content extraction is
+# then a separate OCR/LLM pass with Scope = "keep structure". This replaces
+# the anchored-OCR / anchored-LLM batch ops (which conflated the two).
+# ---------------------------------------------------------------------------
+
+def _cell_layer_text(shape, source):
+    human = (shape.get("human_output") or {}).get("human_corrected_text") or ""
+    llm   = (shape.get("openai_output") or {}).get("response") or ""
+    ocr   = ((shape.get("tesseract_output") or {}).get("ocr_text")
+             or (shape.get("easyocr_output") or {}).get("ocr_text") or "")
+    pdf   = shape.get("pdf_text") or ""
+    return {"pdf": pdf, "ocr": ocr, "llm": llm, "human": human,
+            "best": human or llm or ocr or pdf}.get(source, "")
+
+
+def _bands_for_cell(shadow, shape, source, cell_height):
+    """Return absolute-y (y0, y1) bands for one cell, or None if undeterminable."""
+    x1, y1, x2, y2 = _shape_bbox(shape)
+    iw, ih = shadow.size
+    pad = 4
+    cy1 = max(0, int(y1) - pad)
+    crop = shadow.crop((max(0, int(x1) - pad), cy1,
+                        min(iw, int(x2) + pad), min(ih, int(y2) + pad)))
+    if source == "image":
+        bands = _detect_text_rows(crop, cell_height)
+    else:
+        txt = _cell_layer_text(shape, source)
+        if not txt.strip():
+            return None
+        bands = _split_into_n_rows(crop, len(_split_lines(txt)))
+    return [(t + cy1, b + cy1) for t, b in bands] if bands else None
+
+
+def _project_abs_bands(bands_abs, ry1, ry2, ty1, ty2):
+    """Linear-map absolute bands from a reference bbox y-range to a target's."""
+    rh = (ry2 - ry1) or 1.0
+    th = ty2 - ty1
+    return [(ty1 + (b0 - ry1) * th / rh, ty1 + (b1 - ry1) * th / rh)
+            for b0, b1 in bands_abs]
+
+
+def _set_row_struct(shape, bands_abs, origin):
+    """Write row_struct from absolute bands; distribute each flat layer whose
+    line count matches the band count (mirrors the Convert op)."""
+    n = len(bands_abs)
+    layers = {}
+    for lay, txt in (("human", (shape.get("human_output") or {}).get("human_corrected_text") or ""),
+                     ("llm",   (shape.get("openai_output") or {}).get("response") or ""),
+                     ("ocr",   ((shape.get("tesseract_output") or {}).get("ocr_text")
+                                or (shape.get("easyocr_output") or {}).get("ocr_text") or ""))):
+        lines = _split_lines(txt) if txt.strip() else None
+        layers[lay] = lines if (lines and len(lines) == n) else None
+    rows = []
+    for i, (b0, b1) in enumerate(bands_abs):
+        row = {"n": i + 1, "y0": float(b0), "y1": float(b1),
+               "ocr": "", "llm": "", "human": ""}
+        for lay, lines in layers.items():
+            if lines:
+                row[lay] = lines[i]
+        rows.append(row)
+    shape["row_struct"] = {"version": 1, "origin": origin, "rows": rows}
+    _sync_flat_from_rows(shape)
+
+
+class RowsBuildBody(BaseModel):
+    stems:          List[str] = []
+    anchor_pattern: Optional[str] = None   # cyclic per page; slot = anchor super_column,
+                                           # empty slot = skip page; whole thing blank = no anchoring
+    col_filter:     Optional[str] = None
+    source:         str = "image"          # image | pdf | ocr | llm | human | best
+    cell_height:    int = 26
+    overwrite:      bool = False
+
+
+@app.post("/api/rows/build")
+def api_rows_build(folder: str = Query(...), body: RowsBuildBody = ...):
+    """Build internal-row structure across pages — the one place row geometry
+    is decided. Free, local, no API."""
+    from collections import defaultdict
+    d = _resolve_folder(folder)
+    stems = [s for s in (body.stems or []) if s] or \
+            [jf.stem for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+    col_ok = _auth_col_pred(body.col_filter)
+
+    # anchor pattern: cyclic over stems; empty slot skips the page; whole-blank = no anchoring
+    pat = [p.strip() for p in (body.anchor_pattern or "").split(",")]
+    pat = pat if any(pat) else []
+    anchoring = bool(pat)
+
+    totals = dict(built=0, projected=0, skipped=0, no_rows=0, pages=0)
+    per_page = []
+
+    for pi, stem in enumerate(stems):
+        jf = d / f"{stem}.json"
+        img_path = _find_image(d, stem)
+        if not jf.exists() or img_path is None:
+            continue
+        anchor_col = None
+        if anchoring:
+            slot = pat[pi % len(pat)]
+            if not slot:
+                continue                    # empty slot → skip this page
+            try:
+                anchor_col = int(slot)
+            except ValueError:
+                continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        try:
+            shadow = _get_shadow_page(folder, stem, img_path)
+        except Exception:
+            from PIL import Image as _PIL
+            shadow = _PIL.open(str(img_path))
+        shapes = data.get("shapes", [])
+        pc = dict(built=0, projected=0, skipped=0, no_rows=0)
+        changed = False
+
+        def eligible(sh):
+            sc = sh.get("super_column")
+            if sc is None or sh.get("super_row") is None:
+                return False
+            if not col_ok(int(sc)):
+                return False
+            if sh.get("blank"):
+                return False
+            if sh.get("row_struct") and not body.overwrite:
+                return False
+            return True
+
+        if not anchoring:
+            for sh in shapes:
+                if not eligible(sh):
+                    if sh.get("super_column") is not None:
+                        pc["skipped"] += 1
+                    continue
+                bands = _bands_for_cell(shadow, sh, body.source, body.cell_height)
+                if not bands:
+                    pc["no_rows"] += 1; continue
+                _set_row_struct(sh, bands, "detected")
+                pc["built"] += 1; changed = True
+        else:
+            # group lattice cells by (table, super_row); project the anchor col
+            groups = defaultdict(dict)   # (table, sr) -> {sc: shape}
+            for sh in shapes:
+                sr, sc = sh.get("super_row"), sh.get("super_column")
+                if sr is not None and sc is not None:
+                    groups[(sh.get("table") or 0, int(sr))][int(sc)] = sh
+            for (_tbl, _sr), cells in groups.items():
+                anchor = cells.get(anchor_col)
+                if anchor is None:
+                    continue
+                abands = _bands_for_cell(shadow, anchor, body.source, body.cell_height)
+                if not abands:
+                    pc["no_rows"] += 1; continue
+                _, ay1, _, ay2 = _shape_bbox(anchor)
+                for sc, sh in cells.items():
+                    if not eligible(sh):
+                        if not (sh.get("row_struct") and not body.overwrite):
+                            pc["skipped"] += 1
+                        continue
+                    if sc == anchor_col:
+                        _set_row_struct(sh, abands, "anchor")
+                        pc["built"] += 1; changed = True
+                    else:
+                        _, ty1, _, ty2 = _shape_bbox(sh)
+                        proj = _project_abs_bands(abands, ay1, ay2, ty1, ty2)
+                        _set_row_struct(sh, proj, "projected")
+                        pc["projected"] += 1; changed = True
+
+        if changed:
+            _write_json(jf, data)
+        for k in ("built", "projected", "skipped", "no_rows"):
+            totals[k] += pc[k]
+        totals["pages"] += 1
+        per_page.append({"stem": stem, **pc})
+
+    return {"ok": True, "totals": totals, "per_page": per_page}
+
+
+# ---------------------------------------------------------------------------
 # P3 — page status scoreboard. Status lives in the page's flags.status
 # (predicted | corrected | verified | problem); set via PATCH /api/page/flags.
 # ---------------------------------------------------------------------------
