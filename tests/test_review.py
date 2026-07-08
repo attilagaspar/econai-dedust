@@ -70,6 +70,21 @@ def test_queue_excludes_verified_pages(client, review_folder):
     assert r2.json()["total"] >= 1
 
 
+def test_human_resolves_disagree(client, review_folder):
+    # a cell where OCR≠LLM is flagged; once a human value is set it must
+    # disappear from the queue (the accept-doesn't-stick regression)
+    r = client.post("/api/review/queue", params={"folder": str(review_folder)},
+                    json={"signals": ["disagree"]})
+    assert any(it["idx"] == 1 for it in r.json()["queue"])   # cell(2) OCR≠LLM
+    # set Human on shape 1 (as the review strip's Enter does)
+    client.patch("/api/page/shape",
+                 params={"folder": str(review_folder), "stem": "p1", "idx": 1},
+                 json={"human_corrected_text": "253"})
+    r2 = client.post("/api/review/queue", params={"folder": str(review_folder)},
+                     json={"signals": ["disagree"]})
+    assert all(it["idx"] != 1 for it in r2.json()["queue"])  # resolved → gone
+
+
 def test_project_status_counts(client, review_folder):
     r = client.get("/api/project/status", params={"folder": str(review_folder)})
     d = r.json()

@@ -3233,13 +3233,17 @@ def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
         colvals = defaultdict(list)     # (table, col) -> [(value, ref)]
 
         def consider(i, sh, row_n, human, ocr, llm, pdf, y0=None, y1=None):
+            # A human value = resolved. Accepting/typing in the review strip
+            # writes Human, so a reviewed unit must never come back — even if
+            # OCR≠LLM still differ or it's a numeric outlier.
+            if (human or "").strip():
+                return
             o, l = _norm_txt(ocr), _norm_txt(llm)
             best = best_of(human, ocr, llm, pdf)
-            verified = bool((human or "").strip())
             reasons = []
             if "disagree" in sig and o and l and o != l:
                 reasons.append("OCR≠LLM")
-            if "unverified" in sig and not verified and best:
+            if "unverified" in sig and best:
                 reasons.append("unverified")
             unit = {"stem": stem, "idx": i, "row": row_n, "best": best,
                     "y0": y0, "y1": y1,
@@ -3247,7 +3251,7 @@ def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
             if reasons:
                 sev = max(W.get(_reason_key(r), 1) for r in reasons)
                 items.append({**unit, "why": ", ".join(reasons), "sev": sev})
-            # collect numbers for the outlier pass
+            # collect numbers for the outlier pass (unverified cells only)
             if "outlier" in sig and sh.get("super_column") is not None:
                 v = _parse_num(best)
                 if v is not None:
