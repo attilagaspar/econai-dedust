@@ -826,8 +826,8 @@
     </div>
     <div>
       <label class="row" style="margin-bottom:4px;">Column filter <span style="font-size:10px;color:#555;font-weight:400;">(lattice super_columns to process)</span></label>
-      <input type="text" id="batch-col-filter" placeholder="e.g. 1, 3, 5  (blank = all columns)" />
-      <div style="font-size:10px;color:#555;margin-top:3px;">Comma-separated lattice column numbers. Shapes without a super_column are excluded when a filter is set.</div>
+      <input type="text" id="batch-col-filter" placeholder="e.g. 3  ·  2-4  ·  3-  ·  -5  (blank = all)" />
+      <div style="font-size:10px;color:#555;margin-top:3px;">1-indexed columns: <b>3</b> = col 3 · <b>2-4</b> = 2,3,4 · <b>3-</b> = 3 to end · <b>-5</b> = 1 to 5 · <b>1,3,5</b> = list. Shapes without a super_column are excluded when a filter is set.</div>
     </div>
     <div>
       <label class="row" style="margin-bottom:4px;">Pages</label>
@@ -1139,6 +1139,8 @@
         </select>
         <textarea id="batch-anchored-prompt" rows="3" placeholder="Prompt…"
           style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+        <button onclick="openPromptPalette(true, 'batch-anchored-prompt')"
+          style="align-self:flex-start;background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;">📋 Prompt palette</button>
         <label class="row">
           <input type="checkbox" id="batch-anchored-use-shadow" style="accent-color:#e94560;width:13px;height:13px;">
           <span>Use shadow (line-erased) image</span>
@@ -1153,7 +1155,7 @@
 
     <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
     <div id="batch-progress"></div>
-    <pre id="batch-verbose-log" style="display:none;background:#060f20;border:1px solid #0f3460;border-radius:4px;padding:8px;font-size:10px;color:#7ec8a0;font-family:monospace;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;"></pre>
+    <pre id="batch-verbose-log" style="display:none;background:#060f20;border:1px solid #0f3460;border-radius:4px;padding:8px;font-size:11px;color:#7ec8a0;font-family:monospace;min-height:200px;max-height:50vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;resize:vertical;"></pre>
 
     <div id="batch-modal-btns">
       <button id="batch-undo-btn" onclick="undoLastBatch()" title="Restore the pages to their state before the last batch run" style="margin-right:auto;">↩ Undo last batch</button>

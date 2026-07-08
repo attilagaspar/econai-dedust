@@ -281,15 +281,34 @@ function _computeConditionFilter(shapes) {
 }
 
 // Returns null (no filter) or a Set of shape indices whose super_column matches the user input.
+// 1-indexed column spec, same grammar as the server / Excel export:
+//   "3" = col 3 · "2-4" = 2,3,4 · "3-" = 3…end · "-5" = 1…5 · "1,3,5" = list.
+function _parseColRanges(raw) {
+  const ranges = [];
+  for (const part of raw.split(',')) {
+    const p = part.trim();
+    if (!p) continue;
+    if (p.includes('-')) {
+      const [a, b] = p.split('-');
+      const lo = a.trim() ? parseInt(a, 10) : 1;
+      const hi = b.trim() ? parseInt(b, 10) : Infinity;
+      if (!isNaN(lo) && !isNaN(hi)) ranges.push([lo, hi]);
+    } else {
+      const v = parseInt(p, 10);
+      if (!isNaN(v)) ranges.push([v, v]);
+    }
+  }
+  return ranges.length ? ranges : null;
+}
+
 function _computeColumnFilter(shapes) {
   const raw = document.getElementById('batch-col-filter').value.trim();
   if (!raw) return null;
-  const cols = new Set(
-    raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
-  );
-  if (!cols.size) return null;
+  const ranges = _parseColRanges(raw);
+  if (!ranges) return null;
+  const match = c => c != null && ranges.some(([lo, hi]) => c >= lo && c <= hi);
   const result = new Set();
-  shapes.forEach((s, i) => { if (cols.has(s.super_column)) result.add(i); });
+  shapes.forEach((s, i) => { if (match(s.super_column)) result.add(i); });
   return result;
 }
 
