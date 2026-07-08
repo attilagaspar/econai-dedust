@@ -60,14 +60,22 @@ def _answer(cid, text):
                                     "body": {"choices": [{"message": {"content": text}}]}}})
 
 
+def _submit(client, folder, body):
+    """POST the (now SSE-streaming) submit endpoint; return parsed events."""
+    r = client.post("/api/llm_batch/submit", params={"folder": str(folder)}, json=body)
+    assert r.status_code == 200, r.text
+    evs = [json.loads(c[6:]) for c in r.text.split("\n\n") if c.startswith("data: ")]
+    return evs
+
+
 def test_overnight_roundtrip(client, page_folder, provider):
     # submit two whole-cell requests (ocr mode needs no image work)
-    r = client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
-                    json={"targets": [{"stem": "p1", "idx": 1}, {"stem": "p1", "idx": 2}],
-                          "model": "gpt-4o-mini", "mode": "ocr", "prompt": "read"})
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["n_requests"] == 2 and d["id"] == "job-1"
+    evs = _submit(client, page_folder,
+                  {"targets": [{"stem": "p1", "idx": 1}, {"stem": "p1", "idx": 2}],
+                   "model": "gpt-4o-mini", "mode": "ocr", "prompt": "read"})
+    done = next(e for e in evs if e["type"] == "done")
+    assert done["requests"] == 2 and len(done["jobs"]) == 1
+    assert done["jobs"][0]["id"] == "job-1"
 
     # the uploaded JSONL mirrors the live call's parameters
     lines = [json.loads(l) for l in provider.uploaded.splitlines()]
@@ -107,9 +115,8 @@ def test_overnight_roundtrip(client, page_folder, provider):
 
 
 def test_overnight_cancel(client, page_folder, provider):
-    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
-                json={"targets": [{"stem": "p1", "idx": 1}],
-                      "model": "gpt-4o-mini", "mode": "ocr", "prompt": "read"})
+    _submit(client, page_folder, {"targets": [{"stem": "p1", "idx": 1}],
+            "model": "gpt-4o-mini", "mode": "ocr", "prompt": "read"})
     r = client.post("/api/llm_batch/cancel",
                     params={"folder": str(page_folder), "job": "job-1"})
     assert r.status_code == 200 and provider.cancelled
@@ -117,13 +124,11 @@ def test_overnight_cancel(client, page_folder, provider):
 
 
 def test_overnight_remove_and_clear(client, page_folder, provider):
-    # two jobs; cancel one (terminal-ish) and remove; clear finished
-    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
-                json={"targets": [{"stem": "p1", "idx": 1}],
-                      "model": "gpt-4o-mini", "mode": "ocr", "prompt": "x"})
-    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
-                json={"targets": [{"stem": "p1", "idx": 2}],
-                      "model": "gpt-4o-mini", "mode": "ocr", "prompt": "y"})
+    # two jobs; remove one, then clear finished
+    _submit(client, page_folder, {"targets": [{"stem": "p1", "idx": 1}],
+            "model": "gpt-4o-mini", "mode": "ocr", "prompt": "x"})
+    _submit(client, page_folder, {"targets": [{"stem": "p1", "idx": 2}],
+            "model": "gpt-4o-mini", "mode": "ocr", "prompt": "y"})
     # remove one by id
     r = client.post("/api/llm_batch/remove",
                     params={"folder": str(page_folder), "job": "job-1"})
@@ -149,9 +154,8 @@ def test_overnight_rejects_local_models(client, page_folder, provider):
 
 
 def test_overnight_reasoning_model_body(client, page_folder, provider):
-    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
-                json={"targets": [{"stem": "p1", "idx": 1}],
-                      "model": "azure:gpt-5-mini", "mode": "ocr", "prompt": "x"})
+    _submit(client, page_folder, {"targets": [{"stem": "p1", "idx": 1}],
+            "model": "azure:gpt-5-mini", "mode": "ocr", "prompt": "x"})
     body = json.loads(provider.uploaded.splitlines()[0])["body"]
     assert body["model"] == "gpt-5-mini"            # bare name in the request
     assert body["max_completion_tokens"] >= 2000    # reasoning-model params

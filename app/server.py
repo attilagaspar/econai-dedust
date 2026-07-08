@@ -2331,29 +2331,21 @@ class LlmBatchSubmit(BaseModel):
     rows_source: str = "auto"               # existing | detect | auto
 
 
-@app.post("/api/llm_batch/submit")
-def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
-    import datetime as _dt
+# Providers cap the batch input file (Azure: 200 MB). Flush a chunk into its
+# own job when it nears the limit so a big submission becomes several jobs.
+_BATCH_CHUNK_BYTES = 180 * 1024 * 1024
+_BATCH_CHUNK_MAX_REQ = 40000
+
+
+def _gen_batch_requests(d, folder, body, json_mode, rf):
+    """Yield (jsonl_line_dict, cell_key, meta_val_or_None) per request.
+    meta_val (row bands) is attached only to the FIRST line of a linebyline
+    cell; other lines carry None."""
     from collections import defaultdict
     from PIL import Image as PILImage
-
-    if not _llm_batch_supported(body.model):
-        raise HTTPException(status_code=400,
-            detail="Overnight batches need an OpenAI-hosted (or Azure) model — "
-                   "TK/local models have no batch service.")
-    if not body.targets:
-        raise HTTPException(status_code=400, detail="No target cells")
-    d = _resolve_folder(folder)
-
-    json_mode = bool(body.json_schema)
-    rf = (_json_schema_response_format(body.json_schema, body.schema_name or "record", True)
-          if json_mode else None)
-
-    lines, meta = [], {}
     by_stem = defaultdict(list)
     for t in body.targets:
         by_stem[t["stem"]].append(int(t["idx"]))
-
     for stem, idxs in by_stem.items():
         jf = d / f"{stem}.json"
         img_path = _find_image(d, stem)
@@ -2374,6 +2366,7 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
             xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
             pad = 4
+            ckey = f"{stem}|{idx}"
 
             if body.mode == "linebyline":
                 if img is None:
@@ -2383,7 +2376,7 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                                  min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
                 existing = _existing_row_bands_rel(shape, crop_top, crop.height)
                 if body.rows_source == "existing":
-                    rows = existing            # no structure → cell is skipped
+                    rows = existing
                 elif body.rows_source == "detect":
                     rows = _detect_text_rows(crop, body.cell_height)
                 else:
@@ -2393,9 +2386,8 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                 row_ocr = ([(r.get("ocr") or "") for r in
                             (shape.get("row_struct") or {}).get("rows") or []]
                            if (existing and rows is existing) else [])
-                meta[f"{stem}|{idx}"] = {"stem": stem, "idx": idx,
-                                         "bands": [[t0 + crop_top, b0 + crop_top]
-                                                   for t0, b0 in rows]}
+                mval = {"stem": stem, "idx": idx,
+                        "bands": [[t0 + crop_top, b0 + crop_top] for t0, b0 in rows]}
                 row_pad = max(4, body.cell_height // 6)
                 for i, (top, bottom) in enumerate(rows):
                     txt = body.prompt
@@ -2414,8 +2406,8 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                     messages = ([{"role": "user", "content": txt}]
                                 if body.payload == "ocr"
                                 else [{"role": "user", "content": content}])
-                    lines.append(_llm_batch_line(f"{stem}|{idx}|{i}", body.model,
-                                                 messages, 64, 0))
+                    yield (_llm_batch_line(f"{stem}|{idx}|{i}", body.model, messages, 64, 0),
+                           ckey, mval if i == 0 else None)
                 continue
 
             # whole-cell modes (mirrors api_llm_cell)
@@ -2435,48 +2427,115 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
             content.append({"type": "text", "text": prompt_text})
             messages = ([{"role": "user", "content": prompt_text}] if body.mode == "ocr"
                         else [{"role": "user", "content": content}])
-            meta[f"{stem}|{idx}"] = {"stem": stem, "idx": idx}
-            lines.append(_llm_batch_line(
-                f"{stem}|{idx}|-1", body.model, messages,
-                2048 if json_mode else 1024,
-                0 if json_mode else 0.2, rf))
+            yield (_llm_batch_line(f"{stem}|{idx}|-1", body.model, messages,
+                                   2048 if json_mode else 1024,
+                                   0 if json_mode else 0.2, rf),
+                   ckey, None)
 
-    if not lines:
-        raise HTTPException(status_code=400, detail="No usable requests could be built")
 
-    jsonl = "\n".join(json.dumps(l, ensure_ascii=False) for l in lines)
-    try:
-        client = _make_llm_client(body.model)
-        fobj = client.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
-                                   purpose="batch")
-        remote = client.batches.create(input_file_id=fobj.id,
-                                       endpoint="/v1/chat/completions",
-                                       completion_window="24h")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Batch submit failed: {exc}")
+@app.post("/api/llm_batch/submit")
+def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
+    """Build the batch request file(s) and submit them. Streams SSE progress
+    (phase / requests built / running MB / per-chunk upload) and auto-splits
+    into multiple provider jobs when the file nears the 200 MB limit."""
+    import asyncio, concurrent.futures, datetime as _dt
+    import json as _json
 
-    with _LLM_JOBS_LOCK:
-        jobs = _llm_jobs_load(folder)
-        job = {
-            "id": f"job-{len(jobs) + 1}",
-            "remote_id": remote.id,
-            "provider": ("azure-us" if body.model.startswith(_AZURE_US_PREFIX)
-                         else "azure" if body.model.startswith(_AZURE_PREFIX)
-                         else "openai"),
-            "model": body.model, "mode": body.mode, "prompt": body.prompt,
-            "payload": body.payload, "rows_source": body.rows_source,
-            "json": json_mode, "schema_name": body.schema_name,
-            "n_requests": len(lines), "n_cells": len(meta),
-            "submitted": _dt.datetime.utcnow().isoformat() + "Z",
-            "status": getattr(remote, "status", "validating"),
-            "meta": meta,
-        }
-        jobs.append(job)
-        _llm_jobs_save(folder, jobs)
-    return {"ok": True, "id": job["id"], "remote_id": remote.id,
-            "n_requests": len(lines), "n_cells": len(meta)}
+    if not _llm_batch_supported(body.model):
+        raise HTTPException(status_code=400,
+            detail="Overnight batches need an OpenAI-hosted (or Azure) model — "
+                   "TK/local models have no batch service.")
+    if not body.targets:
+        raise HTTPException(status_code=400, detail="No target cells")
+    d = _resolve_folder(folder)
+    json_mode = bool(body.json_schema)
+    rf = (_json_schema_response_format(body.json_schema, body.schema_name or "record", True)
+          if json_mode else None)
+    client = _make_llm_client(body.model)   # fail early if unconfigured
+    provider = ("azure-us" if body.model.startswith(_AZURE_US_PREFIX)
+                else "azure" if body.model.startswith(_AZURE_PREFIX) else "openai")
+
+    def gen():
+        chunk, chunk_bytes, chunk_meta, chunk_cells = [], 0, {}, set()
+        made, req_total, cell_total = [], 0, 0
+
+        def flush():
+            nonlocal chunk, chunk_bytes, chunk_meta, chunk_cells
+            if not chunk:
+                return None
+            jsonl = "\n".join(_json.dumps(l, ensure_ascii=False) for l in chunk)
+            mb = len(jsonl.encode("utf-8")) / 1048576
+            fobj = client.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
+                                       purpose="batch")
+            remote = client.batches.create(input_file_id=fobj.id,
+                                            endpoint="/v1/chat/completions",
+                                            completion_window="24h")
+            with _LLM_JOBS_LOCK:
+                jobs = _llm_jobs_load(folder)
+                job = {
+                    "id": f"job-{len(jobs) + 1}", "remote_id": remote.id,
+                    "provider": provider, "model": body.model, "mode": body.mode,
+                    "prompt": body.prompt, "payload": body.payload,
+                    "rows_source": body.rows_source, "json": json_mode,
+                    "schema_name": body.schema_name,
+                    "n_requests": len(chunk), "n_cells": len(chunk_cells),
+                    "submitted": _dt.datetime.utcnow().isoformat() + "Z",
+                    "status": getattr(remote, "status", "validating"),
+                    "meta": chunk_meta,
+                }
+                jobs.append(job); _llm_jobs_save(folder, jobs)
+            info = {"id": job["id"], "requests": len(chunk),
+                    "cells": len(chunk_cells), "mb": round(mb, 1)}
+            made.append(info)
+            chunk, chunk_bytes, chunk_meta, chunk_cells = [], 0, {}, set()
+            return info
+
+        try:
+            for line, ckey, mval in _gen_batch_requests(d, folder, body, json_mode, rf):
+                b = len(_json.dumps(line, ensure_ascii=False).encode("utf-8")) + 1
+                if chunk and (chunk_bytes + b > _BATCH_CHUNK_BYTES
+                              or len(chunk) >= _BATCH_CHUNK_MAX_REQ):
+                    yield _json.dumps({"type": "uploading",
+                                       "mb": round(chunk_bytes / 1048576, 1),
+                                       "requests": len(chunk)})
+                    info = flush()
+                    yield _json.dumps({"type": "chunk_done", **info})
+                chunk.append(line); chunk_bytes += b
+                chunk_cells.add(ckey)
+                if mval is not None:
+                    chunk_meta[ckey] = mval
+                req_total += 1
+                if req_total % 400 == 0:
+                    yield _json.dumps({"type": "building", "requests": req_total,
+                                       "cells": cell_total + len(chunk_cells),
+                                       "mb": round((chunk_bytes) / 1048576, 1)})
+            if chunk:
+                yield _json.dumps({"type": "uploading",
+                                   "mb": round(chunk_bytes / 1048576, 1),
+                                   "requests": len(chunk)})
+                info = flush()
+                yield _json.dumps({"type": "chunk_done", **info})
+            if not made:
+                yield _json.dumps({"type": "error", "error": "No usable requests could be built"})
+                return
+            yield _json.dumps({"type": "done", "jobs": made,
+                               "requests": sum(m["requests"] for m in made),
+                               "cells": sum(m["cells"] for m in made)})
+        except Exception as exc:
+            yield _json.dumps({"type": "error", "error": f"Batch submit failed: {exc}"})
+
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen())
+            while True:
+                item = await loop.run_in_executor(pool, _safe_next, it)
+                if item is _SSE_DONE:
+                    break
+                yield f"data: {item}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def _llm_job_public(j: dict) -> dict:

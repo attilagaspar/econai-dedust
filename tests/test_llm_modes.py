@@ -113,8 +113,9 @@ def test_overnight_rows_keep_payload(client, page_folder, monkeypatch):
                           "prompt": "clean", "payload": "ocr",
                           "rows_source": "existing"})
     assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["n_cells"] == 1                     # idx 2 has no structure → skipped
+    evs = [json.loads(c[6:]) for c in r.text.split("\n\n") if c.startswith("data: ")]
+    done = next(e for e in evs if e["type"] == "done")
+    assert done["cells"] == 1                     # idx 2 has no structure → skipped
     lines = [json.loads(l) for l in uploaded["jsonl"].splitlines()]
     assert len(lines) == 2                       # one request per row
     assert lines[0]["custom_id"] == "p1|1|0"

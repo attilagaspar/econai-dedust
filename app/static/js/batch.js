@@ -537,7 +537,7 @@ async function runBatch() {
       + `Proceed? (half price, done within 24h)`)) {
       msg = 'Submission cancelled.';
     } else {
-      progText.textContent = `Submitting ${tasks.length} cell(s)…`;
+      progText.textContent = `Building ${tasks.length} request(s)… (this can take a few minutes)`;
       try {
         const r = await fetch(`${API}/api/llm_batch/submit?folder=${encodeURIComponent(folder)}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -549,11 +549,40 @@ async function runBatch() {
             payload: s.payload, rows_source: s.rows_source,
           }),
         });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || r.status);
-        msg = `🌙 Submitted ${d.n_requests} request(s) (${d.n_cells} cell(s)) as ${d.id}. You can close the browser.`;
-        showToast(msg, 7000);
-      } catch (e) { msg = `✕ Submit failed: ${e.message}`; showToast(msg, 7000); }
+        if (!r.ok) { const m = await r.json().catch(() => ({})); throw new Error(m.detail || r.status); }
+        // stream progress: building → uploading → chunk_done (×N) → done
+        const reader = r.body.getReader(), dec = new TextDecoder();
+        let buf = '', jobsMade = [], done = null, err = null;
+        outer: while (true) {
+          const { done: rd, value } = await reader.read();
+          if (rd) break;
+          buf += dec.decode(value, { stream: true });
+          const chunks = buf.split('\n\n'); buf = chunks.pop();
+          for (const c of chunks) {
+            if (!c.startsWith('data: ')) continue;
+            let ev; try { ev = JSON.parse(c.slice(6)); } catch { continue; }
+            if (ev.type === 'building') {
+              progText.textContent = `Building… ${ev.requests} request(s), ~${ev.mb} MB so far`;
+              progBar.style.width = '40%';
+            } else if (ev.type === 'uploading') {
+              progText.textContent = `Uploading ${ev.requests} request(s) (${ev.mb} MB) to the provider…`;
+              progBar.style.width = '70%';
+            } else if (ev.type === 'chunk_done') {
+              jobsMade.push(ev);
+              showToast(`🌙 ${ev.id}: ${ev.requests} request(s), ${ev.mb} MB submitted`, 4000);
+            } else if (ev.type === 'done') {
+              done = ev;
+            } else if (ev.type === 'error') {
+              err = ev.error; break outer;
+            }
+          }
+        }
+        if (err) throw new Error(err);
+        const nj = jobsMade.length;
+        msg = `🌙 Submitted ${done?.requests ?? '?'} request(s) · ${done?.cells ?? '?'} cell(s) as `
+            + `${nj} job(s): ${jobsMade.map(j => j.id).join(', ')}. You can close the browser.`;
+        showToast(msg, 8000);
+      } catch (e) { msg = `✕ Submit failed: ${e.message}`; showToast(msg, 8000); }
     }
     progText.style.color = msg.startsWith('✕') ? '#ff9800' : '#4caf50';
     progText.textContent = msg;
