@@ -118,9 +118,8 @@ function closeBatchModal() {
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
   document.getElementById('batch-ol-opts').style.display        = (op === 'overlaps_lattice' || op === 'overlaps_lattice_snap_trim') ? 'flex' : 'none';
-  const isOcr = op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl';
-  document.getElementById('batch-ocr-opts').style.display       = isOcr            ? 'flex' : 'none';
-  document.getElementById('batch-ocr-cellheight-wrap').style.display = op === 'ocr_easyocr_lbl' ? '' : 'none';
+  document.getElementById('batch-ocr-opts').style.display = op === 'ocr' ? 'flex' : 'none';
+  if (op === 'ocr') _syncBatchOcrCellHeight();
   const isLlmOp = op === 'llm' || op === 'llm_batchapi';
   document.getElementById('batch-llm-opts').style.display       = isLlmOp ? 'flex' : 'none';
   document.getElementById('batch-llm-parallel-wrap').style.display = op === 'llm' ? '' : 'none';
@@ -140,6 +139,13 @@ function onBatchOpChange() {
   const isJsonExp = op === 'json_export';
   document.getElementById('batch-jsonexport-opts').style.display = isJsonExp ? 'flex' : 'none';
   if (isJsonExp) _batchPopulateJsonExportLabels();
+}
+
+// OCR target row height matters only when re-detecting rows from the image
+function _syncBatchOcrCellHeight() {
+  const scope = document.getElementById('batch-ocr-scope')?.value;
+  const wrap = document.getElementById('batch-ocr-cellheight-wrap');
+  if (wrap) wrap.style.display = (scope === 'rows-detect') ? '' : 'none';
 }
 
 // target row height only matters when rows are detected from the image;
@@ -372,7 +378,7 @@ async function runBatch() {
   if (parityOdd)  for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
   if (parityEven) for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
   if (!indices.size) { showToast('No valid pages in range'); return; }
-  if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') await _syncOcrSettings();
+  if (op === 'ocr') await _syncOcrSettings();
 
   const sorted = [...indices].sort((a, b) => a - b);
 
@@ -454,8 +460,12 @@ async function runBatch() {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
   } else if (op === 'overlaps_lattice_snap_trim') {
     if (!confirm(`Run overlap removal + lattice correction + snap + overlap removal on ${sorted.length} page(s)?`)) return;
-  } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
-    if (!confirm(`Run OCR on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'ocr') {
+    const eng = document.getElementById('batch-ocr-engine').value;
+    const scp = document.getElementById('batch-ocr-scope').value;
+    const scpDesc = scp === 'whole' ? 'whole annotation'
+                  : scp === 'rows-detect' ? 'internal rows (re-detect)' : 'internal rows (keep structure)';
+    if (!confirm(`Run ${eng} OCR — ${scpDesc} — on ${sorted.length} page(s)?`)) return;
   } else if (op === 'llm') {
     if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
     const _bjson = document.getElementById('batch-llm-json').checked;
@@ -753,16 +763,19 @@ async function runBatch() {
         body: JSON.stringify({ shapes }),
       });
 
-    } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
+    } else if (op === 'ocr') {
       const checks    = document.querySelectorAll('#batch-ocr-label-checks input[type=checkbox]');
       const remembered = {};
       const selLabels  = [];
       checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
       localStorage.setItem('batchOcrLabels', JSON.stringify(remembered));
 
+      const engine     = document.getElementById('batch-ocr-engine').value;
+      const scope      = document.getElementById('batch-ocr-scope').value;
       const overwrite  = document.getElementById('batch-ocr-overwrite').checked;
       const cellHeight = parseInt(document.getElementById('batch-ocr-cellheight').value) || 26;
       const labelSet   = new Set(selLabels);
+      const resultField = engine === 'tesseract' ? 'tesseract_output' : 'easyocr_output';
 
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
@@ -777,11 +790,11 @@ async function runBatch() {
         if (!labelSet.has(sh.label)) continue;
         if (condFilter !== null && !condFilter.has(si)) continue;
         if (colFilter  !== null && !colFilter.has(si))  continue;
-        if (!overwrite && sh.tesseract_output?.ocr_text) continue;
+        if (!overwrite && sh[resultField]?.ocr_text) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
         batchLog(`[${stem}] shape ${si} (${sh.label}) row=${sh.super_row} col=${sh.super_column}`);
         try {
-          await _batchOcrShape(stem, si, op, cellHeight);
+          await _batchOcrShape(stem, si, engine, scope, cellHeight);
           shapeDone++;
         } catch(e) { if (_batchStop) break; batchLog(`  ✕ error: ${e.message}`); }
       }
@@ -1171,27 +1184,38 @@ async function _batchLlmShape(stem, idx, model, mode, prompt, cellHeight, useSha
   }
 }
 
-async function _batchOcrShape(stem, idx, op, cellHeight) {
+async function _batchOcrShape(stem, idx, engine, scope, cellHeight) {
   const params = new URLSearchParams({ folder, stem, idx });
-  if (op === 'ocr_tesseract') {
-    const r = await fetch(`${API}/api/page/shape/ocr?${params}`, { method: 'POST' });
-    if (!r.ok) throw new Error(r.status);
+  const perRow = scope === 'rows-keep' || scope === 'rows-detect';
+  if (!perRow) {
+    // whole annotation
+    const url = engine === 'tesseract'
+      ? `${API}/api/page/shape/ocr?${params}`
+      : `${API}/api/page/shape/ocr/easyocr?${params}`;
+    const r = await fetch(url, { method: 'POST' });
+    if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
     if (_batchVerbose) {
       const data = await r.json().catch(() => ({}));
       batchLog(`  ↳ ${(data.ocr_text || '').replace(/\n/g, ' | ')}`);
     }
-  } else if (op === 'ocr_easyocr_lbl') {
-    params.set('cell_height', cellHeight);
-    const r = await fetch(`${API}/api/page/shape/ocr/easyocr/linebyline?${params}`, { method: 'POST' });
-    if (!r.ok) throw new Error(r.status);
-    if (_batchVerbose) {
-      await _drainSSEVerbose(r, msg => {
-        if (msg.type === 'row_result') batchLog(`    row ${msg.row + 1}: ${msg.text}`);
-        if (msg.type === 'done')       batchLog(`  ↳ ${msg.ocr_text.replace(/\n/g, ' | ')}`);
-      });
-    } else {
-      await _drainSSE(r);
-    }
+    return;
+  }
+  // per internal row
+  params.set('cell_height', cellHeight);
+  params.set('rows_source', scope === 'rows-detect' ? 'detect' : 'existing');
+  const url = engine === 'tesseract'
+    ? `${API}/api/page/shape/ocr/linebyline?${params}`
+    : `${API}/api/page/shape/ocr/easyocr/linebyline?${params}`;
+  const r = await fetch(url, { method: 'POST' });
+  if (!r.ok) { const _m = await r.json().catch(() => ({})); throw new Error(_m.detail || r.status); }
+  if (_batchVerbose) {
+    await _drainSSEVerbose(r, msg => {
+      if (msg.type === 'error')      batchLog(`    ✕ ${msg.error}`);
+      if (msg.type === 'row_result') batchLog(`    row ${msg.row + 1}: ${msg.text}`);
+      if (msg.type === 'done')       batchLog(`  ↳ ${(msg.ocr_text || '').replace(/\n/g, ' | ')}`);
+    });
+  } else {
+    await _drainSSE(r);
   }
 }
 
@@ -1398,9 +1422,11 @@ async function previewBatch() {
     const skipped = Object.entries(stats).map(([k, v]) => `${v} × ${k}`).join(', ');
     progText.textContent = `👁 Would send ${tasks.length} cell(s) on ${sorted.length} page(s) to ${s.model}.`
       + (skipped ? ` Skipped: ${skipped}.` : '') + ' Nothing was changed.';
-  } else if (op === 'ocr_tesseract' || op === 'ocr_easyocr_lbl') {
+  } else if (op === 'ocr') {
     const labelSet = new Set([...document.querySelectorAll('#batch-ocr-label-checks input:checked')].map(cb => cb.value));
     const overwrite = document.getElementById('batch-ocr-overwrite').checked;
+    const engine = document.getElementById('batch-ocr-engine').value;
+    const resultField = engine === 'tesseract' ? 'tesseract_output' : 'easyocr_output';
     let n = 0;
     for (const idx of sorted) {
       const stem = pages[idx].stem;
@@ -1413,11 +1439,11 @@ async function previewBatch() {
         if (!labelSet.has(sh.label)) return;
         if (condFilter !== null && !condFilter.has(si)) return;
         if (colFilter  !== null && !colFilter.has(si))  return;
-        if (!overwrite && sh.tesseract_output?.ocr_text) return;
+        if (!overwrite && sh[resultField]?.ocr_text) return;
         n++;
       });
     }
-    progText.textContent = `👁 Would OCR ${n} cell(s) on ${sorted.length} page(s). Nothing was changed.`;
+    progText.textContent = `👁 Would ${engine} OCR ${n} cell(s) on ${sorted.length} page(s). Nothing was changed.`;
   } else {
     progText.textContent = `👁 Would run "${op}" on ${sorted.length} page(s). Nothing was changed.`;
   }

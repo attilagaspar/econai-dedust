@@ -311,7 +311,7 @@ For non-table documents (e.g. one firm record per annotation): toggle **JSON** o
 
 ### Batch operations
 
-The toolbar's **Batch** button runs operations across many pages at once with page/parity/condition/column filters and a live progress log. Available ops include: overlap removal + lattice correction, OCR (Tesseract / EasyOCR line-by-line), LLM (live), **🌙 LLM overnight batch**, **⊞ Build internal row structure**, **🏛 Resolve authorities**, **🚫 Mark structural blanks**, **⇩ JSON export**, score-delete, result-clearing, and short-line stripping.
+The toolbar's **Batch** button runs operations across many pages at once with page/parity/condition/column filters and a live progress log. Available ops include: overlap removal + lattice correction, **OCR** (engine EasyOCR/Tesseract × Scope whole / internal rows keep / re-detect — mirrors the LLM controls), LLM (live), **🌙 LLM overnight batch**, **⊞ Build internal row structure**, **🏛 Resolve authorities**, **🚫 Mark structural blanks**, **⇩ JSON export**, score-delete, result-clearing, and short-line stripping.
 
 - **Column filter** is 1-indexed and range-aware: `3` = col 3, `2-4` = 2/3/4, `3-` = 3 to end, `-5` = 1 to 5, `1,3,5` = list.
 - **Recipes** — save every setting of the dialog as a named recipe (💾) and re-apply it later; per project.

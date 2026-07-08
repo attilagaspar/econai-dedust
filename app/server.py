@@ -771,6 +771,22 @@ def _existing_row_bands_rel(shape, crop_top, crop_h):
     return bands
 
 
+def _rows_for_source(shape, crop, crop_top, cell_height, rows_source):
+    """Row bands for a per-internal-row run, honoring the scope choice:
+    'existing' = the cell's stored bands (400 if none), 'detect' = always
+    re-detect from pixels, 'auto' = existing else detect."""
+    existing = _existing_row_bands_rel(shape, crop_top, crop.height)
+    if rows_source == "existing":
+        if not existing:
+            raise HTTPException(status_code=400,
+                detail="This cell has no internal row structure — build one "
+                       "first, or use 're-detect rows'")
+        return existing
+    if rows_source == "detect":
+        return _detect_text_rows(crop, cell_height)
+    return existing or _detect_text_rows(crop, cell_height)
+
+
 def _project_ref_bands(ref_shape, crop_top, crop_h, ty1, ty2):
     """Project a reference shape's row_struct bands onto a target cell:
     linear map from the reference bbox y-range to the target bbox y-range,
@@ -1539,6 +1555,7 @@ async def api_ocr_linebyline(
     idx:         int = Query(...),
     cell_height: int = Query(26),
     lang:        str = Query("hun"),
+    rows_source: str = Query("auto", description="existing (fail if none) | detect | auto"),
 ):
     """
     Row-by-row Tesseract OCR with digit/dash whitelist.
@@ -1582,8 +1599,7 @@ async def api_ocr_linebyline(
     ))
 
     crop_top = max(0, int(y1) - pad)
-    rows = (_existing_row_bands_rel(shape, crop_top, crop.height)
-            or _detect_text_rows(crop, cell_height))
+    rows = _rows_for_source(shape, crop, crop_top, cell_height, rows_source)
 
     tess_config = "--psm 7 -c tessedit_char_whitelist=0123456789-"
 
@@ -1669,6 +1685,7 @@ async def api_ocr_easyocr_linebyline(
     idx:         int = Query(...),
     cell_height: int = Query(26),
     langs:       str = Query("en,hu"),
+    rows_source: str = Query("auto", description="existing (fail if none) | detect | auto"),
 ):
     """Row-by-row EasyOCR using the comb-filter row detector. Streams SSE."""
     import asyncio, concurrent.futures
@@ -1704,8 +1721,7 @@ async def api_ocr_easyocr_linebyline(
     ))
 
     crop_top  = max(0, int(y1) - pad)
-    rows      = (_existing_row_bands_rel(shape, crop_top, crop.height)
-                 or _detect_text_rows(crop, cell_height))
+    rows      = _rows_for_source(shape, crop, crop_top, cell_height, rows_source)
     lang_list = [l.strip() for l in langs.split(",") if l.strip()]
     reader    = _get_easyocr_reader(lang_list)
 

@@ -794,8 +794,7 @@
         <option value="clear">Clear annotations</option>
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
         <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice + snap + overlaps</option>
-        <option value="ocr_tesseract">OCR — Tesseract</option>
-        <option value="ocr_easyocr_lbl">OCR — EasyOCR line-by-line</option>
+        <option value="ocr">OCR (EasyOCR / Tesseract)</option>
         <option value="mark_blanks">🚫 Mark structural blanks (ink scan — free, no API)</option>
         <option value="llm">LLM</option>
         <option value="llm_batchapi">🌙 LLM — overnight batch (half price)</option>
@@ -858,6 +857,17 @@
 
     <!-- OCR options -->
     <div id="batch-ocr-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div style="display:flex;gap:8px;">
+        <select id="batch-ocr-engine" title="OCR engine" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="easyocr">EasyOCR</option>
+          <option value="tesseract">Tesseract</option>
+        </select>
+        <select id="batch-ocr-scope" title="What one OCR call covers" onchange="_syncBatchOcrCellHeight()" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
+          <option value="whole">Whole annotation</option>
+          <option value="rows-keep">Internal rows (keep structure)</option>
+          <option value="rows-detect">Internal rows (re-detect)</option>
+        </select>
+      </div>
       <div>
         <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Process these label types:</div>
         <div id="batch-ocr-label-checks"></div>
