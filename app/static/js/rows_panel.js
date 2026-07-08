@@ -185,11 +185,13 @@ function renderRowTable(shape) {
            + (hasPdf ? '<th>PDF <button class="rs-copy-btn" onclick="_rsCopyColPdf()" title="Copy whole PDF column to Human">⤓H</button>'
                      + '<button class="rs-copy-btn" onclick="_rsRefreshPdf()" title="Re-extract the PDF text layer per current row band">⟳</button></th>' : '')
            + '<th>OCR <button class="rs-copy-btn" onclick="_rsCopyCol(\'ocr\')" title="Copy whole OCR column to Human">⤓H</button>'
-           + '<button class="rs-copy-btn" onclick="_rsRefreshOcr()" title="Re-run EasyOCR row by row using the current row structure">⟳</button></th>'
+           + '<button class="rs-copy-btn" onclick="_rsImportFlat(\'ocr\')" title="Re-distribute the flat OCR text into the current row bands (top-aligned, one line per row)">⟳</button>'
+           + '<button class="rs-copy-btn" onclick="_rsRefreshOcr()" title="Re-run EasyOCR row by row using the current row structure">🔍</button></th>'
            + '<th>LLM <button class="rs-copy-btn" onclick="_rsCopyCol(\'llm\')" title="Copy whole LLM column to Human">⤓H</button>'
+           + '<button class="rs-copy-btn" onclick="_rsImportFlat(\'llm\')" title="Re-distribute the flat LLM text into the current row bands (top-aligned, one line per row)">⟳</button>'
            + `<button class="rs-copy-btn" id="rs-llm-refresh-btn" onclick="_rsRefreshLlm()" `
            + `title="${_rsLlmRunning ? 'Stop' : 'Re-run the LLM row by row using the current row structure and the active prompt'}">`
-           + `${_rsLlmRunning ? '■' : '⟳'}</button></th>`
+           + `${_rsLlmRunning ? '■' : '🔍'}</button></th>`
            + '<th>Human <button class="rs-copy-btn" onclick="_rsMajorityVote()" '
            + 'title="Fill Human with the majority opinion of PDF/OCR/LLM: one source → copy it; two → copy if they agree; three → copy if at least two agree. Rows without consensus are left unchanged.">⚖</button>'
            + '<button class="rs-copy-btn" onclick="_rsImportFlat(\'human\')" '
