@@ -18,7 +18,27 @@ read/write access to the host filesystem. Phase A must include:
 2. an app-level shared token (header or cookie) as a second layer behind the
    edge auth.
 
-## Phase A — expose via Cloudflare Tunnel (~1 session)
+## Phase A (no-domain variant, chosen 2026-07-08) — Tailscale (~1 session)
+
+User has no domain for now. Public-IP port-forwarding was rejected (plain
+HTTP, dynamic IP, port scanners). Instead:
+- **Tailscale** on PC + phone + laptop (free tier): stable private 100.x IP /
+  MagicDNS name reachable from anywhere, WireGuard-encrypted, no router
+  changes, nothing publicly exposed.
+- `tailscale serve 8000` → `https://<pc>.tailXXXX.ts.net` with an automatic
+  real certificate — required for the PWA (service workers need HTTPS).
+- App hardening is IDENTICAL to the domain variant (folder caging, ECONAI_TOKEN
+  + login cookie, --host 0.0.0.0, CORS, non-local warning) and ships first.
+- Mobile accept goes through a NEW endpoint `POST /api/review/accept`
+  ({stem, idx, row, value}: Human write + empty→blank rule server-side, later
+  verified_by) so accept semantics live in one place; desktop strip migrates
+  to it too. Mobile UI: `app/static/review.html`, card loop (zoomable band
+  snippet, inputmode=decimal, ✓/↓/↩/∅ thumb buttons), PWA manifest + minimal
+  service worker; v1 online-only.
+- If a domain appears later, swap the network layer for Cloudflare Tunnel +
+  Access with zero app changes.
+
+## Phase A (domain variant, deferred) — expose via Cloudflare Tunnel (~1 session)
 
 - `cloudflared` tunnel from the home PC to the user's domain: free, no port
   forwarding, automatic TLS, survives IP changes.
