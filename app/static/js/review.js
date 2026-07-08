@@ -182,51 +182,55 @@ async function _revShow() {
 // one item and skip (never save) the next. _revBusy serializes them.
 let _revBusy = false;
 
+// Both accept and undo go through POST /api/review/accept — the single source
+// of truth for review semantics (shared with the mobile review page). The
+// server does the read-modify-write under its merge lock; we mirror the change
+// into the in-memory shape so the canvas stays current without a page reload.
+async function _revPostAccept(it, value, restoreBlank) {
+  const r = await fetch(`${API}/api/review/accept?folder=${encodeURIComponent(folder)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stem: it.stem, idx: it.idx, row: it.row || null,
+                           value, restore_blank: restoreBlank }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || r.status);
+  return d;
+}
+
+function _revMirrorLocal(it, value, blank) {
+  // keep the loaded page's in-memory copy in step with the server write
+  if (!pageData || (pages[pageIdx]?.stem || pages[pageIdx]) !== it.stem) return;
+  const sh = pageData.shapes[it.idx];
+  if (!sh) return;
+  if (it.row && sh.row_struct?.rows) {
+    const r = sh.row_struct.rows.find(x => x.n === it.row);
+    if (r) { r.human = value; if (blank) r.blank = true; else delete r.blank; }
+    sh.human_output = sh.human_output || {};
+    sh.human_output.human_corrected_text =
+      sh.row_struct.rows.map(x => x.human || '').join('\n');
+  } else {
+    sh.human_output = sh.human_output || {};
+    sh.human_output.human_corrected_text = value;
+    if (blank) sh.blank = true; else delete sh.blank;
+  }
+}
+
 async function _revAccept() {
   if (_revBusy || !_revActive || _revPos >= _revQueue.length) return;
   _revBusy = true;
   try {
     const it = _revQueue[_revPos];
     const val = document.getElementById('rev-input').value;
-    const pi = _revStemIdx(it.stem);
-    if (pi < 0) { _revPos++; await _revShow(); return; }
-    if (pi !== pageIdx) await loadPage(pi);
-    const sh = pageData.shapes[it.idx];
-    _revUndo = { pos: _revPos, stem: it.stem, idx: it.idx, row: it.row,
-                 prev: JSON.parse(JSON.stringify(sh)) };
-    // Accepting an EMPTY value means "I checked — there is nothing here":
-    // mark the unit a structural blank, or the queue (which requires a
-    // non-empty Human to consider a unit reviewed) would re-flag it forever.
-    const isEmpty = !val.trim();
-    let ok = false;
-    if (it.row && sh.row_struct?.rows) {
-      const r = sh.row_struct.rows.find(x => x.n === it.row);
-      if (r) {
-        r.human = val;
-        if (isEmpty) r.blank = true; else delete r.blank;
-      }
-      ok = await saveRowStruct(it.idx);
-      if (ok !== false && isEmpty) showToast('∅ marked blank (nothing here)', 2000);
-    } else if (isEmpty) {
-      sh.human_output = sh.human_output || {};
-      sh.human_output.human_corrected_text = val;
-      sh.blank = true;
-      ok = await replaceAllShapes();      // patchShape can't carry the blank flag
-      if (ok !== false) showToast('∅ marked blank (nothing here)', 2000);
-    } else {
-      const wasBlank = !!sh.blank;
-      delete sh.blank;
-      sh.human_output = sh.human_output || {};
-      sh.human_output.human_corrected_text = val;
-      // patchShape can't remove the blank flag — use a full write when needed
-      ok = wasBlank ? await replaceAllShapes()
-                    : await patchShape(it.idx, { human_corrected_text: val });
-    }
-    if (ok === false) {   // save failed — stay on this item, don't advance
-      showToast('✕ Save failed — press Enter to retry', 4000);
-      _revUndo = null;
+    let d;
+    try {
+      d = await _revPostAccept(it, val, null);
+    } catch (e) {   // save failed — stay on this item, don't advance
+      showToast('✕ Save failed — press Enter to retry (' + (e.message || e) + ')', 4000);
       return;
     }
+    _revUndo = { pos: _revPos, it, prev: d.prev };
+    _revMirrorLocal(it, val, d.blank);
+    if (d.blank) showToast('∅ marked blank (nothing here)', 2000);
     drawOverlay();
     _revPos++;
     await _revShow();
@@ -245,11 +249,14 @@ async function _revUndoLast() {
   _revBusy = true;
   try {
     const u = _revUndo; _revUndo = null;
-    const pi = _revStemIdx(u.stem);
-    if (pi < 0) return;
-    if (pi !== pageIdx) await loadPage(pi);
-    pageData.shapes[u.idx] = u.prev;
-    await replaceAllShapes();
+    try {
+      await _revPostAccept(u.it, u.prev?.human || '', !!u.prev?.blank);
+    } catch (e) {
+      showToast('Undo failed: ' + (e.message || e), 4000);
+      _revUndo = u;   // keep it so U can be pressed again
+      return;
+    }
+    _revMirrorLocal(u.it, u.prev?.human || '', !!u.prev?.blank);
     drawOverlay();
     _revPos = u.pos;
     await _revShow();

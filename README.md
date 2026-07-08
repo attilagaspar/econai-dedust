@@ -15,6 +15,11 @@ A browser-based tool for turning large collections of scanned historical documen
 
 Highlights of major additions (newest first). Small fixes aren't listed here.
 
+**2026-07 — remote access + mobile review (Phase A)**
+- **🔐 Token-guarded remote access** — set the `ECONAI_TOKEN` environment variable and start with `python econai.py serve --host 0.0.0.0` to make the server reachable beyond your machine. Remote visitors get a login page (token entered once per device); requests from `127.0.0.1` are never restricted, and **without the token set nothing changes at all** — the local workflow is untouched. Authorized remote sessions are additionally **caged to the `projects/` folder** (no arbitrary filesystem paths). Pair it with a Cloudflare Tunnel to reach your home server from anywhere. See [Remote access](#remote-access).
+- **📱 Mobile review page (PWA)** — `/static/review.html` is a phone-sized review mode: pick a project, and suspect cells arrive as swipe-through cards (image snippet, best guess pre-filled, numeric keypad) with **✓ Accept / ∅ Blank / ↓ Skip / ↩ Undo**. Installable to the home screen. Review cells on your commute.
+- **Shared review endpoint** — desktop strip and mobile page now go through one server endpoint (`POST /api/review/accept`), so review semantics (empty accept = structural blank, exact undo) can never drift between the two.
+
 **2026-07 — review, structure, and cost overhaul**
 - **⚡ Review queue** — step through *only* the suspect cells across a whole project (OCR≠LLM disagreements, numeric column outliers, unverified cells), worst-first, in a docked strip: **Enter** accepts the best guess into Human, type to correct, **↓** skip, **U** undo. Optional **🎯 Pinpoint** draws a big arrow on the current cell. A cell with a Human value is considered resolved and never re-appears. See [Review queue](#review-queue).
 - **Page status scoreboard** — every page carries a status (`predicted → corrected → verified → problem`); a dropdown in the nav bar and the **V** key (verify + jump to next unverified) set it, and the dashboard shows a per-project **Review progress** bar. See [Page status](#page-status).
@@ -380,13 +385,44 @@ econai-dedust/
 ## CLI reference
 
 ```bash
-python econai.py serve [--port 8000]                          # start the web app
+python econai.py serve [--port 8000] [--host 127.0.0.1]      # start the web app
 python econai.py new-project <name> --type A --labels l1 l2  # create a project
 python econai.py list                                          # list all projects
 python econai.py status <name>                                 # show pipeline state
 python econai.py advance <name>                               # move to next stage
 python econai.py set-stage <name> <stage>                     # set stage manually
 ```
+
+---
+
+## Remote access
+
+By default the server only listens on `127.0.0.1` and nothing is protected — that is the normal single-user local mode and it never changes.
+
+To reach the server from other devices (a phone on your Wi-Fi, or the internet via a tunnel):
+
+```bash
+# 1. Set a long random token (this ARMS the guard — without it, remote binding is refused)
+set ECONAI_TOKEN=some-long-random-string        # Windows
+export ECONAI_TOKEN=some-long-random-string     # Mac/Linux
+
+# 2. Bind beyond localhost
+python econai.py serve --host 0.0.0.0 --port 8000
+```
+
+What the guard does when the token is set:
+
+| Request origin | Behavior |
+|---|---|
+| `127.0.0.1` / `::1` | untouched — full local access, no token needed |
+| Remote, no token | API calls get `401`; pages redirect to a **login page** (token entered once per device, remembered as a cookie for 30 days) |
+| Remote, valid token | works — but the `folder` parameter is **caged to `projects/`**; any path outside it is rejected with `403` |
+
+The token is accepted as a `Bearer` header, an `X-Econai-Token` header, the login cookie, or a `?token=` query parameter.
+
+**Mobile review** — open `/static/review.html` on a phone: a card-based review mode (project picker → suspect cells one at a time with an image snippet, numeric keypad, ✓ Accept / ∅ Blank / ↓ Skip / ↩ Undo). It is a PWA: served over HTTPS (e.g. through a Cloudflare Tunnel) it can be installed to the home screen. Accepting an empty value marks the cell a structural blank — same semantics as the desktop strip, enforced by the shared `POST /api/review/accept` endpoint.
+
+For internet exposure use a **Cloudflare Tunnel** on your own domain (no open ports on your router, HTTPS for free, optional Google-login gate via Cloudflare Access) — see `knowledge_base/08_remote_and_collaboration.md` for the full setup.
 
 ---
 

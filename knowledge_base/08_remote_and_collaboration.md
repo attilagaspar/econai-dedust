@@ -1,5 +1,16 @@
 # Remote access & multi-user collaboration — plan
 
+**STATUS (2026-07-08): Phase A + A′ app-side work is IMPLEMENTED** (token guard
+middleware + `/api/login` + login page, `_resolve_folder` caging via the
+`_REMOTE_REQ` contextvar, `POST /api/review/accept` as the single review-decision
+endpoint with the desktop strip migrated to it, `app/static/review.html` mobile
+PWA + manifest + service worker + icons, `serve --host` with a refusal to bind
+non-locally without `ECONAI_TOKEN`). Tests: `tests/test_remote_guard.py`,
+`tests/test_review_accept.py`. The guard is inert without the env var — local
+workflow unchanged. The network layer (Cloudflare Tunnel + Access on the user's
+domain) is the user's setup step; instructions were handed over. The user chose
+the **domain + Cloudflare** variant (RAs can't be asked to install Tailscale).
+
 Two user goals (2026-07-08): (1) a real multi-user server where several people
 process the same data; (2) reach the home server from anywhere via the user's
 own domain — including a phone-friendly review mode for commutes. They are
@@ -18,9 +29,9 @@ read/write access to the host filesystem. Phase A must include:
 2. an app-level shared token (header or cookie) as a second layer behind the
    edge auth.
 
-## Phase A (no-domain variant, chosen 2026-07-08) — Tailscale (~1 session)
+## Phase A (Tailscale variant — NOT chosen; kept as the fallback)
 
-User has no domain for now. Public-IP port-forwarding was rejected (plain
+Originally considered when no domain was in play. Public-IP port-forwarding was rejected (plain
 HTTP, dynamic IP, port scanners). Instead:
 - **Tailscale** on PC + phone + laptop (free tier): stable private 100.x IP /
   MagicDNS name reachable from anywhere, WireGuard-encrypted, no router
@@ -38,7 +49,7 @@ HTTP, dynamic IP, port scanners). Instead:
 - If a domain appears later, swap the network layer for Cloudflare Tunnel +
   Access with zero app changes.
 
-## Phase A (domain variant, deferred) — expose via Cloudflare Tunnel (~1 session)
+## Phase A (domain variant — CHOSEN 2026-07-08) — expose via Cloudflare Tunnel
 
 - `cloudflared` tunnel from the home PC to the user's domain: free, no port
   forwarding, automatic TLS, survives IP changes.

@@ -122,6 +122,80 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Remote-access guard (Phase A). INERT unless the ECONAI_TOKEN environment
+# variable is set — with no token, behavior is identical to before (and the
+# default bind is 127.0.0.1, so nothing is reachable remotely anyway).
+# With a token set:
+#   * requests from localhost stay unrestricted (local workflow unchanged),
+#   * remote requests need the token (Bearer header, X-Econai-Token, cookie
+#     set by /static/login.html, or ?token=),
+#   * remote requests may only touch folders under <repo>/projects/ (the
+#     `folder` param otherwise accepts arbitrary filesystem paths).
+# ---------------------------------------------------------------------------
+import contextvars
+import secrets as _secrets
+
+_REMOTE_REQ = contextvars.ContextVar("econai_remote_request", default=False)
+PROJECTS_ROOT = (Path(__file__).parent.parent / "projects").resolve()
+
+_AUTH_EXEMPT = ("/static/login.html", "/api/login", "/static/manifest.json",
+                "/static/sw.js", "/static/icon-192.png", "/static/icon-512.png")
+
+
+def _req_token(request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return (request.headers.get("x-econai-token")
+            or request.cookies.get("econai_token")
+            or request.query_params.get("token") or "")
+
+
+@app.middleware("http")
+async def _remote_guard(request, call_next):
+    token = os.environ.get("ECONAI_TOKEN")
+    if not token:
+        return await call_next(request)          # guard disabled — legacy behavior
+    host = request.client.host if request.client else ""
+    if host in ("127.0.0.1", "::1"):
+        return await call_next(request)          # local stays unrestricted
+    path = request.url.path
+    if path in _AUTH_EXEMPT:
+        return await call_next(request)
+    if _secrets.compare_digest(_req_token(request), token):
+        tok = _REMOTE_REQ.set(True)              # authorized remote → caged folders
+        try:
+            return await call_next(request)
+        finally:
+            _REMOTE_REQ.reset(tok)
+    from fastapi.responses import JSONResponse, RedirectResponse
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if request.method == "GET" and wants_html:
+        return RedirectResponse("/static/login.html")
+    return JSONResponse({"detail": "Missing or invalid token"}, status_code=401)
+
+
+class LoginBody(BaseModel):
+    token: str
+
+
+@app.post("/api/login")
+def api_login(body: LoginBody):
+    """Exchange the shared token for a long-lived cookie (used by the login
+    page so remote browsers authenticate once per device)."""
+    real = os.environ.get("ECONAI_TOKEN")
+    if not real:
+        raise HTTPException(status_code=400, detail="Remote access is not enabled on this server")
+    if not _secrets.compare_digest(body.token, real):
+        raise HTTPException(status_code=401, detail="Wrong token")
+    from fastapi.responses import JSONResponse
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie("econai_token", real, max_age=60 * 60 * 24 * 30,
+                    httponly=True, samesite="lax")
+    return resp
+
+
+# ---------------------------------------------------------------------------
 # Per-page mutation serialization — handlers do read-modify-write on the page
 # JSON, so two concurrent mutations of the same page (second browser tab,
 # batch op overlapping a click) could each read the old file and the later
@@ -184,10 +258,20 @@ app.mount("/static", _NoCacheStaticFiles(directory=str(STATIC_DIR)), name="stati
 # ---------------------------------------------------------------------------
 
 def _resolve_folder(folder: str) -> Path:
-    """Resolve a folder path that may be absolute or relative to cwd."""
+    """Resolve a folder path that may be absolute or relative to cwd.
+    Authorized REMOTE requests (see _remote_guard) are caged to the repo's
+    projects/ root — locally the historic any-path behavior is unchanged."""
     p = Path(folder)
     if not p.is_absolute():
         p = Path.cwd() / p
+    if _REMOTE_REQ.get():
+        try:
+            rp = p.resolve()
+            rp.relative_to(PROJECTS_ROOT)
+        except (ValueError, OSError):
+            raise HTTPException(status_code=403,
+                detail="Remote sessions may only access folders under projects/")
+        p = rp
     if not p.exists():
         raise HTTPException(status_code=404, detail=f"Folder not found: {p}")
     if not p.is_dir():
@@ -3324,6 +3408,60 @@ def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
 def _reason_key(reason: str) -> str:
     return {"OCR≠LLM": "disagree", "unverified": "unverified",
             "numeric outlier": "outlier"}.get(reason, "unverified")
+
+
+class ReviewAcceptBody(BaseModel):
+    stem:  str
+    idx:   int
+    row:   Optional[int] = None      # internal row number (1-based), None = whole cell
+    value: str = ""
+    restore_blank: Optional[bool] = None   # set → explicit write (undo path),
+                                           # None → empty value marks blank
+
+
+@app.post("/api/review/accept")
+def api_review_accept(folder: str = Query(...), body: ReviewAcceptBody = ...):
+    """The single source of truth for a review decision (desktop strip and the
+    mobile page both use it). Writes the value to the Human layer; an EMPTY
+    value marks the unit a structural blank so it never re-enters the queue.
+    Returns the previous state so clients can implement undo (re-post it with
+    restore_blank set)."""
+    d  = _resolve_folder(folder)
+    jf = d / f"{body.stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+    with _SHAPE_MERGE_LOCK:
+        data = json.loads(jf.read_text(encoding="utf-8"))
+        shapes = data.get("shapes", [])
+        if body.idx < 0 or body.idx >= len(shapes):
+            raise HTTPException(status_code=400, detail="Shape index out of range")
+        shape = shapes[body.idx]
+        is_empty = not body.value.strip()
+        make_blank = body.restore_blank if body.restore_blank is not None else is_empty
+
+        if body.row is not None:
+            rows = (shape.get("row_struct") or {}).get("rows") or []
+            r = next((x for x in rows if x.get("n") == body.row), None)
+            if r is None:
+                raise HTTPException(status_code=400, detail=f"Row {body.row} not found")
+            prev = {"human": r.get("human") or "", "blank": bool(r.get("blank"))}
+            r["human"] = body.value
+            if make_blank:
+                r["blank"] = True
+            else:
+                r.pop("blank", None)
+            _sync_flat_from_rows(shape)
+        else:
+            prev = {"human": (shape.get("human_output") or {}).get("human_corrected_text") or "",
+                    "blank": bool(shape.get("blank"))}
+            shape.setdefault("human_output", {})["human_corrected_text"] = body.value
+            if make_blank:
+                shape["blank"] = True
+            else:
+                shape.pop("blank", None)
+            _distribute_flat_to_rows(shape, "human", body.value)
+        _write_json(jf, data)
+    return {"ok": True, "blank": bool(make_blank), "prev": prev}
 
 
 @app.post("/api/page/shape/llm")

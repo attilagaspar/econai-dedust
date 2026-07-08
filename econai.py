@@ -231,6 +231,9 @@ def build_parser() -> argparse.ArgumentParser:
     # serve
     p_srv = sub.add_parser("serve", help="Start the web server and open the browser")
     p_srv.add_argument("--port", type=int, default=8000)
+    p_srv.add_argument("--host", default="127.0.0.1",
+                       help="Bind address. Anything other than 127.0.0.1 REQUIRES "
+                            "the ECONAI_TOKEN environment variable (remote auth).")
 
     return parser
 
@@ -256,13 +259,23 @@ def cmd_serve(args):
     except Exception:
         pass  # non-critical — uvicorn will report a clear error if port is busy
 
+    import os
+    host = getattr(args, "host", "127.0.0.1")
+    if host not in ("127.0.0.1", "localhost") and not os.environ.get("ECONAI_TOKEN"):
+        print("REFUSED: binding to a non-local address without ECONAI_TOKEN set.")
+        print("Set a token first, e.g.:  set ECONAI_TOKEN=<long random string>")
+        print("Remote requests will then require it (login page / Bearer header),")
+        print("and remote sessions are confined to the projects/ folder.")
+        return
+
     url = f"http://localhost:{port}"
-    print(f"Starting EconAI server at {url}")
+    print(f"Starting Dedust server at {url}" + ("" if host in ("127.0.0.1", "localhost")
+          else f"  (also listening on {host}:{port} — token required remotely)"))
     print("Press Ctrl+C to stop.\n")
     webbrowser.open(url)
 
     import uvicorn
-    uvicorn.run("app.server:app", host="127.0.0.1", port=port, reload=True)
+    uvicorn.run("app.server:app", host=host, port=port, reload=True)
 
 
 COMMANDS = {

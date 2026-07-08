@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Dedust — Login</title>
+  <style>
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+           background:#0b1426; font-family:system-ui,-apple-system,Segoe UI,sans-serif; }
+    .card { background:#16213e; border:1px solid #16588e; border-radius:10px; padding:28px 26px;
+            width:min(340px,86vw); display:flex; flex-direction:column; gap:14px; }
+    h1 { margin:0; font-size:20px; color:#e94560; }
+    p  { margin:0; font-size:12px; color:#8a94a6; line-height:1.5; }
+    input { background:#0d1b35; border:1px solid #0f3460; color:#e0e0e0; border-radius:6px;
+            padding:11px 12px; font-size:15px; }
+    button { background:#1b4d2e; border:1px solid #2e7d4f; color:#e0e0e0; border-radius:6px;
+             padding:11px; font-size:15px; font-weight:600; cursor:pointer; }
+    #err { color:#e94560; font-size:12px; min-height:14px; }
+  </style>
+</head>
+<body>
+  <form class="card" onsubmit="login(event)">
+    <h1>Dedust</h1>
+    <p>This server is remote-protected. Enter the access token once — it is remembered on this device.</p>
+    <input id="tok" type="password" placeholder="Access token" autocomplete="current-password" autofocus>
+    <button type="submit">Enter</button>
+    <div id="err"></div>
+  </form>
+  <script>
+    async function login(e) {
+      e.preventDefault();
+      const err = document.getElementById('err');
+      err.textContent = '';
+      try {
+        const r = await fetch('/api/login', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ token: document.getElementById('tok').value }),
+        });
+        if (!r.ok) { err.textContent = (await r.json()).detail || 'Login failed'; return; }
+        const dest = new URLSearchParams(location.search).get('next') || '/static/review.html';
+        location.href = dest;
+      } catch (ex) { err.textContent = 'Network error: ' + ex.message; }
+    }
+  </script>
+</body>
+</html>

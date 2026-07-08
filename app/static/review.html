@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0b1426">
+  <title>Dedust Review</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; background:#0b1426; color:#e0e0e0;
+           font-family:system-ui,-apple-system,Segoe UI,sans-serif;
+           display:flex; flex-direction:column; }
+    header { display:flex; align-items:center; gap:10px; padding:10px 14px;
+             background:#16213e; border-bottom:1px solid #16588e; }
+    header h1 { margin:0; font-size:16px; color:#e94560; flex:1; }
+    #counter { font-size:14px; font-weight:700; }
+    .screen { flex:1; display:flex; flex-direction:column; gap:14px; padding:16px; }
+    select, input[type=text] { background:#0d1b35; border:1px solid #0f3460; color:#e0e0e0;
+             border-radius:8px; padding:12px; font-size:16px; width:100%; }
+    label.chk { display:flex; align-items:center; gap:10px; font-size:15px; color:#ccc; }
+    label.chk input { width:20px; height:20px; accent-color:#e94560; }
+    .btn { border:none; border-radius:10px; padding:16px; font-size:17px; font-weight:700;
+           cursor:pointer; color:#e0e0e0; }
+    .btn-go   { background:#1b4d2e; border:1px solid #2e7d4f; }
+    .btn-acc  { background:#1b4d2e; border:1px solid #2e7d4f; flex:2; }
+    .btn-skip { background:#1a2740; border:1px solid #3a4a6a; flex:1; }
+    .btn-undo { background:#1a2740; border:1px solid #3a4a6a; flex:1; }
+    .btn-blank{ background:#3a3320; border:1px solid #8a7a3a; flex:1; }
+    #snippet-wrap { background:#fff; border-radius:8px; overflow:auto; max-height:34vh;
+                    display:flex; align-items:center; justify-content:center; padding:6px; }
+    #snippet { max-width:100%; }
+    #why { color:#f0c040; font-size:13px; min-height:16px; }
+    #loc { color:#667; font-size:12px; }
+    #val { font-size:22px; text-align:center; padding:14px; }
+    .row { display:flex; gap:10px; }
+    #status { color:#7ec8a0; font-size:13px; min-height:16px; text-align:center; }
+    .hidden { display:none !important; }
+    #done { text-align:center; font-size:20px; color:#7ec8a0; margin-top:30vh; }
+    #kbToggle { font-size:12px; color:#8a94a6; text-align:center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Dedust Review</h1>
+    <span id="counter"></span>
+  </header>
+
+  <!-- Setup screen -->
+  <div id="setup" class="screen">
+    <select id="proj"></select>
+    <label class="chk"><input type="checkbox" class="sig" value="disagree" checked> OCR ≠ LLM disagreement</label>
+    <label class="chk"><input type="checkbox" class="sig" value="outlier" checked> Numeric outliers</label>
+    <label class="chk"><input type="checkbox" class="sig" value="unverified"> Unverified cells</label>
+    <input type="text" id="pages" placeholder="Pages (blank = all), e.g. 1-50">
+    <label class="chk"><input type="checkbox" id="skipver" checked> skip pages already verified</label>
+    <button class="btn btn-go" onclick="start()">⚡ Start reviewing</button>
+    <div id="status"></div>
+  </div>
+
+  <!-- Card screen -->
+  <div id="card" class="screen hidden">
+    <div id="snippet-wrap"><img id="snippet" alt=""></div>
+    <div id="why"></div>
+    <div id="loc"></div>
+    <input type="text" id="val" inputmode="decimal" autocomplete="off" placeholder="(empty = nothing here)">
+    <div id="kbToggle" onclick="toggleKb()">⌨ switch to full keyboard</div>
+    <div class="row">
+      <button class="btn btn-acc"  onclick="accept()">✓ Accept</button>
+    </div>
+    <div class="row">
+      <button class="btn btn-undo" onclick="undo()">↩ Undo</button>
+      <button class="btn btn-blank" onclick="acceptBlank()">∅ Blank</button>
+      <button class="btn btn-skip" onclick="skip()">↓ Skip</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div id="done" class="hidden">✓ Queue cleared 🎉<br><br>
+    <button class="btn btn-go" onclick="reset()">Back to setup</button></div>
+
+<script>
+let queue = [], pos = 0, folder = '', lastUndo = null;
+
+const $ = id => document.getElementById(id);
+const status = (t, err) => { document.querySelectorAll('#status').forEach(e => {
+  e.textContent = t; e.style.color = err ? '#e94560' : '#7ec8a0'; }); };
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (r.status === 401) { location.href = '/static/login.html?next=' + encodeURIComponent(location.pathname); throw new Error('login'); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || r.status);
+  return d;
+}
+
+async function loadProjects() {
+  try {
+    const d = await api('/api/projects');
+    $('proj').innerHTML = (d.projects || []).map(p =>
+      `<option value="${p.name || p}">${p.name || p}</option>`).join('');
+    const saved = localStorage.getItem('revProj');
+    if (saved) $('proj').value = saved;
+  } catch (e) { status('Cannot load projects: ' + e.message, true); }
+}
+
+async function start() {
+  const name = $('proj').value;
+  if (!name) { status('Pick a project', true); return; }
+  localStorage.setItem('revProj', name);
+  status('Scanning…');
+  try {
+    const pj = await api('/api/project/' + encodeURIComponent(name));
+    folder = pj.annotations_path;
+    const signals = [...document.querySelectorAll('.sig:checked')].map(c => c.value);
+    const d = await api('/api/review/queue?folder=' + encodeURIComponent(folder), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ signals, limit: 50000,
+        exclude_verified: $('skipver').checked }),
+    });
+    queue = d.queue || []; pos = 0; lastUndo = null;
+    if (!queue.length) { status('✓ Nothing flagged.'); return; }
+    $('setup').classList.add('hidden');
+    $('card').classList.remove('hidden');
+    show();
+  } catch (e) { status(e.message, true); }
+}
+
+function show() {
+  if (pos >= queue.length) { finish(); return; }
+  const it = queue[pos];
+  $('counter').textContent = `${pos + 1} / ${queue.length}`;
+  $('why').textContent = it.why + (it.extra ? ` (${it.extra})` : '');
+  $('loc').textContent = `${it.stem} · col ${it.col ?? '–'}${it.row ? ' · row ' + it.row : ''}`;
+  let u = `/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(it.stem)}&idx=${it.idx}&pad=3`;
+  if (it.y0 != null && it.y1 != null) u += `&y0=${it.y0}&y1=${it.y1}`;
+  $('snippet').src = u;
+  $('val').value = it.best || '';
+  status('');
+}
+
+async function _post(it, value, restoreBlank) {
+  return api('/api/review/accept?folder=' + encodeURIComponent(folder), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ stem: it.stem, idx: it.idx, row: it.row,
+                           value, restore_blank: restoreBlank }),
+  });
+}
+
+async function accept(valueOverride) {
+  const it = queue[pos];
+  const value = valueOverride !== undefined ? valueOverride : $('val').value;
+  try {
+    const d = await _post(it, value, null);
+    lastUndo = { pos, it, prev: d.prev };
+    if (d.blank) status('∅ marked blank');
+    pos++; show();
+  } catch (e) { status('✕ ' + e.message + ' — tap Accept to retry', true); }
+}
+
+function acceptBlank() { accept(''); }
+function skip() { pos++; show(); }
+
+async function undo() {
+  if (!lastUndo) { status('Nothing to undo', true); return; }
+  const u = lastUndo; lastUndo = null;
+  try {
+    await _post(u.it, u.prev.human, !!u.prev.blank);
+    pos = u.pos; show(); status('↩ restored');
+  } catch (e) { status('Undo failed: ' + e.message, true); }
+}
+
+function finish() { $('card').classList.add('hidden'); $('done').classList.remove('hidden'); }
+function reset()  { $('done').classList.add('hidden'); $('setup').classList.remove('hidden'); $('counter').textContent = ''; }
+
+function toggleKb() {
+  const v = $('val');
+  const dec = v.getAttribute('inputmode') === 'decimal';
+  v.setAttribute('inputmode', dec ? 'text' : 'decimal');
+  $('kbToggle').textContent = dec ? '🔢 switch to numeric keypad' : '⌨ switch to full keyboard';
+  v.focus();
+}
+
+document.addEventListener('keydown', e => {
+  if ($('card').classList.contains('hidden')) return;
+  if (e.key === 'Enter') { e.preventDefault(); accept(); }
+});
+
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+loadProjects();
+</script>
+</body>
+</html>
