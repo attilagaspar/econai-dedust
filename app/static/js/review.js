@@ -134,7 +134,7 @@ async function startReview() {
   try {
     const r = await fetch(`${API}/api/review/queue?folder=${encodeURIComponent(folder)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stems, signals,
+      body: JSON.stringify({ stems, signals, limit: 50000,
         col_filter: document.getElementById('rev-cols').value.trim() || null,
         exclude_verified: document.getElementById('rev-skip-verified').checked }),
     });
@@ -147,7 +147,9 @@ async function startReview() {
     document.getElementById('review-strip').style.display = 'block';
     const pinEl = document.getElementById('rev-pinpoint');
     if (pinEl) { pinEl.checked = localStorage.getItem('revPinpoint') === '1'; _revPinpoint = pinEl.checked; }
-    showToast(`${_revQueue.length} cell(s) to review`);
+    const capped = (d.total || _revQueue.length) > _revQueue.length;
+    showToast(`${_revQueue.length} cell(s) to review`
+      + (capped ? ` (of ${d.total} — showing the first ${_revQueue.length})` : ''), 4000);
     await _revShow();
   } catch (e) { showToast('Review error: ' + (e.message || e)); }
 }

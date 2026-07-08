@@ -2466,6 +2466,7 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                          else "azure" if body.model.startswith(_AZURE_PREFIX)
                          else "openai"),
             "model": body.model, "mode": body.mode, "prompt": body.prompt,
+            "payload": body.payload, "rows_source": body.rows_source,
             "json": json_mode, "schema_name": body.schema_name,
             "n_requests": len(lines), "n_cells": len(meta),
             "submitted": _dt.datetime.utcnow().isoformat() + "Z",
@@ -2929,7 +2930,7 @@ class ReviewQueueBody(BaseModel):
     col_filter: Optional[str] = None
     signals:    List[str] = ["disagree", "outlier", "unverified"]
     layer:      str = "best_llm"
-    limit:      int = 2000
+    limit:      int = 50000
     exclude_verified: bool = True     # skip pages already marked verified
 
 

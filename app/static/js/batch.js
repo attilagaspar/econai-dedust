@@ -521,10 +521,20 @@ async function runBatch() {
   if (op === 'llm_batchapi') {
     const s = _collectLlmSettings();
     const tasks = await _collectLlmTargets(sorted, s, progText);
+    const sendDesc = { image: 'image', ocr: 'OCR text', 'image+ocr': 'image + OCR' }[s.payload] || s.payload;
+    const perRow = s.mode === 'linebyline';
+    const scopeDesc = perRow
+      ? `per internal row (${s.rows_source === 'detect' ? 're-detect rows' : 'keep structure'})`
+      : '⚠ WHOLE cell — ONE request per cell; a multi-row cell returns a single value';
     let msg;
     if (!tasks.length) {
       msg = 'No matching cells — nothing submitted.';
-    } else if (!confirm(`Submit ${tasks.length} cell(s) as an overnight batch (half price, done within 24h)?`)) {
+    } else if (!confirm(
+        `Overnight batch — ${tasks.length} cell(s), model ${s.model}\n`
+      + `Send:  ${sendDesc}\n`
+      + `Scope: ${scopeDesc}\n\n`
+      + (perRow ? '' : 'If your cells have internal rows and you want each row read, cancel and set Scope to "Internal rows".\n\n')
+      + `Proceed? (half price, done within 24h)`)) {
       msg = 'Submission cancelled.';
     } else {
       progText.textContent = `Submitting ${tasks.length} cell(s)…`;
