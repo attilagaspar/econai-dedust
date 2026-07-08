@@ -970,6 +970,7 @@
       <div style="font-size:10px;color:#555;">Requests are packaged and handed to the provider's batch service: half price, done within 24h (usually much sooner). You can close the browser after submitting. Azure models need a <b>Global Batch</b> deployment of the model in the Azure portal.</div>
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:11px;color:#aaa;flex:1;">Overnight jobs</span>
+        <button type="button" onclick="_ovClearFinished()" title="Remove all finished jobs (applied/failed/cancelled) from the list" style="background:#1a2740;border:1px solid #3a4a6a;color:#9fb0c8;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">🗑 Clear finished</button>
         <button type="button" onclick="_refreshOvernightJobs()" style="background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">↻ Refresh</button>
       </div>
       <div id="batch-overnight-jobs" style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;"></div>

@@ -2542,6 +2542,26 @@ def api_llm_batch_cancel(folder: str = Query(...), job: str = Query(...)):
     return {"ok": True, "status": j["status"]}
 
 
+@app.post("/api/llm_batch/remove")
+def api_llm_batch_remove(folder: str = Query(...), job: Optional[str] = Query(None),
+                         finished: bool = Query(False)):
+    """Forget job(s) from the local list. Does NOT cancel/delete anything on the
+    provider — just prunes the manifest. `finished=1` drops all terminal jobs;
+    otherwise `job` removes one (any status)."""
+    _TERMINAL = {"applied", "failed", "cancelled", "expired", "completed"}
+    with _LLM_JOBS_LOCK:
+        jobs = _llm_jobs_load(folder)
+        before = len(jobs)
+        if finished:
+            jobs = [j for j in jobs if j.get("status") not in _TERMINAL]
+        elif job:
+            jobs = [j for j in jobs if j.get("id") != job]
+        else:
+            raise HTTPException(status_code=400, detail="Pass job=<id> or finished=1")
+        _llm_jobs_save(folder, jobs)
+    return {"ok": True, "removed": before - len(jobs)}
+
+
 @app.post("/api/llm_batch/apply")
 def api_llm_batch_apply(folder: str = Query(...), job: str = Query(...)):
     """Download a completed job's answers and write them into the pages exactly

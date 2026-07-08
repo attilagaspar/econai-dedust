@@ -116,6 +116,30 @@ def test_overnight_cancel(client, page_folder, provider):
     assert r.json()["status"] == "cancelling"
 
 
+def test_overnight_remove_and_clear(client, page_folder, provider):
+    # two jobs; cancel one (terminal-ish) and remove; clear finished
+    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
+                json={"targets": [{"stem": "p1", "idx": 1}],
+                      "model": "gpt-4o-mini", "mode": "ocr", "prompt": "x"})
+    client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
+                json={"targets": [{"stem": "p1", "idx": 2}],
+                      "model": "gpt-4o-mini", "mode": "ocr", "prompt": "y"})
+    # remove one by id
+    r = client.post("/api/llm_batch/remove",
+                    params={"folder": str(page_folder), "job": "job-1"})
+    assert r.status_code == 200 and r.json()["removed"] == 1
+    assert len(client.get("/api/llm_batch/jobs",
+                          params={"folder": str(page_folder)}).json()["jobs"]) == 1
+    # mark the remaining job failed, then clear finished
+    provider.status = "failed"
+    client.get("/api/llm_batch/jobs", params={"folder": str(page_folder)})  # refresh status
+    r = client.post("/api/llm_batch/remove",
+                    params={"folder": str(page_folder), "finished": "1"})
+    assert r.status_code == 200 and r.json()["removed"] == 1
+    assert client.get("/api/llm_batch/jobs",
+                      params={"folder": str(page_folder)}).json()["jobs"] == []
+
+
 def test_overnight_rejects_local_models(client, page_folder, provider):
     r = client.post("/api/llm_batch/submit", params={"folder": str(page_folder)},
                     json={"targets": [{"stem": "p1", "idx": 1}],

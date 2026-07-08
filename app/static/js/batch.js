@@ -1246,8 +1246,11 @@ async function _refreshOvernightJobs() {
       const btns = [];
       if (j.status === 'completed')
         btns.push(`<button onclick="_ovApply('${j.id}', this)" style="background:#1b4d2e;border:1px solid #2e7d4f;color:#e0e0e0;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">⬇ Apply results</button>`);
-      if (['validating', 'in_progress', 'finalizing', 'queued'].includes(j.status))
+      const running = ['validating', 'in_progress', 'finalizing', 'queued'].includes(j.status);
+      if (running)
         btns.push(`<button onclick="_ovCancel('${j.id}', this)" style="background:#5c1f2e;border:1px solid #8e2f47;color:#e0e0e0;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">✕ Cancel</button>`);
+      else
+        btns.push(`<button onclick="_ovRemove('${j.id}', this)" title="Remove this job from the list (doesn't touch the provider)" style="background:#1a2740;border:1px solid #3a4a6a;color:#8a94a6;border-radius:4px;padding:2px 7px;font-size:11px;cursor:pointer;">🗑</button>`);
       return `<div style="display:flex;align-items:center;gap:8px;background:#091530;border:1px solid #0f3460;border-radius:5px;padding:5px 8px;font-size:11px;color:#aaa;">
         <span style="flex:none;color:#e0e0e0;font-weight:700;">${_escHtml(j.id)}</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
@@ -1288,6 +1291,29 @@ async function _ovCancel(jobId, btn) {
     if (!r.ok) throw new Error(d.detail || r.status);
     showToast(`✕ ${jobId} → ${d.status}`);
   } catch (e) { showToast('Cancel failed: ' + (e.message || e), 7000); }
+  _refreshOvernightJobs();
+}
+
+async function _ovRemove(jobId, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/llm_batch/remove?folder=${encodeURIComponent(folder)}&job=${encodeURIComponent(jobId)}`,
+                          { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+  } catch (e) { showToast('Remove failed: ' + (e.message || e), 6000); }
+  _refreshOvernightJobs();
+}
+
+async function _ovClearFinished() {
+  if (!confirm('Remove all finished jobs (applied / failed / cancelled / expired) from the list?')) return;
+  try {
+    const r = await fetch(`${API}/api/llm_batch/remove?folder=${encodeURIComponent(folder)}&finished=1`,
+                          { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    showToast(`Removed ${d.removed} finished job(s)`);
+  } catch (e) { showToast('Clear failed: ' + (e.message || e), 6000); }
   _refreshOvernightJobs();
 }
 
