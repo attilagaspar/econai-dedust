@@ -247,9 +247,11 @@ The batch op **⊞ Build internal row structure (detect / anchor-project)** is t
 
 | Control | What it does |
 |---|---|
-| **Rows from** | `Image only` (auto-detect the row count from pixels) or a content layer (`Best / Human / LLM / OCR / PDF`) whose line count fixes the number of rows |
-| **Anchor column pattern** | *Blank* → detect rows independently in every cell. Otherwise a cyclic per-page list of the anchor `super_column`; its detected structure is **projected** onto the other columns of the same lattice row. An empty slot skips that page — e.g. `8,,2,1` |
+| **Rows from** | `Image only` (auto-detect the row count from pixels); a content layer (`Best / Human / LLM / OCR / PDF`) whose line count fixes the number of rows; or **`Existing structure`** — use the anchor cell's own hand-made `row_struct` bands **verbatim** (only meaningful with an anchor pattern) |
+| **Anchor column pattern** | *Blank* → detect rows independently in every cell. Otherwise a cyclic per-page list of the anchor `super_column`; its structure is **projected** onto the other columns of the same lattice row. An empty slot skips that page — e.g. `8,,2,1` |
 | **Overwrite** | Rebuild cells that already have a structure |
+
+**To propagate one column's structure everywhere:** perfect that column's dividers by hand, then run with **Rows from = Existing structure**, **Anchor column pattern = its column number** (e.g. `2`), pages and column filter blank, Overwrite off. Its exact bands are mapped onto every other column of each lattice row, on every page; the anchor cell itself is left untouched. (Projection is per lattice row, so the anchor column needs a structure in each row you want covered.)
 
 This replaced the former *Anchored OCR / Anchored LLM* batch ops (which mixed structure and content in one paid pass). A single-cell "Anchored" scope still exists in the LLM panel for one-offs.
 
