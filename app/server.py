@@ -2974,6 +2974,10 @@ def _cell_layer_text(shape, source):
 
 def _bands_for_cell(shadow, shape, source, cell_height):
     """Return absolute-y (y0, y1) bands for one cell, or None if undeterminable."""
+    # "existing" → use the cell's own hand-made row_struct bands verbatim
+    if source == "existing":
+        rows = (shape.get("row_struct") or {}).get("rows") or []
+        return [(float(r["y0"]), float(r["y1"])) for r in rows] if rows else None
     x1, y1, x2, y2 = _shape_bbox(shape)
     iw, ih = shadow.size
     pad = 4

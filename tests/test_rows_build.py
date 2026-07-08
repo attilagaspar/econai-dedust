@@ -66,6 +66,26 @@ def test_anchor_projection(client, rb_folder):
     assert "row_struct" not in sh[2]                    # blank never touched
 
 
+def test_anchor_project_existing_structure(client, rb_folder):
+    # give col 1 a hand-made structure (2 rows), then project it verbatim onto
+    # col 2 with source=existing — the exact y-bands must transfer
+    sh = _shapes(rb_folder)
+    sh[0]["row_struct"] = {"version": 1, "origin": "manual", "rows": [
+        {"n": 1, "y0": 45.0, "y1": 88.0, "ocr": "", "llm": "", "human": ""},
+        {"n": 2, "y0": 88.0, "y1": 128.0, "ocr": "", "llm": "", "human": ""}]}
+    client.put("/api/page/shapes",
+               params={"folder": str(rb_folder), "stem": "p1"}, json={"shapes": sh})
+    r = client.post("/api/rows/build", params={"folder": str(rb_folder)},
+                    json={"source": "existing", "anchor_pattern": "1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["totals"]["projected"] == 1
+    out = _shapes(rb_folder)
+    # col1 (anchor) kept its structure; col2 got 2 rows projected to its own bbox
+    assert len(out[0]["row_struct"]["rows"]) == 2
+    assert out[1]["row_struct"]["origin"] == "projected"
+    assert len(out[1]["row_struct"]["rows"]) == 2
+
+
 def test_overwrite_semantics(client, rb_folder):
     # first build, then a second build without overwrite must not rebuild
     client.post("/api/rows/build", params={"folder": str(rb_folder)},
