@@ -3,9 +3,12 @@
 // ── Shape operations ─────────────────────────────────────────────────────────
 async function patchShape(idx, body) {
   const params=new URLSearchParams({folder,stem:pages[pageIdx].stem,idx});
-  await fetch(`${API}/api/page/shape?${params}`,{
-    method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
-  });
+  try {
+    const r = await fetch(`${API}/api/page/shape?${params}`,{
+      method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
+    });
+    return r.ok;              // callers (e.g. review accept) gate on this
+  } catch (e) { return false; }
 }
 
 // ── Internal row structure (row_struct) ──────────────────────────────────────

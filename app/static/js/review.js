@@ -177,41 +177,65 @@ async function _revShow() {
   setTimeout(() => { inp.focus(); inp.select(); }, 30);
 }
 
+// One review action at a time — the keydown handler fires these without
+// awaiting, so a second Enter before the first finishes would double-process
+// one item and skip (never save) the next. _revBusy serializes them.
+let _revBusy = false;
+
 async function _revAccept() {
-  if (!_revActive || _revPos >= _revQueue.length) return;
-  const it = _revQueue[_revPos];
-  const val = document.getElementById('rev-input').value;
-  const pi = _revStemIdx(it.stem);
-  if (pi < 0) { _revPos++; await _revShow(); return; }
-  if (pi !== pageIdx) await loadPage(pi);
-  const sh = pageData.shapes[it.idx];
-  _revUndo = { pos: _revPos, stem: it.stem, idx: it.idx, row: it.row,
-               prev: JSON.parse(JSON.stringify(sh)) };
-  if (it.row && sh.row_struct?.rows) {
-    const r = sh.row_struct.rows.find(x => x.n === it.row);
-    if (r) { r.human = val; }
-    await saveRowStruct(it.idx);
-  } else {
-    sh.human_output = sh.human_output || {};
-    sh.human_output.human_corrected_text = val;
-    await patchShape(it.idx, { human_corrected_text: val });
-  }
-  drawOverlay();
-  _revPos++;
-  await _revShow();
+  if (_revBusy || !_revActive || _revPos >= _revQueue.length) return;
+  _revBusy = true;
+  try {
+    const it = _revQueue[_revPos];
+    const val = document.getElementById('rev-input').value;
+    const pi = _revStemIdx(it.stem);
+    if (pi < 0) { _revPos++; await _revShow(); return; }
+    if (pi !== pageIdx) await loadPage(pi);
+    const sh = pageData.shapes[it.idx];
+    _revUndo = { pos: _revPos, stem: it.stem, idx: it.idx, row: it.row,
+                 prev: JSON.parse(JSON.stringify(sh)) };
+    let ok = false;
+    if (it.row && sh.row_struct?.rows) {
+      const r = sh.row_struct.rows.find(x => x.n === it.row);
+      if (r) { r.human = val; }
+      ok = await saveRowStruct(it.idx);
+    } else {
+      sh.human_output = sh.human_output || {};
+      sh.human_output.human_corrected_text = val;
+      ok = await patchShape(it.idx, { human_corrected_text: val });
+    }
+    if (ok === false) {   // save failed — stay on this item, don't advance
+      showToast('✕ Save failed — press Enter to retry', 4000);
+      _revUndo = null;
+      return;
+    }
+    drawOverlay();
+    _revPos++;
+    await _revShow();
+  } finally { _revBusy = false; }
+}
+
+async function _revSkip() {
+  if (_revBusy || !_revActive) return;
+  _revBusy = true;
+  try { _revPos++; await _revShow(); } finally { _revBusy = false; }
 }
 
 async function _revUndoLast() {
+  if (_revBusy) return;
   if (!_revUndo) { showToast('Nothing to undo'); return; }
-  const u = _revUndo; _revUndo = null;
-  const pi = _revStemIdx(u.stem);
-  if (pi < 0) return;
-  if (pi !== pageIdx) await loadPage(pi);
-  pageData.shapes[u.idx] = u.prev;
-  await replaceAllShapes();
-  drawOverlay();
-  _revPos = u.pos;
-  await _revShow();
+  _revBusy = true;
+  try {
+    const u = _revUndo; _revUndo = null;
+    const pi = _revStemIdx(u.stem);
+    if (pi < 0) return;
+    if (pi !== pageIdx) await loadPage(pi);
+    pageData.shapes[u.idx] = u.prev;
+    await replaceAllShapes();
+    drawOverlay();
+    _revPos = u.pos;
+    await _revShow();
+  } finally { _revBusy = false; }
 }
 
 function _revFinish() {
@@ -231,7 +255,7 @@ document.addEventListener('keydown', e => {
   const inInput = e.target && e.target.id === 'rev-input';
   if (e.key === 'Enter' && inInput) { e.preventDefault(); _revAccept(); }
   else if (e.key === 'ArrowDown' || (e.key === 'Tab' && inInput)) {
-    e.preventDefault(); _revPos++; _revShow();
+    e.preventDefault(); _revSkip();
   } else if ((e.key === 'u' || e.key === 'U') && inInput && !e.ctrlKey) {
     // 'u' inside the field is rare in numeric data; guard: only when field is a pure number/dash
     if (/^[\d.\-\s]*$/.test(document.getElementById('rev-input').value)) { e.preventDefault(); _revUndoLast(); }
