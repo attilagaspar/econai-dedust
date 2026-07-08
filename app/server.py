@@ -106,7 +106,7 @@ async def lifespan(app):
     )
     yield
 
-app = FastAPI(title="EconAI", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Dedust", version="0.1.0", lifespan=lifespan)
 
 from app.validator import router as _validator_router
 app.include_router(_validator_router)

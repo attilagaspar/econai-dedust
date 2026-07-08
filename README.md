@@ -1,4 +1,6 @@
-# EconAI — Historical Document Digitization Pipeline
+# Dedust — Historical Document Digitization Pipeline
+
+*(working name; formerly "EconAI". The repo may later be renamed — candidate: `hollerith`.)*
 
 A browser-based tool for turning large collections of scanned historical documents (statistical tables, company registers, census pages) into clean, structured data. It combines layout detection, OCR, and LLM-based cleaning, with human-in-the-loop correction at every step.
 
