@@ -1,0 +1,75 @@
+# Remote access & multi-user collaboration — plan
+
+Two user goals (2026-07-08): (1) a real multi-user server where several people
+process the same data; (2) reach the home server from anywhere via the user's
+own domain — including a phone-friendly review mode for commutes. They are
+phases of one road, not separate projects. **No rewrite is needed**: the
+single-process FastAPI + JSON-files architecture already has per-page write
+serialization, merge-safe LLM writes, atomic saves, and page status/assignee
+flags — the missing pieces are auth, identity, and page-level locking.
+
+## Critical prerequisite (before ANY exposure)
+
+The API accepts arbitrary absolute paths in the `folder` query parameter
+(`_resolve_folder`). An internet-exposed instance without hardening =
+read/write access to the host filesystem. Phase A must include:
+1. restrict `folder` resolution to the `projects/` root (reject absolute /
+   traversal paths; keep a legacy escape hatch behind a localhost check),
+2. an app-level shared token (header or cookie) as a second layer behind the
+   edge auth.
+
+## Phase A — expose via Cloudflare Tunnel (~1 session)
+
+- `cloudflared` tunnel from the home PC to the user's domain: free, no port
+  forwarding, automatic TLS, survives IP changes.
+- **Cloudflare Access** (Zero Trust, free ≤50 users) in front: Google/e-mail
+  SSO before any request reaches the app — auth without app changes.
+- App hardening as above. CORS tightened from `*` to the domain.
+- Operational rules: home PC stays on; ONE source of truth — when the home
+  machine serves a project, nobody edits that project via Dropbox-synced
+  copies elsewhere (the old per-RA-local-server mode and the hosted mode must
+  not be mixed for the same project).
+- WAN performance is fine: images are served as JPEGs; OCR/LLM run server-side.
+
+## Phase A′ — mobile review PWA (~1–2 sessions, rides on A)
+
+- `app/static/review.html`: phone-shaped page reusing the existing endpoints
+  (`POST /api/review/queue`, `/api/cell` band crops, saveRowStruct/patchShape
+  paths). Big snippet image, numeric-friendly input, thumb-sized Accept /
+  Skip / Undo, same empty→blank semantics as the desktop strip.
+- PWA manifest + service worker → installable icon, full screen. v1 is
+  online-only; offline batch (download N items, sync later) is a possible v2.
+- No native app / app store needed.
+
+## Phase B — multi-user on the same server (~2–3 sessions)
+
+- **Identity**: read the Cloudflare Access user header (or a minimal login) →
+  stamp `verified_by` on Human saves and review accepts (this is also what
+  the P4 audit wants for provenance/double-entry).
+- **Advisory page locks**: opening a page in edit takes a soft lock
+  (`flags.lock = {user, ts}`, TTL ~5 min, heartbeat); others see "open by X —
+  read-only". Collaboration partitions by page, which is how table
+  digitization actually parallelizes. NOT building real-time same-cell
+  co-editing (CRDT — out of proportion for a 2–5 person team).
+- `assignee` flag becomes enforceable (warn when opening someone else's page);
+  dashboard shows per-person progress from the status scan.
+- Keep uvicorn workers=1 (the in-process asyncio page locks assume one
+  process; fine for ≤10 users). If that ever limits, move locks to file locks.
+
+## Phase C — move off the home PC (optional, ~1–2 sessions)
+
+- Dockerize the webapp (separate from the existing GPU-training Dockerfile);
+  run on an always-on box (TK server or small VPS; EasyOCR/torch wants ~4 GB
+  RAM; Tesseract is a small binary; GPU training stays remote via SSH exactly
+  as today).
+- Project files live on the server disk = single source of truth; git and/or
+  scheduled backup replaces Dropbox as the sync mechanism (this REMOVES the
+  current Dropbox-conflict failure mode between user and RAs).
+- Cloudflare tunnel simply moves to that machine; nothing else changes.
+
+## Sequencing & interactions
+
+A → A′ → B → C; each phase is independently useful and none blocks P2 (tidy
+export) or P4 (audit) — B's `verified_by` actually feeds P4. Suggested: do
+Phase A + A′ when commute-review is wanted; B when a second simultaneous
+user actually appears; C when "PC must stay on" hurts.

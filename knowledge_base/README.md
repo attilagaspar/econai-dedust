@@ -12,6 +12,7 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 | [05_subsystems.md](05_subsystems.md) | Deep dives: authority/gazetteer resolver, structured (JSON) extraction, row rules & rule-fix, batch operations |
 | [06_critique.md](06_critique.md) | What is not right — big-picture, UX, engineering, data-quality weaknesses |
 | [07_improvement_roadmap.md](07_improvement_roadmap.md) | Concrete plans to make human–machine interaction faster and shorten raw-data → final-product time |
+| [08_remote_and_collaboration.md](08_remote_and_collaboration.md) | Plan: expose the server via Cloudflare Tunnel + domain, mobile review PWA, multi-user identity & page locks, optional hosted deployment |
 
 Conventions for AI assistants:
 - The editor is `app/static/index.html` (HTML skeleton) + `app/static/js/*.js` — nine ordered classic scripts sharing one global scope (load order in index.html is load-bearing; no load-time calls into later files). Styles in `app/static/css/editor.css`. The backend is `app/server.py` (~5.4k lines). Grep across `js/` before you assume something doesn't exist — most features do exist but are hard to find.
