@@ -17,10 +17,10 @@ def test_different_workspaces_get_different_containers():
     matyas = {"remote_path": "/home/matyas/econai"}
     assert _predict_container(gaspar) != _predict_container(matyas)
     assert _train_container(gaspar) != _train_container(matyas)
-    # names embed the base + a readable slug of the workspace tail
-    assert _predict_container(gaspar).startswith("detectron_predicting_container_")
-    assert "koren" in _predict_container(gaspar)
-    assert "econai" in _predict_container(matyas)
+    # brand-clean: dedust base + hash suffix, no directory names leaked
+    assert _predict_container(gaspar).startswith("dedust_predict_")
+    for name in (_predict_container(gaspar), _predict_container(matyas)):
+        assert "koren" not in name and "econai" not in name
 
 
 def test_predict_prefers_predict_remote_path():
@@ -31,8 +31,8 @@ def test_predict_prefers_predict_remote_path():
     assert _predict_container(srv) != _train_container(srv)
 
 
-def test_no_srv_returns_legacy_base_name():
-    # inert default: without a workspace we keep the historic single-user name
-    assert _predict_container(None) == "detectron_predicting_container"
-    assert _train_container(None) == "detectron_training_container"
+def test_no_srv_returns_base_name():
+    # inert default: without a workspace we keep the plain base name
+    assert _predict_container(None) == "dedust_predict"
+    assert _train_container(None) == "dedust_train"
     assert _ns_suffix("") == ""

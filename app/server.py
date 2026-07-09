@@ -4023,17 +4023,15 @@ def _docker_cfg() -> dict:
 def _ns_suffix(host_path: str) -> str:
     """A stable, docker-safe suffix derived from the host workspace path a
     container will mount. Each distinct workspace gets its own container, so
-    two users on the same GPU host (e.g. gaspar and matyas, whose /workspace
-    binds differ) never share — and can never clobber — one another's
-    container. Empty path → no suffix (legacy single-user behavior)."""
-    import hashlib, re as _re
+    two users on the same GPU host (whose /workspace binds differ) never
+    share — and can never clobber — one another's container. A short hash of
+    the path (no directory names, to keep container names brand-clean).
+    Empty path → no suffix (legacy single-user behavior)."""
+    import hashlib
     host_path = (host_path or "").rstrip("/")
     if not host_path:
         return ""
-    tail = host_path.split("/")[-1]
-    slug = _re.sub(r"[^A-Za-z0-9]+", "-", tail).strip("-")[:24]
-    h = hashlib.sha1(host_path.encode("utf-8")).hexdigest()[:8]
-    return f"{slug}-{h}" if slug else h
+    return hashlib.sha1(host_path.encode("utf-8")).hexdigest()[:10]
 
 def _predict_workspace_root(srv: dict) -> str:
     """Host dir the predict container mounts as /workspace."""
@@ -4123,7 +4121,7 @@ def api_docker_container_status(body: SshRequest = None,
 @app.post("/api/docker-config/build")
 async def api_docker_build(passphrase: Optional[str] = Query(None),
                            role: str = Query("predict")):
-    """Build the econai-layout image on the GPU server and create the named container.
+    """Build the dedust-layout image on the GPU server and create the named container.
     role: 'predict' | 'train' | 'both'
     Streams SSE log lines."""
     from app import ssh_ops
@@ -4170,7 +4168,7 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
         sftp = c.open_sftp()
         try:
             # Upload Dockerfile to server
-            remote_df = "/tmp/econai_Dockerfile"
+            remote_df = "/tmp/dedust_Dockerfile"
             yield f"[docker] Uploading Dockerfile to {remote_df}..."
             with sftp.open(remote_df, "w") as f:
                 f.write(dockerfile_content)

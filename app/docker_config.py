@@ -10,9 +10,9 @@ from pathlib import Path
 _CONFIG_PATH = Path(__file__).parent / "docker_config.json"
 
 _DEFAULTS: dict = {
-    "predict_container": "detectron_predicting_container",
-    "train_container":   "detectron_training_container",
-    "image_name":        "econai-layout",
+    "predict_container": "dedust_predict",
+    "train_container":   "dedust_train",
+    "image_name":        "dedust-layout",
 }
 
 
