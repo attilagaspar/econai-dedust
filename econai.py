@@ -234,6 +234,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_srv.add_argument("--host", default="127.0.0.1",
                        help="Bind address. Anything other than 127.0.0.1 REQUIRES "
                             "the ECONAI_TOKEN environment variable (remote auth).")
+    p_srv.add_argument("--no-browser", action="store_true",
+                       help="Don't open a browser on start (for background / startup use).")
+    p_srv.add_argument("--no-reload", action="store_true",
+                       help="Disable the autoreload file-watcher (for background / startup use).")
 
     return parser
 
@@ -272,10 +276,12 @@ def cmd_serve(args):
     print(f"Starting Dedust server at {url}" + ("" if host in ("127.0.0.1", "localhost")
           else f"  (also listening on {host}:{port} — token required remotely)"))
     print("Press Ctrl+C to stop.\n")
-    webbrowser.open(url)
+    if not getattr(args, "no_browser", False):
+        webbrowser.open(url)
 
     import uvicorn
-    uvicorn.run("app.server:app", host=host, port=port, reload=True)
+    uvicorn.run("app.server:app", host=host, port=port,
+                reload=not getattr(args, "no_reload", False))
 
 
 COMMANDS = {
