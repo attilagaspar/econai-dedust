@@ -5502,7 +5502,8 @@ async def _sse_stream(gen):
                                       "X-Accel-Buffering": "no"})
 
 
-def _push_training_data_gen(name: str, srv: dict, passphrase: str):
+def _push_training_data_gen(name: str, srv: dict, passphrase: str,
+                            skip_images: bool = False):
     """Generator: push images + COCO JSON + config + scripts, yielding progress lines."""
     from app import ssh_ops
     pdir   = project_dir(name)
@@ -5528,12 +5529,15 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str):
         images = [p for p in (pdir / "annotations").iterdir()
                   if p.suffix.lower() in IMAGE_EXTS]
         total = len(images)
-        yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
-        for i, img in enumerate(images, 1):
-            dest = f"{remote}/{name}/images/{img.name}"
-            sftp.put(str(img), dest)
-            if i % 5 == 0 or i == total:
-                yield f"[push]   {i}/{total}  {img.name} → {dest}"
+        if skip_images:
+            yield f"[push] Skipping image upload ({total} images assumed already on server)."
+        else:
+            yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
+            for i, img in enumerate(images, 1):
+                dest = f"{remote}/{name}/images/{img.name}"
+                sftp.put(str(img), dest)
+                if i % 5 == 0 or i == total:
+                    yield f"[push]   {i}/{total}  {img.name} → {dest}"
 
         dest = f"{remote}/{name}/annotations.json"
         yield f"[push] {inter/'annotations.json'} → {dest}"
@@ -6041,6 +6045,203 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                 yield from _stop_container_gen(srv, body.passphrase,
                                                _predict_container(srv), "infer-from",
                                                body.keep_container)
+
+        return await _sse_stream(full_gen())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class FinetuneFromRequest(BaseModel):
+    passphrase:        Optional[str] = None
+    max_iter:          int = 500          # short: we start from good weights
+    base_lr:           float = 0.00025    # gentle: don't wreck what the model knows
+    skip_image_upload: bool = False
+    keep_container:    bool = False
+
+
+@app.post("/api/project/{name}/finetune-from/{source}")
+async def api_finetune_from(name: str, source: str,
+                            body: FinetuneFromRequest = FinetuneFromRequest()):
+    """Fine-tune: train `name`'s own model on its (hand-corrected) annotations,
+    warm-started from `source`'s trained weights (MODEL.WEIGHTS override)
+    instead of the generic COCO backbone. Short + low-LR by default. The result
+    lands in outputs/{name}/ — the source model is never touched. Launched
+    detached (like Train) so it survives browser disconnects; streams the log.
+    """
+    from app import ssh_ops
+    from app.coco_convert import prepare_training_data
+
+    try:
+        try:
+            cfg     = load_config(name)
+            src_cfg = load_config(source)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        if set(cfg.get("labels", [])) != set(src_cfg.get("labels", [])):
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Label mismatch: '{name}' has {cfg.get('labels')} but "
+                        f"'{source}' was trained with {src_cfg.get('labels')}. "
+                        f"Projects must share the same label set."))
+
+        srv        = _server_cfg(name)
+        passphrase = body.passphrase
+        pdir       = project_dir(name)
+        inter      = pdir / "intermediate"
+        remote     = srv["remote_path"].rstrip("/")
+
+        max_iter = max(1, int(body.max_iter or 500))
+        base_lr  = float(body.base_lr or 0.00025)
+
+        # Regenerate COCO + config locally from the CURRENT (corrected)
+        # annotations. Standard solver params here so the normal train.sh that
+        # gets pushed alongside is not silently rewritten with fine-tune values.
+        prepare_training_data(
+            project_name     = name,
+            ann_dir          = pdir / "annotations",
+            labels           = cfg["labels"],
+            intermediate_dir = inter,
+            base_yaml_path   = BASE_YAML,
+        )
+
+        # The fine-tune script: identical to train.sh except MODEL.WEIGHTS
+        # points at the source model and the solver is short + gentle.
+        src_weights = (f"/workspace/layout-model-training/outputs/{source}/"
+                       f"fast_rcnn_R_50_FPN_3x/model_final.pth")
+        ft_script = f"""#!/bin/bash
+set -e
+echo "=== Dedust: fine-tune {name} from {source} model ==="
+echo "Running cocosplit..."
+cd /workspace/layout-model-training
+python3 utils/cocosplit.py \\
+    --annotation-path /workspace/{name}/annotations.json \\
+    --train            /workspace/{name}/train.json \\
+    --test             /workspace/{name}/test.json \\
+    --split-ratio      0.8 \\
+    --having-annotations
+
+echo "=== Cleaning previous checkpoints of {name} ==="
+rm -f /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/*.pth
+rm -f /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/last_checkpoint
+
+echo "=== Starting fine-tune (warm start from {source}) ==="
+cd /workspace/layout-model-training/tools
+python3 train_net.py \\
+    --dataset_name          {name}-layout \\
+    --json_annotation_train /workspace/{name}/train.json \\
+    --image_path_train      /workspace/{name}/images \\
+    --json_annotation_val   /workspace/{name}/test.json \\
+    --image_path_val        /workspace/{name}/images \\
+    --config-file           /workspace/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml \\
+    OUTPUT_DIR  /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/ \\
+    MODEL.WEIGHTS {src_weights} \\
+    SOLVER.IMS_PER_BATCH 2 \\
+    SOLVER.BASE_LR {base_lr} \\
+    SOLVER.MAX_ITER {max_iter} \\
+    DATALOADER.NUM_WORKERS 2
+echo "=== Fine-tune complete ==="
+"""
+
+        script_path = f"/workspace/layout-model-training/scripts/{name}_finetune_from_{source}.sh"
+        log_path    = f"/workspace/layout-model-training/logs/{name}_ft.log"
+        pid_path    = f"/workspace/layout-model-training/logs/{name}_ft.pid"
+
+        def _quick(cmd: str) -> str:
+            c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+            _, out, _ = c.exec_command(cmd)
+            result = out.read().decode(errors="replace").strip()
+            c.close()
+            return result
+
+        def full_gen():
+            # ── Re-attach if a fine-tune is already running ────────────────────
+            already_running = False
+            try:
+                status = _quick(
+                    f"docker exec {_train_container(srv)} bash -c "
+                    f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
+                    f"kill -0 $pid 2>/dev/null && echo RUNNING || echo STOPPED'"
+                    f" 2>/dev/null || echo STOPPED"
+                )
+                already_running = "RUNNING" in status
+            except Exception:
+                already_running = False
+
+            if already_running:
+                yield "[ft] Fine-tune already running — re-attaching to log..."
+            else:
+                yield f"[ft] source model : {source}"
+                yield f"[ft] target project: {name}"
+                yield f"[ft] MAX_ITER={max_iter}  BASE_LR={base_lr}"
+
+                # Source weights must exist on the server
+                host_weights = (f"{remote}/layout-model-training/outputs/{source}/"
+                                f"fast_rcnn_R_50_FPN_3x/model_final.pth")
+                st = _quick(f"test -f {host_weights} && echo OK || echo MISSING")
+                if st != "OK":
+                    yield (f"ERROR: model weights not found on server: {host_weights} — "
+                           f"run 'Train model' on '{source}' first.")
+                    return
+                yield f"[ft] ✓ weights found: {host_weights}"
+
+                # Push images + COCO + config + tools (same as Train)
+                yield from _push_training_data_gen(name, srv, passphrase,
+                                                   skip_images=body.skip_image_upload)
+
+                # Upload the fine-tune script (LF endings)
+                c2 = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+                sftp2 = c2.open_sftp()
+                try:
+                    dest = f"{remote}/layout-model-training/scripts/{name}_finetune_from_{source}.sh"
+                    yield f"[ft] finetune script → {dest}"
+                    with sftp2.open(dest, "wb") as fh:
+                        fh.write(ft_script.replace("\r\n", "\n").encode())
+                finally:
+                    sftp2.close()
+                    c2.close()
+
+                # ── Launch detached (survives browser disconnects) ─────────────
+                yield "[ft] Launching detached fine-tune (safe to close browser)..."
+                launch_result = _quick(
+                    f"docker start {_train_container(srv)} && "
+                    f"docker exec {_train_container(srv)} bash -c "
+                    f"'mkdir -p /workspace/layout-model-training/logs && "
+                    f"nohup bash {script_path} >{log_path} 2>&1 & echo $! >{pid_path}; "
+                    f"echo LAUNCHED:$(cat {pid_path})'"
+                )
+                yield f"[ft] {launch_result.strip()}"
+
+            # ── Stream log until the process exits ─────────────────────────────
+            yield "[ft] Streaming log — closing browser won't stop the fine-tune..."
+            tail_cmd = (
+                f"docker exec {_train_container(srv)} bash -c '"
+                f"tail -n 0 -f {log_path} & TAIL=$!; "
+                f"pid=$(cat {pid_path} 2>/dev/null); "
+                f"[ -n \"$pid\" ] && while kill -0 $pid 2>/dev/null; do sleep 5; done; "
+                f"sleep 2; kill $TAIL 2>/dev/null; "
+                f"echo \"[Fine-tune complete — process has exited]\"'"
+            )
+            yield from ssh_ops.stream_command(
+                srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
+
+            if not body.keep_container:
+                still = _quick(
+                    f"docker exec {_train_container(srv)} bash -c '"
+                    f"pid=$(cat {pid_path} 2>/dev/null); "
+                    f"{{ [ -n \"$pid\" ] && kill -0 $pid 2>/dev/null && echo RUNNING; }} || echo DONE'"
+                    f" 2>/dev/null || echo DONE"
+                )
+                if "RUNNING" in still:
+                    yield "[ft] Stream ended but fine-tune still running — container left up."
+                else:
+                    yield f"[ft] Finished — stopping container '{_train_container(srv)}'..."
+                    _quick(f"docker stop {_train_container(srv)}")
+                    yield f"[ft] Container '{_train_container(srv)}' stopped."
+                    yield (f"[ft] Done. '{name}' now has its own fine-tuned model — "
+                           f"'Run inference' on this project will use it.")
 
         return await _sse_stream(full_gen())
 

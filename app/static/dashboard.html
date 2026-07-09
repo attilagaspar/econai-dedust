@@ -515,6 +515,17 @@ function renderDetail() {
                style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
         <button class="btn btn-success" onclick="runInferFrom()" style="background:#1a5c38;">🔄 Infer from selected model</button>
       </div>
+      <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;"
+           title="Train THIS project's own model on its hand-corrected annotations, warm-started from the selected source model's weights. Short + gentle by default; the source model is never modified.">
+        <span style="font-size:0.8rem;color:#aaa;">Feed corrections back:</span>
+        <label style="font-size:0.8rem;color:#aaa;">iterations</label>
+        <input id="ft-max-iter" type="number" min="1" step="100" value="500"
+               style="width:70px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        <label style="font-size:0.8rem;color:#aaa;">LR</label>
+        <input id="ft-base-lr" type="number" min="0" step="0.0001" value="0.00025"
+               style="width:85px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        <button class="btn btn-warning" onclick="runFinetuneFrom()">⚡ Fine-tune from selected model</button>
+      </div>
     </div>
 
     <!-- Server config -->
@@ -964,6 +975,65 @@ async function runInfer() {
     }
     status.innerHTML = '<span class="status-dot dot-green"></span>Done';
     info.textContent = 'Stream ended.';
+  }).catch(err => {
+    if (err.name !== 'AbortError') {
+      body.textContent += '\nConnection error: ' + err.message;
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+    }
+  });
+}
+
+async function runFinetuneFrom() {
+  if (!activeProj) return;
+  const src = document.getElementById('infer-from-src').value;
+  if (!src) { alert('Select a source project first (the "Bootstrap from model" dropdown).'); return; }
+  if (src === activeProj.name) { alert('Source and target project must be different.'); return; }
+  await saveServerConfig();
+  const reupload = document.getElementById('chk-reupload')?.checked ?? true;
+  const maxIter  = parseInt(document.getElementById('ft-max-iter')?.value ?? '500', 10);
+  const baseLr   = parseFloat(document.getElementById('ft-base-lr')?.value ?? '0.00025');
+  const url   = `/api/project/${activeProj.name}/finetune-from/${encodeURIComponent(src)}`;
+  const title = `⚡ Fine-tune '${activeProj.name}' from '${src}' (${maxIter} iter)`;
+  openLogModal(title);
+  const body   = document.getElementById('log-modal-body');
+  const info   = document.getElementById('log-modal-info');
+  const status = document.getElementById('log-modal-status');
+  const ctrl   = new AbortController();
+  activeSSE    = ctrl;
+  fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ passphrase: getPassphrase(), max_iter: maxIter,
+                              base_lr: baseLr, skip_image_upload: !reupload }),
+    signal:  ctrl.signal,
+  }).then(async res => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      body.textContent += '\nError: ' + (err.detail || res.statusText);
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        if (!part.startsWith('data:')) continue;
+        try {
+          const d = JSON.parse(part.slice(5).trim());
+          if (d.done) { info.textContent = 'Fine-tune complete.'; break; }
+          if (d.error) { body.textContent += '\n' + d.error; break; }
+          if (d.line)  { body.textContent += d.line + '\n'; body.scrollTop = body.scrollHeight; }
+        } catch {}
+      }
+    }
+    status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+    info.textContent = "Fine-tune complete. This project's own model is updated — use 🔍 Run inference to apply it.";
   }).catch(err => {
     if (err.name !== 'AbortError') {
       body.textContent += '\nConnection error: ' + err.message;

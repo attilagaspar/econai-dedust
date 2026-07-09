@@ -15,6 +15,9 @@ A browser-based tool for turning large collections of scanned historical documen
 
 Highlights of major additions (newest first). Small fixes aren't listed here.
 
+**2026-07 — fine-tune from corrections (active learning)**
+- **⚡ Fine-tune from a source model** — after bootstrapping a project with *Infer from* and hand-correcting the predictions, feed those corrections back: the dashboard's "Feed corrections back" row trains the project's **own** model, warm-started from the source model's weights (`MODEL.WEIGHTS` override) with a short, gentle solver (default 500 iterations, LR 0.00025). The source model is never modified. Loop: infer → correct → fine-tune → re-infer; corrections get cheaper every round.
+
 **2026-07 — remote access + mobile review (Phase A)**
 - **🔐 Token-guarded remote access** — set the `ECONAI_TOKEN` environment variable and start with `python econai.py serve --host 0.0.0.0` to make the server reachable beyond your machine. Remote visitors get a login page (token entered once per device); requests from `127.0.0.1` are never restricted, and **without the token set nothing changes at all** — the local workflow is untouched. Authorized remote sessions are additionally **caged to the `projects/` folder** (no arbitrary filesystem paths). Pair it with a Cloudflare Tunnel to reach your home server from anywhere. See [Remote access](#remote-access).
 - **📱 Mobile review page (PWA)** — `/static/review.html` is a phone-sized review mode: pick a project, and suspect cells arrive as swipe-through cards (image snippet, best guess pre-filled, numeric keypad) with **✓ Accept / ∅ Blank / ↓ Skip / ↩ Undo**. Installable to the home screen. Review cells on your commute.
