@@ -4020,11 +4020,34 @@ from app import docker_config as _docker_cfg_mod
 def _docker_cfg() -> dict:
     return _docker_cfg_mod.load()
 
-def _predict_container() -> str:
-    return _docker_cfg()["predict_container"]
+def _ns_suffix(host_path: str) -> str:
+    """A stable, docker-safe suffix derived from the host workspace path a
+    container will mount. Each distinct workspace gets its own container, so
+    two users on the same GPU host (e.g. gaspar and matyas, whose /workspace
+    binds differ) never share — and can never clobber — one another's
+    container. Empty path → no suffix (legacy single-user behavior)."""
+    import hashlib, re as _re
+    host_path = (host_path or "").rstrip("/")
+    if not host_path:
+        return ""
+    tail = host_path.split("/")[-1]
+    slug = _re.sub(r"[^A-Za-z0-9]+", "-", tail).strip("-")[:24]
+    h = hashlib.sha1(host_path.encode("utf-8")).hexdigest()[:8]
+    return f"{slug}-{h}" if slug else h
 
-def _train_container() -> str:
-    return _docker_cfg()["train_container"]
+def _predict_workspace_root(srv: dict) -> str:
+    """Host dir the predict container mounts as /workspace."""
+    return (srv.get("predict_remote_path") or srv.get("remote_path") or "").rstrip("/")
+
+def _predict_container(srv: dict | None = None) -> str:
+    base = _docker_cfg()["predict_container"]
+    sfx = _ns_suffix(_predict_workspace_root(srv)) if srv else ""
+    return f"{base}_{sfx}" if sfx else base
+
+def _train_container(srv: dict | None = None) -> str:
+    base = _docker_cfg()["train_container"]
+    sfx = _ns_suffix((srv.get("remote_path") or "").rstrip("/")) if srv else ""
+    return f"{base}_{sfx}" if sfx else base
 
 def _stop_container_gen(srv: dict, passphrase, container: str, tag: str, keep: bool):
     """Stop a Docker container after a job finishes, yielding SSE log lines.
@@ -4077,10 +4100,9 @@ def api_docker_container_status(body: SshRequest = None,
         raise HTTPException(status_code=400, detail="Server not configured on any project")
 
     pw = passphrase or ""
-    cfg = _docker_cfg()
     result = {}
-    for role, cname in [("predict", cfg["predict_container"]),
-                        ("train",   cfg["train_container"])]:
+    for role, cname in [("predict", _predict_container(srv)),
+                        ("train",   _train_container(srv))]:
         try:
             c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], pw)
             _, out, _ = c.exec_command(
@@ -4125,19 +4147,23 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
         raise HTTPException(status_code=500, detail="Dockerfile not found in repo root")
     dockerfile_content = dockerfile_path.read_text(encoding="utf-8")
 
-    # Determine which containers to create
+    # Determine which containers to create. Container names AND mounts are
+    # per-workspace (see _ns_suffix), so two users on the same host get
+    # distinct containers each bound to their own workspace root.
+    predict_root = _predict_workspace_root(srv)
+    train_root   = (srv.get("remote_path") or "").rstrip("/")
     roles_to_build = []
     if role in ("predict", "both"):
-        roles_to_build.append(("predict", cfg["predict_container"]))
+        roles_to_build.append(("predict", _predict_container(srv), predict_root))
     if role in ("train", "both"):
-        roles_to_build.append(("train", cfg["train_container"]))
+        roles_to_build.append(("train", _train_container(srv), train_root))
     # Deduplicate — same name = only create once
     seen = set()
     roles_unique = []
-    for r, n in roles_to_build:
+    for r, n, ws in roles_to_build:
         if n not in seen:
             seen.add(n)
-            roles_unique.append((r, n))
+            roles_unique.append((r, n, ws))
 
     def build_gen():
         c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], pw)
@@ -4156,23 +4182,14 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
             yield from ssh_ops.stream_command(
                 srv["host"], srv["user"], srv["key_path"], build_cmd, pw)
 
-            # Detect workspace bind from existing predict container (if any)
-            _, _out, _ = c.exec_command(
-                f"docker inspect {cfg['predict_container']} "
-                "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}' 2>/dev/null"
-            )
-            workspace_host = None
-            for _bind in _out.read().decode().strip().splitlines():
-                _parts = _bind.strip().split(":")
-                if len(_parts) >= 2 and _parts[1].rstrip("/") == "/workspace":
-                    workspace_host = _parts[0].rstrip("/")
-                    break
-            if not workspace_host:
-                workspace_host = srv.get("remote_path", "").rstrip("/")
-            yield f"[docker] workspace host path: {workspace_host}"
-
-            # Create each new container
-            for _role, cname in roles_unique:
+            # Create each new container, each bound to its own workspace root
+            # (deterministic from config — no cross-container mount inheritance).
+            for _role, cname, workspace_host in roles_unique:
+                if not workspace_host:
+                    yield (f"[docker] SKIP {_role}: no workspace path configured "
+                           f"(set remote_path / predict_remote_path first).")
+                    continue
+                yield f"[docker] {_role} container '{cname}'  /workspace <- {workspace_host}"
                 _, chk, _ = c.exec_command(
                     f"docker ps -a --filter name=^{cname}$ --format '{{{{.Names}}}}'"
                 )
@@ -5558,7 +5575,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             already_running = False
             try:
                 status = _quick(
-                    f"docker exec {_train_container()} bash -c "
+                    f"docker exec {_train_container(srv)} bash -c "
                     f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
                     f"kill -0 $pid 2>/dev/null && echo RUNNING || echo STOPPED'"
                     f" 2>/dev/null || echo STOPPED"
@@ -5579,8 +5596,8 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 # ── Launch detached training ──────────────────────────────────
                 yield "[train] Launching detached training (safe to close browser)..."
                 launch_result = _quick(
-                    f"docker start {_train_container()} && "
-                    f"docker exec {_train_container()} bash -c "
+                    f"docker start {_train_container(srv)} && "
+                    f"docker exec {_train_container(srv)} bash -c "
                     f"'mkdir -p /workspace/layout-model-training/logs && "
                     f"nohup bash {script_path} >{log_path} 2>&1 & echo $! >{pid_path}; "
                     f"echo LAUNCHED:$(cat {pid_path})'"
@@ -5590,7 +5607,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # ── Stream log, stop when process exits ───────────────────────────
             yield "[train] Streaming log — closing browser won't stop training..."
             tail_cmd = (
-                f"docker exec {_train_container()} bash -c '"
+                f"docker exec {_train_container(srv)} bash -c '"
                 f"tail -n 0 -f {log_path} & TAIL=$!; "
                 f"pid=$(cat {pid_path} 2>/dev/null); "
                 f"[ -n \"$pid\" ] && while kill -0 $pid 2>/dev/null; do sleep 5; done; "
@@ -5606,7 +5623,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # container to free the GPU / host resources.
             if not body.keep_container:
                 still = _quick(
-                    f"docker exec {_train_container()} bash -c '"
+                    f"docker exec {_train_container(srv)} bash -c '"
                     f"pid=$(cat {pid_path} 2>/dev/null); "
                     f"{{ [ -n \"$pid\" ] && kill -0 $pid 2>/dev/null && echo RUNNING; }} || echo DONE'"
                     f" 2>/dev/null || echo DONE"
@@ -5614,9 +5631,9 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 if "RUNNING" in still:
                     yield "[train] Stream ended but training still running — container left up."
                 else:
-                    yield f"[train] Training finished — stopping container '{_train_container()}'..."
-                    _quick(f"docker stop {_train_container()}")
-                    yield f"[train] Container '{_train_container()}' stopped."
+                    yield f"[train] Training finished — stopping container '{_train_container(srv)}'..."
+                    _quick(f"docker stop {_train_container(srv)}")
+                    yield f"[train] Container '{_train_container(srv)}' stopped."
 
         return await _sse_stream(full_gen())
 
@@ -5649,8 +5666,8 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
     # Detect the actual bind mount so we get the correct ws_prefix regardless
     # of how remote_path / predict_remote_path are configured.
     _, _out, _ = c.exec_command(
-        f"docker inspect {_predict_container()} "
-        "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
+        f"docker inspect {_predict_container(srv)} "
+        "--format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{println}}{{end}}'"
     )
     container_ws_host = predict_root
     for _bind in _out.read().decode().strip().splitlines():
@@ -5750,8 +5767,8 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
             try:
                 c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
                 _, _out, _ = c.exec_command(
-                    f"docker inspect {_predict_container()} "
-                    "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
+                    f"docker inspect {_predict_container(srv)} "
+                    "--format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{println}}{{end}}'"
                 )
                 container_ws_host = predict_root
                 for _bind in _out.read().decode().strip().splitlines():
@@ -5772,16 +5789,24 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
             yield from _push_infer_data_gen(name, srv, passphrase,
                                             skip_images=body.skip_image_upload)
             script_path = _detect_script_path()
+            _cn = _predict_container(srv)
+            # Verify the script is actually visible inside the container before
+            # running — guards against a /workspace mount that doesn't match the
+            # upload path (the cross-user clobbering failure mode).
             docker_cmd = (
-                f"docker start {_predict_container()} && "
-                f"docker exec {_predict_container()} "
-                f"bash {script_path}"
+                f"docker start {_cn} && "
+                f"if docker exec {_cn} test -f {script_path}; then "
+                f"docker exec {_cn} bash {script_path}; "
+                f"else echo '[ERROR] {script_path} not found inside container {_cn}. "
+                f"Its /workspace mount does not match where files were uploaded. "
+                f"Rebuild the predict container in Docker settings so /workspace maps "
+                f"to this project remote_path.'; exit 1; fi"
             )
             yield f"[push] Starting Docker inference (script: {script_path})..."
             yield from ssh_ops.stream_command(srv["host"], srv["user"],
                                               srv["key_path"], docker_cmd, passphrase)
             # Stream ended naturally → the foreground inference exec finished.
-            yield from _stop_container_gen(srv, passphrase, _predict_container(),
+            yield from _stop_container_gen(srv, passphrase, _predict_container(srv),
                                            "infer", body.keep_container)
 
         return await _sse_stream(full_gen())
@@ -5841,8 +5866,8 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         # Determine the actual host directory that the predicting container mounts as /workspace.
         # This may differ from predict_root/remote if predict_remote_path isn't configured.
         _, _out, _ = c.exec_command(
-            f"docker inspect {_predict_container()} "
-            "--format '{{range .HostConfig.Binds}}{{println .}}{{end}}'"
+            f"docker inspect {_predict_container(srv)} "
+            "--format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{println}}{{end}}'"
         )
         container_ws_host = predict_root  # fallback
         for _bind in _out.read().decode().strip().splitlines():
@@ -5968,14 +5993,20 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
             if docker_cmd:
                 container_script = docker_cmd
                 yield "[infer-from] Starting Docker inference..."
+                _cn = _predict_container(srv)
                 cmd = (
-                    f"docker start {_predict_container()} && "
-                    f"docker exec {_predict_container()} bash {container_script}"
+                    f"docker start {_cn} && "
+                    f"if docker exec {_cn} test -f {container_script}; then "
+                    f"docker exec {_cn} bash {container_script}; "
+                    f"else echo '[ERROR] {container_script} not found inside container {_cn}. "
+                    f"Its /workspace mount does not match where files were uploaded. "
+                    f"Rebuild the predict container in Docker settings so /workspace maps "
+                    f"to this project remote_path.'; exit 1; fi"
                 )
                 yield from ssh_ops.stream_command(
                     srv["host"], srv["user"], srv["key_path"], cmd, body.passphrase)
                 yield from _stop_container_gen(srv, body.passphrase,
-                                               _predict_container(), "infer-from",
+                                               _predict_container(srv), "infer-from",
                                                body.keep_container)
 
         return await _sse_stream(full_gen())
