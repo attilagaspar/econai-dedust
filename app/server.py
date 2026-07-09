@@ -4087,15 +4087,12 @@ def api_docker_container_status(body: SshRequest = None,
                                 passphrase: Optional[str] = Query(None)):
     """Check whether predict/train containers exist on the GPU server.
     Returns exists/running status for each. Requires a project with server cfg."""
-    # Use the first available project's server config
+    # Use the first server-configured project (list_projects() yields dicts).
     from app import ssh_ops
-    projects = list_projects()
-    if not projects:
-        raise HTTPException(status_code=400, detail="No projects configured")
-    try:
-        srv = _server_cfg(projects[0])
-    except HTTPException:
+    names = _server_project_names()
+    if not names:
         raise HTTPException(status_code=400, detail="Server not configured on any project")
+    srv = _server_cfg(names[0])
 
     pw = passphrase or ""
     result = {}
@@ -4120,20 +4117,22 @@ def api_docker_container_status(body: SshRequest = None,
 
 @app.post("/api/docker-config/build")
 async def api_docker_build(passphrase: Optional[str] = Query(None),
-                           role: str = Query("predict")):
-    """Build the dedust-layout image on the GPU server and create the named container.
-    role: 'predict' | 'train' | 'both'
+                           role: str = Query("predict"),
+                           project: Optional[str] = Query(None)):
+    """Build the dedust-layout image on the GPU server and create the named
+    container(s). role: 'predict' | 'train' | 'both'. If `project` is given the
+    SSH connection uses that project's server config; otherwise the first
+    server-configured project. Because container names/mounts are per-workspace,
+    we create one container per DISTINCT workspace across all projects on the
+    same host — so whichever project you later infer from, its container exists.
     Streams SSE log lines."""
     from app import ssh_ops
     import posixpath as pp
 
-    projects = list_projects()
-    if not projects:
-        raise HTTPException(status_code=400, detail="No projects configured")
-    try:
-        srv = _server_cfg(projects[0])
-    except HTTPException:
-        raise HTTPException(status_code=400, detail="Server not configured")
+    names = _server_project_names()
+    if not names:
+        raise HTTPException(status_code=400, detail="Server not configured on any project")
+    srv = _server_cfg(project) if project else _server_cfg(names[0])
 
     cfg      = _docker_cfg()
     image    = cfg["image_name"]
@@ -4145,16 +4144,26 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
         raise HTTPException(status_code=500, detail="Dockerfile not found in repo root")
     dockerfile_content = dockerfile_path.read_text(encoding="utf-8")
 
-    # Determine which containers to create. Container names AND mounts are
-    # per-workspace (see _ns_suffix), so two users on the same host get
-    # distinct containers each bound to their own workspace root.
-    predict_root = _predict_workspace_root(srv)
-    train_root   = (srv.get("remote_path") or "").rstrip("/")
+    # All server configs sharing this host — one container per distinct
+    # workspace root so every project on the host is covered.
+    host_srvs = []
+    for nm in names:
+        try:
+            s = _server_cfg(nm)
+        except HTTPException:
+            continue
+        if s.get("host") == srv["host"]:
+            host_srvs.append(s)
+
     roles_to_build = []
     if role in ("predict", "both"):
-        roles_to_build.append(("predict", _predict_container(srv), predict_root))
+        for r in sorted({_predict_workspace_root(s) for s in host_srvs
+                         if _predict_workspace_root(s)}):
+            roles_to_build.append(("predict", _predict_container({"predict_remote_path": r}), r))
     if role in ("train", "both"):
-        roles_to_build.append(("train", _train_container(srv), train_root))
+        for r in sorted({(s.get("remote_path") or "").rstrip("/") for s in host_srvs
+                         if (s.get("remote_path") or "").strip()}):
+            roles_to_build.append(("train", _train_container({"remote_path": r}), r))
     # Deduplicate — same name = only create once
     seen = set()
     roles_unique = []
@@ -4220,6 +4229,21 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
 # ---------------------------------------------------------------------------
 # Routes — SSH / server operations
 # ---------------------------------------------------------------------------
+
+def _server_project_names() -> list[str]:
+    """Names of projects that have a usable server config. list_projects()
+    returns summary DICTS, so callers must not pass those straight to
+    _server_cfg (which expects a project name)."""
+    names = []
+    for p in list_projects():
+        nm = p["name"] if isinstance(p, dict) else p
+        try:
+            _server_cfg(nm)
+            names.append(nm)
+        except HTTPException:
+            continue
+    return names
+
 
 def _server_cfg(name: str) -> dict:
     cfg = load_config(name)
