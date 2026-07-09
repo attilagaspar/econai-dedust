@@ -4197,16 +4197,27 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
                            f"(set remote_path / predict_remote_path first).")
                     continue
                 yield f"[docker] {_role} container '{cname}'  /workspace <- {workspace_host}"
+                # Is it already there, and running?
                 _, chk, _ = c.exec_command(
-                    f"docker ps -a --filter name=^{cname}$ --format '{{{{.Names}}}}'"
+                    f"docker ps -a --filter name=^{cname}$ --format '{{{{.Status}}}}'"
                 )
-                if chk.read().decode().strip():
-                    yield f"[docker] Container '{cname}' already exists — skipping create."
-                    continue
+                existing = chk.read().decode().strip()
+                if existing:
+                    if existing.lower().startswith("up"):
+                        yield f"[docker] Container '{cname}' is running — left as-is."
+                        continue
+                    # Stopped/exited: remove and recreate so it picks up the
+                    # current mount + keep-alive config (self-healing rebuild).
+                    yield f"[docker] Container '{cname}' exists but stopped — recreating."
+                    _, rmo, rme = c.exec_command(f"docker rm {cname}")
+                    rmo.read(); rme.read()
                 yield f"[docker] Creating container '{cname}'..."
+                # `tail -f /dev/null` keeps the container alive after `docker
+                # start` (the image CMD is `bash`, which exits immediately with
+                # no TTY), so later `docker exec` calls can run in it.
                 create_cmd = (
                     f"docker create --name {cname} --gpus all --shm-size=8g "
-                    f"-v {workspace_host}:/workspace {image}"
+                    f"-v {workspace_host}:/workspace {image} tail -f /dev/null"
                 )
                 _, co, ce = c.exec_command(create_cmd)
                 out_txt = co.read().decode().strip()
