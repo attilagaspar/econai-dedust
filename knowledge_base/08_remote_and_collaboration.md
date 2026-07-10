@@ -112,10 +112,27 @@ Linux VM, NOT App Service / Container Apps.
   old `opencv-python~=4.12` pin was broken for fresh installs — fixed).
   Inside Docker all requests look remote → token always required (compose
   fails fast without ECONAI_TOKEN). Local dev remains bare `econai.py serve`.
-- **C2 — Azure VM** (~1 session): Ubuntu B4ms/D4as_v5 (4 vCPU/16 GB, ~$70–140/mo;
-  try 8 GB ~$60 first) + 256 GB standard SSD (~$20/mo). rsync projects/ over,
-  move cloudflared tunnel there. Nightly backup projects/ → Blob (~$2/100 GB/mo).
-  Dropbox drops out of the loop = conflict failure mode gone.
+- **C2 — Azure VM — DONE 2026-07-10** (infra; project migration still pending):
+  subscription "Gabors Data AI Lab_Attila_Gaspar" (user is Owner), resource
+  group `dedust-rg`, VM `dedust-vm` = Ubuntu 24.04 D4as_v5 (4 vCPU/16 GB,
+  128 GB StandardSSD) in **westeurope** at 20.71.94.231, SSH user `dedust`
+  with a NEW key az generated at `~/.ssh/id_rsa` (the GPU key
+  `Documents\korenwork_gaspar_private.pem` is separate/untouched).
+  Repo cloned at `~/dedust`, image built, `docker compose --profile tunnel up -d`
+  running webapp + cloudflared (restart: unless-stopped → reboot-safe).
+  **Tunnel**: locally-managed `dedust-azure` (fb8d31f5-…) created FROM THE PC
+  (user refused Zero Trust dashboard signup — it demands a credit card; the
+  cert-based `cloudflared tunnel create` route needs none). Credentials +
+  config.yml under `~/dedust/cloudflared/` (chmod 644 — the container runs
+  nonroot uid 65532 and can't read 600), wired via `docker-compose.override.yml`
+  (config-file mode replaces the token mode). Gotcha: `tunnel route dns` bound
+  the hostname to the OLD tunnel first — fixed with `--overwrite-dns <uuid>`.
+  Live at **https://azure.gasparattila.hu** (login 200 / API 401 / Bearer OK).
+  VM's ECONAI_TOKEN differs from the PC's; stored in `~/dedust/.env` on the VM
+  and `%USERPROFILE%\.dedust-azure-token.txt` locally.
+  NEXT: migrate first project (rsync annotations + config), nightly Blob
+  backup, flip dedust.gasparattila.hu when ready. T4 quota (8 vCPU, westeurope)
+  requested, pending.
 - **C3 — GPU** (optional, later): day one keep gpu.koren.work over SSH (zero code
   changes — the webapp doesn't care where the GPU box is). Upgrade: Azure
   NCas_T4_v3 (T4, ~$0.53/hr) started/deallocated around jobs (`az vm start` step
