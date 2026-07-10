@@ -375,8 +375,32 @@ def cmd_push_project(args):
                 sftp.mkdir(cur)
 
     sent = skipped = 0
-    sent_bytes = 0
+    sent_bytes = 0          # bytes actually transferred (for the MB/s rate)
+    done_bytes = 0          # bytes accounted for incl. skipped (for the bar)
     t0 = time.time()
+    _last_draw = [0.0]
+
+    def _bar(current_name: str, in_file: int = 0):
+        """Single-line status bar: overall progress, speed, ETA, current file."""
+        now = time.time()
+        if now - _last_draw[0] < 0.1 and (done_bytes + in_file) < total_bytes:
+            return                          # throttle redraws to 10/s
+        _last_draw[0] = now
+        done = min(done_bytes + in_file, total_bytes)
+        frac = done / total_bytes if total_bytes else 1.0
+        width = 24
+        filled = int(width * frac)
+        rate = (sent_bytes + in_file) / 1e6 / max(now - t0, 0.1)   # MB/s of real transfer
+        remaining = total_bytes - done
+        eta = remaining / (rate * 1e6) if rate > 0 else 0
+        name = current_name if len(current_name) <= 34 else "..." + current_name[-31:]
+        sys.stdout.write(
+            f"\r[{'#' * filled}{'-' * (width - filled)}] "
+            f"{done/1e6:7.1f}/{total_bytes/1e6:.1f} MB  "
+            f"{rate:5.1f} MB/s  ETA {int(eta // 60)}:{int(eta % 60):02d}  "
+            f"{name:<34}")
+        sys.stdout.flush()
+
     try:
         remote_root = f"{remote_projects.rstrip('/')}/{dest_name}"
         mkdir_p(remote_root)
@@ -393,16 +417,21 @@ def cmd_push_project(args):
                 rst = sftp.stat(rpath)
                 if rst.st_size == st.st_size and abs(rst.st_mtime - st.st_mtime) < 2:
                     skipped += 1
+                    done_bytes += st.st_size
+                    _bar(rel.name)
                     continue
             except FileNotFoundError:
                 pass
-            sftp.put(str(p), rpath)
+            _bar(rel.name)
+            sftp.put(str(p), rpath,
+                     callback=lambda got, _tot, n=rel.name: _bar(n, in_file=got))
             sftp.utime(rpath, (int(st.st_atime), int(st.st_mtime)))  # enable skip on re-push
             sent += 1
             sent_bytes += st.st_size
-            if sent % 20 == 0 or i == len(files):
-                rate = sent_bytes / 1e6 / max(time.time() - t0, 0.1)
-                print(f"  {i}/{len(files)}  ({sent_bytes/1e6:.1f} MB sent, {rate:.1f} MB/s)")
+            done_bytes += st.st_size
+            _bar(rel.name)
+        _bar("done")
+        sys.stdout.write("\n")
     finally:
         sftp.close()
         c.close()
