@@ -98,6 +98,28 @@ HTTP, dynamic IP, port scanners). Instead:
   current Dropbox-conflict failure mode between user and RAs).
 - Cloudflare tunnel simply moves to that machine; nothing else changes.
 
+### Phase C on Azure (planned 2026-07-09 — user's university has large Azure credits)
+
+Architecture maps 1:1; the tunnel + token guard + URL are unchanged, they just
+move. The webapp is stateful (JSON files on disk, single process) → a plain
+Linux VM, NOT App Service / Container Apps.
+
+- **C1 — dockerize webapp** (~1 session): `Dockerfile.web` + `docker-compose.yml`
+  (webapp + cloudflared sibling containers, `projects/` as a volume). Useful on
+  the home PC even before Azure (reproducible setup).
+- **C2 — Azure VM** (~1 session): Ubuntu B4ms/D4as_v5 (4 vCPU/16 GB, ~$70–140/mo;
+  try 8 GB ~$60 first) + 256 GB standard SSD (~$20/mo). rsync projects/ over,
+  move cloudflared tunnel there. Nightly backup projects/ → Blob (~$2/100 GB/mo).
+  Dropbox drops out of the loop = conflict failure mode gone.
+- **C3 — GPU** (optional, later): day one keep gpu.koren.work over SSH (zero code
+  changes — the webapp doesn't care where the GPU box is). Upgrade: Azure
+  NCas_T4_v3 (T4, ~$0.53/hr) started/deallocated around jobs (`az vm start` step
+  in train/infer flows); a 25-min fine-tune ≈ $0.25. Deallocated = disk cost only.
+- **Total ≈ $90–160/mo**, dominated by the always-on webapp VM; GPU negligible.
+- **Caveats to check early**: (1) university subscriptions often have NC-family
+  GPU quota = 0 → file quota request if Azure GPU wanted; (2) confirm credits
+  are general Azure (they pay for Azure OpenAI deployments, so almost surely).
+
 ## Sequencing & interactions
 
 A → A′ → B → C; each phase is independently useful and none blocks P2 (tidy
