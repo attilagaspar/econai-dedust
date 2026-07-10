@@ -137,6 +137,25 @@ Linux VM, NOT App Service / Container Apps.
   changes — the webapp doesn't care where the GPU box is). Upgrade: Azure
   NCas_T4_v3 (T4, ~$0.53/hr) started/deallocated around jobs (`az vm start` step
   in train/infer flows); a 25-min fine-tune ≈ $0.25. Deallocated = disk cost only.
+
+  Detailed C3 plan (2026-07-10). KEY: the GPU server is a PER-PROJECT setting
+  (config.json `server:` block) — so "cloud projects on Azure GPU, local
+  projects on Koren's GPU" needs NO new architecture; both coexist by config.
+  - **C3a** (~1 guided session, after T4 quota approval): portal-create
+    `NC4as_T4_v3` (fits the 8-vCPU quota) in westeurope, Ubuntu 24.04 + the
+    NVIDIA GPU driver extension checkbox; install docker + nvidia-container-
+    toolkit; `dedust` user with the webapp VM's pubkey; ONE-TIME copy of the
+    layout-model-training scaffolding (train_net.py, utils/cocosplit.py,
+    configs) + any source-model weights (outputs/<proj>/) from gpu.koren.work;
+    then the app's Build-containers creates dedust-layout there (per-workspace
+    container naming already handles it).
+  - **C3b** (no code): GPU VM lives DEALLOCATED (~$5/mo disk); portal Start
+    before a job (~90 s), Stop after; nightly auto-shutdown as backstop.
+  - **C3c** (later, if C3b annoys): managed identity on dedust-vm scoped to
+    start/stop the GPU VM; optional `server.azure_vm: {resource_group, name}`
+    in project config → train/infer/fine-tune wake the VM, wait for SSH, run,
+    deallocate after. Projects without the field (all local/Koren ones) are
+    untouched.
 - **Total ≈ $90–160/mo**, dominated by the always-on webapp VM; GPU negligible.
 - **Caveats to check early**: (1) university subscriptions often have NC-family
   GPU quota = 0 → file quota request if Azure GPU wanted; (2) confirm credits
