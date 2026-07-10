@@ -5576,6 +5576,59 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
         c.close()
 
 
+# ── Detached-job plumbing shared by Train and Fine-tune ──────────────────────
+# The .pid file lives on the /workspace bind mount, so it SURVIVES container
+# restarts — and container PIDs are small numbers that get reused. A bare
+# `kill -0 <old pid>` therefore eventually matches some unrelated process and
+# the endpoint "re-attaches" to a dead log forever (the fine-tune-blocked-
+# until-container-killed bug). Three defenses:
+#   1. the launch wrapper DELETES the pid file when the job exits,
+#   2. the running-probe verifies /proc/<pid>/cmdline names our script,
+#   3. the tail loop / still-running probe treat a missing pid file as done.
+
+def _job_running_cmd(container: str, pid_path: str, script_path: str) -> str:
+    import posixpath as pp
+    script_name = pp.basename(script_path)
+    return (
+        f"docker exec {container} bash -c "
+        f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
+        f"kill -0 $pid 2>/dev/null && "
+        f"tr \"\\0\" \" \" </proc/$pid/cmdline 2>/dev/null | grep -qF \"{script_name}\" "
+        f"&& echo RUNNING || echo STOPPED' 2>/dev/null || echo STOPPED"
+    )
+
+def _job_launch_cmd(container: str, script_path: str, log_path: str,
+                    pid_path: str) -> str:
+    return (
+        f"docker start {container} && "
+        f"docker exec {container} bash -c "
+        f"'mkdir -p /workspace/layout-model-training/logs && "
+        f"nohup bash -c \"bash {script_path} >{log_path} 2>&1; rm -f {pid_path}\" "
+        f">/dev/null 2>&1 & echo $! >{pid_path}; "
+        f"echo LAUNCHED:$(cat {pid_path})'"
+    )
+
+def _job_tail_cmd(container: str, log_path: str, pid_path: str,
+                  done_msg: str) -> str:
+    return (
+        f"docker exec {container} bash -c '"
+        f"tail -n 0 -f {log_path} & TAIL=$!; "
+        f"pid=$(cat {pid_path} 2>/dev/null); "
+        f"[ -n \"$pid\" ] && while [ -f {pid_path} ] && kill -0 $pid 2>/dev/null; "
+        f"do sleep 5; done; "
+        f"sleep 2; kill $TAIL 2>/dev/null; "
+        f"echo \"{done_msg}\"'"
+    )
+
+def _job_still_running_cmd(container: str, pid_path: str) -> str:
+    return (
+        f"docker exec {container} bash -c '"
+        f"{{ [ -f {pid_path} ] && pid=$(cat {pid_path}) && "
+        f"kill -0 $pid 2>/dev/null && echo RUNNING; }} || echo DONE'"
+        f" 2>/dev/null || echo DONE"
+    )
+
+
 @app.post("/api/project/{name}/train")
 async def api_train(name: str, body: TrainRequest = TrainRequest()):
     """Push data to server then run training inside Docker. Streams log via SSE.
@@ -5612,12 +5665,8 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # ── Check if training is already running ──────────────────────────
             already_running = False
             try:
-                status = _quick(
-                    f"docker exec {_train_container(srv)} bash -c "
-                    f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
-                    f"kill -0 $pid 2>/dev/null && echo RUNNING || echo STOPPED'"
-                    f" 2>/dev/null || echo STOPPED"
-                )
+                status = _quick(_job_running_cmd(_train_container(srv),
+                                                 pid_path, script_path))
                 already_running = "RUNNING" in status
             except Exception:
                 already_running = False
@@ -5633,25 +5682,14 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
 
                 # ── Launch detached training ──────────────────────────────────
                 yield "[train] Launching detached training (safe to close browser)..."
-                launch_result = _quick(
-                    f"docker start {_train_container(srv)} && "
-                    f"docker exec {_train_container(srv)} bash -c "
-                    f"'mkdir -p /workspace/layout-model-training/logs && "
-                    f"nohup bash {script_path} >{log_path} 2>&1 & echo $! >{pid_path}; "
-                    f"echo LAUNCHED:$(cat {pid_path})'"
-                )
+                launch_result = _quick(_job_launch_cmd(_train_container(srv),
+                                                       script_path, log_path, pid_path))
                 yield f"[train] {launch_result.strip()}"
 
             # ── Stream log, stop when process exits ───────────────────────────
             yield "[train] Streaming log — closing browser won't stop training..."
-            tail_cmd = (
-                f"docker exec {_train_container(srv)} bash -c '"
-                f"tail -n 0 -f {log_path} & TAIL=$!; "
-                f"pid=$(cat {pid_path} 2>/dev/null); "
-                f"[ -n \"$pid\" ] && while kill -0 $pid 2>/dev/null; do sleep 5; done; "
-                f"sleep 2; kill $TAIL 2>/dev/null; "
-                f"echo \"[Training complete — process has exited]\"'"
-            )
+            tail_cmd = _job_tail_cmd(_train_container(srv), log_path, pid_path,
+                                     "[Training complete — process has exited]")
             yield from ssh_ops.stream_command(
                 srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
 
@@ -5660,12 +5698,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # job is never killed). Verify the PID is gone, then stop the
             # container to free the GPU / host resources.
             if not body.keep_container:
-                still = _quick(
-                    f"docker exec {_train_container(srv)} bash -c '"
-                    f"pid=$(cat {pid_path} 2>/dev/null); "
-                    f"{{ [ -n \"$pid\" ] && kill -0 $pid 2>/dev/null && echo RUNNING; }} || echo DONE'"
-                    f" 2>/dev/null || echo DONE"
-                )
+                still = _quick(_job_still_running_cmd(_train_container(srv), pid_path))
                 if "RUNNING" in still:
                     yield "[train] Stream ended but training still running — container left up."
                 else:
@@ -6161,12 +6194,8 @@ echo "=== Fine-tune complete ==="
             # ── Re-attach if a fine-tune is already running ────────────────────
             already_running = False
             try:
-                status = _quick(
-                    f"docker exec {_train_container(srv)} bash -c "
-                    f"'[ -f {pid_path} ] && pid=$(cat {pid_path}) && "
-                    f"kill -0 $pid 2>/dev/null && echo RUNNING || echo STOPPED'"
-                    f" 2>/dev/null || echo STOPPED"
-                )
+                status = _quick(_job_running_cmd(_train_container(srv),
+                                                 pid_path, script_path))
                 already_running = "RUNNING" in status
             except Exception:
                 already_running = False
@@ -6206,35 +6235,19 @@ echo "=== Fine-tune complete ==="
 
                 # ── Launch detached (survives browser disconnects) ─────────────
                 yield "[ft] Launching detached fine-tune (safe to close browser)..."
-                launch_result = _quick(
-                    f"docker start {_train_container(srv)} && "
-                    f"docker exec {_train_container(srv)} bash -c "
-                    f"'mkdir -p /workspace/layout-model-training/logs && "
-                    f"nohup bash {script_path} >{log_path} 2>&1 & echo $! >{pid_path}; "
-                    f"echo LAUNCHED:$(cat {pid_path})'"
-                )
+                launch_result = _quick(_job_launch_cmd(_train_container(srv),
+                                                       script_path, log_path, pid_path))
                 yield f"[ft] {launch_result.strip()}"
 
             # ── Stream log until the process exits ─────────────────────────────
             yield "[ft] Streaming log — closing browser won't stop the fine-tune..."
-            tail_cmd = (
-                f"docker exec {_train_container(srv)} bash -c '"
-                f"tail -n 0 -f {log_path} & TAIL=$!; "
-                f"pid=$(cat {pid_path} 2>/dev/null); "
-                f"[ -n \"$pid\" ] && while kill -0 $pid 2>/dev/null; do sleep 5; done; "
-                f"sleep 2; kill $TAIL 2>/dev/null; "
-                f"echo \"[Fine-tune complete — process has exited]\"'"
-            )
+            tail_cmd = _job_tail_cmd(_train_container(srv), log_path, pid_path,
+                                     "[Fine-tune complete — process has exited]")
             yield from ssh_ops.stream_command(
                 srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
 
             if not body.keep_container:
-                still = _quick(
-                    f"docker exec {_train_container(srv)} bash -c '"
-                    f"pid=$(cat {pid_path} 2>/dev/null); "
-                    f"{{ [ -n \"$pid\" ] && kill -0 $pid 2>/dev/null && echo RUNNING; }} || echo DONE'"
-                    f" 2>/dev/null || echo DONE"
-                )
+                still = _quick(_job_still_running_cmd(_train_container(srv), pid_path))
                 if "RUNNING" in still:
                     yield "[ft] Stream ended but fine-tune still running — container left up."
                 else:
