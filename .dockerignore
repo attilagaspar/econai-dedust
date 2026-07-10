@@ -1,0 +1,30 @@
+# Keep the web image small — data, outputs and dev debris stay out.
+.git
+.gitignore
+.claude
+.pytest_cache
+__pycache__
+**/__pycache__
+
+# Data (mounted as volumes, never baked into the image)
+projects/
+authorities/
+.llm_cache.sqlite
+
+# Heavy artifacts / local debris
+*.pth
+*.log
+server.err
+server.out
+*.png
+*.jpg
+*.docx
+benchmarks/
+illustrations/
+knowledge_base/
+tests/
+NOTES_*.md
+WHATS_NEW_*.md
+PROGRESS.md
+paper_ideas_separate.md
+migrate_*.py

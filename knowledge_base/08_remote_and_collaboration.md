@@ -104,9 +104,14 @@ Architecture maps 1:1; the tunnel + token guard + URL are unchanged, they just
 move. The webapp is stateful (JSON files on disk, single process) → a plain
 Linux VM, NOT App Service / Container Apps.
 
-- **C1 — dockerize webapp** (~1 session): `Dockerfile.web` + `docker-compose.yml`
-  (webapp + cloudflared sibling containers, `projects/` as a volume). Useful on
-  the home PC even before Azure (reproducible setup).
+- **C1 — dockerize webapp — DONE 2026-07-09**: `Dockerfile.web` + `docker-compose.yml`
+  (webapp + cloudflared sibling containers via `--profile tunnel`; `projects/`
+  + `authorities/` bind mounts, LLM cache + EasyOCR weights in named volumes,
+  `~/.ssh` ro for GPU ops). Image verified: guard 401/login/Bearer, tesseract
+  5.5 (hun/deu/eng), easyocr + cv2 4.10 + numpy 1.26 (matches the dev env; the
+  old `opencv-python~=4.12` pin was broken for fresh installs — fixed).
+  Inside Docker all requests look remote → token always required (compose
+  fails fast without ECONAI_TOKEN). Local dev remains bare `econai.py serve`.
 - **C2 — Azure VM** (~1 session): Ubuntu B4ms/D4as_v5 (4 vCPU/16 GB, ~$70–140/mo;
   try 8 GB ~$60 first) + 256 GB standard SSD (~$20/mo). rsync projects/ over,
   move cloudflared tunnel there. Nightly backup projects/ → Blob (~$2/100 GB/mo).

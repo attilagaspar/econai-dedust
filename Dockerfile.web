@@ -1,0 +1,43 @@
+# Dedust webapp container (Phase C1).
+# This is NOT the GPU training image (that's ./Dockerfile, built on the GPU
+# host). This one runs the FastAPI editor/server itself, CPU-only.
+#
+# Build:  docker build -f Dockerfile.web -t dedust-web .
+# Run:    see docker-compose.yml (volumes for projects/, authorities/, cache)
+FROM python:3.12-slim
+
+# Tesseract (with Hungarian) + OpenCV runtime libs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr tesseract-ocr-hun tesseract-ocr-deu \
+        libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# CPU-only torch first — the default pip wheels bundle CUDA (~5 GB installed);
+# the CPU build is a fraction of that and is all EasyOCR needs here.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Code + the static assets the server reads at runtime.
+# projects/ and authorities/ are volumes (see compose) — not baked in.
+COPY econai.py .
+COPY app/ app/
+COPY samples/ samples/
+COPY Dockerfile .
+
+# EasyOCR model weights download on first use into ~/.EasyOCR — persist via volume.
+VOLUME ["/app/projects", "/app/authorities", "/data", "/root/.EasyOCR"]
+
+ENV ECONAI_LLM_CACHE=/data/llm_cache.sqlite \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+# 0.0.0.0 is required inside a container. The token guard treats everything
+# non-loopback as remote, so with ECONAI_TOKEN set (compose enforces it),
+# every request through the published port requires the token. Local dev
+# without a token should use `python econai.py serve` directly instead.
+CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -427,6 +427,18 @@ The token is accepted as a `Bearer` header, an `X-Econai-Token` header, the logi
 
 For internet exposure use a **Cloudflare Tunnel** on your own domain (no open ports on your router, HTTPS for free, optional Google-login gate via Cloudflare Access) — see `knowledge_base/08_remote_and_collaboration.md` for the full setup.
 
+### Run in Docker (production / server deployments)
+
+For an always-on deployment (a VPS, an Azure VM), the webapp ships as a container — [Dockerfile.web](Dockerfile.web) + [docker-compose.yml](docker-compose.yml):
+
+```bash
+ECONAI_TOKEN=<long random string> docker compose up -d --build          # webapp on :8000
+# with the Cloudflare tunnel as a sibling container:
+TUNNEL_TOKEN=<connector token> ECONAI_TOKEN=... docker compose --profile tunnel up -d
+```
+
+`projects/` and `authorities/` are bind-mounted (data lives on the host), the LLM cache and EasyOCR model weights persist in named volumes, and `~/.ssh` is mounted read-only for GPU-server operations (project `key_path` should point at `/root/.ssh/<keyfile>`). Inside Docker **every request looks remote**, so the token is always required — the compose file refuses to start without one. Local development keeps using `python econai.py serve` directly (unguarded on localhost); the container is the production shape. Deploying updates: `git pull && docker compose up -d --build`.
+
 ---
 
 ## Pipeline stages

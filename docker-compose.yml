@@ -1,0 +1,48 @@
+# Dedust webapp + (optional) Cloudflare tunnel — Phase C deployment.
+#
+#   ECONAI_TOKEN=<long random string> docker compose up -d --build
+#
+# The token is REQUIRED (fail-fast): inside Docker every request looks remote
+# to the guard, so an unset token would either disable auth entirely or lock
+# everything out, depending on path. Explicit is safer.
+#
+# Tunnel (production on a VM):
+#   TUNNEL_TOKEN=<cloudflared connector token> \
+#   ECONAI_TOKEN=... docker compose --profile tunnel up -d
+# Without --profile tunnel, only the webapp starts (reachable on :8000).
+
+services:
+  dedust:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8000:8000"
+    environment:
+      ECONAI_TOKEN: ${ECONAI_TOKEN:?set ECONAI_TOKEN — remote auth token}
+      # LLM keys — pass through whichever the host has set
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-}
+    volumes:
+      - ./projects:/app/projects
+      - ./authorities:/app/authorities
+      - dedust-data:/data              # LLM response cache
+      - easyocr-models:/root/.EasyOCR  # OCR model weights (downloaded once)
+      # SSH key for GPU server operations (read-only). Project config.json
+      # key_path must then point at /root/.ssh/<keyfile>.
+      - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:-}
+    depends_on:
+      - dedust
+    restart: unless-stopped
+    profiles: ["tunnel"]
+
+volumes:
+  dedust-data:
+  easyocr-models:

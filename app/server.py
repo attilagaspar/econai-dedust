@@ -2218,7 +2218,8 @@ def _is_reasoning_model(model: str) -> bool:
 # Opt-in per call (use_cache=True) — bulk/batch endpoints use it so re-runs
 # are instant and free; interactive "give me a fresh attempt" paths (rule fix,
 # LLM test modal) don't.
-_LLM_CACHE_PATH = Path(__file__).parent.parent / ".llm_cache.sqlite"
+_LLM_CACHE_PATH = Path(os.environ.get("ECONAI_LLM_CACHE")
+                       or Path(__file__).parent.parent / ".llm_cache.sqlite")
 _LLM_CACHE_LOCK = threading.Lock()
 
 

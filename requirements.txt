@@ -10,7 +10,7 @@ python-multipart~=0.0.27
 
 # ── Image processing ─────────────────────────────────────────────────────────
 pillow~=10.4
-opencv-python~=4.12
+opencv-python~=4.10.0  # 4.12+ requires numpy>=2 — conflicts with the numpy pin below
 numpy~=1.26          # <2 — easyocr/opencv wheels lag behind numpy 2.x
 
 # ── OCR engines ──────────────────────────────────────────────────────────────
