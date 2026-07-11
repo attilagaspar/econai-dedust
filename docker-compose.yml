@@ -20,10 +20,13 @@ services:
       - "8000:8000"
     environment:
       ECONAI_TOKEN: ${ECONAI_TOKEN:?set ECONAI_TOKEN — remote auth token}
-      # LLM keys — pass through whichever the host has set
+      # LLM keys — pass through whichever the host has set.
+      # EU pair (azure: models, live) + US pair (azure_us: models, batch).
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_KEY_US: ${AZURE_OPENAI_API_KEY_US:-}
+      AZURE_OPENAI_ENDPOINT_US: ${AZURE_OPENAI_ENDPOINT_US:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-}
     volumes:
       - ./projects:/app/projects
