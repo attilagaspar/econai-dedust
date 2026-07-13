@@ -138,9 +138,32 @@ Linux VM, NOT App Service / Container Apps.
   NCas_T4_v3 (T4, ~$0.53/hr) started/deallocated around jobs (`az vm start` step
   in train/infer flows); a 25-min fine-tune ≈ $0.25. Deallocated = disk cost only.
 
+  **GPU quota saga (2026-07-11): BLOCKED on the subscription.** T4 quota
+  auto-rejected in West Europe, Sweden Central, North Europe (limits 8 AND 4);
+  A10 (NVadsA10v5, 12 vCPU) also rejected → the offer type is excluded from
+  GPU auto-approval, not a capacity issue. Support API requires a PAID plan
+  (free-tier tickets are portal-only, and the portal quota panel had a dead
+  Save-and-Continue button). Remaining doors: portal ticket from another
+  browser, or the CEU enrollment admin (email draft was provided). Koren
+  carries all GPU work meanwhile. User also wants to try a GPU server at his
+  OTHER WORKPLACE → GPU profiles built (see below).
+
+  **GPU server profiles — DONE 2026-07-11**: named backends in per-instance
+  `app/gpu_servers.json` (git-ignored; may hold a stored key passphrase).
+  Dashboard GPU card: Profile dropdown + ＋/🗑, "remember in profile" checkbox
+  for the passphrase; project config stores only `server_profile: <name>`;
+  `_server_cfg` resolves it (clear 400 if the profile isn't defined on the
+  executing instance); legacy inline `server:` block = "(custom)", untouched.
+  Stored passphrase is the fallback wherever a request's passphrase is empty.
+  Switching profiles does NOT move trained models (UI warns); a
+  "copy model to other server" op is the planned follow-up.
+  Test-suite note: conftest now strips ECONAI_TOKEN (a setx'd token on the dev
+  machine armed the guard and 401'd the whole suite).
+
   Detailed C3 plan (2026-07-10). KEY: the GPU server is a PER-PROJECT setting
-  (config.json `server:` block) — so "cloud projects on Azure GPU, local
-  projects on Koren's GPU" needs NO new architecture; both coexist by config.
+  (config.json `server:` block, now preferably a named profile) — so "cloud
+  projects on Azure GPU, local projects on Koren's GPU" needs NO new
+  architecture; both coexist by config.
   - **C3a** (~1 guided session, after T4 quota approval): portal-create
     `NC4as_T4_v3` (fits the 8-vCPU quota) in westeurope, Ubuntu 24.04 + the
     NVIDIA GPU driver extension checkbox; install docker + nvidia-container-

@@ -15,6 +15,9 @@ A browser-based tool for turning large collections of scanned historical documen
 
 Highlights of major additions (newest first). Small fixes aren't listed here.
 
+**2026-07 — named GPU server profiles**
+- **GPU server profiles** — the dashboard's GPU Server card now has a **Profile dropdown**: define each GPU box once (koren / azure-gpu / …) and switch a project between them with one click. Profiles live per-instance in `app/gpu_servers.json` (git-ignored) so the same server can have different key paths on different machines; a project only stores the profile *name*. Optional **stored key passphrase** per profile ("remember in profile") so jobs stop prompting. Legacy per-project server fields keep working as "(custom)". Note when switching: **trained models stay on the old server** — they don't move with the project.
+
 **2026-07 — fine-tune from corrections (active learning)**
 - **⚡ Fine-tune from a source model** — after bootstrapping a project with *Infer from* and hand-correcting the predictions, feed those corrections back: the dashboard's "Feed corrections back" row trains the project's **own** model, warm-started from the source model's weights (`MODEL.WEIGHTS` override) with a short, gentle solver (default 500 iterations, LR 0.00025). The source model is never modified. Loop: infer → correct → fine-tune → re-infer; corrections get cheaper every round.
 

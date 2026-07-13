@@ -1,10 +1,17 @@
 """Shared fixtures: a TestClient over the real app and a synthetic
 annotation folder with one 'lattice page' (title + 2x2 grid + footer)."""
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# The suite assumes the remote guard is INERT. On machines where ECONAI_TOKEN
+# is a persistent env var (any deployment box), inherited env would arm the
+# guard and 401 every TestClient request — strip it here. The guard tests
+# monkeypatch.setenv it explicitly, so they are unaffected.
+os.environ.pop("ECONAI_TOKEN", None)
 
 # Repo root importable regardless of where pytest is invoked from
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -373,6 +373,11 @@ async function selectProject(name) {
   localStorage.setItem('lastProject', name);
   renderProjectList(); // re-render sidebar to update active highlight
   renderDetail();
+  // GPU profile dropdown: populate, and show the profile's settings if used
+  await loadGpuProfiles();
+  renderGpuProfileDropdown();
+  const prof = activeProj.config.server_profile;
+  if (prof && gpuProfiles[prof]) _fillSrvFields(gpuProfiles[prof]);
   // Populate "infer from" source dropdown with all OTHER projects
   const sel = document.getElementById('infer-from-src');
   if (sel) {
@@ -531,6 +536,13 @@ function renderDetail() {
     <!-- Server config -->
     <div class="card">
       <h3>GPU Server &nbsp;<small id="conn-status-label">${connStatus}</small></h3>
+      <div class="field-row" title="Named GPU backends (koren / azure-gpu / …). Profiles live on THIS instance (paths differ per machine); the project only remembers the name. Switching does NOT move trained models — they stay on the old server.">
+        <label>Profile</label>
+        <select id="srv-profile" onchange="gpuProfileChanged()"
+                style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:6px 8px;flex:1;"></select>
+        <button class="btn btn-secondary" style="padding:4px 10px;" onclick="gpuProfileNew()" title="Create a new named profile from the fields below">＋</button>
+        <button class="btn btn-secondary" style="padding:4px 10px;" onclick="gpuProfileDelete()" title="Delete the selected profile (projects using it will need a new one)">🗑</button>
+      </div>
       <div class="field-row">
         <label>Host</label>
         <input id="srv-host" value="${srv.host||''}" placeholder="gpu.myuni.edu" />
@@ -550,6 +562,11 @@ function renderDetail() {
       <div class="field-row">
         <label>Passphrase</label>
         <input id="srv-pass" type="password" placeholder="(leave blank if key has no passphrase)" />
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.78rem;color:#aaa;cursor:pointer;white-space:nowrap;"
+               title="Stores the passphrase in this instance's gpu_servers.json (plain text, git-ignored) so jobs stop asking for it. Protects against a copied key file, not a stolen machine.">
+          <input type="checkbox" id="srv-pass-store" style="accent-color:#e94560;width:13px;height:13px;">
+          remember in profile
+        </label>
       </div>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="saveServerConfig()">💾 Save</button>
@@ -693,31 +710,145 @@ async function advanceStage() {
 }
 
 // ============================================================
-// Server config
+// Server config + GPU profiles
 // ============================================================
 function getPassphrase() {
   const el = document.getElementById('srv-pass');
   return el ? el.value : '';
 }
 
+let gpuProfiles = {};   // name -> {host, user, key_path, remote_path, has_passphrase}
+
+async function loadGpuProfiles() {
+  try {
+    const r = await fetch('/api/gpu-profiles');
+    gpuProfiles = (await r.json()).profiles || {};
+  } catch (e) { gpuProfiles = {}; }
+}
+
+function _srvFields() {
+  return {
+    host:        document.getElementById('srv-host').value.trim(),
+    user:        document.getElementById('srv-user').value.trim(),
+    key_path:    document.getElementById('srv-key').value.trim().replace(/^["']+|["']+$/g, ''),
+    remote_path: document.getElementById('srv-remote').value.trim(),
+  };
+}
+
+function _fillSrvFields(s) {
+  document.getElementById('srv-host').value   = s.host || '';
+  document.getElementById('srv-user').value   = s.user || '';
+  document.getElementById('srv-key').value    = s.key_path || '';
+  document.getElementById('srv-remote').value = s.remote_path || '';
+  const pass = document.getElementById('srv-pass');
+  pass.value = '';
+  pass.placeholder = s.has_passphrase
+    ? '(stored in profile — leave blank to keep)'
+    : '(leave blank if key has no passphrase)';
+}
+
+function renderGpuProfileDropdown() {
+  const sel = document.getElementById('srv-profile');
+  if (!sel) return;
+  const current = activeProj?.config?.server_profile || '';
+  sel.innerHTML = '<option value="">(custom — this project only)</option>' +
+    Object.keys(gpuProfiles).sort().map(n =>
+      `<option value="${n}" ${n === current ? 'selected' : ''}>${n}</option>`).join('');
+  if (current && !gpuProfiles[current]) {
+    sel.innerHTML += `<option value="${current}" selected>${current} (missing on this instance!)</option>`;
+  }
+}
+
+function gpuProfileChanged() {
+  const name = document.getElementById('srv-profile').value;
+  if (name && gpuProfiles[name]) {
+    _fillSrvFields(gpuProfiles[name]);
+    const hadServerBefore = !!(activeProj?.config?.server?.host || activeProj?.config?.server_profile);
+    if (hadServerBefore && name !== (activeProj?.config?.server_profile || '')) {
+      showToast('⚠ Trained models do NOT move with this switch — they stay on the old server.', 6000);
+    }
+  } else if (!name) {
+    _fillSrvFields({ ...(activeProj?.config?.server || {}) });
+  }
+}
+
+async function gpuProfileNew() {
+  const name = prompt('Name for the new GPU profile (e.g. koren, azure-gpu, corvinus):');
+  if (!name || !name.trim()) return;
+  const server = _srvFields();
+  if (document.getElementById('srv-pass-store')?.checked && getPassphrase()) {
+    server.passphrase = getPassphrase();
+  }
+  const r = await fetch('/api/gpu-profiles', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name: name.trim(), server }),
+  });
+  if ((await r.json()).ok) {
+    await loadGpuProfiles();
+    activeProj.config.server_profile = name.trim();
+    await fetch(`/api/project/${activeProj.name}/config`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ server_profile: name.trim() }),
+    });
+    renderGpuProfileDropdown();
+    showToast(`Profile '${name.trim()}' created — this project now uses it.`);
+  }
+}
+
+async function gpuProfileDelete() {
+  const name = document.getElementById('srv-profile').value;
+  if (!name) { showToast('Select a profile to delete.'); return; }
+  if (!confirm(`Delete GPU profile '${name}' from this instance? Projects using it will need a new one.`)) return;
+  await fetch(`/api/gpu-profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  await loadGpuProfiles();
+  if (activeProj?.config?.server_profile === name) {
+    activeProj.config.server_profile = '';
+    await fetch(`/api/project/${activeProj.name}/config`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ server_profile: '' }),
+    });
+  }
+  renderGpuProfileDropdown();
+  showToast(`Profile '${name}' deleted.`);
+}
+
 async function saveServerConfig() {
   if (!activeProj) return;
-  const body = {
-    server: {
-      host:        document.getElementById('srv-host').value.trim(),
-      user:        document.getElementById('srv-user').value.trim(),
-      key_path:    document.getElementById('srv-key').value.trim().replace(/^["']+|["']+$/g, ''),
-      remote_path: document.getElementById('srv-remote').value.trim(),
+  const profileName = document.getElementById('srv-profile')?.value || '';
+  const server = _srvFields();
+
+  if (profileName) {
+    // save fields INTO the profile (shared by every project using it)
+    if (document.getElementById('srv-pass-store')?.checked && getPassphrase()) {
+      server.passphrase = getPassphrase();
     }
-  };
+    const r1 = await fetch('/api/gpu-profiles', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name: profileName, server }),
+    });
+    const r2 = await fetch(`/api/project/${activeProj.name}/config`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ server_profile: profileName }),
+    });
+    const ok = (await r1.json()).ok && (await r2.json()).ok;
+    if (ok) {
+      activeProj.config.server_profile = profileName;
+      await loadGpuProfiles();
+      showToast(`Saved to profile '${profileName}'.`);
+    } else { alert('Error saving profile.'); }
+    return;
+  }
+
+  // (custom) — legacy inline block on this project only
   const res  = await fetch(`/api/project/${activeProj.name}/config`, {
     method: 'PATCH', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body),
+    body: JSON.stringify({ server, server_profile: '' }),
   });
   const data = await res.json();
   if (data.ok) {
     activeProj.config.server = data.config.server;
-    showToast('Server settings saved.');
+    activeProj.config.server_profile = '';
+    showToast('Server settings saved (custom, this project only).');
   } else {
     alert('Error: ' + (errMsg(data)));
   }

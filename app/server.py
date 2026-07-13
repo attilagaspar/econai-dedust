@@ -3946,6 +3946,7 @@ class ConfigUpdate(BaseModel):
     server: Optional[dict] = None
     llm:    Optional[dict] = None
     labels: Optional[list] = None
+    server_profile: Optional[str] = None   # "" clears (back to inline/custom)
 
 
 @app.patch("/api/project/{name}/config")
@@ -3953,6 +3954,11 @@ def api_update_config(name: str, body: ConfigUpdate):
     try:
         cfg  = load_config(name)
         pdir = project_dir(name)
+        if body.server_profile is not None:
+            if body.server_profile == "":
+                cfg.pop("server_profile", None)
+            else:
+                cfg["server_profile"] = body.server_profile
         if body.server is not None:
             cfg["server"] = {**cfg.get("server", {}), **body.server}
         if body.llm is not None:
@@ -4095,7 +4101,7 @@ def api_docker_container_status(body: SshRequest = None,
         raise HTTPException(status_code=400, detail="Server not configured on any project")
     srv = _server_cfg(names[0])
 
-    pw = passphrase or ""
+    pw = passphrase or srv.get("passphrase") or ""
     result = {}
     for role, cname in [("predict", _predict_container(srv)),
                         ("train",   _train_container(srv))]:
@@ -4137,7 +4143,7 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
 
     cfg      = _docker_cfg()
     image    = cfg["image_name"]
-    pw       = passphrase or ""
+    pw       = passphrase or srv.get("passphrase") or ""
 
     # Read the local Dockerfile and upload it
     dockerfile_path = Path(__file__).parent.parent / "Dockerfile"
@@ -4258,8 +4264,27 @@ def _server_project_names() -> list[str]:
 
 
 def _server_cfg(name: str) -> dict:
+    """Resolve a project's GPU server settings.
+
+    If the project references a named profile (config.json "server_profile"),
+    the profile — defined per-instance in app/gpu_servers.json — wins entirely;
+    the same logical server needs different key paths from different machines,
+    so profiles are resolved on the instance that executes the job. Projects
+    without a profile keep the legacy inline server block. A profile may carry
+    a stored key passphrase; endpoints use it when the request has none."""
+    from app import gpu_profiles
     cfg = load_config(name)
-    srv = cfg.get("server", {})
+    profile_name = cfg.get("server_profile")
+    if profile_name:
+        srv = gpu_profiles.get(profile_name)
+        if srv is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"GPU profile '{profile_name}' is not defined on this "
+                        f"instance — add it in the dashboard's GPU Server card "
+                        f"(or switch the project to different settings)."))
+    else:
+        srv = cfg.get("server", {})
     if not srv.get("host"):
         raise HTTPException(status_code=400, detail="Server host not configured")
     if not srv.get("user"):
@@ -4267,6 +4292,49 @@ def _server_cfg(name: str) -> dict:
     if not srv.get("key_path"):
         raise HTTPException(status_code=400, detail="Server key_path not configured")
     return srv
+
+
+# ── GPU server profiles (named backends: koren / azure-gpu / …) ──────────────
+
+class GpuProfileBody(BaseModel):
+    name:   str
+    server: dict
+
+
+@app.get("/api/gpu-profiles")
+def api_gpu_profiles_list():
+    """All profiles on this instance. Passphrases are masked — the UI only
+    needs to know whether one is stored."""
+    from app import gpu_profiles
+    out = {}
+    for pname, srv in gpu_profiles.load_all().items():
+        out[pname] = {**{k: v for k, v in srv.items() if k != "passphrase"},
+                      "has_passphrase": bool(srv.get("passphrase"))}
+    return {"profiles": out}
+
+
+@app.post("/api/gpu-profiles")
+def api_gpu_profiles_save(body: GpuProfileBody):
+    from app import gpu_profiles
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Profile name required")
+    server = dict(body.server or {})
+    # empty passphrase in the payload = keep the stored one (the UI never
+    # echoes it back); to actually clear it the UI sends passphrase=None + clear
+    if not server.get("passphrase") and not server.pop("clear_passphrase", False):
+        old = gpu_profiles.get(name) or {}
+        if old.get("passphrase"):
+            server["passphrase"] = old["passphrase"]
+    gpu_profiles.save(name, server)
+    return {"ok": True}
+
+
+@app.delete("/api/gpu-profiles/{name}")
+def api_gpu_profiles_delete(name: str):
+    from app import gpu_profiles
+    gpu_profiles.delete(name)
+    return {"ok": True}
 
 
 class SshRequest(BaseModel):
@@ -4286,7 +4354,8 @@ def api_server_test(name: str, body: SshRequest = SshRequest()):
     from app import ssh_ops
     try:
         srv = _server_cfg(name)
-        return ssh_ops.test_connection(srv["host"], srv["user"], srv["key_path"], body.passphrase)
+        return ssh_ops.test_connection(srv["host"], srv["user"], srv["key_path"],
+                                       body.passphrase or srv.get("passphrase"))
     except HTTPException:
         raise
     except Exception as e:
@@ -4306,7 +4375,7 @@ def api_server_push(name: str, body: SshRequest = SshRequest()):
             raise HTTPException(status_code=400, detail="annotations/ folder does not exist")
         return ssh_ops.push_folder(
             srv["host"], srv["user"], srv["key_path"],
-            local_ann, remote_ann, body.passphrase,
+            local_ann, remote_ann, body.passphrase or srv.get("passphrase"),
         )
     except HTTPException:
         raise
@@ -4325,7 +4394,7 @@ def api_server_pull(name: str, body: SshPullRequest = SshPullRequest()):
         local  = pdir / body.subfolder
         return ssh_ops.pull_folder(
             srv["host"], srv["user"], srv["key_path"],
-            remote, local, body.passphrase,
+            remote, local, body.passphrase or srv.get("passphrase"),
         )
     except HTTPException:
         raise
@@ -4345,7 +4414,7 @@ def api_job_submit(name: str, body: JobSubmit):
         )
         result = ssh_ops.submit_job(
             srv["host"], srv["user"], srv["key_path"],
-            body.command, log_path, body.passphrase,
+            body.command, log_path, body.passphrase or srv.get("passphrase"),
         )
         if result["ok"]:
             state = load_pipeline(name)
@@ -4371,7 +4440,7 @@ def api_job_status(name: str, passphrase: Optional[str] = Query(None)):
             return {"ok": True, "running": False, "log_tail": "(no job submitted yet)"}
         return ssh_ops.job_status(
             srv["host"], srv["user"], srv["key_path"],
-            job.get("pid"), job["log_path"], passphrase,
+            job.get("pid"), job["log_path"], passphrase or srv.get("passphrase"),
         )
     except HTTPException:
         raise
@@ -5644,7 +5713,7 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
     try:
         cfg = load_config(name)
         srv = _server_cfg(name)
-        passphrase = body.passphrase
+        passphrase = body.passphrase or srv.get("passphrase")
 
         pdir  = project_dir(name)
         inter = pdir / "intermediate"
@@ -5829,7 +5898,7 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
     from app import ssh_ops
     try:
         srv          = _server_cfg(name)
-        passphrase   = body.passphrase
+        passphrase   = body.passphrase or srv.get("passphrase")
         remote       = srv["remote_path"].rstrip("/")
         predict_root = srv.get("predict_remote_path", remote).rstrip("/")
 
@@ -6051,11 +6120,12 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
     from app import ssh_ops
     try:
         srv = _server_cfg(name)
+        passphrase = body.passphrase or srv.get("passphrase")
 
         def full_gen():
             docker_cmd = None
             for line in _push_infer_from_gen(name, source, srv,
-                                             body.passphrase, body.skip_image_upload,
+                                             passphrase, body.skip_image_upload,
                                              body.threshold):
                 if line.startswith("__docker_cmd__:"):
                     docker_cmd = line[len("__docker_cmd__:"):]
@@ -6075,8 +6145,8 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                     f"to this project remote_path.'; exit 1; fi"
                 )
                 yield from ssh_ops.stream_command(
-                    srv["host"], srv["user"], srv["key_path"], cmd, body.passphrase)
-                yield from _stop_container_gen(srv, body.passphrase,
+                    srv["host"], srv["user"], srv["key_path"], cmd, passphrase)
+                yield from _stop_container_gen(srv, passphrase,
                                                _predict_container(srv), "infer-from",
                                                body.keep_container)
 
@@ -6122,7 +6192,7 @@ async def api_finetune_from(name: str, source: str,
                         f"Projects must share the same label set."))
 
         srv        = _server_cfg(name)
-        passphrase = body.passphrase
+        passphrase = body.passphrase or srv.get("passphrase")
         pdir       = project_dir(name)
         inter      = pdir / "intermediate"
         remote     = srv["remote_path"].rstrip("/")
@@ -6279,7 +6349,7 @@ def api_pull_predictions(name: str, body: TrainRequest = TrainRequest()):
             srv["host"], srv["user"], srv["key_path"],
             f"{remote}/{name}/predictions",
             pred_dir,
-            body.passphrase,
+            body.passphrase or srv.get("passphrase"),
         )
         return {**result, "local_path": str(pred_dir)}
     except HTTPException:
