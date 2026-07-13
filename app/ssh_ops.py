@@ -32,7 +32,20 @@ def _load_key(kp: Path, passphrase: str = None):
 
 
 def _client(host: str, user: str, key_path: str, passphrase: str = None):
+    """SSH connection. key_path set → key auth (passphrase unlocks the key).
+    key_path EMPTY → password auth: the passphrase field IS the login password
+    (e.g. VPN-protected workplace servers with plain username/password SSH)."""
     import paramiko
+    c = paramiko.SSHClient()
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    if not (key_path or "").strip():
+        if not passphrase:
+            raise ValueError(
+                "No key file configured — password login: enter the account "
+                "password in the passphrase field (or store it in the GPU profile).")
+        c.connect(hostname=host, username=user, password=passphrase,
+                  timeout=15, allow_agent=False, look_for_keys=False)
+        return c
     kp = Path(key_path.strip().strip('"').strip("'")).expanduser()
     if kp.suffix.lower() == ".ppk":
         raise ValueError(
@@ -40,8 +53,6 @@ def _client(host: str, user: str, key_path: str, passphrase: str = None):
             "In PuTTYgen: load the key → Conversions → Export OpenSSH key → save as .pem"
         )
     pkey = _load_key(kp, passphrase)
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     c.connect(hostname=host, username=user, pkey=pkey, timeout=15)
     return c
 

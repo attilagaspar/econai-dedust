@@ -4289,8 +4289,9 @@ def _server_cfg(name: str) -> dict:
         raise HTTPException(status_code=400, detail="Server host not configured")
     if not srv.get("user"):
         raise HTTPException(status_code=400, detail="Server user not configured")
-    if not srv.get("key_path"):
-        raise HTTPException(status_code=400, detail="Server key_path not configured")
+    # key_path may be empty: password-auth servers (VPN + plain login) use the
+    # passphrase field / stored profile passphrase as the password instead.
+    srv.setdefault("key_path", "")
     return srv
 
 

@@ -87,3 +87,20 @@ def test_project_config_patch_profile(client, proj):
     assert r.json()["config"]["server_profile"] == "box"
     r = client.patch(f"/api/project/{proj}/config", json={"server_profile": ""})
     assert "server_profile" not in r.json()["config"]
+
+
+def test_password_auth_profile_no_key_path(client, proj):
+    # VPN/password servers: key_path empty is valid config; the passphrase
+    # (typed or stored) is the login password.
+    from app.server import _server_cfg
+    gpu_profiles.save("workplace", {"host": "vpn.example.org", "user": "u",
+                                    "passphrase": "hunter2"})
+    _set_cfg(proj, server_profile="workplace")
+    srv = _server_cfg(proj)
+    assert srv["key_path"] == "" and srv["passphrase"] == "hunter2"
+
+
+def test_client_password_mode_requires_password():
+    from app.ssh_ops import _client
+    with pytest.raises(ValueError, match="password"):
+        _client("h.example.org", "u", "", None)   # no key, no password → clear error
