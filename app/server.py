@@ -4580,13 +4580,20 @@ def _auth_norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Import ONCE at module scope. A failed import inside the per-call function is
+# a performance landmine: Python does not cache import failures, so every call
+# re-scans sys.path (with the 32k-entry places index that was ~40 s of nt.stat
+# calls per index build — the "authority resolve freezes the server" bug).
+try:
+    from unidecode import unidecode as _unidecode
+except ImportError:
+    _unidecode = None
+
+
 def _auth_fold(s: str) -> str:
     """Accent-folded key (Vágagyagos -> vagagyagos) — tolerant of OCR dropping diacritics."""
-    try:
-        from unidecode import unidecode
-        s = unidecode(s or "")
-    except Exception:
-        pass
+    if _unidecode is not None:
+        s = _unidecode(s or "")
     return _auth_norm(s)
 
 
@@ -4669,15 +4676,18 @@ def _load_authority(name: Optional[str] = None) -> dict:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
     mtime = path.stat().st_mtime
+    # Build INSIDE the lock: concurrent requests after an mtime change (server
+    # start, file update, Dropbox touch) must wait for ONE build — building
+    # outside the lock let every in-flight request start its own multi-second
+    # build (thundering herd = the editor freezing for minutes).
     with _AUTH_LOCK:
         cached = _AUTH_CACHE.get(fname)
         if cached and cached["mtime"] == mtime:
             return cached["index"]
-    data = json.loads(path.read_text(encoding="utf-8"))   # built outside lock (slow)
-    index = _build_auth_index(data)
-    with _AUTH_LOCK:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        index = _build_auth_index(data)
         _AUTH_CACHE[fname] = {"mtime": mtime, "index": index}
-    return index
+        return index
 
 
 _AUTH_META_CACHE: dict = {}   # filename -> {"mtime", "meta"}
