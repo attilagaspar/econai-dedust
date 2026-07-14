@@ -270,6 +270,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "predictions, config.json, pipeline.json, schema files)")
     p_pull.add_argument("--as-name", dest="as_name",
                         help="Store under a different project name locally")
+    p_pull.add_argument("--overwrite", action="store_true",
+                        help="Replace local files that DIFFER from the remote. Without this, "
+                             "pull only downloads NEW files (and skips identical ones) — safe "
+                             "for collecting a collaborator's added pages without clobbering "
+                             "local edits.")
 
     return parser
 
@@ -481,9 +486,12 @@ def cmd_pull_project(args):
     """Sync a project FROM a remote Dedust instance down to local projects/.
 
     Mirror of push-project: incremental (same size + mtime skipped), live
-    status bar, same remembered connection (~/.dedust_push.json). Remote files
-    OVERWRITE differing local ones — after a pull, the local copy is only the
-    live one if you stop editing the project remotely (one-home rule).
+    status bar, same remembered connection (~/.dedust_push.json).
+
+    Default = ADDITIVE: only files missing locally are downloaded; local files
+    that differ from the remote are kept and reported (safe for collecting a
+    collaborator's new pages without clobbering local edits). Pass --overwrite
+    to make the remote version win on differing files.
     """
     import os, stat, time
     from pathlib import Path
@@ -555,6 +563,7 @@ def cmd_pull_project(args):
             f"{name:<34}")
         sys.stdout.flush()
 
+    kept_differing = []
     try:
         for rp, rel_parts, size, mtime in files:
             lp = pdir.joinpath(*rel_parts)
@@ -563,6 +572,12 @@ def cmd_pull_project(args):
                 st = lp.stat()
                 if st.st_size == size and abs(st.st_mtime - mtime) < 2:
                     skipped += 1
+                    done_bytes += size
+                    _bar(rel_parts[-1])
+                    continue
+                if not args.overwrite:
+                    # local file differs from remote — keep it (additive mode)
+                    kept_differing.append("/".join(rel_parts))
                     done_bytes += size
                     _bar(rel_parts[-1])
                     continue
@@ -581,11 +596,20 @@ def cmd_pull_project(args):
         c.close()
 
     dt = time.time() - t0
-    print(GREEN(f"✓ Done in {dt:.0f}s — {sent} downloaded, {skipped} unchanged."))
+    print(GREEN(f"✓ Done in {dt:.0f}s — {sent} downloaded, {skipped} unchanged"
+                + (f", {len(kept_differing)} differing kept local." if kept_differing else ".")))
+    if kept_differing:
+        SHOW = 8
+        for f in kept_differing[:SHOW]:
+            print(YELLOW(f"  differs (kept local): {f}"))
+        if len(kept_differing) > SHOW:
+            print(YELLOW(f"  … and {len(kept_differing) - SHOW} more"))
+        print(YELLOW("  Re-run with --overwrite to replace these with the remote version."))
     save_conn()
     print(f"Project is at {pdir} — it appears in the local dashboard automatically.")
-    print(YELLOW("Reminder: a project should have ONE home. If you now work on it"))
-    print(YELLOW("locally, stop editing it on the remote (or re-push before you do)."))
+    if args.overwrite:
+        print(YELLOW("Reminder: a project should have ONE home. If you now work on it"))
+        print(YELLOW("locally, stop editing it on the remote (or re-push before you do)."))
 
 
 COMMANDS = {

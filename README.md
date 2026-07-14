@@ -401,7 +401,9 @@ python econai.py push-project <name>                           # upload a projec
 python econai.py pull-project <name>                           # download a project from a remote Dedust server
 ```
 
-**`push-project` / `pull-project`** are the fast paths for moving projects to/from a cloud or server deployment: transfer straight over SSH (no browser upload caps, no server-side rendering), incremental in both directions — unchanged files are skipped on re-runs. First use needs `--host --user --key --remote-projects` (e.g. `/home/dedust/dedust/projects`); they're remembered in `~/.dedust_push.json` afterwards. `--as-name` stores under a different name at the destination; `--all` includes `intermediate/` and `output/`. Remember the one-home rule: a project lives in ONE place — push/pull are for *moving* it (or backing it up), not for editing in two places.
+**`push-project` / `pull-project`** are the fast paths for moving projects to/from a cloud or server deployment: transfer straight over SSH (no browser upload caps, no server-side rendering), incremental in both directions — unchanged files are skipped on re-runs. First use needs `--host --user --key --remote-projects` (e.g. `/home/dedust/dedust/projects`); they're remembered in `~/.dedust_push.json` afterwards. `--as-name` stores under a different name at the destination; `--all` includes `intermediate/` and `output/`.
+
+`pull-project` is **additive by default**: it downloads files that are new on the server and *keeps* local files that differ (listing them) — safe for collecting a collaborator's added pages into your copy without losing local edits. Pass **`--overwrite`** to make the remote version win on differing files (a true restore). `push-project` still overwrites the remote unconditionally — it's the "deploy my copy" direction.
 
 ---
 
