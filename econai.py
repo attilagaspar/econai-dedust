@@ -255,6 +255,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_push.add_argument("--as-name", dest="as_name",
                         help="Store under a different project name on the remote")
 
+    # pull-project — the mirror: sync a remote project down to local projects/
+    p_pull = sub.add_parser(
+        "pull-project",
+        help="Download a project from a remote Dedust server (SFTP, incremental)")
+    p_pull.add_argument("name", help="Project name on the remote")
+    p_pull.add_argument("--host", help="Remote host/IP (remembered after first use)")
+    p_pull.add_argument("--user", help="SSH user (remembered)")
+    p_pull.add_argument("--key",  help="SSH private key path (remembered)")
+    p_pull.add_argument("--remote-projects", dest="remote_projects",
+                        help="Remote projects dir (remembered), e.g. /home/dedust/dedust/projects")
+    p_pull.add_argument("--all", action="store_true",
+                        help="Also pull intermediate/ and output/ (default: annotations, "
+                             "predictions, config.json, pipeline.json, schema files)")
+    p_pull.add_argument("--as-name", dest="as_name",
+                        help="Store under a different project name locally")
+
     return parser
 
 
@@ -300,6 +316,43 @@ def cmd_serve(args):
                 reload=not getattr(args, "no_reload", False))
 
 
+def _sync_connection(args, verb: str):
+    """Resolve host/user/key/remote_projects from args + the remembered file
+    (~/.dedust_push.json). Returns (host, user, key, remote_projects,
+    save_fn) — call save_fn() after a successful transfer to remember."""
+    import json
+    from pathlib import Path
+
+    cfg_path = Path.home() / ".dedust_push.json"
+    saved = {}
+    if cfg_path.exists():
+        try:
+            saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            saved = {}
+    host = args.host or saved.get("host")
+    user = args.user or saved.get("user")
+    key  = args.key  or saved.get("key")
+    remote_projects = args.remote_projects or saved.get("remote_projects")
+    missing = [n for n, v in [("--host", host), ("--user", user), ("--key", key),
+                              ("--remote-projects", remote_projects)] if not v]
+    if missing:
+        print(f"Error: missing {', '.join(missing)} (given once, they are remembered).",
+              file=sys.stderr)
+        print(f'Example:\n  python econai.py {verb} myproj --host 20.71.94.231 '
+              '--user dedust --key %USERPROFILE%\\.ssh\\id_rsa '
+              '--remote-projects /home/dedust/dedust/projects', file=sys.stderr)
+        sys.exit(1)
+
+    def save_fn():
+        cfg_path.write_text(json.dumps({"host": host, "user": user, "key": key,
+                                        "remote_projects": remote_projects}, indent=2),
+                            encoding="utf-8")
+        print(f"(connection remembered in {cfg_path})")
+
+    return host, user, key, remote_projects, save_fn
+
+
 def cmd_push_project(args):
     """Sync a local project to a remote Dedust instance over SFTP.
 
@@ -317,27 +370,7 @@ def cmd_push_project(args):
         print(f"Error: no local project '{args.name}' at {pdir}", file=sys.stderr)
         sys.exit(1)
 
-    # ── remembered connection defaults ──────────────────────────────────────
-    cfg_path = Path.home() / ".dedust_push.json"
-    saved = {}
-    if cfg_path.exists():
-        try:
-            saved = json.loads(cfg_path.read_text(encoding="utf-8"))
-        except Exception:
-            saved = {}
-    host = args.host or saved.get("host")
-    user = args.user or saved.get("user")
-    key  = args.key  or saved.get("key")
-    remote_projects = args.remote_projects or saved.get("remote_projects")
-    missing = [n for n, v in [("--host", host), ("--user", user), ("--key", key),
-                              ("--remote-projects", remote_projects)] if not v]
-    if missing:
-        print(f"Error: missing {', '.join(missing)} (given once, they are remembered).",
-              file=sys.stderr)
-        print('Example:\n  python econai.py push-project myproj --host 20.71.94.231 '
-              '--user dedust --key %USERPROFILE%\\.ssh\\id_rsa '
-              '--remote-projects /home/dedust/dedust/projects', file=sys.stderr)
-        sys.exit(1)
+    host, user, key, remote_projects, save_conn = _sync_connection(args, "push-project")
 
     # ── what to send ────────────────────────────────────────────────────────
     SKIP_DIRS_DEFAULT = {"intermediate", "output"}
@@ -438,13 +471,121 @@ def cmd_push_project(args):
 
     dt = time.time() - t0
     print(GREEN(f"✓ Done in {dt:.0f}s — {sent} uploaded, {skipped} unchanged."))
-    cfg_path.write_text(json.dumps({"host": host, "user": user, "key": key,
-                                    "remote_projects": remote_projects}, indent=2),
-                        encoding="utf-8")
-    print(f"(connection remembered in {cfg_path})")
+    save_conn()
     print(f"Open the project at the remote dashboard — it appears automatically.")
     print(YELLOW("Reminder: a project should have ONE home. Once you start working on it"))
     print(YELLOW("remotely, treat this local copy as read-only (or delete it)."))
+
+
+def cmd_pull_project(args):
+    """Sync a project FROM a remote Dedust instance down to local projects/.
+
+    Mirror of push-project: incremental (same size + mtime skipped), live
+    status bar, same remembered connection (~/.dedust_push.json). Remote files
+    OVERWRITE differing local ones — after a pull, the local copy is only the
+    live one if you stop editing the project remotely (one-home rule).
+    """
+    import os, stat, time
+    from pathlib import Path
+
+    host, user, key, remote_projects, save_conn = _sync_connection(args, "pull-project")
+
+    dest_name = args.as_name or args.name
+    pdir = project_dir(dest_name)
+
+    SKIP_DIRS_DEFAULT = {"intermediate", "output"}
+    skip_dirs = set() if args.all else SKIP_DIRS_DEFAULT
+
+    import paramiko
+    c = paramiko.SSHClient()
+    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    c.connect(host, username=user, key_filename=os.path.expanduser(key))
+    sftp = c.open_sftp()
+
+    remote_root = f"{remote_projects.rstrip('/')}/{args.name}"
+    try:
+        sftp.stat(remote_root)
+    except FileNotFoundError:
+        print(f"Error: no project '{args.name}' at {user}@{host}:{remote_root}",
+              file=sys.stderr)
+        sftp.close(); c.close()
+        sys.exit(1)
+
+    # ── walk the remote tree ─────────────────────────────────────────────────
+    files = []          # (remote_path, rel_parts, size, mtime)
+    def walk(rdir, rel_parts):
+        for entry in sftp.listdir_attr(rdir):
+            rp = f"{rdir}/{entry.filename}"
+            if stat.S_ISDIR(entry.st_mode):
+                if not rel_parts and entry.filename in skip_dirs:
+                    continue
+                walk(rp, rel_parts + [entry.filename])
+            else:
+                files.append((rp, rel_parts + [entry.filename],
+                              entry.st_size, entry.st_mtime))
+    walk(remote_root, [])
+    total_bytes = sum(f[2] for f in files)
+    print(f"Pulling '{args.name}' ← {user}@{host}:{remote_root} → {pdir}")
+    print(f"  {len(files)} files, {total_bytes/1e6:.1f} MB"
+          + (f"  (skipping {', '.join(sorted(skip_dirs))}/)" if skip_dirs else ""))
+
+    sent = skipped = 0
+    sent_bytes = 0
+    done_bytes = 0
+    t0 = time.time()
+    _last_draw = [0.0]
+
+    def _bar(current_name: str, in_file: int = 0):
+        now = time.time()
+        if now - _last_draw[0] < 0.1 and (done_bytes + in_file) < total_bytes:
+            return
+        _last_draw[0] = now
+        done = min(done_bytes + in_file, total_bytes)
+        frac = done / total_bytes if total_bytes else 1.0
+        width = 24
+        filled = int(width * frac)
+        rate = (sent_bytes + in_file) / 1e6 / max(now - t0, 0.1)
+        remaining = total_bytes - done
+        eta = remaining / (rate * 1e6) if rate > 0 else 0
+        name = current_name if len(current_name) <= 34 else "..." + current_name[-31:]
+        sys.stdout.write(
+            f"\r[{'#' * filled}{'-' * (width - filled)}] "
+            f"{done/1e6:7.1f}/{total_bytes/1e6:.1f} MB  "
+            f"{rate:5.1f} MB/s  ETA {int(eta // 60)}:{int(eta % 60):02d}  "
+            f"{name:<34}")
+        sys.stdout.flush()
+
+    try:
+        for rp, rel_parts, size, mtime in files:
+            lp = pdir.joinpath(*rel_parts)
+            lp.parent.mkdir(parents=True, exist_ok=True)
+            if lp.exists():
+                st = lp.stat()
+                if st.st_size == size and abs(st.st_mtime - mtime) < 2:
+                    skipped += 1
+                    done_bytes += size
+                    _bar(rel_parts[-1])
+                    continue
+            _bar(rel_parts[-1])
+            sftp.get(rp, str(lp),
+                     callback=lambda got, _tot, n=rel_parts[-1]: _bar(n, in_file=got))
+            os.utime(lp, (mtime, mtime))   # enable skip on re-pull
+            sent += 1
+            sent_bytes += size
+            done_bytes += size
+            _bar(rel_parts[-1])
+        _bar("done")
+        sys.stdout.write("\n")
+    finally:
+        sftp.close()
+        c.close()
+
+    dt = time.time() - t0
+    print(GREEN(f"✓ Done in {dt:.0f}s — {sent} downloaded, {skipped} unchanged."))
+    save_conn()
+    print(f"Project is at {pdir} — it appears in the local dashboard automatically.")
+    print(YELLOW("Reminder: a project should have ONE home. If you now work on it"))
+    print(YELLOW("locally, stop editing it on the remote (or re-push before you do)."))
 
 
 COMMANDS = {
@@ -456,6 +597,7 @@ COMMANDS = {
     "stages":      cmd_stages,
     "serve":       cmd_serve,
     "push-project": cmd_push_project,
+    "pull-project": cmd_pull_project,
 }
 
 

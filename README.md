@@ -398,9 +398,10 @@ python econai.py status <name>                                 # show pipeline s
 python econai.py advance <name>                               # move to next stage
 python econai.py set-stage <name> <stage>                     # set stage manually
 python econai.py push-project <name>                           # upload a project to a remote Dedust server (SFTP)
+python econai.py pull-project <name>                           # download a project from a remote Dedust server
 ```
 
-**`push-project`** is the fast path for getting data onto a cloud/server deployment: import and render PDFs *locally* (your CPU is faster and browser uploads are size-capped by Cloudflare), then push the resulting files straight up over SSH. Incremental — re-pushing skips unchanged files. First use needs `--host --user --key --remote-projects` (e.g. `/home/dedust/dedust/projects`); they're remembered in `~/.dedust_push.json` afterwards. `--as-name` uploads under a different remote name; `--all` includes `intermediate/` and `output/`. Remember the one-home rule: once you work on a project remotely, stop editing the local copy.
+**`push-project` / `pull-project`** are the fast paths for moving projects to/from a cloud or server deployment: transfer straight over SSH (no browser upload caps, no server-side rendering), incremental in both directions — unchanged files are skipped on re-runs. First use needs `--host --user --key --remote-projects` (e.g. `/home/dedust/dedust/projects`); they're remembered in `~/.dedust_push.json` afterwards. `--as-name` stores under a different name at the destination; `--all` includes `intermediate/` and `output/`. Remember the one-home rule: a project lives in ONE place — push/pull are for *moving* it (or backing it up), not for editing in two places.
 
 ---
 
