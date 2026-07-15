@@ -29,12 +29,13 @@ function _rsClearLayer(shape, layer) {
 }
 
 function _syncFlatLocal(shape) {
+  // HUMAN only — flat OCR/LLM are the models' ORIGINAL outputs and must
+  // survive row edits (they feed the ⟳ re-distribute buttons). Mirrors the
+  // server's _sync_flat_from_rows default.
   const rows = _rsRows(shape); if (!rows?.length) return;
   const join = L => rows.map(r => r[L] || '').join('\n');
   const any  = L => rows.some(r => (r[L] || '').trim());
-  if (any('ocr'))   { (shape.tesseract_output ??= {}).ocr_text             = join('ocr');   }
-  if (any('llm'))   { (shape.openai_output    ??= {}).response             = join('llm');   }
-  if (any('human')) { (shape.human_output     ??= {}).human_corrected_text = join('human'); }
+  if (any('human')) { (shape.human_output ??= {}).human_corrected_text = join('human'); }
 }
 
 function _rescaleRowStructLocal(shape, oldPts, newPts) {
@@ -120,11 +121,13 @@ function renderRowTable(shape) {
   const rows = _rsRows(shape);
   fg.style.display = 'flex';
 
-  // Flat text boxes are replaced by the table when a row structure exists
+  // Flat text boxes are replaced by the table when a row structure exists —
+  // but remain reachable via the "whole-cell layers" toggle (users who edit /
+  // pull the flat fields must not lose them just because rows exist).
   const hasRs = !!rows?.length;
   ['f-ocr', 'f-llm-result', 'human-input'].forEach(id => {
     const el = document.getElementById(id)?.closest('.lined-wrap');
-    if (el) el.style.display = hasRs ? 'none' : '';
+    if (el) el.style.display = (hasRs && !_rsShowFlat) ? 'none' : '';
   });
   document.getElementById('rows-convert-btn').style.display = hasRs ? 'none' : '';
   document.getElementById('rows-remove-btn').style.display  = hasRs ? '' : 'none';
@@ -141,13 +144,17 @@ function renderRowTable(shape) {
     return;
   }
 
-  meta.textContent = `${rows.length} row${rows.length > 1 ? 's' : ''} · ${shape.row_struct.origin || ''}`;
+  meta.innerHTML = `${rows.length} row${rows.length > 1 ? 's' : ''} · ${shape.row_struct.origin || ''}`
+    + ` &nbsp;<a href="#" style="color:#8a94a6;font-size:10px;" onclick="_rsToggleFlat(event)">`
+    + `${_rsShowFlat ? '▾ hide' : '▸ show'} whole-cell layers</a>`;
 
   // A flat layer that disagrees with the table (e.g. a whole-cell LLM run
-  // whose line count didn't match the rows) must stay visible — un-hide its
-  // legacy text box and warn with the actual line counts.
+  // whose lines didn't make it into the rows) must stay visible — un-hide its
+  // legacy text box and warn. Comparison is per-line, whitespace-tolerant;
+  // the message distinguishes a COUNT mismatch from CONTENT divergence
+  // (the old exact-string test produced absurd "49 lines vs 49 rows" warnings
+  // over trailing whitespace).
   const splitLines = t => (t || '').trim() ? t.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
-  const joined = L => rows.map(r => (r[L] || '')).join('\n').trim();
   const flat = {
     'f-ocr':        (shape.tesseract_output?.ocr_text || shape.easyocr_output?.ocr_text || '').trim(),
     'f-llm-result': (shape.openai_output?.response || '').trim(),
@@ -156,12 +163,19 @@ function renderRowTable(shape) {
   const rowsOf = {'f-ocr': 'ocr', 'f-llm-result': 'llm', 'human-input': 'human'};
   let mismatches = [];
   Object.entries(flat).forEach(([id, txt]) => {
-    const mism = txt && txt !== joined(rowsOf[id]);
+    const L = rowsOf[id];
+    const flatLines = splitLines(txt);
+    const sameCount = flatLines.length === rows.length;
+    const same = !txt || (sameCount
+      && flatLines.every((ln, i) => ln.trim() === (rows[i][L] || '').trim()));
+    const mism = txt && !same;
     const el = document.getElementById(id)?.closest('.lined-wrap');
-    if (el) el.style.display = mism ? '' : 'none';
+    if (el) el.style.display = (mism || _rsShowFlat) ? '' : 'none';
     if (mism) mismatches.push(
-      `${rowsOf[id].toUpperCase()} (${splitLines(txt).length} lines vs ${rows.length} rows) `
-      + `<button class="rs-copy-btn" onclick="_rsImportFlat('${rowsOf[id]}')" `
+      (sameCount
+        ? `${L.toUpperCase()} (${rows.length} lines — content differs from the table)`
+        : `${L.toUpperCase()} (${flatLines.length} lines vs ${rows.length} rows)`)
+      + ` <button class="rs-copy-btn" onclick="_rsImportFlat('${L}')" `
       + `title="Force-fill the rows top-aligned from the flat text (extra lines are dropped)">⤓ import anyway</button>`);
   });
 
@@ -249,6 +263,16 @@ async function _rsImportFlat(layer) {
   renderRowTable(shape);
   showToast(`${layer.toUpperCase()} imported into ${Math.min(lines.length, rows.length)} rows`
             + (lines.length > rows.length ? ` (${lines.length - rows.length} extra lines dropped)` : ''));
+}
+
+// Whole-cell flat layers visibility while a row structure exists (bug report:
+// "the human correction area disappears and I cannot pull the OCR/LLM fields")
+let _rsShowFlat = localStorage.getItem('rsShowFlat') === '1';
+function _rsToggleFlat(e) {
+  e?.preventDefault();
+  _rsShowFlat = !_rsShowFlat;
+  try { localStorage.setItem('rsShowFlat', _rsShowFlat ? '1' : '0'); } catch {}
+  if (selIdx >= 0) renderRowTable(pageData.shapes[selIdx]);
 }
 
 let _rsPdfCap = 60;

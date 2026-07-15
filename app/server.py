@@ -745,9 +745,16 @@ def _shape_bbox(shape):
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _sync_flat_from_rows(shape):
-    """Re-derive the legacy flat text fields from row_struct.  A layer whose
-    rows are all empty is left untouched (preserves legacy text)."""
+def _sync_flat_from_rows(shape, layers=("human",)):
+    """Re-derive flat text fields from row_struct for the given layers.
+
+    Default = HUMAN ONLY. The flat OCR/LLM fields are the models' original
+    outputs — overwriting them with the row-join on every row save (the old
+    behavior) silently destroyed the originals: after inserting a row the
+    flat text gained a phantom empty line, which made the panel's ⟳
+    "re-distribute" a circular no-op forever. Only a line-by-line run that
+    rewrites a layer should sync that layer's flat (pass it in `layers`).
+    A layer whose rows are all empty is left untouched."""
     rs = shape.get("row_struct")
     if not rs or not rs.get("rows"):
         return
@@ -757,21 +764,24 @@ def _sync_flat_from_rows(shape):
         vals = [(r.get(layer) or "") for r in rows]
         return "\n".join(vals) if any(v.strip() for v in vals) else None
 
-    t = joined("ocr")
-    if t is not None:
-        if not isinstance(shape.get("tesseract_output"), dict):
-            shape["tesseract_output"] = {}
-        shape["tesseract_output"]["ocr_text"] = t
-    t = joined("llm")
-    if t is not None:
-        if not isinstance(shape.get("openai_output"), dict):
-            shape["openai_output"] = {}
-        shape["openai_output"]["response"] = t
-    t = joined("human")
-    if t is not None:
-        if not isinstance(shape.get("human_output"), dict):
-            shape["human_output"] = {}
-        shape["human_output"]["human_corrected_text"] = t
+    if "ocr" in layers:
+        t = joined("ocr")
+        if t is not None:
+            if not isinstance(shape.get("tesseract_output"), dict):
+                shape["tesseract_output"] = {}
+            shape["tesseract_output"]["ocr_text"] = t
+    if "llm" in layers:
+        t = joined("llm")
+        if t is not None:
+            if not isinstance(shape.get("openai_output"), dict):
+                shape["openai_output"] = {}
+            shape["openai_output"]["response"] = t
+    if "human" in layers:
+        t = joined("human")
+        if t is not None:
+            if not isinstance(shape.get("human_output"), dict):
+                shape["human_output"] = {}
+            shape["human_output"]["human_corrected_text"] = t
 
 
 def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False):
@@ -816,7 +826,8 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False)
             for r, t in zip(rows_now, _split_lines(flat_h)):
                 r["human"] = t
 
-    _sync_flat_from_rows(shape)
+    # a line-by-line run REWROTE this layer — its flat mirrors the new rows
+    _sync_flat_from_rows(shape, layers=(layer, "human"))
 
 
 def _split_lines(text):
