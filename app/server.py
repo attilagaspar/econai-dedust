@@ -4219,12 +4219,17 @@ async def api_docker_build(passphrase: Optional[str] = Query(None),
                     _, rmo, rme = c.exec_command(f"docker rm {cname}")
                     rmo.read(); rme.read()
                 yield f"[docker] Creating container '{cname}'..."
-                # `tail -f /dev/null` keeps the container alive after `docker
-                # start` (the image CMD is `bash`, which exits immediately with
-                # no TTY), so later `docker exec` calls can run in it.
+                # Keep-alive = a sentinel loop instead of `tail -f /dev/null`:
+                # a job's last act can `touch /tmp/dedust_selfstop` and the
+                # container stops ITSELF (a container cannot docker-stop itself
+                # and PID 1 ignores in-namespace kill signals). This is what
+                # frees the GPU even when the browser that launched the job is
+                # long gone. The stale sentinel is cleared on every start.
                 create_cmd = (
                     f"docker create --name {cname} --gpus all --shm-size=8g "
-                    f"-v {workspace_host}:/workspace {image} tail -f /dev/null"
+                    f"-v {workspace_host}:/workspace {image} "
+                    f"bash -c 'rm -f /tmp/dedust_selfstop; "
+                    f"while [ ! -f /tmp/dedust_selfstop ]; do sleep 5; done'"
                 )
                 _, co, ce = c.exec_command(create_cmd)
                 out_txt = co.read().decode().strip()
@@ -5678,12 +5683,16 @@ def _job_running_cmd(container: str, pid_path: str, script_path: str) -> str:
     )
 
 def _job_launch_cmd(container: str, script_path: str, log_path: str,
-                    pid_path: str) -> str:
+                    pid_path: str, self_stop: bool = True) -> str:
+    # self_stop: after the job exits, touch the sentinel that makes the
+    # container's keep-alive loop terminate → the container stops itself and
+    # frees the GPU even if no browser/SSE stream survived to do the cleanup.
+    finale = "; touch /tmp/dedust_selfstop" if self_stop else ""
     return (
         f"docker start {container} && "
         f"docker exec {container} bash -c "
         f"'mkdir -p /workspace/layout-model-training/logs && "
-        f"nohup bash -c \"bash {script_path} >{log_path} 2>&1; rm -f {pid_path}\" "
+        f"nohup bash -c \"bash {script_path} >{log_path} 2>&1; rm -f {pid_path}{finale}\" "
         f">/dev/null 2>&1 & echo $! >{pid_path}; "
         f"echo LAUNCHED:$(cat {pid_path})'"
     )
@@ -5800,7 +5809,8 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 yield from _gpu_busy_warning(_quick, "train")
                 yield "[train] Launching detached training (safe to close browser)..."
                 launch_result = _quick(_job_launch_cmd(_train_container(srv),
-                                                       script_path, log_path, pid_path))
+                                                       script_path, log_path, pid_path,
+                                                       self_stop=not body.keep_container))
                 yield f"[train] {launch_result.strip()}"
                 yield from _job_instant_death_check(_quick, launch_result,
                                                     _train_container(srv), log_path, "train")
@@ -5982,11 +5992,14 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
             _cn = _predict_container(srv)
             # Verify the script is actually visible inside the container before
             # running — guards against a /workspace mount that doesn't match the
-            # upload path (the cross-user clobbering failure mode).
+            # upload path (the cross-user clobbering failure mode). The sentinel
+            # touch after the script makes the container stop ITSELF when the
+            # job ends, even if the browser/SSE stream is long gone.
+            _fin = "" if body.keep_container else "; ec=$?; touch /tmp/dedust_selfstop; exit $ec"
             docker_cmd = (
                 f"docker start {_cn} && "
                 f"if docker exec {_cn} test -f {script_path}; then "
-                f"docker exec {_cn} bash {script_path}; "
+                f"docker exec {_cn} bash -c 'bash {script_path}{_fin}'; "
                 f"else echo '[ERROR] {script_path} not found inside container {_cn}. "
                 f"Its /workspace mount does not match where files were uploaded. "
                 f"Rebuild the predict container in Docker settings so /workspace maps "
@@ -6185,10 +6198,11 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                 container_script = docker_cmd
                 yield "[infer-from] Starting Docker inference..."
                 _cn = _predict_container(srv)
+                _fin = "" if body.keep_container else "; ec=$?; touch /tmp/dedust_selfstop; exit $ec"
                 cmd = (
                     f"docker start {_cn} && "
                     f"if docker exec {_cn} test -f {container_script}; then "
-                    f"docker exec {_cn} bash {container_script}; "
+                    f"docker exec {_cn} bash -c 'bash {container_script}{_fin}'; "
                     f"else echo '[ERROR] {container_script} not found inside container {_cn}. "
                     f"Its /workspace mount does not match where files were uploaded. "
                     f"Rebuild the predict container in Docker settings so /workspace maps "
@@ -6357,7 +6371,8 @@ echo "=== Fine-tune complete ==="
                 yield from _gpu_busy_warning(_quick, "ft")
                 yield "[ft] Launching detached fine-tune (safe to close browser)..."
                 launch_result = _quick(_job_launch_cmd(_train_container(srv),
-                                                       script_path, log_path, pid_path))
+                                                       script_path, log_path, pid_path,
+                                                       self_stop=not body.keep_container))
                 yield f"[ft] {launch_result.strip()}"
                 yield from _job_instant_death_check(_quick, launch_result,
                                                     _train_container(srv), log_path, "ft")

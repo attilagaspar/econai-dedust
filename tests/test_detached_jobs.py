@@ -21,6 +21,19 @@ def test_launch_wrapper_removes_pid_file_on_exit():
     assert cmd.startswith(f"docker start {CN}")
 
 
+def test_launch_self_stops_container_by_default():
+    # the job's last act touches the sentinel → the container's keep-alive
+    # loop exits → GPU freed even when no browser stream survived to clean up
+    cmd = _job_launch_cmd(CN, SH, LOG, PID)
+    assert "touch /tmp/dedust_selfstop" in cmd
+    assert cmd.index(f"rm -f {PID}") < cmd.index("touch /tmp/dedust_selfstop")
+
+
+def test_launch_keep_container_skips_self_stop():
+    cmd = _job_launch_cmd(CN, SH, LOG, PID, self_stop=False)
+    assert "dedust_selfstop" not in cmd
+
+
 def test_running_probe_verifies_cmdline_not_just_pid():
     cmd = _job_running_cmd(CN, PID, SH)
     assert "kill -0 $pid" in cmd
