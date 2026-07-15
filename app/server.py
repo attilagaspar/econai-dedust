@@ -831,8 +831,14 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False)
 
 
 def _split_lines(text):
-    """Robust line split: trailing newlines / CR must not shift the count."""
-    return [l.rstrip("\r") for l in (text or "").strip().split("\n")]
+    """Line split that PRESERVES row positions: leading/interior empty lines
+    are kept — in a row-join they mark empty rows, and stripping them (the old
+    behavior) shifted every value up so imports landed in the first N rows.
+    Only CRs and trailing blank lines (a stray final newline) are dropped."""
+    lines = [l.rstrip("\r") for l in (text or "").split("\n")]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
 
 
 def _distribute_flat_to_rows(shape, layer, text):
@@ -842,7 +848,11 @@ def _distribute_flat_to_rows(shape, layer, text):
     if not rs or not rs.get("rows"):
         return
     lines = _split_lines(text)
-    if len(lines) == len(rs["rows"]):
+    # fewer lines than rows = the missing tail rows are empty (a row-join
+    # loses trailing empty rows on split); more lines than rows = a real
+    # mismatch, leave the rows alone
+    if lines and len(lines) <= len(rs["rows"]):
+        lines += [""] * (len(rs["rows"]) - len(lines))
         for r, t in zip(rs["rows"], lines):
             r[layer] = t
             if layer == "llm":

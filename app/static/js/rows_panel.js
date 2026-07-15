@@ -150,37 +150,36 @@ function renderRowTable(shape) {
 
   // A flat layer that disagrees with the table (e.g. a whole-cell LLM run
   // whose lines didn't make it into the rows) must stay visible — un-hide its
-  // legacy text box and warn. Comparison is per-line, whitespace-tolerant;
-  // the message distinguishes a COUNT mismatch from CONTENT divergence
-  // (the old exact-string test produced absurd "49 lines vs 49 rows" warnings
-  // over trailing whitespace).
-  const splitLines = t => (t || '').trim() ? t.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
-  const flat = {
-    'f-ocr':        (shape.tesseract_output?.ocr_text || shape.easyocr_output?.ocr_text || '').trim(),
-    'f-llm-result': (shape.openai_output?.response || '').trim(),
-    'human-input':  (shape.human_output?.human_corrected_text || '').trim(),
+  // legacy text box and warn. Comparison is positional and whitespace-tolerant:
+  // leading/interior empty lines are EMPTY ROWS, not noise (the flat Human is
+  // the join of ALL rows), so a flat layer with fewer lines than rows only
+  // matches when the missing tail rows are empty too. The message
+  // distinguishes a COUNT mismatch from CONTENT divergence.
+  const flatRaw = {
+    'f-ocr':        shape.tesseract_output?.ocr_text || shape.easyocr_output?.ocr_text || '',
+    'f-llm-result': shape.openai_output?.response || '',
+    'human-input':  shape.human_output?.human_corrected_text || '',
   };
   const rowsOf = {'f-ocr': 'ocr', 'f-llm-result': 'llm', 'human-input': 'human'};
   let mismatches = [];
-  Object.entries(flat).forEach(([id, txt]) => {
+  Object.entries(flatRaw).forEach(([id, txt]) => {
     const L = rowsOf[id];
-    const flatLines = splitLines(txt);
-    const sameCount = flatLines.length === rows.length;
-    const same = !txt || (sameCount
-      && flatLines.every((ln, i) => ln.trim() === (rows[i][L] || '').trim()));
-    const mism = txt && !same;
+    const flatLines = _rsSplitFlat(txt);
+    const same = !txt.trim() || (flatLines.length <= rows.length
+      && rows.every((r, i) => (flatLines[i] ?? '').trim() === (r[L] || '').trim()));
+    const mism = txt.trim() && !same;
     const el = document.getElementById(id)?.closest('.lined-wrap');
     if (el) el.style.display = (mism || _rsShowFlat) ? '' : 'none';
     if (mism) mismatches.push(
-      (sameCount
-        ? `${L.toUpperCase()} (${rows.length} lines — content differs from the table)`
+      (flatLines.length <= rows.length
+        ? `${L.toUpperCase()} (content differs from the table)`
         : `${L.toUpperCase()} (${flatLines.length} lines vs ${rows.length} rows)`)
       + ` <button class="rs-copy-btn" onclick="_rsImportFlat('${L}')" `
-      + `title="Force-fill the rows top-aligned from the flat text (extra lines are dropped)">⤓ import anyway</button>`);
+      + `title="Force-fill the rows line-by-line from the flat text, keeping empty lines in place (extra lines are dropped)">⤓ import anyway</button>`);
   });
 
   // PDF layer: shown read-only next to the rows, capped (extracts can be huge)
-  const pdfLines = splitLines(shape.pdf_text);
+  const pdfLines = _rsSplitFlat(shape.pdf_text);
   const pdfShown = Math.min(pdfLines.length, _rsPdfCap);
   const nRows    = Math.max(rows.length, pdfShown);
 
@@ -246,8 +245,20 @@ function renderRowTable(shape) {
   _rsDrawCrops();
 }
 
-// Force-fill a layer's row values from its flat text, top-aligned (used when
-// the line count doesn't match the row structure and auto-distribute refuses)
+// Split a flat text into row-positional lines: leading/interior empty lines
+// are kept (in a row-join they ARE the empty rows — stripping them shifted
+// every value up so imports landed in the first N rows); only CRs and
+// trailing blank lines (stray final newline) are dropped. Mirrors the
+// server's _split_lines.
+function _rsSplitFlat(text) {
+  const ls = (text || '').split('\n').map(l => l.replace(/\r$/, ''));
+  while (ls.length && !ls[ls.length - 1].trim()) ls.pop();
+  return ls;
+}
+
+// Force-fill a layer's row values from its flat text, line i → row i with
+// empty lines kept in place (used when the flat layer disagrees with the
+// table and auto-distribute refuses)
 async function _rsImportFlat(layer) {
   if (selIdx < 0) return;
   const shape = pageData.shapes[selIdx];
@@ -257,11 +268,12 @@ async function _rsImportFlat(layer) {
                  : layer === 'llm'
                  ? (shape.openai_output?.response || '')
                  : (shape.human_output?.human_corrected_text || '');
-  const lines = flatText.trim() ? flatText.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
+  const lines = _rsSplitFlat(flatText);
+  const filled = lines.slice(0, rows.length).filter(l => l.trim()).length;
   rows.forEach((r, i) => { r[layer] = lines[i] ?? ''; });
   await saveRowStruct(selIdx);
   renderRowTable(shape);
-  showToast(`${layer.toUpperCase()} imported into ${Math.min(lines.length, rows.length)} rows`
+  showToast(`${layer.toUpperCase()} imported: ${filled} non-empty line${filled !== 1 ? 's' : ''} placed`
             + (lines.length > rows.length ? ` (${lines.length - rows.length} extra lines dropped)` : ''));
 }
 
@@ -286,9 +298,7 @@ function _rsSetPdfCap(v) {
 function _rsPdfVal(shape, i) {
   const rows = _rsRows(shape);
   if (rows?.[i]?.pdf != null) return rows[i].pdf;
-  const lines = (shape.pdf_text || '').trim()
-    ? shape.pdf_text.trim().split('\n').map(l => l.replace(/\r$/, '')) : [];
-  return lines[i] ?? '';
+  return _rsSplitFlat(shape.pdf_text)[i] ?? '';
 }
 
 // ── Per-column refresh: re-pull content into the CURRENT row structure ──────
