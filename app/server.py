@@ -5709,6 +5709,42 @@ def _job_still_running_cmd(container: str, pid_path: str) -> str:
     )
 
 
+def _job_instant_death_check(_quick, launch_result: str, container: str,
+                             log_path: str, tag: str):
+    """A healthy launch echoes LAUNCHED:<pid>. An empty pid means the job died
+    within milliseconds (bad path, missing scaffolding, …) and its wrapper
+    already removed the pid file — surface the log instead of a silent
+    'complete'."""
+    if re.search(r"LAUNCHED:\d+", launch_result or ""):
+        return
+    yield f"[{tag}] ⚠ Launch returned no PID — the job likely died instantly. Log tail:"
+    try:
+        tail = _quick(f"docker exec {container} tail -n 30 {log_path} 2>/dev/null || true")
+        for ln in (tail or "").splitlines():
+            yield f"[{tag}]   {ln}"
+    except Exception as e:
+        yield f"[{tag}]   (could not read log: {e})"
+
+
+def _gpu_busy_warning(_quick, tag: str):
+    """Preflight: warn (don't block) when other processes already hold the GPU.
+    On shared hosts in exclusive-process mode a second CUDA client dies with
+    the cryptic 'No CUDA GPUs are available' — this names the real culprit."""
+    try:
+        procs = _quick("nvidia-smi --query-compute-apps=pid,process_name "
+                       "--format=csv,noheader 2>/dev/null")
+    except Exception:
+        return
+    procs = (procs or "").strip()
+    if procs:
+        yield f"[{tag}] ⚠ GPU already in use by other process(es):"
+        for ln in procs.splitlines()[:5]:
+            yield f"[{tag}]     {ln.strip()}"
+        yield (f"[{tag}] ⚠ If the job fails with 'No CUDA GPUs are available', "
+               f"another container holds the GPU (exclusive mode) — "
+               f"`docker ps` on the server, stop the culprit, retry.")
+
+
 @app.post("/api/project/{name}/train")
 async def api_train(name: str, body: TrainRequest = TrainRequest()):
     """Push data to server then run training inside Docker. Streams log via SSE.
@@ -5761,10 +5797,13 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 yield from _push_training_data_gen(name, srv, passphrase)
 
                 # ── Launch detached training ──────────────────────────────────
+                yield from _gpu_busy_warning(_quick, "train")
                 yield "[train] Launching detached training (safe to close browser)..."
                 launch_result = _quick(_job_launch_cmd(_train_container(srv),
                                                        script_path, log_path, pid_path))
                 yield f"[train] {launch_result.strip()}"
+                yield from _job_instant_death_check(_quick, launch_result,
+                                                    _train_container(srv), log_path, "train")
 
             # ── Stream log, stop when process exits ───────────────────────────
             yield "[train] Streaming log — closing browser won't stop training..."
@@ -6315,10 +6354,13 @@ echo "=== Fine-tune complete ==="
                     c2.close()
 
                 # ── Launch detached (survives browser disconnects) ─────────────
+                yield from _gpu_busy_warning(_quick, "ft")
                 yield "[ft] Launching detached fine-tune (safe to close browser)..."
                 launch_result = _quick(_job_launch_cmd(_train_container(srv),
                                                        script_path, log_path, pid_path))
                 yield f"[ft] {launch_result.strip()}"
+                yield from _job_instant_death_check(_quick, launch_result,
+                                                    _train_container(srv), log_path, "ft")
 
             # ── Stream log until the process exits ─────────────────────────────
             yield "[ft] Streaming log — closing browser won't stop the fine-tune..."
