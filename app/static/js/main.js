@@ -156,6 +156,13 @@ const urlParams=new URLSearchParams(window.location.search);
 if (urlParams.get('labels')) {
   projectLabels = urlParams.get('labels').split(',').map(s=>s.trim()).filter(Boolean);
 }
+if (urlParams.get('region_labels')) {   // per-project override of the region vocabulary
+  regionLabels = new Set(urlParams.get('region_labels').split(',').map(s=>s.trim()).filter(Boolean));
+}
+{ // region visibility checkbox reflects the remembered state
+  const chk = document.getElementById('show-regions-chk');
+  if (chk) chk.checked = showRegions;
+}
 if (urlParams.get('folder')) {
   document.getElementById('folder-input').value=urlParams.get('folder');
   loadFolder();

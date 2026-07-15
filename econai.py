@@ -276,6 +276,23 @@ def build_parser() -> argparse.ArgumentParser:
                              "for collecting a collaborator's added pages without clobbering "
                              "local edits.")
 
+    # derive-regions — free region-model training data from cell annotations
+    p_dr = sub.add_parser(
+        "derive-regions",
+        help="Build <name>_regions: table_region boxes derived from a project's "
+             "lattice-cell annotations (training data for the region model)")
+    p_dr.add_argument("name", help="Source project (cell-annotated)")
+    p_dr.add_argument("--dest", help="Destination project name (default: <name>_regions)")
+    p_dr.add_argument("--margin", type=float, default=8.0,
+                      help="Padding in px around each lattice bbox (default 8)")
+
+    # check-page-order — sanity: stem sort order vs numeric page sequence
+    p_po = sub.add_parser(
+        "check-page-order",
+        help="Verify a project's page stems sort in physical order "
+             "(duplicates / gaps / non-monotonic numbering)")
+    p_po.add_argument("name", help="Project name")
+
     return parser
 
 
@@ -612,6 +629,103 @@ def cmd_pull_project(args):
         print(YELLOW("locally, stop editing it on the remote (or re-push before you do)."))
 
 
+def cmd_derive_regions(args):
+    """Create <name>_regions: per page, table_region shapes derived from the
+    source project's lattice-cell annotations (bbox per table + margin), image
+    copied alongside. Pages without lattice cells are skipped. The result is
+    a normal annotable/trainable project for the region model's table class."""
+    import json, shutil
+    from app.pipeline import create_project, project_dir as pdir_of
+    from app.regions import derive_table_regions, REGION_LABELS_DEFAULT
+
+    src = project_dir(args.name)
+    src_ann = src / "annotations"
+    if not src_ann.exists():
+        print(f"Error: no annotations/ in project '{args.name}'", file=sys.stderr)
+        sys.exit(1)
+    dest_name = args.dest or f"{args.name}_regions"
+    try:
+        dest = create_project(dest_name, "A", REGION_LABELS_DEFAULT)
+    except FileExistsError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    dest_ann = dest / "annotations"
+
+    IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
+    pages = kept = regions_total = 0
+    for jf in sorted(src_ann.glob("*.json")):
+        pages += 1
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  skip {jf.name}: unreadable ({e})", file=sys.stderr)
+            continue
+        img = next((src_ann / (jf.stem + ext) for ext in IMAGE_EXTS
+                    if (src_ann / (jf.stem + ext)).exists()), None)
+        if img is None:
+            continue
+        w = data.get("imageWidth") or 0
+        h = data.get("imageHeight") or 0
+        regions = derive_table_regions(data.get("shapes", []), w, h, args.margin)
+        if not regions:
+            continue
+        out = {"version": data.get("version", "5.0.1"), "flags": {},
+               "shapes": regions, "imagePath": img.name,
+               "imageWidth": w, "imageHeight": h}
+        (dest_ann / jf.name).write_text(
+            json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+        shutil.copy2(img, dest_ann / img.name)
+        kept += 1
+        regions_total += len(regions)
+
+    print(GREEN(f"✓ '{dest_name}': {kept}/{pages} pages with lattices → "
+                f"{regions_total} table_region boxes (margin {args.margin}px)."))
+    print("Annotate the OTHER region labels (firm_header/text_block/figure) on top,")
+    print("or merge these pages into a hand-annotated region project for training.")
+
+
+def cmd_check_page_order(args):
+    """Sanity-check that page stems sort in physical order: extracts the
+    trailing number of each stem in natural-sort order and reports duplicates,
+    gaps, and non-monotonic jumps. A clean report is a precondition for the
+    record-grouping sweep (which walks pages in stem order)."""
+    import re as _re
+    src_ann = project_dir(args.name) / "annotations"
+    stems = sorted({p.stem for p in src_ann.glob("*.json")},
+                   key=lambda s: [int(t) if t.isdigit() else t.lower()
+                                  for t in _re.split(r"(\d+)", s)])
+    if not stems:
+        print("No pages found.")
+        return
+    nums, problems = [], []
+    for s in stems:
+        m = _re.search(r"(\d+)(?!.*\d)", s)
+        nums.append(int(m.group(1)) if m else None)
+    seen = {}
+    prev = None
+    for s, n in zip(stems, nums):
+        if n is None:
+            problems.append(f"no page number in stem: {s}")
+            continue
+        if n in seen:
+            problems.append(f"duplicate page number {n}: {seen[n]} and {s}")
+        seen[n] = s
+        if prev is not None and n < prev:
+            problems.append(f"non-monotonic: {s} (={n}) after page {prev}")
+        if prev is not None and n > prev + 1:
+            problems.append(f"gap: pages {prev+1}..{n-1} missing before {s}")
+        prev = n
+    print(f"{len(stems)} pages, {stems[0]} … {stems[-1]}")
+    if problems:
+        print(YELLOW(f"{len(problems)} issue(s):"))
+        for p in problems[:30]:
+            print(YELLOW(f"  {p}"))
+        if len(problems) > 30:
+            print(YELLOW(f"  … and {len(problems) - 30} more"))
+    else:
+        print(GREEN("✓ Order clean: strictly increasing, no gaps, no duplicates."))
+
+
 COMMANDS = {
     "new-project": cmd_new_project,
     "list":        cmd_list,
@@ -622,6 +736,8 @@ COMMANDS = {
     "serve":       cmd_serve,
     "push-project": cmd_push_project,
     "pull-project": cmd_pull_project,
+    "derive-regions":   cmd_derive_regions,
+    "check-page-order": cmd_check_page_order,
 }
 
 

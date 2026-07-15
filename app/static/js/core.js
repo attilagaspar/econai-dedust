@@ -40,6 +40,23 @@ let lastRowLines    = null;      // persists detected rows on the crop panel aft
 let lastEmptyRows   = new Set(); // persists empty-row classification after llmProgress clears
 let _lastPanelIdx   = -2;        // tracks when selection changes, to clear lastRowLines
 
+// ── Region layer (Phase H) ───────────────────────────────────────────────────
+// Page-scale layout objects (firm headers, text blocks, whole tables) live in
+// the same shapes list, distinguished purely by label. Canonical vocabulary
+// mirrors app/regions.py; override per session with ?region_labels=a,b,c.
+const DEFAULT_REGION_LABELS = ['firm_header', 'text_block', 'table_region',
+                               'figure', 'page_header'];
+let regionLabels = new Set(DEFAULT_REGION_LABELS);
+let showRegions  = localStorage.getItem('showRegions') !== '0';   // default on
+
+function isRegionLabel(label) { return regionLabels.has(label); }
+
+function toggleRegions(checked) {
+  showRegions = checked;
+  try { localStorage.setItem('showRegions', checked ? '1' : '0'); } catch {}
+  drawOverlay();
+}
+
 // ── Toast ────────────────────────────────────────────────────────────────────
 // ── Panel collapse ───────────────────────────────────────────────────────────
 function togglePanel() {

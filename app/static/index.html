@@ -99,6 +99,11 @@
                 title="Show shadow page and tune OCR preprocessing parameters">OCR View</button>
         <button class="nav-btn" id="review-btn" onclick="openReview()" disabled
                 title="Review queue: step through only the suspect cells across the project (⚡)">⚡ Review</button>
+        <label style="font-size:11px;color:#8a94a6;display:inline-flex;align-items:center;gap:3px;cursor:pointer;"
+               title="Show/hide region shapes (firm_header, text_block, table_region, figure, page_header) — page-scale layout boxes drawn dashed, so they don't drown the cell layer">
+          <input type="checkbox" id="show-regions-chk" checked onchange="toggleRegions(this.checked)"
+                 style="accent-color:#e94560;width:12px;height:12px;">Regions
+        </label>
         <span style="font-size:11px;color:#666;">Diagnose:</span>
         <select id="diagnostic-select" onchange="onDiagnosticChange()"
                 style="background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:2px 5px;font-size:11px;">
