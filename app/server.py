@@ -350,6 +350,102 @@ def list_json_stems(folder: str = Query(...)):
     return {"stems": stems}
 
 
+@app.get("/api/search")
+def api_search(
+    folder: str = Query(...),
+    q:      str = Query(..., description="Text to find (case/accent-insensitive substring)"),
+    label:  str = Query("", description="Comma-sep annotation labels to restrict to; empty = all"),
+    layer:  str = Query("best", description="best | any | human | llm | ocr | pdf"),
+    limit:  int = Query(500, description="Max results returned (the total keeps counting)"),
+):
+    """Full-text search across every page JSON of the folder.
+
+    Cells with an internal row structure are searched row by row (the
+    canonical view — one hit per matching row); cells without are searched in
+    their flat text layers line by line. Matching uses the authority
+    matcher's folding: case-insensitive, accent-insensitive, punctuation- and
+    whitespace-tolerant. `layer`: "best" follows Human > LLM > OCR > PDF and
+    searches only the winning layer; "any" reports the first layer (in that
+    order) whose text matches; a named layer searches just that one."""
+    d  = _resolve_folder(folder)
+    qf = _auth_fold(q)
+    if not qf:
+        raise HTTPException(status_code=400, detail="Empty query")
+    labels  = {l.strip() for l in label.split(",") if l.strip()}
+    _LAYERS = ("human", "llm", "ocr", "pdf")
+    if layer not in ("best", "any") and layer not in _LAYERS:
+        raise HTTPException(status_code=400, detail=f"Unknown layer: {layer}")
+
+    def flat(sh, L):
+        if L == "human":
+            return (sh.get("human_output") or {}).get("human_corrected_text") or ""
+        if L == "llm":
+            return (sh.get("openai_output") or {}).get("response") or ""
+        if L == "ocr":
+            return ((sh.get("tesseract_output") or {}).get("ocr_text")
+                    or (sh.get("easyocr_output") or {}).get("ocr_text") or "")
+        return sh.get("pdf_text") or ""
+
+    def candidates(get):
+        """(layer, text) pairs to test for one unit, honoring the layer choice."""
+        if layer == "best":
+            for L in _LAYERS:
+                t = (get(L) or "").strip()
+                if t:
+                    return [(L, t)]
+            return []
+        if layer == "any":
+            return [(L, get(L) or "") for L in _LAYERS]
+        return [(layer, get(layer) or "")]
+
+    def first_match(text):
+        """The first line of `text` containing the query, else None."""
+        for ln in text.split("\n"):
+            if ln.strip() and qf in _auth_fold(ln):
+                return ln.strip()
+        return None
+
+    results, total = [], 0
+    for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
+        try:
+            shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            continue
+        for idx, sh in enumerate(shapes):
+            if labels and sh.get("label", "") not in labels:
+                continue
+            rows = (sh.get("row_struct") or {}).get("rows") or []
+            hits = []                     # (row_n, layer, matched line)
+            if rows:
+                for i, r in enumerate(rows):
+                    for L, t in candidates(lambda L, r=r: r.get(L)):
+                        ln = first_match(t)
+                        if ln is not None:
+                            hits.append((r.get("n") or i + 1, L, ln))
+                            break         # first matching layer wins per row
+            else:
+                for L, t in candidates(lambda L: flat(sh, L)):
+                    matched = [ln.strip() for ln in t.split("\n")
+                               if ln.strip() and qf in _auth_fold(ln)]
+                    if matched:
+                        hits.extend((None, L, ln) for ln in matched)
+                        break             # first matching layer wins per cell
+            for row_n, L, line in hits:
+                total += 1
+                if len(results) < limit:
+                    results.append({
+                        "stem": jf.stem, "idx": idx,
+                        "label": sh.get("label", ""),
+                        "table": sh.get("table") or 0,
+                        "super_row": sh.get("super_row"),
+                        "super_col": sh.get("super_column"),
+                        "row_n": row_n, "layer": L,
+                        "text": line[:200],
+                    })
+    return {"query": q, "total": total,
+            "truncated": total > len(results), "results": results}
+
+
 # ---------------------------------------------------------------------------
 # Routes — serving files
 # ---------------------------------------------------------------------------

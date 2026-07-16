@@ -31,6 +31,13 @@
     <option value="verified">✓ verified</option>
     <option value="problem">⚠ problem</option>
   </select>
+  <div id="search-wrap" style="display:flex;align-items:center;gap:3px;margin-left:8px;">
+    <input id="search-input" type="text" placeholder="search… (Enter)"
+           title="Search all pages of this folder. Enter = search, Enter again = next hit, Shift+Enter = previous, Esc = close"
+           style="width:150px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:11px;padding:2px 6px;"
+           onkeydown="searchKeydown(event)">
+    <button class="nav-btn" onclick="runSearch()" title="Search all pages of this folder">🔍</button>
+  </div>
   <div style="flex:1"></div>
   <button onclick="openPromptPalette()"
           style="background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#aaa;padding:2px 9px;cursor:pointer;font-size:11px;"
@@ -1329,6 +1336,7 @@
 <script src="js/llm_structured.js"></script>
 <script src="js/authority.js"></script>
 <script src="js/review.js"></script>
+<script src="js/search.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>
