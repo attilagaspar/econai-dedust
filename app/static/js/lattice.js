@@ -935,6 +935,9 @@ function drawOverlay() {
   svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode || clipMode) ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
+    // Region layer visibility (Phase H): region-labeled shapes can be hidden
+    // so page-scale boxes don't drown the cell layer (and vice versa).
+    if (!showRegions && isRegionLabel(shape.label) && !selSet.has(i)) return;
     const pts = (() => {
     if (!dragState || !dragCurrentPts) return shape.points;
     if (dragState.type==='resize' && dragState.idx===i) return dragCurrentPts;
@@ -961,6 +964,8 @@ function drawOverlay() {
       rect.setAttribute('stroke',        border.color);
       rect.setAttribute('stroke-width',  border.width);
       rect.setAttribute('stroke-opacity','1');
+      // region shapes render dashed so they read as page-scale containers
+      if (bi === 0 && isRegionLabel(shape.label)) rect.setAttribute('stroke-dasharray', '7,4');
       rect.style.pointerEvents = 'all';
       rect.style.cursor = editMode ? 'move' : 'pointer';
       rect.addEventListener('mousedown', e => {
