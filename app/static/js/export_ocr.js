@@ -233,6 +233,7 @@ async function doExcelExport() {
   const rowsOnly  = document.getElementById('xls-rows-only').checked;
   const clipCol   = document.getElementById('xls-clip-col').checked;
   const clipsOnly = document.getElementById('xls-clips-only').checked;
+  const authCols  = document.getElementById('xls-auth-cols').checked;
   const params = new URLSearchParams({
     folder, layer, types,
     scope: 'document',
@@ -243,6 +244,7 @@ async function doExcelExport() {
     ...(rowsOnly   ? { rows_only:   'true'     } : {}),
     ...(clipCol    ? { clip_col:    'true'     } : {}),
     ...(clipsOnly  ? { clips_only:  'true'     } : {}),
+    ...(!authCols  ? { auth_cols:   'false'    } : {}),
   });
 
   closeExcelExportModal();

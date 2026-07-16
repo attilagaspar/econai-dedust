@@ -6848,6 +6848,7 @@ def api_export_excel(
     rows_only:   bool = Query(False),      # export only cells that have an internal row structure
     clip_col:    bool = Query(False),      # add a "Clip" meta column with each row's clip id(s)
     clips_only:  bool = Query(False),      # export only rows that carry a clip
+    auth_cols:   bool = Query(True),       # insert resolved-authority name+ID columns next to each resolved column
 ):
     """
     Generate an .xlsx preserving spatial layout.
@@ -6971,6 +6972,23 @@ def api_export_excel(
             c["col_idx"] = min(range(len(col_centers)),
                                key=lambda i: abs(col_centers[i] - c["cx"]))
 
+    def _auth_pair(c, lines):
+        """Per-line resolved (names, ids) for one cell, padded/truncated to
+        len(lines); (None, None) when nothing is resolved. Internal-row
+        authority wins (index-aligned with the row lines); a whole-cell
+        authority goes on the first line."""
+        ra = c.get("rows_auth") or []
+        if c.get("row_lines") and any(ra):
+            names = [((a or {}).get("name") or "") for a in ra]
+            ids   = [((a or {}).get("id")   or "") for a in ra]
+        elif c.get("auth"):
+            names = [(c["auth"].get("name") or "")]
+            ids   = [(c["auth"].get("id")   or "")]
+        else:
+            return None, None
+        n = len(lines)
+        return (names + [""] * n)[:n], (ids + [""] * n)[:n]
+
     def shapes_to_cells(shapes):
         """
         Return list of dicts: {row_idx, col_idx, lines[], w_px}.
@@ -7007,7 +7025,10 @@ def api_export_excel(
                             clip=sh.get("clip"),
                             table=sh.get("table") or 0,
                             super_row=sh.get("super_row"),
-                            super_col=sh.get("super_column")))
+                            super_col=sh.get("super_column"),
+                            auth=sh.get("authority"),
+                            rows_auth=[r.get("authority") for r in
+                                       (sh.get("row_struct") or {}).get("rows") or []]))
         print(f"[EXCEL] shapes_to_cells: {len(shapes)} shapes in, {len(raw)} with text", flush=True)
         if not raw:
             return []
@@ -7030,12 +7051,15 @@ def api_export_excel(
                 min_row = min(c["row_idx"] for c in winner.values())
                 if min_row != 0:
                     for c in winner.values(): c["row_idx"] -= min_row
-            return [dict(row_idx=c["row_idx"],
-                         col_idx=c["col_idx"],
-                         # one cell, no line expansion
-                         lines=[c["text"] or "\n".join(c["row_lines"] or [])],
-                         w_px=c["w"], clip=c.get("clip"))
-                    for c in winner.values()]
+            out = []
+            for c in winner.values():
+                # one cell, no line expansion
+                lines = [c["text"] or "\n".join(c["row_lines"] or [])]
+                names, ids = _auth_pair(dict(c, row_lines=None), lines)
+                out.append(dict(row_idx=c["row_idx"], col_idx=c["col_idx"],
+                                lines=lines, w_px=c["w"], clip=c.get("clip"),
+                                auth_names=names, auth_ids=ids))
+            return out
 
         # ── Lattice path: use stored super_row / super_column ────────────────
         no_coords = [c for c in raw if c["super_row"] is None or c["super_col"] is None]
@@ -7104,15 +7128,18 @@ def api_export_excel(
         _n_free = sum(1 for c in cells if c["super_row"] is None or c["super_col"] is None)
         print(f"[EXCEL] shapes_to_cells returning {len(cells)} cells "
               f"({len(cells) - _n_free} lattice + {_n_free} non-lattice interleaved)", flush=True)
-        return [dict(row_idx=c["row_idx"],
-                     col_idx=c["col_idx"],
-                     # Internal row structure is authoritative when present
-                     lines=c["row_lines"] if c["row_lines"] else text_to_lines(c["text"]),
-                     w_px=c["w"], clip=c.get("clip"),
-                     # free = interleaved non-lattice annotation (title/footer/…);
-                     # exempt from the column filter — it has no real column.
-                     free=(c["super_row"] is None or c["super_col"] is None))
-                for c in cells]
+        out = []
+        for c in cells:
+            # Internal row structure is authoritative when present
+            lines = c["row_lines"] if c["row_lines"] else text_to_lines(c["text"])
+            names, ids = _auth_pair(c, lines)
+            out.append(dict(row_idx=c["row_idx"], col_idx=c["col_idx"],
+                            lines=lines, w_px=c["w"], clip=c.get("clip"),
+                            # free = interleaved non-lattice annotation (title/footer/…);
+                            # exempt from the column filter — it has no real column.
+                            free=(c["super_row"] is None or c["super_col"] is None),
+                            auth_names=names, auth_ids=ids))
+        return out
 
     # ── Helpers for stacking / horizontal page groups ────────────────────────
 
@@ -7231,9 +7258,15 @@ def api_export_excel(
         _hdr(col_offset + 1, "Row")
         if clip_col:
             _hdr(col_offset + 2, "Clip")
-        # User-specified data column headers (after the meta column(s))
+        # User-specified data column headers (after the meta column(s)),
+        # shifted around any inserted authority columns
         for i, label in enumerate(hdr_list):
-            _hdr(i + 1 + META_COLS + col_offset, label)
+            _hdr(_newcol(i) + 1 + META_COLS + col_offset, label)
+        # Authority column headers (always labeled — they're synthetic)
+        for a in _acols:
+            src = hdr_list[a] if a < len(hdr_list) else f"col {a + 1}"
+            _hdr(_newcol(a) + 2 + META_COLS + col_offset, f"{src} → name")
+            _hdr(_newcol(a) + 3 + META_COLS + col_offset, f"{src} → id")
 
     data_start = 2   # row 1 is always the header row (meta col "Row" + optional data headers)
 
@@ -7288,6 +7321,45 @@ def api_export_excel(
         rows_with_clip = {c["row_idx"] for c in cells if c.get("clip") is not None}
         return [c for c in cells if c["row_idx"] in rows_with_clip]
 
+    # ── Authority columns: resolved name + ID inserted next to each source
+    # column that carries any resolution (per internal row when present,
+    # whole-cell otherwise). The set of authority-bearing columns is computed
+    # GLOBALLY over all exported pages so pattern groups stay column-aligned
+    # even when early pages are still unresolved. Opt out with auth_cols=false.
+    _acols: list = []          # post-filter data col indices carrying authority
+
+    def _newcol(col):
+        return col + 2 * sum(1 for a in _acols if a < col)
+
+    def compute_auth_cols(cells_lists):
+        if not auth_cols:
+            return
+        seen = set()
+        for cells in cells_lists:
+            for c in cells:
+                if not c.get("free") and c.get("auth_names"):
+                    seen.add(c["col_idx"])
+        _acols.extend(sorted(seen))
+
+    def inject_auth_cells(cells):
+        """Shift data columns to make room and add the name/ID cells."""
+        if not _acols:
+            return cells
+        out = []
+        for c in cells:
+            nc = dict(c)
+            if not nc.get("free"):
+                nc["col_idx"] = _newcol(c["col_idx"])
+            out.append(nc)
+            if c.get("free") or not c.get("auth_names"):
+                continue
+            base = _newcol(c["col_idx"])
+            out.append(dict(row_idx=c["row_idx"], col_idx=base + 1,
+                            lines=c["auth_names"], w_px=1, clip=None, free=False))
+            out.append(dict(row_idx=c["row_idx"], col_idx=base + 2,
+                            lines=c["auth_ids"], w_px=1, clip=None, free=False))
+        return out
+
     def load_shapes(jf):
         try:
             return json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
@@ -7322,8 +7394,10 @@ def api_export_excel(
         # ── Single page: one sheet (no source row needed) ─────────────────
         print(f"[EXCEL] processing page {jfiles[0].name}", flush=True)
         ws = wb.create_sheet(title=stem[:31])
+        page_cells = apply_clips_only(apply_col_filter(shapes_to_cells(load_shapes(jfiles[0]))))
+        compute_auth_cols([page_cells])
         write_header_row(ws)
-        write_cells(ws, apply_clips_only(apply_col_filter(shapes_to_cells(load_shapes(jfiles[0])))), base_row=data_start)
+        write_cells(ws, inject_auth_cells(page_cells), base_row=data_start)
 
     else:
         # ── Whole document: 1/0 page pattern over the selected sequence ───
@@ -7336,6 +7410,17 @@ def api_export_excel(
         if not bits:
             bits = [1, 1] if dual else [1]
 
+        # Pre-compute every printed page's cells once so the authority-bearing
+        # column set can be established globally BEFORE any group is written
+        # (pattern groups must agree on column positions across pages).
+        cells_by_jf = {}
+        for k, jf in enumerate(jfiles):
+            if bits[k % len(bits)] == 1:
+                print(f"[EXCEL] processing {jf.name}", flush=True)
+                cells_by_jf[jf] = apply_clips_only(apply_col_filter(
+                    shapes_to_cells(load_shapes(jf))))
+        compute_auth_cols(cells_by_jf.values())
+
         ws      = wb.create_sheet(title="Export")
         cur_row = data_start
         headers_written = False
@@ -7346,10 +7431,7 @@ def api_export_excel(
             printed = [jf for jf, b in zip(chunk, bits) if b == 1]
             if not printed:
                 continue
-            cells_list = [apply_clips_only(apply_col_filter(shapes_to_cells(load_shapes(jf))))
-                          for jf in printed]
-            for jf in printed:
-                print(f"[EXCEL] processing {jf.name}", flush=True)
+            cells_list = [inject_auth_cells(cells_by_jf[jf]) for jf in printed]
             if not any(cells_list):
                 continue
 
