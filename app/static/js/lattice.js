@@ -1722,6 +1722,7 @@ window.addEventListener('mouseup', async e => {
     });
     drawOverlay();
     await replaceAllShapes();
+    updatePanel();   // the selected cell's crop must show the new geometry
 
   } else if (state.type==='resize') {
     _rescaleRowStructLocal(pageData.shapes[state.idx], pageData.shapes[state.idx].points, dragCurrentPts);

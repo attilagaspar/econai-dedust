@@ -655,8 +655,12 @@ async function trimOverlaps() {
   if (!trimmed) { showToast('No overlaps found'); return; }
   // Write updated rects back as canonical [[x1,y1],[x2,y2]] points
   rects.forEach((r, i) => { shapes[i].points = [[r.x1, r.y1], [r.x2, r.y2]]; });
-  drawOverlay(); updatePanel();
+  drawOverlay();
+  // Persist BEFORE updatePanel: the panel's crop URL is geometry-keyed and
+  // /api/cell reads from disk — fetching before the write would cache a
+  // stale crop under the new key.
   await replaceAllShapes();
+  updatePanel();
   showToast(`Trimmed ${trimmed} overlapping pair${trimmed !== 1 ? 's' : ''}`);
 }
 

@@ -507,7 +507,17 @@ function updatePanel() {
   // Divider editing is done on the crop overlay canvas in edit mode
   const rowCanvas = document.getElementById('row-canvas');
   rowCanvas.style.pointerEvents = (editMode && _rsRows(shape)) ? 'auto' : 'none';
-  cropImg.src=`${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}&idx=${selIdx}`;
+  // The shape's bbox is part of the crop URL as a cache-buster: when the
+  // annotation is moved/resized (drag, lattice sep, snap, undo, …) the URL
+  // changes and the browser refetches — otherwise the stale cached crop kept
+  // showing and row-structure edits were made against the WRONG image.
+  const _bb = (shape.points?.length >= 2)
+    ? [Math.min(shape.points[0][0], shape.points[1][0]),
+       Math.min(shape.points[0][1], shape.points[1][1]),
+       Math.max(shape.points[0][0], shape.points[1][0]),
+       Math.max(shape.points[0][1], shape.points[1][1])].map(Math.round).join(',')
+    : '';
+  cropImg.src=`${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(pages[pageIdx].stem)}&idx=${selIdx}&r=${_bb}`;
   cropImg.style.display='block'; cropPh.style.display='none';
 
   // Label: static in review, dropdown in edit
