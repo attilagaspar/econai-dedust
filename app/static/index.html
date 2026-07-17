@@ -819,6 +819,7 @@
         <option value="trim_overlaps">✂ Trim overlaps</option>
         <option value="convert_rows">⊞ Build internal row structure (detect / anchor-project)</option>
         <option value="resolve_authority">🏛 Resolve authorities</option>
+        <option value="auth_duplicates">🏛 Authority duplicate report</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
       </select>
     </div>
@@ -1032,6 +1033,19 @@
         <button type="button" onclick="openAuthAliases()" style="flex:1;background:#0f3460;border:1px solid #16588e;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;cursor:pointer;">➕ Alias suggestions…</button>
       </div>
       <div style="font-size:10px;color:#555;">Worklist = distinct unresolved strings by frequency — pick the entity once, apply to all occurrences. Alias suggestions = your confirmed picks that the authority file doesn't know yet.</div>
+    </div>
+
+    <!-- Authority duplicate report options -->
+    <div id="batch-dup-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row">
+        <span style="white-space:nowrap;">Report entities resolved in ≥</span>
+        <input type="number" id="batch-dup-mincount" value="2" min="2" style="width:52px;flex:none;">
+        <span style="font-size:10px;color:#666;">places</span>
+      </label>
+      <div style="font-size:10px;color:#555;">Scans the Pages / Pattern / Column filter above for resolved
+        authorities (per internal row and whole-cell) and lists every entity that appears in two or more
+        places, occurrences one below the other — crop, PDF, OCR, LLM, Human and Authority side by side.
+        Human and Authority are editable in the report; edits are saved into the page JSONs immediately.</div>
     </div>
 
     <!-- JSON export options -->
@@ -1343,6 +1357,7 @@
 <script src="js/authority.js"></script>
 <script src="js/review.js"></script>
 <script src="js/search.js"></script>
+<script src="js/dup_report.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

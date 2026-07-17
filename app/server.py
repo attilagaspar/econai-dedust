@@ -1031,6 +1031,47 @@ class RowStructBody(BaseModel):
     origin: Optional[str] = None
 
 
+class RowFieldPatch(BaseModel):
+    row_i:         int                       # index into row_struct.rows
+    human:         Optional[str] = None      # set the row's human value
+    authority:     Optional[dict] = None     # entity record to assign
+    set_authority: bool = False              # True + authority=None → clear
+
+
+@app.patch("/api/page/shape/row-field")
+def api_row_field(folder: str = Query(...), stem: str = Query(...),
+                  idx: int = Query(...), body: RowFieldPatch = ...):
+    """Targeted edit of ONE internal row's human text and/or authority,
+    leaving every other row and field untouched (unlike the rows PATCH,
+    which replaces the whole structure). Used by cross-page tools (the
+    authority duplicate report) that edit rows on pages the editor hasn't
+    loaded — the read-modify-write happens server-side under the lock."""
+    d  = _resolve_folder(folder)
+    jf = d / f"{stem}.json"
+    if not jf.exists():
+        raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
+    with _SHAPE_MERGE_LOCK:
+        data   = json.loads(jf.read_text(encoding="utf-8"))
+        shapes = data.get("shapes", [])
+        if idx < 0 or idx >= len(shapes):
+            raise HTTPException(status_code=400, detail="Shape index out of range")
+        shape = shapes[idx]
+        rows  = (shape.get("row_struct") or {}).get("rows") or []
+        if body.row_i < 0 or body.row_i >= len(rows):
+            raise HTTPException(status_code=400, detail="Row index out of range")
+        row = rows[body.row_i]
+        if body.human is not None:
+            row["human"] = body.human
+            _sync_flat_from_rows(shape)
+        if body.set_authority:
+            if body.authority:
+                row["authority"] = body.authority
+            else:
+                row.pop("authority", None)
+        _write_json(jf, data)
+    return {"ok": True, "row": row}
+
+
 @app.patch("/api/page/shape/rows")
 def update_row_struct(
     folder: str = Query(...),
@@ -5406,6 +5447,80 @@ def api_authority_worklist(folder: str = Query(...), body: AuthorityScanBody = .
     return {"groups": out, "distinct": len(groups),
             "total_unresolved": sum(g["count"] for g in groups.values()),
             "pages": len(pages), "authority": body.name or _AUTH_DEFAULT_FILE}
+
+
+class AuthorityDuplicatesBody(BaseModel):
+    stems:      List[str] = []
+    pattern:    Optional[str] = None
+    col_filter: Optional[str] = None
+    min_count:  int = 2
+
+
+@app.post("/api/authority/duplicates")
+def api_authority_duplicates(folder: str = Query(...),
+                             body: AuthorityDuplicatesBody = ...):
+    """Duplicate report: every resolved unit (internal row or whole cell)
+    across the selected pages/columns, grouped by resolved entity id; only
+    entities resolved in ≥ min_count places are returned. Each item carries
+    the text layers and the crop band so the client can render an editable
+    review table without loading the pages."""
+    d = _resolve_folder(folder)
+    stems       = _auth_select_pages(d, body.stems, body.pattern)
+    col_allowed = _auth_col_pred(body.col_filter)
+
+    groups: dict = {}       # entity id -> {"name","type","items":[...]}
+    total_resolved = 0
+    for stem in stems:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            continue
+        for idx, sh in enumerate(shapes):
+            sr, sc = sh.get("super_row"), sh.get("super_column")
+            if sr is None or sc is None or not col_allowed(int(sc)):
+                continue
+            base = {"stem": stem, "idx": idx, "table": sh.get("table") or 0,
+                    "super_row": sr, "super_col": sc}
+            rows = (sh.get("row_struct") or {}).get("rows") or []
+            units = []
+            if rows:
+                for ri, r in enumerate(rows):
+                    a = r.get("authority")
+                    if not a or not a.get("id"):
+                        continue
+                    units.append(dict(base, row_i=ri, row_n=r.get("n") or ri + 1,
+                                      y0=r.get("y0"), y1=r.get("y1"),
+                                      pdf=r.get("pdf") or "", ocr=r.get("ocr") or "",
+                                      llm=r.get("llm") or "", human=r.get("human") or "",
+                                      authority=a))
+            else:
+                a = sh.get("authority")
+                if a and a.get("id"):
+                    units.append(dict(base, row_i=None, row_n=None, y0=None, y1=None,
+                                      pdf=(sh.get("pdf_text") or "")[:300],
+                                      ocr=((sh.get("tesseract_output") or {}).get("ocr_text")
+                                           or (sh.get("easyocr_output") or {}).get("ocr_text") or "")[:300],
+                                      llm=((sh.get("openai_output") or {}).get("response") or "")[:300],
+                                      human=(sh.get("human_output") or {}).get("human_corrected_text") or "",
+                                      authority=a))
+            for u in units:
+                total_resolved += 1
+                a = u["authority"]
+                g = groups.setdefault(a["id"], {
+                    "id": a["id"], "name": a.get("name") or a["id"],
+                    "type": a.get("type"), "items": []})
+                g["items"].append(u)
+
+    dup = [g for g in groups.values() if len(g["items"]) >= max(2, body.min_count)]
+    dup.sort(key=lambda g: (g["name"] or "").casefold())
+    for g in dup:
+        g["count"] = len(g["items"])
+    return {"pages": len(stems), "total_resolved": total_resolved,
+            "distinct_entities": len(groups), "duplicate_entities": len(dup),
+            "groups": dup}
 
 
 class AuthorityApplyString(BaseModel):

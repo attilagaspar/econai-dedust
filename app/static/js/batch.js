@@ -137,6 +137,7 @@ function onBatchOpChange() {
   const isAuth = op === 'resolve_authority';
   document.getElementById('batch-auth-opts').style.display = isAuth ? 'flex' : 'none';
   if (isAuth) _batchAuthInit();
+  document.getElementById('batch-dup-opts').style.display = op === 'auth_duplicates' ? 'flex' : 'none';
   const isJsonExp = op === 'json_export';
   document.getElementById('batch-jsonexport-opts').style.display = isJsonExp ? 'flex' : 'none';
   if (isJsonExp) _batchPopulateJsonExportLabels();
@@ -407,6 +408,14 @@ async function runBatch() {
   if (op === 'ocr') await _syncOcrSettings();
 
   const sorted = [...indices].sort((a, b) => a - b);
+
+  // Authority duplicate report: read-only scan, opens the review table.
+  if (op === 'auth_duplicates') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    await runDupReport(stems, document.getElementById('batch-col-filter').value.trim());
+    return;
+  }
 
   // Authority resolution runs server-side in one call (in-process matcher).
   if (op === 'resolve_authority') {
