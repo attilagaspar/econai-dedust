@@ -95,6 +95,7 @@ function openBatchModal() {
   _batchRunning = false;
   _batchStop    = false;
   document.getElementById('batch-pages').value = '';
+  const _pat = document.getElementById('batch-pattern'); if (_pat) _pat.value = '';
   document.getElementById('batch-op').value = 'overlaps_lattice';
   onBatchOpChange();
   document.getElementById('batch-progress').textContent = '';
@@ -368,6 +369,30 @@ function _setTextField(shape, field, text) {
   }
 }
 
+// Repeating 1/0 page pattern (e.g. "0,1,0" = the middle page of every 3),
+// anchored to page 1 — same idea as the Excel export's page pattern.
+// Returns null when the field is blank, an array of 0/1 otherwise, or
+// undefined (+ toast) when the input is not parseable.
+function _batchPagePattern() {
+  const raw = document.getElementById('batch-pattern')?.value.trim() || '';
+  if (!raw) return null;
+  const bits = raw.split(/[\s,;]+/).filter(Boolean);
+  if (!bits.length || bits.some(b => b !== '0' && b !== '1')) {
+    showToast('Pattern must be 1s and 0s, e.g. 0,1,0');
+    return undefined;
+  }
+  return bits.map(Number);
+}
+
+// Filter a Set of 0-based page indices in place by the repeating pattern
+// (pattern[0] applies to page 1). Returns false when the pattern is invalid.
+function _batchApplyPattern(indices) {
+  const pat = _batchPagePattern();
+  if (pat === undefined) return false;
+  if (pat) for (const i of [...indices]) { if (!pat[i % pat.length]) indices.delete(i); }
+  return true;
+}
+
 async function runBatch() {
   const op       = document.getElementById('batch-op').value;
   const rawPages   = document.getElementById('batch-pages').value;
@@ -377,6 +402,7 @@ async function runBatch() {
   const parityEven = document.getElementById('batch-parity-even').checked;
   if (parityOdd)  for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
   if (parityEven) for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
+  if (!_batchApplyPattern(indices)) return;
   if (!indices.size) { showToast('No valid pages in range'); return; }
   if (op === 'ocr') await _syncOcrSettings();
 
@@ -1406,6 +1432,7 @@ function _batchSelectedIndices() {
     for (const i of [...indices]) { if ((i + 1) % 2 === 0) indices.delete(i); }
   if (document.getElementById('batch-parity-even').checked)
     for (const i of [...indices]) { if ((i + 1) % 2 === 1) indices.delete(i); }
+  if (!_batchApplyPattern(indices)) return null;
   return [...indices].sort((a, b) => a - b);
 }
 

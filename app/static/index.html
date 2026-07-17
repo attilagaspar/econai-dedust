@@ -851,6 +851,12 @@
           <input type="checkbox" id="batch-parity-even" onchange="onBatchParityChange('even')"
                  style="accent-color:#e94560;width:13px;height:13px;"> Even pages only
         </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#aaa;flex:1;"
+               title="Repeating 1/0 page pattern anchored to page 1, like the Excel export: 0,1,0 processes the middle page of every 3. Combines with the range and parity above.">
+          Pattern
+          <input type="text" id="batch-pattern" placeholder="e.g. 0,1,0 (blank = all)"
+                 style="flex:1;min-width:90px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:11px;padding:2px 6px;">
+        </label>
       </div>
     </div>
 
