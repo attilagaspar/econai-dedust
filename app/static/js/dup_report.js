@@ -29,7 +29,34 @@ async function runDupReport(stems, colFilter) {
 
 function _dupCloseModal() {
   document.getElementById('dup-report-modal')?.remove();
+  document.getElementById('dup-report-pill')?.remove();
   _dupCloseAuthDD();
+}
+
+// Minimize to a small pill (bottom-right) so the editor behind is usable —
+// jumping to a location minimizes automatically; the pill restores.
+function _dupMinimize() {
+  const m = document.getElementById('dup-report-modal');
+  if (!m || document.getElementById('dup-report-pill')) return;
+  m.style.display = 'none';
+  _dupCloseAuthDD();
+  const pill = document.createElement('div');
+  pill.id = 'dup-report-pill';
+  pill.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:1800;background:#12224a;' +
+    'border:1px solid #2a4a8e;border-radius:18px;box-shadow:0 6px 22px rgba(0,0,0,0.55);' +
+    'padding:7px 14px;font-size:12px;color:#cde;cursor:pointer;display:flex;gap:8px;align-items:center;';
+  pill.title = 'Restore the duplicate report';
+  pill.innerHTML = `🏛 Duplicate report <span style="color:#8a94a6;">(${_dupGroups.length} entit${_dupGroups.length === 1 ? 'y' : 'ies'})</span>` +
+    ` <span style="color:#93c5fd;">▲ restore</span>` +
+    ` <span onclick="event.stopPropagation();_dupCloseModal()" title="Close the report" style="color:#fca5a5;padding-left:4px;">✕</span>`;
+  pill.onclick = _dupRestore;
+  document.body.appendChild(pill);
+}
+
+function _dupRestore() {
+  document.getElementById('dup-report-pill')?.remove();
+  const m = document.getElementById('dup-report-modal');
+  if (m) m.style.display = 'flex';
 }
 
 function _dupOpenModal(data) {
@@ -47,7 +74,8 @@ function _dupOpenModal(data) {
       '<b style="color:#e0e0e0;font-size:13px;">🏛 Authority duplicate report</b>' +
       `<span style="color:#8a94a6;">${_escHtml(summary)}</span>` +
       '<div style="flex:1"></div>' +
-      '<span style="color:#556;font-size:10px;">click a location to open it in the editor behind this window</span>' +
+      '<span style="color:#556;font-size:10px;">clicking a location opens it in the editor and minimizes this report</span>' +
+      '<button class="nav-btn" onclick="_dupMinimize()" title="Minimize to a pill (bottom right)">▁</button>' +
       '<button class="nav-btn" onclick="_dupCloseModal()" title="Close">✕</button>' +
     '</div>' +
     '<div id="dup-report-body" style="flex:1;overflow-y:auto;padding:8px 12px;"></div>';
@@ -97,6 +125,7 @@ function _dupRenderBody() {
 async function _dupJump(gi, ii) {
   const it = _dupGroups[gi]?.items[ii];
   if (!it) return;
+  _dupMinimize();                                    // get out of the way first
   await _searchJump({stem: it.stem, idx: it.idx});   // loads page, selects, zooms
 }
 
