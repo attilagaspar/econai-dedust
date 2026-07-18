@@ -820,6 +820,7 @@
         <option value="convert_rows">⊞ Build internal row structure (detect / anchor-project)</option>
         <option value="resolve_authority">🏛 Resolve authorities</option>
         <option value="auth_duplicates">🏛 Authority duplicate report</option>
+        <option value="auth_unresolved">🏛 Authority unresolved report</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
       </select>
     </div>
@@ -1046,6 +1047,20 @@
         authorities (per internal row and whole-cell) and lists every entity that appears in two or more
         places, occurrences one below the other — crop, PDF, OCR, LLM, Human and Authority side by side.
         Human and Authority are editable in the report; edits are saved into the page JSONs immediately.</div>
+    </div>
+
+    <!-- Authority unresolved report options -->
+    <div id="batch-unres-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row">
+        <span style="white-space:nowrap;">Only strings appearing ≥</span>
+        <input type="number" id="batch-unres-mincount" value="1" min="1" style="width:52px;flex:none;">
+        <span style="font-size:10px;color:#666;">times (1 = list every row)</span>
+      </label>
+      <div style="font-size:10px;color:#555;">The counterpart of the duplicate report: every internal row /
+        whole cell in the Pages / Pattern / Column filter above whose best text is non-empty but has NO
+        resolved authority. Identical strings are grouped (accent-insensitive), most frequent first;
+        structural blanks are skipped. Human and Authority are editable in the report; edits are saved
+        into the page JSONs immediately.</div>
     </div>
 
     <!-- JSON export options -->

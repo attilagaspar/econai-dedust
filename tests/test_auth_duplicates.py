@@ -41,11 +41,16 @@ def dup_folder(tmp_path):
 
     # Kisvaszar (M1) resolved on p1 row 1 AND p2 whole-cell → duplicate.
     # Aporka (M2) resolved once → not in the report.
+    blank_cell = {"label": "cell", "points": [[300, 50], [390, 90]],
+                  "shape_type": "rectangle", "flags": {}, "blank": True,
+                  "super_row": 1, "super_column": 3, "table": 0,
+                  "human_output": {"human_corrected_text": "smudge"}}
     page("p1", [cell(1, 1, rows=[
         {"human": "Kisvaszar", "auth": _auth("M1", "Kisvaszar")},
         {"human": "Aporka", "auth": _auth("M2", "Aporka")}])])
     page("p2", [cell(1, 1, auth=_auth("M1", "Kisvaszar"), human="Kis-Vaszar"),
-                cell(1, 2, human="no auth here")])
+                cell(1, 2, human="no auth here"),
+                blank_cell])
     return proj
 
 
@@ -76,6 +81,25 @@ def test_duplicates_pattern(client, dup_folder):
     r = client.post("/api/authority/duplicates", params={"folder": str(dup_folder)},
                     json={"pattern": "1,0"})
     assert r.json()["duplicate_entities"] == 0
+
+
+def test_unresolved_report(client, dup_folder):
+    # counterpart mode: text present + no authority; blanks skipped;
+    # resolved units excluded; grouped by folded text
+    r = client.post("/api/authority/duplicates", params={"folder": str(dup_folder)},
+                    json={"unresolved": True})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["mode"] == "unresolved"
+    assert d["duplicate_entities"] == 1          # only "no auth here"
+    g = d["groups"][0]
+    assert g["name"] == "no auth here" and g["count"] == 1 and g["type"] is None
+    it = g["items"][0]
+    assert (it["stem"], it["row_i"], it["authority"]) == ("p2", None, None)
+    # min_count 2 in unresolved mode hides the single occurrence
+    r2 = client.post("/api/authority/duplicates", params={"folder": str(dup_folder)},
+                     json={"unresolved": True, "min_count": 2})
+    assert r2.json()["duplicate_entities"] == 0
 
 
 def test_row_field_patch_human_and_authority(client, dup_folder):

@@ -5483,7 +5483,10 @@ class AuthorityDuplicatesBody(BaseModel):
     stems:      List[str] = []
     pattern:    Optional[str] = None
     col_filter: Optional[str] = None
-    min_count:  int = 2
+    min_count:  Optional[int] = None   # default: 2 (duplicates) / 1 (unresolved)
+    unresolved: bool = False    # True = the counterpart report: units with
+                                # text but NO resolved authority, grouped by
+                                # folded text, min_count applies to the group
 
 
 @app.post("/api/authority/duplicates")
@@ -5493,7 +5496,12 @@ def api_authority_duplicates(folder: str = Query(...),
     across the selected pages/columns, grouped by resolved entity id; only
     entities resolved in ≥ min_count places are returned. Each item carries
     the text layers and the crop band so the client can render an editable
-    review table without loading the pages."""
+    review table without loading the pages.
+
+    With unresolved=True the filter flips: units whose best text is non-empty
+    but which have NO authority, grouped by accent-folded text (identical
+    strings cluster), sorted most-frequent first, min_count default 1.
+    Structural blanks (cell- or row-level) are skipped in this mode."""
     d = _resolve_folder(folder)
     stems       = _auth_select_pages(d, body.stems, body.pattern)
     col_allowed = _auth_col_pred(body.col_filter)
@@ -5518,39 +5526,70 @@ def api_authority_duplicates(folder: str = Query(...),
             units = []
             if rows:
                 for ri, r in enumerate(rows):
-                    a = r.get("authority")
-                    if not a or not a.get("id"):
-                        continue
                     units.append(dict(base, row_i=ri, row_n=r.get("n") or ri + 1,
                                       y0=r.get("y0"), y1=r.get("y1"),
                                       pdf=r.get("pdf") or "", ocr=r.get("ocr") or "",
                                       llm=r.get("llm") or "", human=r.get("human") or "",
-                                      authority=a))
+                                      authority=r.get("authority"),
+                                      blank=bool(r.get("blank"))))
             else:
-                a = sh.get("authority")
-                if a and a.get("id"):
-                    units.append(dict(base, row_i=None, row_n=None, y0=None, y1=None,
-                                      pdf=(sh.get("pdf_text") or "")[:300],
-                                      ocr=((sh.get("tesseract_output") or {}).get("ocr_text")
-                                           or (sh.get("easyocr_output") or {}).get("ocr_text") or "")[:300],
-                                      llm=((sh.get("openai_output") or {}).get("response") or "")[:300],
-                                      human=(sh.get("human_output") or {}).get("human_corrected_text") or "",
-                                      authority=a))
+                units.append(dict(base, row_i=None, row_n=None, y0=None, y1=None,
+                                  pdf=(sh.get("pdf_text") or "")[:300],
+                                  ocr=((sh.get("tesseract_output") or {}).get("ocr_text")
+                                       or (sh.get("easyocr_output") or {}).get("ocr_text") or "")[:300],
+                                  llm=((sh.get("openai_output") or {}).get("response") or "")[:300],
+                                  human=(sh.get("human_output") or {}).get("human_corrected_text") or "",
+                                  authority=sh.get("authority"),
+                                  blank=bool(sh.get("blank"))))
             for u in units:
-                total_resolved += 1
-                a = u["authority"]
-                g = groups.setdefault(a["id"], {
-                    "id": a["id"], "name": a.get("name") or a["id"],
-                    "type": a.get("type"), "items": []})
-                g["items"].append(u)
+                blank = u.pop("blank", False)
+                a = u.get("authority")
+                resolved = bool(a and a.get("id"))
+                if resolved:
+                    total_resolved += 1
+                if body.unresolved:
+                    if resolved or blank:
+                        continue
+                    best = (u["human"] or u["llm"] or u["ocr"] or u["pdf"] or "").strip()
+                    if not best:
+                        continue
+                    key = _auth_fold(best)
+                    if not key:
+                        continue
+                    u["authority"] = None
+                    g = groups.setdefault(key, {"id": key, "name": best,
+                                                "type": None, "items": []})
+                    g["items"].append(u)
+                else:
+                    if not resolved:
+                        continue
+                    g = groups.setdefault(a["id"], {
+                        "id": a["id"], "name": a.get("name") or a["id"],
+                        "type": a.get("type"), "items": []})
+                    g["items"].append(u)
 
-    dup = [g for g in groups.values() if len(g["items"]) >= max(2, body.min_count)]
-    dup.sort(key=lambda g: (g["name"] or "").casefold())
-    for g in dup:
+    floor = max(1 if body.unresolved else 2,
+                body.min_count if body.min_count is not None
+                else (1 if body.unresolved else 2))
+    out = [g for g in groups.values() if len(g["items"]) >= floor]
+    for g in out:
         g["count"] = len(g["items"])
+    if body.unresolved:
+        out.sort(key=lambda g: (-g["count"], (g["name"] or "").casefold()))
+    else:
+        out.sort(key=lambda g: (g["name"] or "").casefold())
+    # Cap the payload: whole groups are kept until ~3000 items are reached.
+    truncated, kept, n_items = False, [], 0
+    for g in out:
+        if n_items >= 3000:
+            truncated = True
+            break
+        kept.append(g)
+        n_items += g["count"]
     return {"pages": len(stems), "total_resolved": total_resolved,
-            "distinct_entities": len(groups), "duplicate_entities": len(dup),
-            "groups": dup}
+            "distinct_entities": len(groups), "duplicate_entities": len(kept),
+            "mode": "unresolved" if body.unresolved else "duplicates",
+            "truncated": truncated, "groups": kept}
 
 
 class AuthorityApplyString(BaseModel):

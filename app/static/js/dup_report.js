@@ -9,20 +9,25 @@
 // Reuses: _resolveText, _candToAuth, _rsAuthCellHtml, _escHtml, _searchJump.
 
 let _dupGroups = [];
+let _dupMode   = 'duplicates';   // 'duplicates' | 'unresolved'
 
-async function runDupReport(stems, colFilter) {
-  const minCount = parseInt(document.getElementById('batch-dup-mincount')?.value, 10) || 2;
-  showToast('Scanning for duplicate resolutions…');
+async function runDupReport(stems, colFilter, unresolved = false) {
+  const minCount = unresolved
+    ? (parseInt(document.getElementById('batch-unres-mincount')?.value, 10) || 1)
+    : (parseInt(document.getElementById('batch-dup-mincount')?.value, 10) || 2);
+  showToast(unresolved ? 'Scanning for unresolved cells…' : 'Scanning for duplicate resolutions…');
   let data;
   try {
     const r = await fetch(`${API}/api/authority/duplicates?folder=${encodeURIComponent(folder)}`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({stems, col_filter: colFilter || null, min_count: minCount}),
+      body: JSON.stringify({stems, col_filter: colFilter || null,
+                            min_count: minCount, unresolved}),
     });
     if (!r.ok) { const m = await r.json().catch(() => ({})); showToast('Report error: ' + (m.detail || r.status)); return; }
     data = await r.json();
   } catch (e) { showToast('Report error: ' + (e?.message || e)); return; }
   _dupGroups = data.groups || [];
+  _dupMode   = data.mode || (unresolved ? 'unresolved' : 'duplicates');
   closeBatchModal?.();
   _dupOpenModal(data);
 }
@@ -46,7 +51,8 @@ function _dupMinimize() {
     'border:1px solid #2a4a8e;border-radius:18px;box-shadow:0 6px 22px rgba(0,0,0,0.55);' +
     'padding:7px 14px;font-size:12px;color:#cde;cursor:pointer;display:flex;gap:8px;align-items:center;';
   pill.title = 'Restore the duplicate report';
-  pill.innerHTML = `🏛 Duplicate report <span style="color:#8a94a6;">(${_dupGroups.length} entit${_dupGroups.length === 1 ? 'y' : 'ies'})</span>` +
+  pill.innerHTML = `🏛 ${_dupMode === 'unresolved' ? 'Unresolved' : 'Duplicate'} report ` +
+    `<span style="color:#8a94a6;">(${_dupGroups.length} group${_dupGroups.length === 1 ? '' : 's'})</span>` +
     ` <span style="color:#93c5fd;">▲ restore</span>` +
     ` <span onclick="event.stopPropagation();_dupCloseModal()" title="Close the report" style="color:#fca5a5;padding-left:4px;">✕</span>`;
   pill.onclick = _dupRestore;
@@ -66,12 +72,19 @@ function _dupOpenModal(data) {
   m.style.cssText = 'position:fixed;inset:24px;z-index:1800;background:#0a1128;border:1px solid #2a4a8e;' +
     'border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,0.7);display:flex;flex-direction:column;' +
     'font-size:11px;color:#ccc;';
-  const summary = `${data.duplicate_entities} entit${data.duplicate_entities === 1 ? 'y' : 'ies'} with duplicates`
-    + ` · ${data.total_resolved} resolved units on ${data.pages} page(s)`
-    + ` · ${data.distinct_entities} distinct entities`;
+  const nUnits = (_dupGroups || []).reduce((s, g) => s + (g.count || g.items.length), 0);
+  const summary = (_dupMode === 'unresolved'
+    ? `${nUnits} unresolved unit${nUnits === 1 ? '' : 's'} in ${data.duplicate_entities} distinct string${data.duplicate_entities === 1 ? '' : 's'}`
+      + ` · ${data.total_resolved} already resolved on ${data.pages} page(s)`
+    : `${data.duplicate_entities} entit${data.duplicate_entities === 1 ? 'y' : 'ies'} with duplicates`
+      + ` · ${data.total_resolved} resolved units on ${data.pages} page(s)`
+      + ` · ${data.distinct_entities} distinct entities`)
+    + (data.truncated ? ' · ⚠ truncated (narrow the page range)' : '');
+  const title = _dupMode === 'unresolved' ? '🏛 Authority unresolved report'
+                                          : '🏛 Authority duplicate report';
   m.innerHTML =
     '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #1a3a6e;">' +
-      '<b style="color:#e0e0e0;font-size:13px;">🏛 Authority duplicate report</b>' +
+      `<b style="color:#e0e0e0;font-size:13px;">${title}</b>` +
       `<span style="color:#8a94a6;">${_escHtml(summary)}</span>` +
       '<div style="flex:1"></div>' +
       '<span style="color:#556;font-size:10px;">clicking a location opens it in the editor and minimizes this report</span>' +
@@ -87,7 +100,9 @@ function _dupRenderBody() {
   const body = document.getElementById('dup-report-body');
   if (!body) return;
   if (!_dupGroups.length) {
-    body.innerHTML = '<div style="padding:20px;color:#8a94a6;">No entity is resolved in more than one place — nothing to review. 🎉</div>';
+    body.innerHTML = '<div style="padding:20px;color:#8a94a6;">' + (_dupMode === 'unresolved'
+      ? 'Every non-empty cell in the selection is resolved — nothing to do. 🎉'
+      : 'No entity is resolved in more than one place — nothing to review. 🎉') + '</div>';
     return;
   }
   const stemToPage = {};
@@ -96,7 +111,9 @@ function _dupRenderBody() {
   _dupGroups.forEach((g, gi) => {
     html += `<div style="margin:10px 0 4px;padding:4px 6px;background:#12224a;border-radius:4px;display:flex;gap:10px;align-items:baseline;">` +
       `<b style="color:#93c5fd;font-size:12px;">${_escHtml(g.name)}</b>` +
-      `<span style="color:#667;">${_escHtml(g.id)}${g.type ? ' · ' + _escHtml(g.type) : ''}</span>` +
+      (_dupMode === 'unresolved'
+        ? `<span style="color:#f87171;">unresolved</span>`
+        : `<span style="color:#667;">${_escHtml(g.id)}${g.type ? ' · ' + _escHtml(g.type) : ''}</span>`) +
       `<span style="color:#fbbf24;">× ${g.count}</span></div>`;
     html += '<table class="rs-table" style="width:100%;"><tr><th style="white-space:nowrap;">where</th><th></th>' +
             '<th>PDF</th><th>OCR</th><th>LLM</th><th>Human</th><th>Auth</th></tr>';

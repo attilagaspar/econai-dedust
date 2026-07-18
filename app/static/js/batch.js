@@ -138,6 +138,7 @@ function onBatchOpChange() {
   document.getElementById('batch-auth-opts').style.display = isAuth ? 'flex' : 'none';
   if (isAuth) _batchAuthInit();
   document.getElementById('batch-dup-opts').style.display = op === 'auth_duplicates' ? 'flex' : 'none';
+  document.getElementById('batch-unres-opts').style.display = op === 'auth_unresolved' ? 'flex' : 'none';
   const isJsonExp = op === 'json_export';
   document.getElementById('batch-jsonexport-opts').style.display = isJsonExp ? 'flex' : 'none';
   if (isJsonExp) _batchPopulateJsonExportLabels();
@@ -409,11 +410,12 @@ async function runBatch() {
 
   const sorted = [...indices].sort((a, b) => a - b);
 
-  // Authority duplicate report: read-only scan, opens the review table.
-  if (op === 'auth_duplicates') {
+  // Authority duplicate / unresolved report: read-only scan, opens the review table.
+  if (op === 'auth_duplicates' || op === 'auth_unresolved') {
     const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
     if (!stems.length) { showToast('No pages in range'); return; }
-    await runDupReport(stems, document.getElementById('batch-col-filter').value.trim());
+    await runDupReport(stems, document.getElementById('batch-col-filter').value.trim(),
+                       op === 'auth_unresolved');
     return;
   }
 
