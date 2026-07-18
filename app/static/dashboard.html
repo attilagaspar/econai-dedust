@@ -322,17 +322,23 @@ document.addEventListener('change', (e) => {
   try { localStorage.setItem('trainParams', JSON.stringify(cur)); } catch (e) {}
 });
 
-async function loadProjects() {
+async function loadProjects(selectName = null) {
   const res  = await fetch('/api/projects');
   const data = await res.json();
   projects   = data.projects || [];
   renderProjectList();
-  // Auto-restore the last selected project
+  // Explicit selection (e.g. a just-created project) beats the auto-restore —
+  // the old fire-and-forget restore raced the caller's selectProject and the
+  // PREVIOUS project often won, so new pages landed in the wrong project.
+  if (selectName && projects.find(p => p.name === selectName)) {
+    await selectProject(selectName);
+    return;
+  }
   const last = localStorage.getItem('lastProject');
   if (last && projects.find(p => p.name === last)) {
-    selectProject(last);
+    await selectProject(last);
   } else if (projects.length === 1) {
-    selectProject(projects[0].name);
+    await selectProject(projects[0].name);
   }
 }
 
@@ -407,7 +413,12 @@ function renderDetail() {
     : '<span class="status-dot dot-grey"></span>Not configured';
 
   detail.innerHTML = `
-    <h2>${cfg.name}</h2>
+    <h2 style="display:flex;align-items:center;gap:12px;">${cfg.name}
+      <button class="btn btn-secondary" style="font-size:0.72rem;padding:3px 10px;" onclick="renameActiveProject()"
+              title="Rename the project (the folder on disk is renamed too)">✏ Rename</button>
+      <button class="btn btn-secondary" style="font-size:0.72rem;padding:3px 10px;color:#e94560;border-color:#e9456055;" onclick="deleteActiveProject()"
+              title="Delete the project — the folder is moved to projects/_trash (recoverable)">🗑 Delete</button>
+    </h2>
     <div class="subtitle">Type ${cfg.type} &nbsp;·&nbsp; ${cfg.type === 'A' ? 'Tables' : 'Structured text'} &nbsp;·&nbsp; ${stats.json} pages (${stats.images} images)</div>
 
     <!-- Pipeline progress -->
@@ -1405,11 +1416,48 @@ async function submitNewProject() {
   data = await res.json();
   if (data.ok) {
     closeNewProjectModal();
-    await loadProjects();
-    selectProject(name);
+    await loadProjects(name);   // the NEW project becomes the active one
+    showToast(`Project "${name}" created and selected`);
   } else {
     alert('Error: ' + (errMsg(data)));
   }
+}
+
+async function renameActiveProject() {
+  if (!activeProj) return;
+  const cur = activeProj.name;
+  const nn  = (prompt(`Rename project "${cur}" to:`, cur) || '').trim();
+  if (!nn || nn === cur) return;
+  const res  = await fetch(`/api/project/${encodeURIComponent(cur)}/rename`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ new_name: nn }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) { alert('Rename failed: ' + errMsg(data)); return; }
+  localStorage.setItem('lastProject', data.name);
+  showToast(`Renamed to "${data.name}"`);
+  await loadProjects(data.name);
+}
+
+async function deleteActiveProject() {
+  if (!activeProj) return;
+  const cur = activeProj.name;
+  const typed = prompt(
+    `Delete project "${cur}"?\n\nThe folder is moved to projects/_trash/` +
+    ` (recoverable — nothing is erased permanently).\n\nType the project name to confirm:`);
+  if (typed === null) return;
+  if (typed.trim() !== cur) { alert('Name did not match — nothing was deleted.'); return; }
+  const res  = await fetch(`/api/project/${encodeURIComponent(cur)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok || !data.ok) { alert('Delete failed: ' + errMsg(data)); return; }
+  localStorage.removeItem('lastProject');
+  activeProj = null;
+  document.getElementById('detail-panel').innerHTML =
+    `<div class="empty"><div class="big">🗑</div>"${cur}" moved to projects/_trash/.<br>Pick another project on the left.</div>`;
+  showToast(`"${cur}" moved to _trash`);
+  const res2 = await fetch('/api/projects');
+  projects = (await res2.json()).projects || [];
+  renderProjectList();
 }
 
 // ============================================================

@@ -222,6 +222,45 @@ def create_project(name: str, project_type: str, labels: list[str]) -> Path:
     return pdir
 
 
+def rename_project(name: str, new_name: str) -> Path:
+    """Rename a project folder and keep config.json's name field in sync."""
+    import re
+    src = project_dir(name)
+    if not src.exists():
+        raise FileNotFoundError(f"Project '{name}' not found")
+    new_name = (new_name or "").strip()
+    if (not re.match(r"^[A-Za-z0-9_][A-Za-z0-9._\- ]*$", new_name)
+            or new_name != new_name.strip() or new_name == "_trash"):
+        raise ValueError("Invalid project name (letters, digits, . _ - and spaces; "
+                         "no leading dot; '_trash' is reserved)")
+    if new_name == name:
+        return src
+    dst = project_dir(new_name)
+    if dst.exists():
+        raise FileExistsError(f"Project '{new_name}' already exists")
+    src.rename(dst)          # OSError (folder in use) propagates to the route
+    cfg_path = dst / "config.json"
+    if cfg_path.exists():
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["name"] = new_name
+        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    return dst
+
+
+def delete_project(name: str) -> Path:
+    """Soft delete: move the project folder to projects/_trash/<name>_<ts>.
+    _trash has no config.json, so list_projects never shows it; purge by
+    deleting the folder manually when sure."""
+    src = project_dir(name)
+    if not src.exists():
+        raise FileNotFoundError(f"Project '{name}' not found")
+    trash = PROJECTS_ROOT / "_trash"
+    trash.mkdir(exist_ok=True)
+    dst = trash / f"{name}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
+    src.rename(dst)
+    return dst
+
+
 def list_projects() -> list[dict]:
     """Return summary dicts for all projects."""
     if not PROJECTS_ROOT.exists():

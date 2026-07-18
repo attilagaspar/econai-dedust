@@ -4146,6 +4146,36 @@ def api_new_project(body: NewProject):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class RenameProject(BaseModel):
+    new_name: str
+
+@app.post("/api/project/{name}/rename")
+def api_rename_project(name: str, body: RenameProject):
+    from app.pipeline import rename_project
+    try:
+        pdir = rename_project(name, body.new_name)
+        return {"ok": True, "name": pdir.name, "path": str(pdir)}
+    except (FileNotFoundError, FileExistsError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=409,
+            detail=f"Rename failed — is the folder open in another program? {e}")
+
+
+@app.delete("/api/project/{name}")
+def api_delete_project(name: str):
+    """Soft delete: the folder moves to projects/_trash (recoverable)."""
+    from app.pipeline import delete_project
+    try:
+        dst = delete_project(name)
+        return {"ok": True, "trash": str(dst)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=409,
+            detail=f"Delete failed — is the folder open in another program? {e}")
+
+
 class CloneProject(BaseModel):
     new_name: str
 
