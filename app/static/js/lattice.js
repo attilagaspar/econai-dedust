@@ -1286,6 +1286,18 @@ function drawOverlay() {
           if (inDelMode) { if (rowAbove!=null&&rowBelow!=null) handleLatticeMergeRow(rowAbove,rowBelow,rowBands,colBands); }
           else startLatticeRowResize(e,rowAbove,rowBelow);
         });
+        // Edit mode: double-click an INTERNAL separator = delete it (merge
+        // the two rows), without having to arm the ✕ Del sep mode first.
+        hit.addEventListener('dblclick',e=>{
+          e.stopPropagation(); e.preventDefault();
+          if (!editMode || latticeSplitMode || inDelMode) return;
+          if (rowAbove!=null && rowBelow!=null) handleLatticeMergeRow(rowAbove,rowBelow,rowBands,colBands);
+        });
+        if (editMode && rowAbove!=null && rowBelow!=null && !latticeSplitMode && !inDelMode) {
+          const tt=document.createElementNS('http://www.w3.org/2000/svg','title');
+          tt.textContent='drag: move separator · double-click: delete separator (merge rows)';
+          hit.appendChild(tt);
+        }
         svgOverlay.appendChild(hit);
       };
       const mkColHandle=(xImg,colLeft,colRight)=>{
@@ -1305,6 +1317,16 @@ function drawOverlay() {
           if (inDelMode) { if (colLeft!=null&&colRight!=null) handleLatticeMergeCol(colLeft,colRight,rowBands,colBands); }
           else startLatticeColResize(e,colLeft,colRight);
         });
+        hit.addEventListener('dblclick',e=>{
+          e.stopPropagation(); e.preventDefault();
+          if (!editMode || latticeSplitMode || inDelMode) return;
+          if (colLeft!=null && colRight!=null) handleLatticeMergeCol(colLeft,colRight,rowBands,colBands);
+        });
+        if (editMode && colLeft!=null && colRight!=null && !latticeSplitMode && !inDelMode) {
+          const tt=document.createElementNS('http://www.w3.org/2000/svg','title');
+          tt.textContent='drag: move separator · double-click: delete separator (merge columns)';
+          hit.appendChild(tt);
+        }
         svgOverlay.appendChild(hit);
       };
       // Horizontal lines + row labels + row resize handles
@@ -1684,9 +1706,19 @@ window.addEventListener('mousemove', e => {
     }
     return;
   } else if (dragState.type==='lattice-row') {
+    // A pure click (e.g. half of a double-click-to-merge) must not count as a
+    // resize — only start applying the drag after real movement.
+    if (!dragState.moved) {
+      if (Math.abs(e.clientY - dragState.startY) < 3) return;
+      dragState.moved = true;
+    }
     const d=screenDeltaToImg(0, e.clientY-dragState.startY);
     _applyLatticeDrag(dragState.adjustments, dragState.origPts, d.dy, 'y');
   } else if (dragState.type==='lattice-col') {
+    if (!dragState.moved) {
+      if (Math.abs(e.clientX - dragState.startX) < 3) return;
+      dragState.moved = true;
+    }
     const d=screenDeltaToImg(e.clientX-dragState.startX, 0);
     _applyLatticeDrag(dragState.adjustments, dragState.origPts, d.dx, 'x');
   } else if (dragState.type==='draw'||dragState.type==='select-rect'||dragState.type==='draw-table') {
@@ -1715,6 +1747,11 @@ window.addEventListener('mouseup', async e => {
     drawOverlay(); updatePanel();
 
   } else if (state.type==='lattice-row' || state.type==='lattice-col') {
+    // Click without movement: nothing changed — drop the undo snapshot taken
+    // at mousedown and save nothing. No redraw either: rebuilding the SVG
+    // would replace the handle between the two clicks of a double-click and
+    // could swallow the dblclick-to-merge event.
+    if (!state.moved) { undoStack.pop(); return; }
     // Points were mutated during the drag; remap internal row bands from the
     // original bbox to the new one before persisting
     Object.entries(state.origPts || {}).forEach(([i, op]) => {
