@@ -2697,7 +2697,7 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
     """Build the batch request file(s) and submit them. Streams SSE progress
     (phase / requests built / running MB / per-chunk upload) and auto-splits
     into multiple provider jobs when the file nears the 200 MB limit."""
-    import asyncio, concurrent.futures, datetime as _dt
+    import asyncio, concurrent.futures, datetime as _dt, time as _time
     import json as _json
 
     if not _llm_batch_supported(body.model):
@@ -2724,11 +2724,23 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                 return None
             jsonl = "\n".join(_json.dumps(l, ensure_ascii=False) for l in chunk)
             mb = len(jsonl.encode("utf-8")) / 1048576
-            fobj = client.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
+            # ONE bounded attempt, loud failure. The SDK default (600 s timeout
+            # × 2 silent full retries) meant a stalled Azure ingest looked like
+            # "uploading…" for up to half an hour with no feedback. A healthy
+            # upload of even a 200 MB chunk finishes in well under 300 s.
+            up = (client.with_options(timeout=300.0, max_retries=0)
+                  if hasattr(client, "with_options") else client)
+            _t0 = _time.time()
+            try:
+                fobj = up.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
                                        purpose="batch")
-            remote = client.batches.create(input_file_id=fobj.id,
-                                            endpoint="/v1/chat/completions",
-                                            completion_window="24h")
+                remote = up.batches.create(input_file_id=fobj.id,
+                                           endpoint="/v1/chat/completions",
+                                           completion_window="24h")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"upload of {mb:.1f} MB to {provider} failed after "
+                    f"{_time.time() - _t0:.0f}s: {exc}") from exc
             with _LLM_JOBS_LOCK:
                 jobs = _llm_jobs_load(folder)
                 job = {
@@ -2781,7 +2793,12 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                                "requests": sum(m["requests"] for m in made),
                                "cells": sum(m["cells"] for m in made)})
         except Exception as exc:
-            yield _json.dumps({"type": "error", "error": f"Batch submit failed: {exc}"})
+            yield _json.dumps({"type": "error",
+                "error": f"Batch submit failed: {exc}"
+                + (f" — NOTE: {len(made)} chunk job(s) were already submitted "
+                   f"before the failure (they appear in the jobs list below); "
+                   f"only the remaining cells need resubmitting."
+                   if made else " — nothing was submitted, safe to try again.")})
 
     async def event_gen():
         loop = asyncio.get_event_loop()
