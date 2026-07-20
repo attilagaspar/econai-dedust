@@ -87,13 +87,73 @@ function _dupOpenModal(data) {
       `<b style="color:#e0e0e0;font-size:13px;">${title}</b>` +
       `<span style="color:#8a94a6;">${_escHtml(summary)}</span>` +
       '<div style="flex:1"></div>' +
+      '<button class="nav-btn" id="dup-clear-sel" onclick="_dupClearSelected()" disabled ' +
+        'title="Clear the resolved authority on every checked row">✕ Clear authority (0)</button>' +
       '<span style="color:#556;font-size:10px;">clicking a location opens it in the editor and minimizes this report</span>' +
       '<button class="nav-btn" onclick="_dupMinimize()" title="Minimize to a pill (bottom right)">▁</button>' +
       '<button class="nav-btn" onclick="_dupCloseModal()" title="Close">✕</button>' +
     '</div>' +
     '<div id="dup-report-body" style="flex:1;overflow-y:auto;padding:8px 12px;"></div>';
   document.body.appendChild(m);
+  _dupSelected.clear();
   _dupRenderBody();
+}
+
+// ── Multi-select: check rows, clear their authorities in one go ────────────
+const _dupSelected = new Set();          // "gi:ii" keys
+
+function _dupSelKey(gi, ii) { return gi + ':' + ii; }
+
+function _dupUpdateClearBtn() {
+  const b = document.getElementById('dup-clear-sel');
+  if (!b) return;
+  b.textContent = `✕ Clear authority (${_dupSelected.size})`;
+  b.disabled = !_dupSelected.size;
+}
+
+function _dupSelToggle(gi, ii, checked) {
+  checked ? _dupSelected.add(_dupSelKey(gi, ii)) : _dupSelected.delete(_dupSelKey(gi, ii));
+  _dupUpdateClearBtn();
+}
+
+function _dupSelGroup(gi, checked) {
+  (_dupGroups[gi]?.items || []).forEach((_, ii) => {
+    checked ? _dupSelected.add(_dupSelKey(gi, ii)) : _dupSelected.delete(_dupSelKey(gi, ii));
+    const cb = document.getElementById(`dup-sel-${gi}-${ii}`);
+    if (cb) cb.checked = checked;
+  });
+  _dupUpdateClearBtn();
+}
+
+async function _dupClearSelected() {
+  const keys = [..._dupSelected];
+  if (!keys.length) return;
+  if (!confirm(`Clear the resolved authority on ${keys.length} row${keys.length > 1 ? 's' : ''}?`)) return;
+  const btn = document.getElementById('dup-clear-sel');
+  if (btn) btn.disabled = true;
+  let done = 0, failed = 0;
+  const touched = new Set();
+  for (const key of keys) {
+    const [gi, ii] = key.split(':').map(Number);
+    const it = _dupGroups[gi]?.items[ii];
+    if (!it) continue;
+    if (btn) btn.textContent = `… ${done + failed + 1}/${keys.length}`;
+    const res = await _dupSaveAuthority(it, null);
+    if (res.ok) {
+      it.authority = null;
+      touched.add(it.stem);
+      const cell = document.getElementById(`dup-auth-${gi}-${ii}`);
+      if (cell) cell.innerHTML = _rsAuthCellHtml({authority: null});
+      const cb = document.getElementById(`dup-sel-${gi}-${ii}`);
+      if (cb) cb.checked = false;
+      _dupSelected.delete(key);
+      done++;
+    } else failed++;
+  }
+  _dupUpdateClearBtn();
+  if (touched.has(pages[pageIdx]?.stem)) await _dupSyncEditor(pages[pageIdx].stem);
+  showToast(`Cleared ${done} authorit${done === 1 ? 'y' : 'ies'}`
+            + (failed ? ` — ⚠ ${failed} FAILED (still resolved)` : ''), failed ? 6000 : 3000);
 }
 
 function _dupRenderBody() {
@@ -110,12 +170,14 @@ function _dupRenderBody() {
   let html = '';
   _dupGroups.forEach((g, gi) => {
     html += `<div style="margin:10px 0 4px;padding:4px 6px;background:#12224a;border-radius:4px;display:flex;gap:10px;align-items:baseline;">` +
+      `<input type="checkbox" onchange="_dupSelGroup(${gi}, this.checked)" ` +
+        `title="Select / deselect every row of this entity" style="accent-color:#e94560;width:12px;height:12px;align-self:center;">` +
       `<b style="color:#93c5fd;font-size:12px;">${_escHtml(g.name)}</b>` +
       (_dupMode === 'unresolved'
         ? `<span style="color:#f87171;">unresolved</span>`
         : `<span style="color:#667;">${_escHtml(g.id)}${g.type ? ' · ' + _escHtml(g.type) : ''}</span>`) +
       `<span style="color:#fbbf24;">× ${g.count}</span></div>`;
-    html += '<table class="rs-table" style="width:100%;"><tr><th style="white-space:nowrap;">where</th><th></th>' +
+    html += '<table class="rs-table" style="width:100%;"><tr><th></th><th style="white-space:nowrap;">where</th><th></th>' +
             '<th>PDF</th><th>OCR</th><th>LLM</th><th>Human</th><th>Auth</th></tr>';
     g.items.forEach((it, ii) => {
       const pg  = stemToPage[it.stem] ? `p${stemToPage[it.stem]}` : it.stem;
@@ -123,6 +185,8 @@ function _dupRenderBody() {
       const band = (it.y0 != null && it.y1 != null) ? `&y0=${it.y0}&y1=${it.y1}` : '';
       const src = `${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(it.stem)}&idx=${it.idx}${band}`;
       html += `<tr>` +
+        `<td><input type="checkbox" id="dup-sel-${gi}-${ii}" ${_dupSelected.has(_dupSelKey(gi, ii)) ? 'checked ' : ''}` +
+          `onchange="_dupSelToggle(${gi},${ii},this.checked)" style="accent-color:#e94560;width:12px;height:12px;"></td>` +
         `<td class="rs-clk" style="white-space:nowrap;color:#93c5fd;" onclick="_dupJump(${gi},${ii})" ` +
           `title="Open this cell in the editor">${_escHtml(loc)}</td>` +
         `<td class="rs-img"><img src="${src}" loading="lazy" style="max-height:${it.row_n != null ? 22 : 60}px;max-width:170px;object-fit:contain;display:block;"></td>` +
@@ -176,9 +240,10 @@ async function _dupHumanEdit(gi, ii, value) {
   await _dupSyncEditor(it.stem);
 }
 
-async function _dupSetAuthority(gi, ii, auth) {
-  const it = _dupGroups[gi]?.items[ii];
-  if (!it) return;
+// Persist one item's authority (entity record or null to clear) into its
+// page JSON. Returns {ok, saved} — shared by the single-cell dropdown and
+// the bulk clear.
+async function _dupSaveAuthority(it, auth) {
   const params = new URLSearchParams({folder, stem: it.stem, idx: it.idx});
   let saved = null;
   const ok = await _serializeWrite(async () => {
@@ -197,6 +262,13 @@ async function _dupSetAuthority(gi, ii, auth) {
       return r.ok;
     } catch (e) { return false; }
   });
+  return {ok, saved};
+}
+
+async function _dupSetAuthority(gi, ii, auth) {
+  const it = _dupGroups[gi]?.items[ii];
+  if (!it) return;
+  const {ok, saved} = await _dupSaveAuthority(it, auth);
   if (!ok) { showToast('Save failed — the edit was NOT stored'); return; }
   it.authority = saved;
   const cell = document.getElementById(`dup-auth-${gi}-${ii}`);
@@ -233,8 +305,7 @@ async function _dupAuthClick(gi, ii, ev) {
     `color:#cde;font:inherit;padding:3px 6px;margin-bottom:4px;">` +
     `<div id="dup-auth-dd-list" style="padding:4px;color:#667;">…</div>`;
   document.body.appendChild(dd);
-  dd.style.top  = Math.min(anchor.bottom + 2, window.innerHeight - 80) + 'px';
-  dd.style.left = Math.min(anchor.left, window.innerWidth - dd.offsetWidth - 8) + 'px';
+  _authDropdownPlace(dd, anchor);
 
   const listEl = dd.querySelector('#dup-auth-dd-list');
   const render = (cands) => {

@@ -623,6 +623,27 @@ function _rsAuthDocClose(ev) {
   if (!ev.target.closest('#rs-auth-dd')) _rsCloseAuthDropdown();
 }
 
+// Place a fixed-position dropdown next to its anchor so it always stays fully
+// on screen: below the anchor when there is room, above it otherwise, with
+// max-height clamped to the available space (the list scrolls inside).
+// Anchors near the bottom of the window used to push the lower half of the
+// dropdown off screen, making those entries unclickable.
+function _authDropdownPlace(dd, anchorRect) {
+  const margin     = 8;
+  const spaceBelow = window.innerHeight - anchorRect.bottom - margin;
+  const spaceAbove = anchorRect.top - margin;
+  if (spaceBelow >= 200 || spaceBelow >= spaceAbove) {
+    dd.style.top       = (anchorRect.bottom + 2) + 'px';
+    dd.style.bottom    = '';
+    dd.style.maxHeight = Math.max(120, Math.min(spaceBelow, window.innerHeight * 0.55)) + 'px';
+  } else {
+    dd.style.bottom    = (window.innerHeight - anchorRect.top + 2) + 'px';
+    dd.style.top       = '';
+    dd.style.maxHeight = Math.max(120, Math.min(spaceAbove, window.innerHeight * 0.55)) + 'px';
+  }
+  dd.style.left = Math.max(6, Math.min(anchorRect.left, window.innerWidth - dd.offsetWidth - 8)) + 'px';
+}
+
 let _rsDDLastCands = [];   // candidates currently shown in the dropdown
 let _rsDDDebounce  = null;
 async function _rsOpenAuthDropdown(i, anchorEl) {
@@ -644,9 +665,7 @@ async function _rsOpenAuthDropdown(i, anchorEl) {
     + `color:#cde;font:inherit;padding:3px 6px;margin-bottom:4px;">`
     + `<div id="rs-auth-dd-list"></div>`;
   document.body.appendChild(dd);
-  const rect = anchorEl.getBoundingClientRect();
-  dd.style.top  = Math.min(rect.bottom + 2, window.innerHeight - 60) + 'px';
-  dd.style.left = Math.min(rect.left, window.innerWidth - dd.offsetWidth - 6) + 'px';
+  _authDropdownPlace(dd, anchorEl.getBoundingClientRect());
 
   const listEl = dd.querySelector('#rs-auth-dd-list');
   const render = (cands) => {
