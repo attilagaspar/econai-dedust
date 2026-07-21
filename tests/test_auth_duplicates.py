@@ -102,6 +102,29 @@ def test_unresolved_report(client, dup_folder):
     assert r2.json()["duplicate_entities"] == 0
 
 
+def test_lookup_report(client, dup_folder):
+    # by id (M2 = single occurrence → still listed), by accent-folded name
+    # ("kisvaszar" matches Kisvaszar), unknown terms land in not_found;
+    # groups follow the order of the terms
+    r = client.post("/api/authority/duplicates", params={"folder": str(dup_folder)},
+                    json={"lookup": ["M2", "kisvaszar", "Nincsilyen"]})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["mode"] == "lookup"
+    assert [g["id"] for g in d["groups"]] == ["M2", "M1"]     # term order
+    assert d["groups"][0]["count"] == 1                       # singles listed
+    assert d["groups"][1]["count"] == 2
+    assert d["not_found"] == ["Nincsilyen"]
+
+
+def test_lookup_respects_page_and_col_filters(client, dup_folder):
+    r = client.post("/api/authority/duplicates", params={"folder": str(dup_folder)},
+                    json={"lookup": ["M1"], "pattern": "1,0"})   # p1 only
+    d = r.json()
+    assert d["groups"][0]["count"] == 1
+    assert d["groups"][0]["items"][0]["stem"] == "p1"
+
+
 def test_row_field_patch_human_and_authority(client, dup_folder):
     params = {"folder": str(dup_folder), "stem": "p1", "idx": 0}
     # human edit on row 0 also syncs the flat human layer

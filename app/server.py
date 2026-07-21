@@ -5500,10 +5500,15 @@ class AuthorityDuplicatesBody(BaseModel):
     stems:      List[str] = []
     pattern:    Optional[str] = None
     col_filter: Optional[str] = None
-    min_count:  Optional[int] = None   # default: 2 (duplicates) / 1 (unresolved)
+    min_count:  Optional[int] = None   # default: 2 (duplicates) / 1 (otherwise)
     unresolved: bool = False    # True = the counterpart report: units with
                                 # text but NO resolved authority, grouped by
                                 # folded text, min_count applies to the group
+    lookup:     Optional[List[str]] = None   # entity IDs and/or resolved names:
+                                # report ONLY units resolved to these (id =
+                                # exact, name = accent-folded); groups follow
+                                # the order of the terms; unmatched terms are
+                                # returned in "not_found"
 
 
 @app.post("/api/authority/duplicates")
@@ -5522,6 +5527,13 @@ def api_authority_duplicates(folder: str = Query(...),
     d = _resolve_folder(folder)
     stems       = _auth_select_pages(d, body.stems, body.pattern)
     col_allowed = _auth_col_pred(body.col_filter)
+
+    # Lookup terms: (raw, fold) preserving the user's order; a term matches a
+    # resolved unit by exact entity id or accent-folded resolved name.
+    terms = [(t.strip(), _auth_fold(t)) for t in (body.lookup or []) if t and t.strip()]
+    terms_found: set = set()
+    if terms:
+        body.unresolved = False    # lookup targets RESOLVED units by definition
 
     groups: dict = {}       # entity id -> {"name","type","items":[...]}
     total_resolved = 0
@@ -5580,18 +5592,33 @@ def api_authority_duplicates(folder: str = Query(...),
                 else:
                     if not resolved:
                         continue
+                    if terms:
+                        afold = _auth_fold(a.get("name") or "")
+                        hit = [i for i, (raw, fold) in enumerate(terms)
+                               if raw == a["id"] or (fold and fold == afold)]
+                        if not hit:
+                            continue
+                        terms_found.update(hit)
+                        ordv = min(hit)
                     g = groups.setdefault(a["id"], {
                         "id": a["id"], "name": a.get("name") or a["id"],
                         "type": a.get("type"), "items": []})
+                    if terms:
+                        g["_ord"] = min(g.get("_ord", 10**9), ordv)
                     g["items"].append(u)
 
-    floor = max(1 if body.unresolved else 2,
+    loose = body.unresolved or bool(terms)   # these modes list singles too
+    floor = max(1 if loose else 2,
                 body.min_count if body.min_count is not None
-                else (1 if body.unresolved else 2))
+                else (1 if loose else 2))
     out = [g for g in groups.values() if len(g["items"]) >= floor]
     for g in out:
         g["count"] = len(g["items"])
-    if body.unresolved:
+    if terms:
+        out.sort(key=lambda g: g.get("_ord", 10**9))   # the user's list order
+        for g in out:
+            g.pop("_ord", None)
+    elif body.unresolved:
         out.sort(key=lambda g: (-g["count"], (g["name"] or "").casefold()))
     else:
         out.sort(key=lambda g: (g["name"] or "").casefold())
@@ -5605,7 +5632,10 @@ def api_authority_duplicates(folder: str = Query(...),
         n_items += g["count"]
     return {"pages": len(stems), "total_resolved": total_resolved,
             "distinct_entities": len(groups), "duplicate_entities": len(kept),
-            "mode": "unresolved" if body.unresolved else "duplicates",
+            "mode": ("lookup" if terms else
+                     "unresolved" if body.unresolved else "duplicates"),
+            "not_found": [raw for i, (raw, _f) in enumerate(terms)
+                          if i not in terms_found] if terms else [],
             "truncated": truncated, "groups": kept}
 
 

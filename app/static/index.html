@@ -821,6 +821,7 @@
         <option value="resolve_authority">🏛 Resolve authorities</option>
         <option value="auth_duplicates">🏛 Authority duplicate report</option>
         <option value="auth_unresolved">🏛 Authority unresolved report</option>
+        <option value="auth_lookup">🏛 Authority lookup report (by ID / name list)</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
       </select>
     </div>
@@ -1061,6 +1062,19 @@
         resolved authority. Identical strings are grouped (accent-insensitive), most frequent first;
         structural blanks are skipped. Human and Authority are editable in the report; edits are saved
         into the page JSONs immediately.</div>
+    </div>
+
+    <!-- Authority lookup report options -->
+    <div id="batch-lookup-opts" style="display:none;flex-direction:column;gap:10px;">
+      <div>
+        <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Entity IDs and/or resolved names (one per line, or comma-separated):</div>
+        <textarea id="batch-lookup-list" rows="6" placeholder="M0606036&#10;Somogyszentpál&#10;Kisvaszar"
+                  style="width:100%;box-sizing:border-box;background:#0d1b35;border:1px solid #0f3460;border-radius:4px;color:#ccc;font-size:11px;padding:6px;resize:vertical;"></textarea>
+      </div>
+      <div style="font-size:10px;color:#555;">Lists every internal row / whole cell in the Pages / Pattern /
+        Column filter above that is RESOLVED to one of the given entities — IDs match exactly, names
+        accent-insensitively. Groups follow the order of your list; terms with no occurrences are reported.
+        Human and Authority are editable in the report; edits are saved into the page JSONs immediately.</div>
     </div>
 
     <!-- JSON export options -->
