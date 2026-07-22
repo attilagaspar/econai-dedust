@@ -271,6 +271,21 @@ function _computeConditionFilter(shapes) {
     return flagged;
   }
 
+  if (cond === 'rows_llm_empty') {
+    // Cells WITH an internal row structure whose LLM column is entirely
+    // empty. Typical case: a whole-cell LLM ran before the structure was
+    // rebuilt with a different row count — the flat LLM survives but the
+    // rows have nothing, so exports fall back to OCR. These need a per-row
+    // re-run. NOTE: because the flat LLM exists, the "already has a result"
+    // skip fires unless Overwrite is checked.
+    const flagged = new Set();
+    shapes.forEach((s, i) => {
+      const rows = s.row_struct?.rows;
+      if (rows?.length && !rows.some(r => (r.llm || '').trim())) flagged.add(i);
+    });
+    return flagged;
+  }
+
   if (cond === 'ocr_row_minority') {
     const flagged = new Set();
     const rowGroups = {};
@@ -1118,6 +1133,10 @@ function _collectLlmSettings() {
 
 async function _collectLlmTargets(sorted, s, progText, stats = null) {
   const tally = k => { if (stats) stats[k] = (stats[k] || 0) + 1; };
+  if (document.getElementById('batch-condition').value === 'rows_llm_empty' && !s.overwrite) {
+    showToast('⚠ "Internal rows have NO LLM" targets cells whose FLAT LLM exists — '
+              + 'check Overwrite, otherwise they are all skipped', 7000);
+  }
   const tasks = [];
   for (const idx of sorted) {
     if (_batchStop) break;
