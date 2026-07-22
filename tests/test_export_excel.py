@@ -158,3 +158,52 @@ def test_auth_cols_respect_col_filter(client, auth_folder):
     ws = _export(client, auth_folder, col_filter="2").worksheets[0]
     vals = _all_values(ws)
     assert "12" in vals and "M001" not in vals and "Tótfalu" not in vals
+
+
+# ── Pattern groups: horizontal slots aligned across cycles ───────────────────
+
+@pytest.fixture()
+def pattern_folder(tmp_path):
+    proj = tmp_path / "proj" / "annotations"
+    proj.mkdir(parents=True)
+
+    def page(stem, n_cols):
+        shapes = [{"label": "cell", "points": [[c * 100, 50], [c * 100 + 90, 100]],
+                   "shape_type": "rectangle", "flags": {},
+                   "super_row": 1, "super_column": c, "table": 0,
+                   "human_output": {"human_corrected_text": f"{stem}c{c}"}}
+                  for c in range(1, n_cols + 1)]
+        (proj / f"{stem}.json").write_text(json.dumps(
+            {"shapes": shapes, "imagePath": f"{stem}.jpg",
+             "imageWidth": 800, "imageHeight": 200}), encoding="utf-8")
+        from PIL import Image
+        Image.new("RGB", (800, 200), "white").save(proj / f"{stem}.jpg")
+
+    page("p1", 1)   # cycle 1 left — NARROW
+    page("p2", 2)   # cycle 1 right
+    page("p3", 3)   # cycle 2 left — wider
+    page("p4", 2)   # cycle 2 right
+    return proj
+
+
+def test_pattern_slots_align_across_cycles(client, pattern_folder):
+    """A narrow left page must not shift its cycle's right page west: the
+    right slot starts at the same column in every cycle (widest-left rule)."""
+    p = {"folder": str(pattern_folder), "scope": "document",
+         "pattern": "1,1", "layer": "human"}
+    r = client.get("/api/export/excel", params=p)
+    assert r.status_code == 200, r.text
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    ws = wb.worksheets[0]
+    col_of = {}
+    for row in ws.iter_rows():
+        for c in row:
+            if isinstance(c.value, str) and c.value.startswith("p") and "c" in c.value:
+                col_of.setdefault(c.value, c.column)
+            if c.value in ("p1", "p2", "p3", "p4"):
+                col_of.setdefault("banner_" + c.value, c.column)
+    assert col_of["banner_p1"] == col_of["banner_p3"] == 1
+    # right pages start at the same column, sized by the WIDEST left page (p3)
+    assert col_of["banner_p2"] == col_of["banner_p4"]
+    assert col_of["p2c1"] == col_of["p4c1"]
+    assert col_of["banner_p2"] > col_of["banner_p1"] + 3   # room for p3's 3 cols

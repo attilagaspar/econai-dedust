@@ -7792,6 +7792,22 @@ def api_export_excel(
                 cells_by_jf[jf] = apply_clips_only(apply_col_filter(
                     shapes_to_cells(load_shapes(jf))))
         compute_auth_cols(cells_by_jf.values())
+        cells_by_jf = {jf: inject_auth_cells(c) for jf, c in cells_by_jf.items()}
+
+        # Horizontal slot offsets must be IDENTICAL down the sheet: each
+        # slot's width is the widest page EVER printed in that slot, over the
+        # whole export. Per-group offsets (the old behavior) let one narrow
+        # left page shift its group's right page a column west — same-slot
+        # columns stopped lining up vertically and looked like lost cells.
+        n_slots = sum(bits)
+        slot_w  = [0] * n_slots
+        i = 0
+        while i < len(jfiles):
+            printed = [jf for jf, b in zip(jfiles[i : i + len(bits)], bits) if b == 1]
+            i += len(bits)
+            for k, jf in enumerate(printed):
+                slot_w[k] = max(slot_w[k],
+                                max_col_of(cells_by_jf[jf]) + META_COLS + 2)
 
         ws      = wb.create_sheet(title="Export")
         cur_row = data_start
@@ -7803,15 +7819,13 @@ def api_export_excel(
             printed = [jf for jf, b in zip(chunk, bits) if b == 1]
             if not printed:
                 continue
-            cells_list = [inject_auth_cells(cells_by_jf[jf]) for jf in printed]
+            cells_list = [cells_by_jf[jf] for jf in printed]
             if not any(cells_list):
                 continue
 
-            # Column offset of each page in the group: meta col + data + gap
-            offsets, coff = [], 0
-            for cells in cells_list:
-                offsets.append(coff)
-                coff += max_col_of(cells) + META_COLS + 2
+            # Column offset of each page = sum of the widths of the slots
+            # before it (constant across cycles)
+            offsets = [sum(slot_w[:k]) for k in range(len(printed))]
 
             if not headers_written:
                 for o in offsets:
