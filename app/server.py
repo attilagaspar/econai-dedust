@@ -2610,8 +2610,12 @@ class LlmBatchSubmit(BaseModel):
 
 # Providers cap the batch input file (Azure: 200 MB). Flush a chunk into its
 # own job when it nears the limit so a big submission becomes several jobs.
-_BATCH_CHUNK_BYTES = 180 * 1024 * 1024
-_BATCH_CHUNK_MAX_REQ = 40000
+# Kept WELL below the cap: Azure's file ingest intermittently 408s ("The
+# operation was timeout") on ~75-100 MB uploads even over a healthy line
+# (observed 2026-07-19/20); ~50 MB chunks upload in seconds and pass. More,
+# smaller jobs cost nothing — each applies independently.
+_BATCH_CHUNK_BYTES = int(os.environ.get("ECONAI_BATCH_CHUNK_MB", "50")) * 1024 * 1024
+_BATCH_CHUNK_MAX_REQ = 20000
 
 
 def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
