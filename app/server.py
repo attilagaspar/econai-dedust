@@ -2614,10 +2614,13 @@ _BATCH_CHUNK_BYTES = 180 * 1024 * 1024
 _BATCH_CHUNK_MAX_REQ = 40000
 
 
-def _gen_batch_requests(d, folder, body, json_mode, rf):
+def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
     """Yield (jsonl_line_dict, cell_key, meta_val_or_None) per request.
     meta_val (row bands) is attached only to the FIRST line of a linebyline
-    cell; other lines carry None."""
+    cell; other lines carry None. Cells with broken geometry (bbox outside
+    the image, or stale row bands outside the cell) are SKIPPED and counted
+    in stats["bad_geometry"] — one such cell used to raise inside PIL and
+    abort the whole submit."""
     from collections import defaultdict
     from PIL import Image as PILImage
     by_stem = defaultdict(list)
@@ -2648,9 +2651,14 @@ def _gen_batch_requests(d, folder, body, json_mode, rf):
             if body.mode == "linebyline":
                 if img is None:
                     continue
-                crop_top = max(0, int(y1) - pad)
-                crop = img.crop((max(0, int(x1) - pad), crop_top,
-                                 min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
+                cl, ct = max(0, int(x1) - pad), max(0, int(y1) - pad)
+                cr, cb = min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)
+                if cr <= cl or cb <= ct:               # bbox outside the image
+                    if stats is not None:
+                        stats["bad_geometry"] += 1
+                    continue
+                crop_top = ct
+                crop = img.crop((cl, ct, cr, cb))
                 existing = _existing_row_bands_rel(shape, crop_top, crop.height)
                 if body.rows_source == "existing":
                     rows = existing
@@ -2660,12 +2668,19 @@ def _gen_batch_requests(d, folder, body, json_mode, rf):
                     rows = existing or _detect_text_rows(crop, body.cell_height)
                 if not rows:
                     continue
+                row_pad = max(4, body.cell_height // 6)
+                # Stale row bands (cell resized without rescaling its rows)
+                # can lie outside the crop → inverted per-row crops.
+                if any(min(crop.height, b0 + row_pad) <= max(0, t0 - row_pad)
+                       for t0, b0 in rows):
+                    if stats is not None:
+                        stats["bad_geometry"] += 1
+                    continue
                 row_ocr = ([(r.get("ocr") or "") for r in
                             (shape.get("row_struct") or {}).get("rows") or []]
                            if (existing and rows is existing) else [])
                 mval = {"stem": stem, "idx": idx,
                         "bands": [[t0 + crop_top, b0 + crop_top] for t0, b0 in rows]}
-                row_pad = max(4, body.cell_height // 6)
                 for i, (top, bottom) in enumerate(rows):
                     txt = body.prompt
                     if body.payload in ("ocr", "image+ocr"):
@@ -2692,8 +2707,13 @@ def _gen_batch_requests(d, folder, body, json_mode, rf):
             if body.mode in ("image", "image+ocr"):
                 if img is None:
                     continue
-                crop = img.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
-                                 min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)))
+                cl, ct = max(0, int(x1) - pad), max(0, int(y1) - pad)
+                cr, cb = min(img.width, int(x2) + pad), min(img.height, int(y2) + pad)
+                if cr <= cl or cb <= ct:               # bbox outside the image
+                    if stats is not None:
+                        stats["bad_geometry"] += 1
+                    continue
+                crop = img.crop((cl, ct, cr, cb))
                 content.append(_img_part(crop))
             prompt_text = body.prompt
             ocr_text = (shape.get("tesseract_output") or {}).get("ocr_text", "")
@@ -2779,8 +2799,10 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
             chunk, chunk_bytes, chunk_meta, chunk_cells = [], 0, {}, set()
             return info
 
+        build_stats = {"bad_geometry": 0}
         try:
-            for line, ckey, mval in _gen_batch_requests(d, folder, body, json_mode, rf):
+            for line, ckey, mval in _gen_batch_requests(d, folder, body, json_mode, rf,
+                                                        build_stats):
                 b = len(_json.dumps(line, ensure_ascii=False).encode("utf-8")) + 1
                 if chunk and (chunk_bytes + b > _BATCH_CHUNK_BYTES
                               or len(chunk) >= _BATCH_CHUNK_MAX_REQ):
@@ -2809,7 +2831,8 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
                 return
             yield _json.dumps({"type": "done", "jobs": made,
                                "requests": sum(m["requests"] for m in made),
-                               "cells": sum(m["cells"] for m in made)})
+                               "cells": sum(m["cells"] for m in made),
+                               "skipped_bad_geometry": build_stats["bad_geometry"]})
         except Exception as exc:
             yield _json.dumps({"type": "error",
                 "error": f"Batch submit failed: {exc}"

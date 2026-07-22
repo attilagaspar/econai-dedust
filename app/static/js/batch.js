@@ -703,7 +703,11 @@ async function runBatch() {
         if (err) throw new Error(err);
         const nj = jobsMade.length;
         msg = `🌙 Submitted ${done?.requests ?? '?'} request(s) · ${done?.cells ?? '?'} cell(s) as `
-            + `${nj} job(s): ${jobsMade.map(j => j.id).join(', ')}. You can close the browser.`;
+            + `${nj} job(s): ${jobsMade.map(j => j.id).join(', ')}.`
+            + (done?.skipped_bad_geometry
+               ? ` ⚠ ${done.skipped_bad_geometry} cell(s) skipped — broken geometry (row bands / bbox outside the image).`
+               : '')
+            + ` You can close the browser.`;
         showToast(msg, 8000);
       } catch (e) { msg = `✕ Submit failed: ${e.message}`; showToast(msg, 8000); }
     }

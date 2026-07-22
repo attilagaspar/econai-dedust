@@ -161,3 +161,27 @@ def test_overnight_reasoning_model_body(client, page_folder, provider):
     assert body["max_completion_tokens"] >= 2000    # reasoning-model params
     assert body["reasoning_effort"] == "low"
     assert "temperature" not in body
+
+
+def test_submit_skips_broken_geometry_cells(client, page_folder, provider):
+    # Give shape 1 a row_struct whose bands lie BELOW the cell (stale rows
+    # after a resize) — this used to raise inside PIL and abort the whole
+    # submit. It must now be skipped and counted, and the good cell (shape 2,
+    # rows matching its bbox 300,100..500,200) must still go through.
+    doc = json.loads((page_folder / "p1.json").read_text(encoding="utf-8"))
+    doc["shapes"][1]["row_struct"] = {"version": 1, "origin": "t", "rows": [
+        {"n": 1, "y0": 950.0, "y1": 990.0, "ocr": "", "llm": "", "human": ""}]}
+    doc["shapes"][2]["row_struct"] = {"version": 1, "origin": "t", "rows": [
+        {"n": 1, "y0": 110.0, "y1": 150.0, "ocr": "", "llm": "", "human": ""},
+        {"n": 2, "y0": 150.0, "y1": 190.0, "ocr": "", "llm": "", "human": ""}]}
+    (page_folder / "p1.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    evs = _submit(client, page_folder,
+                  {"targets": [{"stem": "p1", "idx": 1}, {"stem": "p1", "idx": 2}],
+                   "model": "gpt-4o-mini", "mode": "linebyline", "prompt": "read",
+                   "payload": "image", "rows_source": "existing"})
+    done = next(e for e in evs if e["type"] == "done")
+    assert done["skipped_bad_geometry"] == 1
+    assert done["requests"] == 2                       # shape 2's two rows
+    lines = [json.loads(l) for l in provider.uploaded.splitlines()]
+    assert all(l["custom_id"].startswith("p1|2|") for l in lines)
