@@ -25,7 +25,7 @@
   "aliases": 18984,
   "settlements_with_coords": 12541,
   "settlements_1930": 3555,
-  "minted_1930": 299
+  "minted_1930": 274
  },
  "entities": [
   {
@@ -14500,6 +14500,17 @@
       "county_name": "Baranya",
       "district_name": "Pécsi"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Kővágótöttös",
+     "attrs": {
+      "county_modern": "Baranya",
+      "ksh_panel_kod": "02158"
+     }
     }
    ],
    "xref": {
@@ -17648,6 +17659,10 @@
     {
      "name": "Hidvég",
      "source": "helysegnevtar"
+    },
+    {
+     "name": "Baranyahídvég",
+     "source": "census_panel_1930"
     }
    ],
    "attrs": {
@@ -17670,6 +17685,17 @@
       "district_seat": false,
       "county_name": "Baranya",
       "district_name": "Siklósi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Baranyahídvég",
+     "attrs": {
+      "county_modern": "Baranya",
+      "ksh_panel_kod": "02035"
      }
     }
    ],
@@ -39700,6 +39726,17 @@
       "district_seat": false,
       "county_name": "Somogy",
       "district_name": "Csurgói"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őrtilos",
+     "attrs": {
+      "county_modern": "Somogy",
+      "ksh_panel_kod": "14150"
      }
     }
    ],
@@ -63040,6 +63077,17 @@
       "county_name": "Tolna",
       "district_name": "Központi (TOLNA)"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őcsény",
+     "attrs": {
+      "county_modern": "Tolna",
+      "ksh_panel_kod": "16084"
+     }
     }
    ],
    "xref": {
@@ -63415,6 +63463,17 @@
       "district_seat": false,
       "county_name": "Tolna",
       "district_name": "Simontornyai"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Dúzs",
+     "attrs": {
+      "county_modern": "Tolna",
+      "ksh_panel_kod": "16035"
      }
     }
    ],
@@ -65708,6 +65767,17 @@
       "district_seat": false,
       "county_name": "Tolna",
       "district_name": "Völgységi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Dörypatlan",
+     "attrs": {
+      "county_modern": "Tolna",
+      "ksh_panel_kod": "16109"
      }
     }
    ],
@@ -72966,6 +73036,17 @@
       "district_seat": false,
       "county_name": "Vas",
       "district_name": "Körmendi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őrimagyarósd",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17146"
      }
     }
    ],
@@ -83136,7 +83217,12 @@
   {
    "id": "M0907022",
    "name": "Megyehid",
-   "aliases": [],
+   "aliases": [
+    {
+     "name": "Megyehíd",
+     "source": "census_panel_1930"
+    }
+   ],
    "attrs": {
     "modern_name": "Megyehid",
     "modern_country": "Magyarország",
@@ -83157,6 +83243,17 @@
       "district_seat": false,
       "county_name": "Vas",
       "district_name": "Sárvári"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Megyehíd",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17113"
      }
     }
    ],
@@ -86176,6 +86273,17 @@
       "county_name": "Vas",
       "district_name": "Szentgotthárdi"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őrbajánháza",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17019"
+     }
     }
    ],
    "xref": {
@@ -86255,6 +86363,17 @@
       "district_seat": false,
       "county_name": "Vas",
       "district_name": "Szentgotthárdi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őriszentpéter",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17008"
      }
     }
    ],
@@ -89570,6 +89689,10 @@
     {
      "name": "Szombathely",
      "source": "modern"
+    },
+    {
+     "name": "Ólad",
+     "source": "census_panel_1930"
     }
    ],
    "attrs": {
@@ -89592,6 +89715,17 @@
       "district_seat": false,
       "county_name": "Vas",
       "district_name": "Szombathelyi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Ólad",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17001"
      }
     }
    ],
@@ -90354,6 +90488,10 @@
     {
      "name": "Szécseny",
      "source": "census_1900"
+    },
+    {
+     "name": "Vasszécsény",
+     "source": "census_panel_1930"
     }
    ],
    "attrs": {
@@ -90376,6 +90514,17 @@
       "district_seat": false,
       "county_name": "Vas",
       "district_name": "Szombathelyi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Vasszécsény",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17207"
      }
     }
    ],
@@ -92092,6 +92241,17 @@
       "county_name": "Vas",
       "district_name": "Vasvári"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Rábahídvég",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17161"
+     }
     }
    ],
    "xref": {
@@ -92240,6 +92400,10 @@
     {
      "name": "Töttös",
      "source": "census_1900"
+    },
+    {
+     "name": "Rábatöttös",
+     "source": "census_panel_1930"
     }
    ],
    "attrs": {
@@ -92262,6 +92426,17 @@
       "district_seat": false,
       "county_name": "Vas",
       "district_name": "Vasvári"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Rábatöttös",
+     "attrs": {
+      "county_modern": "Vas",
+      "ksh_panel_kod": "17163"
      }
     }
    ],
@@ -98950,6 +99125,17 @@
       "district_seat": false,
       "county_name": "Veszprém",
       "district_name": "Veszprémi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Ősi",
+     "attrs": {
+      "county_modern": "Veszprém",
+      "ksh_panel_kod": "18157"
      }
     }
    ],
@@ -112522,6 +112708,17 @@
       "county_name": "Zala",
       "district_name": "Nagykanizsai"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Fűzvölgy",
+     "attrs": {
+      "county_modern": "Zala",
+      "ksh_panel_kod": "19067"
+     }
     }
    ],
    "xref": {
@@ -116161,6 +116358,10 @@
     {
      "name": "Bucsu-Szent-László",
      "source": "helysegnevtar"
+    },
+    {
+     "name": "Búcsúszentlászló",
+     "source": "census_panel_1930"
     }
    ],
    "attrs": {
@@ -116183,6 +116384,17 @@
       "district_seat": false,
       "county_name": "Zala",
       "district_name": "Pacsai"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Búcsúszentlászló",
+     "attrs": {
+      "county_modern": "Zala",
+      "ksh_panel_kod": "19043"
      }
     }
    ],
@@ -119846,7 +120058,12 @@
   {
    "id": "M1110018",
    "name": "Óhid",
-   "aliases": [],
+   "aliases": [
+    {
+     "name": "Óhíd",
+     "source": "census_panel_1930"
+    }
+   ],
    "attrs": {
     "modern_name": "Óhid",
     "modern_country": "Magyarország",
@@ -119867,6 +120084,17 @@
       "district_seat": false,
       "county_name": "Zala",
       "district_name": "Sümegi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Óhíd",
+     "attrs": {
+      "county_modern": "Zala",
+      "ksh_panel_kod": "19157"
      }
     }
    ],
@@ -123513,6 +123741,17 @@
       "district_seat": false,
       "county_name": "Zala",
       "district_name": "Zalaegerszegi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Pethőhenye",
+     "attrs": {
+      "county_modern": "Zala",
+      "ksh_panel_kod": "19169"
      }
     }
    ],
@@ -152316,6 +152555,17 @@
       "county_name": "Nógrád",
       "district_name": "Balassagyarmati"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őrhalom",
+     "attrs": {
+      "county_modern": "Nógrád",
+      "ksh_panel_kod": "12097"
+     }
     }
    ],
    "xref": {
@@ -158501,6 +158751,17 @@
       "district_seat": false,
       "county_name": "Nógrád",
       "district_name": "Nógrádi"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Ősagárd",
+     "attrs": {
+      "county_modern": "Nógrád",
+      "ksh_panel_kod": "12098"
      }
     }
    ],
@@ -236974,6 +237235,17 @@
       "district_seat": false,
       "county_name": "Pest-Pilis-Solt-Kiskun",
       "district_name": "Váci"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őrszentmiklós",
+     "attrs": {
+      "county_modern": "Pest",
+      "ksh_panel_kod": "13030"
      }
     }
    ],
@@ -321885,6 +322157,17 @@
       "county_name": "Zemplén",
       "district_name": "Szerencsi"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Sajóhídvég",
+     "attrs": {
+      "county_modern": "Borsod-Abaúj-Zemplén",
+      "ksh_panel_kod": "04267"
+     }
     }
    ],
    "xref": {
@@ -358237,6 +358520,17 @@
       "county_name": "Szabolcs",
       "district_name": "Kisvárdai"
      }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Nyírkarász",
+     "attrs": {
+      "county_modern": "Szabolcs-Szatmár-Bereg",
+      "ksh_panel_kod": "15141"
+     }
     }
    ],
    "xref": {
@@ -359936,6 +360230,17 @@
       "district_seat": false,
       "county_name": "Szabolcs",
       "district_name": "Nyírbaktai"
+     }
+    },
+    {
+     "as_of": 1930,
+     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
+     "type": "settlement",
+     "parent": null,
+     "name": "Őr",
+     "attrs": {
+      "county_modern": "Szabolcs-Szatmár-Bereg",
+      "ksh_panel_kod": "15159"
      }
     }
    ],
@@ -519459,28 +519764,6 @@
    }
   },
   {
-   "id": "K30_02035_baranyahidveg",
-   "name": "Baranyahídvég",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Baranyahídvég",
-     "attrs": {
-      "county_modern": "Baranya",
-      "ksh_panel_kod": "02035"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "02035"
-   }
-  },
-  {
    "id": "K30_18047_barnag",
    "name": "Barnag",
    "aliases": [],
@@ -519984,28 +520267,6 @@
    ],
    "xref": {
     "ksh_panel_kod": "04083"
-   }
-  },
-  {
-   "id": "K30_19043_bucsuszentlaszlo",
-   "name": "Búcsúszentlászló",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Búcsúszentlászló",
-     "attrs": {
-      "county_modern": "Zala",
-      "ksh_panel_kod": "19043"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "19043"
    }
   },
   {
@@ -520586,50 +520847,6 @@
    }
   },
   {
-   "id": "K30_16109_dorypatlan",
-   "name": "Dörypatlan",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Dörypatlan",
-     "attrs": {
-      "county_modern": "Tolna",
-      "ksh_panel_kod": "16109"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "16109"
-   }
-  },
-  {
-   "id": "K30_16035_duzs",
-   "name": "Dúzs",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Dúzs",
-     "attrs": {
-      "county_modern": "Tolna",
-      "ksh_panel_kod": "16035"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "16035"
-   }
-  },
-  {
    "id": "K30_12032_egyhazasgerge",
    "name": "Egyházasgerge",
    "aliases": [],
@@ -520803,28 +521020,6 @@
    ],
    "xref": {
     "ksh_panel_kod": "16037"
-   }
-  },
-  {
-   "id": "K30_19067_fuzvolgy",
-   "name": "Fűzvölgy",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Fűzvölgy",
-     "attrs": {
-      "county_modern": "Zala",
-      "ksh_panel_kod": "19067"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "19067"
    }
   },
   {
@@ -522016,28 +522211,6 @@
    }
   },
   {
-   "id": "K30_02158_kovagotottos",
-   "name": "Kővágótöttös",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Kővágótöttös",
-     "attrs": {
-      "county_modern": "Baranya",
-      "ksh_panel_kod": "02158"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "02158"
-   }
-  },
-  {
    "id": "K30_14122_lad",
    "name": "Lad",
    "aliases": [],
@@ -522277,28 +522450,6 @@
    ],
    "xref": {
     "ksh_panel_kod": "17114"
-   }
-  },
-  {
-   "id": "K30_17113_megyehid",
-   "name": "Megyehíd",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Megyehíd",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17113"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17113"
    }
   },
   {
@@ -522720,28 +522871,6 @@
    }
   },
   {
-   "id": "K30_15141_nyirkarasz",
-   "name": "Nyírkarász",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Nyírkarász",
-     "attrs": {
-      "county_modern": "Szabolcs-Szatmár-Bereg",
-      "ksh_panel_kod": "15141"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "15141"
-   }
-  },
-  {
    "id": "K30_15142_nyirkata",
    "name": "Nyírkáta",
    "aliases": [],
@@ -522962,28 +523091,6 @@
    }
   },
   {
-   "id": "K30_19169_pethohenye",
-   "name": "Pethőhenye",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Pethőhenye",
-     "attrs": {
-      "county_modern": "Zala",
-      "ksh_panel_kod": "19169"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "19169"
-   }
-  },
-  {
    "id": "K30_11057_piliscsev",
    "name": "Piliscsév",
    "aliases": [],
@@ -523072,28 +523179,6 @@
    }
   },
   {
-   "id": "K30_17161_rabahidveg",
-   "name": "Rábahídvég",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Rábahídvég",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17161"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17161"
-   }
-  },
-  {
    "id": "K30_17162_rabapaty",
    "name": "Rábapaty",
    "aliases": [],
@@ -523113,28 +523198,6 @@
    ],
    "xref": {
     "ksh_panel_kod": "17162"
-   }
-  },
-  {
-   "id": "K30_17163_rabatottos",
-   "name": "Rábatöttös",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Rábatöttös",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17163"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17163"
    }
   },
   {
@@ -523223,28 +523286,6 @@
    ],
    "xref": {
     "ksh_panel_kod": "17167"
-   }
-  },
-  {
-   "id": "K30_04267_sajohidveg",
-   "name": "Sajóhídvég",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Sajóhídvég",
-     "attrs": {
-      "county_modern": "Borsod-Abaúj-Zemplén",
-      "ksh_panel_kod": "04267"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "04267"
    }
   },
   {
@@ -523908,50 +523949,6 @@
    }
   },
   {
-   "id": "K30_19157_ohid",
-   "name": "Óhíd",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Óhíd",
-     "attrs": {
-      "county_modern": "Zala",
-      "ksh_panel_kod": "19157"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "19157"
-   }
-  },
-  {
-   "id": "K30_17001_olad",
-   "name": "Ólad",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Ólad",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17001"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17001"
-   }
-  },
-  {
    "id": "K30_05046_opusztaszer",
    "name": "Ópusztaszer",
    "aliases": [],
@@ -524099,7 +524096,7 @@
      "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
      "type": "settlement",
      "parent": null,
-     "name": "Õrbottyán",
+     "name": "Őrbottyán",
      "attrs": {
       "county_modern": "Pest",
       "ksh_panel_kod": "13030"
@@ -525198,28 +525195,6 @@
    }
   },
   {
-   "id": "K30_17207_vasszecseny",
-   "name": "Vasszécsény",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Vasszécsény",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17207"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17207"
-   }
-  },
-  {
    "id": "K30_18206_veszpremgalsa",
    "name": "Veszprémgalsa",
    "aliases": [],
@@ -525349,226 +525324,6 @@
    ],
    "xref": {
     "ksh_panel_kod": "19010"
-   }
-  },
-  {
-   "id": "K30_16084_ocseny",
-   "name": "Õcsény",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õcsény",
-     "attrs": {
-      "county_modern": "Tolna",
-      "ksh_panel_kod": "16084"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "16084"
-   }
-  },
-  {
-   "id": "K30_15159_or",
-   "name": "Õr",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õr",
-     "attrs": {
-      "county_modern": "Szabolcs-Szatmár-Bereg",
-      "ksh_panel_kod": "15159"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "15159"
-   }
-  },
-  {
-   "id": "K30_17019_orbajanhaza",
-   "name": "Õrbajánháza",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õrbajánháza",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17019"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17019"
-   }
-  },
-  {
-   "id": "K30_12097_orhalom",
-   "name": "Õrhalom",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õrhalom",
-     "attrs": {
-      "county_modern": "Nógrád",
-      "ksh_panel_kod": "12097"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "12097"
-   }
-  },
-  {
-   "id": "K30_17146_orimagyarosd",
-   "name": "Õrimagyarósd",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õrimagyarósd",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17146"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17146"
-   }
-  },
-  {
-   "id": "K30_17008_oriszentpeter",
-   "name": "Õriszentpéter",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õriszentpéter",
-     "attrs": {
-      "county_modern": "Vas",
-      "ksh_panel_kod": "17008"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "17008"
-   }
-  },
-  {
-   "id": "K30_13030_orszentmiklos",
-   "name": "Õrszentmiklós",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õrszentmiklós",
-     "attrs": {
-      "county_modern": "Pest",
-      "ksh_panel_kod": "13030"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "13030"
-   }
-  },
-  {
-   "id": "K30_14150_ortilos",
-   "name": "Õrtilos",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õrtilos",
-     "attrs": {
-      "county_modern": "Somogy",
-      "ksh_panel_kod": "14150"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "14150"
-   }
-  },
-  {
-   "id": "K30_12098_osagard",
-   "name": "Õsagárd",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õsagárd",
-     "attrs": {
-      "county_modern": "Nógrád",
-      "ksh_panel_kod": "12098"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "12098"
-   }
-  },
-  {
-   "id": "K30_18157_osi",
-   "name": "Õsi",
-   "aliases": [],
-   "attrs": {},
-   "slices": [
-    {
-     "as_of": 1930,
-     "source": "KSH census panel 1930 (Sebők; complete 2026 rescrape)",
-     "type": "settlement",
-     "parent": null,
-     "name": "Õsi",
-     "attrs": {
-      "county_modern": "Veszprém",
-      "ksh_panel_kod": "18157"
-     }
-    }
-   ],
-   "xref": {
-    "ksh_panel_kod": "18157"
    }
   },
   {
