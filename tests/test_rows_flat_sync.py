@@ -34,6 +34,27 @@ def test_distribute_flat_keeps_empty_rows_in_place():
     assert got == ["", "", "A", "B", ""]
 
 
+def test_apply_layer_rows_rebuild_pulls_flat_llm_back():
+    # A rebuild with a DIFFERENT row count drops the llm layer from the rows
+    # while the flat original survives; when the flat line count matches the
+    # new structure exactly it must be pulled back in (OCR-only export bug).
+    sh = _shape_with_rows(3)
+    sh["row_struct"]["rows"][0]["llm"] = "old"
+    sh["openai_output"] = {"response": "a\nb\nc\nd\ne"}          # 5 lines
+    bands5 = [(10.0 * i, 10.0 * i + 10) for i in range(5)]
+    _apply_layer_rows(sh, bands5, "ocr", ["o1", "o2", "o3", "o4", "o5"],
+                      "anchored", force_boxes=True)
+    rows = sh["row_struct"]["rows"]
+    assert [r["ocr"] for r in rows] == ["o1", "o2", "o3", "o4", "o5"]
+    assert [r["llm"] for r in rows] == ["a", "b", "c", "d", "e"]  # pulled back
+    # count mismatch → left alone (manual import-anyway)
+    sh2 = _shape_with_rows(3)
+    sh2["openai_output"] = {"response": "a\nb\nc\nd\ne"}
+    bands4 = [(10.0 * i, 10.0 * i + 10) for i in range(4)]
+    _apply_layer_rows(sh2, bands4, "ocr", ["o"] * 4, "anchored", force_boxes=True)
+    assert all(not r["llm"] for r in sh2["row_struct"]["rows"])
+
+
 def test_apply_layer_rows_pulls_flat_human_positionally():
     # a line-by-line LLM run on a cell whose rows have no human yet must pull
     # the flat Human in at its own row positions, not packed to the top

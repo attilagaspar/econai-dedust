@@ -922,6 +922,24 @@ def _apply_layer_rows(shape, bands_abs, layer, texts, origin, force_boxes=False)
             for r, t in zip(rows_now, _split_lines(flat_h)):
                 r["human"] = t
 
+    # Same protection for the model layers: when a rebuild changed the row
+    # count, the OTHER layers were dropped from the rows while their flat
+    # originals survived — a whole-cell LLM output then silently vanished
+    # from the table and from exports (OCR-only export bug, foldbirtok1935).
+    # Pull a flat layer back in when the rows are empty for it and the line
+    # count matches the structure EXACTLY (a positional fit; anything else
+    # stays manual via the panel's ⟳ / import-anyway buttons).
+    def _pull_flat(lay, flat_text):
+        if lay == layer or any((r.get(lay) or "").strip() for r in rows_now):
+            return
+        lines = _split_lines(flat_text or "")
+        if lines and len(lines) == len(rows_now):
+            for r, t in zip(rows_now, lines):
+                r[lay] = t
+    _pull_flat("llm", (shape.get("openai_output") or {}).get("response"))
+    _pull_flat("ocr", (shape.get("tesseract_output") or {}).get("ocr_text")
+                      or (shape.get("easyocr_output") or {}).get("ocr_text"))
+
     # a line-by-line run REWROTE this layer — its flat mirrors the new rows
     _sync_flat_from_rows(shape, layers=(layer, "human"))
 
