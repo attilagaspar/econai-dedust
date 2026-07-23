@@ -28,6 +28,9 @@ services:
       AZURE_OPENAI_API_KEY_US: ${AZURE_OPENAI_API_KEY_US:-}
       AZURE_OPENAI_ENDPOINT_US: ${AZURE_OPENAI_ENDPOINT_US:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-}
+      # Blob container for the dashboard's 📥 Inbox (bulk PDF import).
+      # Unset = the Inbox button doesn't render. Auth = managed identity.
+      DEDUST_INBOX_URL: ${DEDUST_INBOX_URL:-}
     volumes:
       - ./projects:/app/projects
       - ./authorities:/app/authorities

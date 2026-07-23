@@ -122,6 +122,7 @@ header span { color: #888; font-size: 0.85rem; }
 .dot-red    { background: #e94560; }
 .dot-grey   { background: #555; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+@keyframes pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.35);opacity:0.6} }
 
 /* Empty state */
 .empty { text-align: center; padding: 60px 20px; color: #555; }
@@ -197,6 +198,8 @@ header span { color: #888; font-size: 0.85rem; }
     <div class="sidebar-header">
       <h2>Projects</h2>
       <button id="btn-new-project" onclick="openNewProjectModal()">+ New</button>
+      <button id="btn-inbox" onclick="openInboxModal()" style="display:none;background:#1a5c38;border:none;color:#eee;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;position:relative;"
+              title="Bulk import: pick a folder of PDFs from the storage inbox and render it into a project">📥 Inbox<span id="inbox-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#f0c040;animation:pulse 1.2s infinite;"></span></button>
     </div>
     <div id="project-list">
       <div class="empty"><div class="big">📂</div>Loading…</div>
@@ -265,6 +268,48 @@ header span { color: #888; font-size: 0.85rem; }
   </div>
 </div>
 
+<!-- Inbox (bulk import) modal -->
+<div class="modal-bg" id="inbox-modal">
+  <div class="modal">
+    <h3>📥 Inbox — bulk import</h3>
+    <p style="font-size:0.8rem;color:#888;margin:0 0 10px;">
+      Folders uploaded to the storage inbox (one folder per volume). Importing
+      renders every PDF into pages of the chosen project — it runs on the
+      server; you can close this window and come back.
+    </p>
+    <div class="field-row">
+      <label>Folder</label>
+      <select id="ib-folder" onchange="ibFolderChanged()"></select>
+      <button class="btn btn-secondary" style="padding:3px 8px;" onclick="ibLoadFolders()" title="Refresh the folder list">⟳</button>
+    </div>
+    <div class="field-row">
+      <label>Into</label>
+      <select id="ib-dest" onchange="ibDestChanged()">
+        <option value="__new__">➕ new project (named below)</option>
+      </select>
+    </div>
+    <div id="ib-new-fields">
+      <div class="field-row">
+        <label>Name</label>
+        <input id="ib-name" placeholder="project name" />
+      </div>
+      <div class="field-row">
+        <label>Preset</label>
+        <select id="ib-preset" onchange="ibPresetChanged()"></select>
+      </div>
+      <div class="field-row">
+        <label>Labels</label>
+        <input id="ib-labels" placeholder="label1 label2 …  (space-separated)" />
+      </div>
+    </div>
+    <div id="ib-progress" style="font-size:0.82rem;color:#7ec8a0;margin:8px 0;min-height:18px;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeInboxModal()">Close</button>
+      <button class="btn btn-primary" id="ib-submit-btn" onclick="submitInboxImport()">⬇ Import</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ============================================================
 // State
@@ -272,6 +317,140 @@ header span { color: #888; font-size: 0.85rem; }
 let projects   = [];
 let activeProj = null;
 let jobPollTimer = null;
+
+// ============================================================
+// Inbox (bulk import from blob storage)
+// ============================================================
+let ibPresets = {};
+let ibNameEdited = false;
+let ibPollTimer = null;
+
+async function initInbox() {
+  try {
+    const r = await fetch('/api/inbox/config');
+    if ((await r.json()).configured) {
+      document.getElementById('btn-inbox').style.display = '';
+      ibUpdateBadge();
+      setInterval(ibUpdateBadge, 20000);
+    }
+  } catch (e) {}
+}
+
+async function ibUpdateBadge() {
+  try {
+    const jobs = (await (await fetch('/api/inbox/status')).json()).jobs || {};
+    const active = Object.values(jobs).some(j => !j.done);
+    document.getElementById('inbox-badge').style.display = active ? '' : 'none';
+  } catch (e) {}
+}
+
+async function openInboxModal() {
+  document.getElementById('inbox-modal').classList.add('open');
+  ibNameEdited = false;
+  document.getElementById('ib-progress').textContent = '';
+  // destination dropdown: new + existing projects
+  const dest = document.getElementById('ib-dest');
+  dest.innerHTML = '<option value="__new__">➕ new project (named below)</option>'
+    + projects.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+  ibDestChanged();
+  // presets
+  try {
+    ibPresets = (await (await fetch('/api/label-presets')).json()).presets || {};
+  } catch (e) { ibPresets = {}; }
+  const ps = document.getElementById('ib-preset');
+  ps.innerHTML = Object.keys(ibPresets).map(n => `<option>${n}</option>`).join('')
+    + '<option value="__custom__">(custom)</option>';
+  ibPresetChanged();
+  document.getElementById('ib-name').addEventListener('input', () => { ibNameEdited = true; }, { once: true });
+  await ibLoadFolders();
+  ibPollStatus();          // show progress immediately if a job is running
+}
+function closeInboxModal() {
+  document.getElementById('inbox-modal').classList.remove('open');
+  if (ibPollTimer) { clearTimeout(ibPollTimer); ibPollTimer = null; }
+}
+
+async function ibLoadFolders() {
+  const sel = document.getElementById('ib-folder');
+  sel.innerHTML = '<option>loading…</option>';
+  try {
+    const d = await (await fetch('/api/inbox')).json();
+    sel.innerHTML = (d.folders || []).map(f =>
+      `<option value="${f.name}">${f.name}  (${f.files} file${f.files !== 1 ? 's' : ''}, ${(f.bytes/1e6).toFixed(0)} MB)</option>`
+    ).join('') || '<option value="">(inbox is empty)</option>';
+    ibFolderChanged();
+  } catch (e) {
+    sel.innerHTML = `<option value="">(listing failed)</option>`;
+    document.getElementById('ib-progress').textContent = '✕ ' + e.message;
+  }
+}
+
+function ibFolderChanged() {
+  if (ibNameEdited) return;
+  const f = document.getElementById('ib-folder').value;
+  if (f) document.getElementById('ib-name').value = f;
+}
+function ibDestChanged() {
+  const isNew = document.getElementById('ib-dest').value === '__new__';
+  document.getElementById('ib-new-fields').style.display = isNew ? '' : 'none';
+}
+function ibPresetChanged() {
+  const name = document.getElementById('ib-preset').value;
+  if (ibPresets[name]) document.getElementById('ib-labels').value = ibPresets[name].join(' ');
+}
+
+async function submitInboxImport() {
+  const folder = document.getElementById('ib-folder').value;
+  if (!folder) { alert('Pick a folder.'); return; }
+  const destSel = document.getElementById('ib-dest').value;
+  const isNew = destSel === '__new__';
+  const project = isNew ? document.getElementById('ib-name').value.trim() : destSel;
+  if (!project) { alert('Give the new project a name.'); return; }
+  const labels = document.getElementById('ib-labels').value.trim().split(/\s+/).filter(Boolean);
+  const body = { folder, project, create: isNew, labels };
+  const btn = document.getElementById('ib-submit-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/inbox/ingest', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { document.getElementById('ib-progress').textContent = '✕ ' + (d.detail || r.status); btn.disabled = false; return; }
+    document.getElementById('ib-progress').textContent = 'Import started…';
+    ibUpdateBadge();
+    ibPollStatus();
+  } catch (e) {
+    document.getElementById('ib-progress').textContent = '✕ ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function ibPollStatus() {
+  if (ibPollTimer) clearTimeout(ibPollTimer);
+  const el = document.getElementById('ib-progress');
+  try {
+    const jobs = (await (await fetch('/api/inbox/status')).json()).jobs || {};
+    const entries = Object.entries(jobs).sort((a, b) => (b[1].started || 0) - (a[1].started || 0));
+    if (entries.length) {
+      const lines = entries.slice(0, 3).map(([proj, j]) => {
+        if (!j.done) return `⏳ ${proj} ← ${j.folder}: ${j.phase} ${j.file_i}/${j.file_n} (${j.current || ''}) — ${j.pages} pages so far`;
+        const err = j.errors?.length ? ` — ⚠ ${j.errors.length} error(s): ${j.errors[0]}` : '';
+        const skip = j.skipped ? `, ${j.skipped} already present` : '';
+        return `${j.phase === 'failed' ? '✕' : '✓'} ${proj} ← ${j.folder}: ${j.pages} pages${skip}${err}`;
+      });
+      el.innerHTML = lines.join('<br>');
+    }
+    const anyActive = entries.some(([, j]) => !j.done);
+    document.getElementById('ib-submit-btn').disabled = anyActive;
+    if (anyActive && document.getElementById('inbox-modal').classList.contains('open')) {
+      ibPollTimer = setTimeout(ibPollStatus, 2500);
+    } else if (!anyActive && entries.length) {
+      loadProjects();        // page counts changed; new project may exist now
+      ibUpdateBadge();
+    }
+  } catch (e) {}
+}
 
 const STAGE_COLORS = {
   raw:            '#555',
@@ -301,6 +480,7 @@ function errMsg(data) {
 // Boot
 // ============================================================
 loadProjects();
+initInbox();
 
 // Persist the training solver fields so they don't silently reset to their
 // defaults (e.g. iterations back to 2000) when the project view is re-rendered.
