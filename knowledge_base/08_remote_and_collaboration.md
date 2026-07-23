@@ -164,14 +164,18 @@ Linux VM, NOT App Service / Container Apps.
   (config.json `server:` block, now preferably a named profile) — so "cloud
   projects on Azure GPU, local projects on Koren's GPU" needs NO new
   architecture; both coexist by config.
-  - **C3a** (~1 guided session, after T4 quota approval): portal-create
-    `NC4as_T4_v3` (fits the 8-vCPU quota) in westeurope, Ubuntu 24.04 + the
-    NVIDIA GPU driver extension checkbox; install docker + nvidia-container-
-    toolkit; `dedust` user with the webapp VM's pubkey; ONE-TIME copy of the
-    layout-model-training scaffolding (train_net.py, utils/cocosplit.py,
-    configs) + any source-model weights (outputs/<proj>/) from gpu.koren.work;
-    then the app's Build-containers creates dedust-layout there (per-workspace
-    container naming already handles it).
+  - **C3a — DONE 2026-07-23.** `dedust-gpu` = NC4as_T4_v3, westeurope, static
+    IP 4.180.196.43, user dedust, Standard security (NOT Trusted Launch — its
+    Secure Boot can block the NVIDIA kernel module), 128 GB StandardSSD,
+    auto-shutdown 01:00, NVIDIA driver via extension. Scaffolding came from
+    THIS REPO's `gpu_scaffold/` (vendored public scripts) — NOTHING copied
+    from Koren (user boundary); models there train from scratch (public
+    backbone auto-download). Verified end-to-end through the app: containers
+    built, 20-iter smoke training on the T4, model written, train container
+    self-stopped. Profile `azure-gpu` on the user's PC instance. Operating
+    habit: portal Start before GPU jobs, Stop after (~$0.66/hr running,
+    ~$10/mo parked). Gotcha: the size picker pins zone 1 where no T4s live —
+    choose "No infrastructure redundancy required".
   - **C3b** (no code): GPU VM lives DEALLOCATED (~$5/mo disk); portal Start
     before a job (~90 s), Stop after; nightly auto-shutdown as backstop.
   - **C3c** (later, if C3b annoys): managed identity on dedust-vm scoped to
