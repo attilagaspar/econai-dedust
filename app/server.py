@@ -4482,6 +4482,79 @@ def api_job_status(name: str, passphrase: Optional[str] = Query(None)):
 class ImportRequest(BaseModel):
     source_path: str  # local folder or single file path
 
+# ── Blob inbox: self-service bulk import (dashboard 📥 Inbox) ────────────────
+
+class InboxIngestBody(BaseModel):
+    folder:  str
+    project: str
+    create:  bool = False
+    labels:  List[str] = []
+    type:    str = "A"
+
+
+@app.get("/api/inbox/config")
+def api_inbox_config():
+    """Cheap probe: is this instance inbox-enabled? (No Azure call.)"""
+    from app import inbox
+    return {"configured": inbox.configured()}
+
+
+@app.get("/api/inbox")
+def api_inbox_list():
+    """Folders in the inbox container with importable-file counts."""
+    from app import inbox
+    if not inbox.configured():
+        return {"configured": False, "folders": []}
+    try:
+        return {"configured": True, "folders": inbox.list_folders()}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Inbox listing failed: {e}")
+
+
+@app.post("/api/inbox/ingest")
+def api_inbox_ingest(body: InboxIngestBody):
+    """Start a background download+render job: inbox/<folder> → project pages.
+    One active job per project and per folder."""
+    from app import inbox
+    from app.pipeline import create_project
+    if not inbox.configured():
+        raise HTTPException(status_code=400, detail="No inbox configured on this instance")
+    if not inbox.valid_folder(body.folder):
+        raise HTTPException(status_code=400, detail=f"Invalid folder name: {body.folder!r}")
+    busy = inbox.active_job(project=body.project, folder=body.folder)
+    if busy:
+        raise HTTPException(status_code=409,
+                            detail=f"An import for '{busy[0]}' is already running")
+    if body.create:
+        try:
+            create_project(body.project, body.type, body.labels)
+        except (FileExistsError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    pdir = project_dir(body.project)
+    if not pdir.exists():
+        raise HTTPException(status_code=404, detail=f"No project '{body.project}'")
+    job = inbox.start_ingest(body.folder, body.project,
+                             pdir / "annotations", pdir / "sources")
+    return {"ok": True, "job": job}
+
+
+@app.get("/api/inbox/status")
+def api_inbox_status():
+    from app import inbox
+    return {"jobs": inbox.jobs_snapshot()}
+
+
+@app.get("/api/label-presets")
+def api_label_presets():
+    """Named label sets (git-tracked app/label_presets.json) for project
+    creation — shared by every instance via the repo."""
+    p = Path(__file__).parent / "label_presets.json"
+    try:
+        return {"presets": json.loads(p.read_text(encoding="utf-8"))}
+    except Exception:
+        return {"presets": {}}
+
+
 @app.post("/api/project/{name}/import")
 def api_import_pages(name: str, body: ImportRequest):
     """Import PDFs/images from a local path directly — no upload needed."""

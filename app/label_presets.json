@@ -1,0 +1,4 @@
+{
+  "Compass regions": ["firm_header", "text_block", "table_region", "figure", "page_header"],
+  "Table cells": ["table_header", "text_cell", "numerical_cell", "page_header"]
+}
