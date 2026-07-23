@@ -31,6 +31,7 @@ services:
     volumes:
       - ./projects:/app/projects
       - ./authorities:/app/authorities
+      - ./inbox:/app/inbox             # bulk-ingest staging (PDFs pulled from Blob)
       - dedust-data:/data              # LLM response cache
       - easyocr-models:/root/.EasyOCR  # OCR model weights (downloaded once)
       # SSH key for GPU server operations (read-only). Project config.json
