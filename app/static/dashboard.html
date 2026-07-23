@@ -319,6 +319,68 @@ let activeProj = null;
 let jobPollTimer = null;
 
 // ============================================================
+// Label palette (per-project annotation types)
+// ============================================================
+const DEFAULT_REGION_LABELS = ['firm_header', 'text_block', 'table_region', 'figure', 'page_header'];
+
+function lblEffectiveRegions() {
+  const cfg = activeProj?.config || {};
+  return new Set(cfg.region_labels ?? (cfg.labels || []).filter(l => DEFAULT_REGION_LABELS.includes(l)));
+}
+
+function renderLabelChips() {
+  const wrap = document.getElementById('lbl-chips');
+  if (!wrap || !activeProj) return;
+  const regions = lblEffectiveRegions();
+  const labels = activeProj.config.labels || [];
+  wrap.innerHTML = labels.length ? labels.map(l => {
+    const isR = regions.has(l);
+    return `<span style="display:inline-flex;align-items:center;gap:5px;background:#1e1e2e;border:1px solid #3a3a5a;border-radius:12px;padding:3px 9px;font-size:0.8rem;color:#ddd;">
+      <span style="cursor:pointer;color:${isR ? '#7ec8a0' : '#555'};" title="${isR ? 'Region: counts as a page-scale object (grouping, region toggle). Click to unmark.' : 'Not a region. Click to mark as region.'}"
+            onclick="lblSetRegion('${l}', ${!isR})">${isR ? '▣' : '□'}</span>
+      ${l}
+      <span style="cursor:pointer;color:#8a94a6;" title="Rename everywhere (updates every shape already labeled '${l}')" onclick="lblRename('${l}')">✎</span>
+      <span style="cursor:pointer;color:#c05050;" title="Delete (only possible while no shape uses it)" onclick="lblRemove('${l}')">✕</span>
+    </span>`;
+  }).join('') : '<span style="color:#666;font-size:0.8rem;">No labels yet — add the first one below.</span>';
+}
+
+async function _lblCall(body) {
+  const r = await fetch('/api/labels', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ folder: activeProj.annotations_path, ...body }),
+  });
+  const d = await r.json();
+  if (!r.ok) { alert(d.detail || 'Label edit failed'); return null; }
+  activeProj.config.labels = d.labels;
+  if (d.region_labels !== undefined && d.region_labels !== null) activeProj.config.region_labels = d.region_labels;
+  renderLabelChips();
+  return d;
+}
+
+async function lblAdd() {
+  const inp = document.getElementById('lbl-new');
+  const name = inp.value.trim();
+  if (!name) return;
+  const d = await _lblCall({ action: 'add', label: name });
+  if (d) { inp.value = ''; showToast(`Label '${name}' added.`); }
+}
+async function lblRename(oldName) {
+  const newName = prompt(`Rename label '${oldName}' to (updates every existing shape):`, oldName);
+  if (!newName || newName === oldName) return;
+  const d = await _lblCall({ action: 'rename', label: oldName, new_label: newName.trim() });
+  if (d) showToast(`Renamed '${oldName}' → '${newName}' on ${d.shapes_touched} shape(s) across ${d.pages_touched} page(s).`, 5000);
+}
+async function lblRemove(name) {
+  if (!confirm(`Delete label '${name}'? (Refused if any shape still uses it.)`)) return;
+  const d = await _lblCall({ action: 'remove', label: name });
+  if (d) showToast(`Label '${name}' deleted.`);
+}
+async function lblSetRegion(name, isRegion) {
+  await _lblCall({ action: 'set_region', label: name, is_region: isRegion });
+}
+
+// ============================================================
 // Inbox (bulk import from blob storage)
 // ============================================================
 let ibPresets = {};
@@ -559,6 +621,7 @@ async function selectProject(name) {
   localStorage.setItem('lastProject', name);
   renderProjectList(); // re-render sidebar to update active highlight
   renderDetail();
+  renderLabelChips();
   // GPU profile dropdown: populate, and show the profile's settings if used
   await loadGpuProfiles();
   renderGpuProfileDropdown();
@@ -608,6 +671,19 @@ function renderDetail() {
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="openEditor()">📝 Open Editor</button>
         <button class="btn btn-secondary" onclick="advanceStage()">▶ Advance Stage</button>
+      </div>
+    </div>
+
+    <!-- Label palette -->
+    <div class="card">
+      <h3>Labels <small style="color:#666;font-weight:normal;">— the annotation types of this project</small></h3>
+      <div id="lbl-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;"></div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="lbl-new" placeholder="new label (e.g. firm_description)"
+               style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.82rem;flex:1;max-width:280px;"
+               onkeydown="if(event.key==='Enter')lblAdd()">
+        <button class="btn btn-secondary" onclick="lblAdd()">＋ Add</button>
+        <span style="font-size:0.75rem;color:#666;">▣ = region (page-scale object — counts for firm grouping); click it to toggle. ✎ rename (updates every existing shape), ✕ delete (only when unused).</span>
       </div>
     </div>
 
