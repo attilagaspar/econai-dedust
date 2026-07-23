@@ -4482,6 +4482,47 @@ def api_job_status(name: str, passphrase: Optional[str] = Query(None)):
 class ImportRequest(BaseModel):
     source_path: str  # local folder or single file path
 
+# ── Label palette editing (dashboard Labels card + editor "new label…") ─────
+
+class LabelEditBody(BaseModel):
+    folder:    str
+    action:    str                 # add | rename | remove | set_region
+    label:     str
+    new_label: Optional[str] = None
+    is_region: Optional[bool] = None
+
+
+@app.post("/api/labels")
+def api_labels_edit(body: LabelEditBody):
+    """Edit the owning project's label palette from its annotations folder.
+    Renames PROPAGATE to every shape; deletes are refused while in use."""
+    from app import labels as lab
+    from app.regions import REGION_LABELS_DEFAULT
+    ann_dir = _resolve_folder(body.folder)
+    if lab.config_path_for(ann_dir) is None:
+        raise HTTPException(status_code=404,
+                            detail="No project config.json next to this folder — "
+                                   "labels can't be persisted here")
+    try:
+        if body.action == "add":
+            if not lab.valid_label(body.label):
+                raise ValueError(f"Invalid label {body.label!r} — use letters, "
+                                 f"digits, _ . - (no spaces)")
+            return lab.add_label(ann_dir, body.label)
+        if body.action == "rename":
+            if not lab.valid_label(body.new_label or ""):
+                raise ValueError(f"Invalid new label {body.new_label!r}")
+            return lab.rename_label(ann_dir, body.label, body.new_label)
+        if body.action == "remove":
+            return lab.remove_label(ann_dir, body.label)
+        if body.action == "set_region":
+            return lab.set_region_flag(ann_dir, body.label,
+                                       bool(body.is_region), REGION_LABELS_DEFAULT)
+        raise ValueError(f"Unknown action {body.action!r}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ── Blob inbox: self-service bulk import (dashboard 📥 Inbox) ────────────────
 
 class InboxIngestBody(BaseModel):

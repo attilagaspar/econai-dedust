@@ -456,7 +456,8 @@ function updatePanel() {
     const commonLabel=[...selSet].map(i=>pageData.shapes[i]?.label);
     const allSame=commonLabel.every(l=>l===commonLabel[0]);
     staticLbl.style.display='none'; selectLbl.style.display='block';
-    selectLbl.innerHTML=labels.map(l=>`<option value="${l}"${allSame&&l===commonLabel[0]?' selected':''}>${l}</option>`).join('');
+    selectLbl.innerHTML=labels.map(l=>`<option value="${l}"${allSame&&l===commonLabel[0]?' selected':''}>${l}</option>`).join('')
+      + '<option value="__new__">➕ new label…</option>';
     document.getElementById('fg-score').style.display='none';
     document.getElementById('fg-super').style.display='none';
 
@@ -516,7 +517,8 @@ function updatePanel() {
   if (editMode) {
     staticLbl.style.display='none'; selectLbl.style.display='block';
     const labels=[...new Set([...projectLabels, ...(pageData.shapes||[]).map(s=>s.label)])].sort();
-    selectLbl.innerHTML=labels.map(l=>`<option value="${l}"${l===shape.label?' selected':''}>${l}</option>`).join('');
+    selectLbl.innerHTML=labels.map(l=>`<option value="${l}"${l===shape.label?' selected':''}>${l}</option>`).join('')
+      + '<option value="__new__">➕ new label…</option>';
   } else {
     staticLbl.style.display='block'; staticLbl.textContent=shape.label||'—';
     selectLbl.style.display='none';

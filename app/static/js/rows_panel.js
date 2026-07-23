@@ -976,11 +976,38 @@ async function deleteSelectedShape() {
 }
 
 async function changeLabel(newLabel) {
+  if (newLabel === '__new__') {              // "➕ new label…" picked
+    await addProjectLabel(true);
+    return;
+  }
   if (selSet.size === 0) return;
   pushUndo();
   lastUsedLabel = newLabel;
   selSet.forEach(i => { pageData.shapes[i].label = newLabel; });
   await replaceAllShapes();
   drawOverlay();
+}
+
+// Add a label to the project's palette on the fly (persisted to the project
+// config via the server; applied to the current selection when applyToSel).
+async function addProjectLabel(applyToSel) {
+  const name = (prompt('New label name (letters, digits, _ . -; no spaces):') || '').trim();
+  if (!name) { updatePanel(); return; }
+  try {
+    const r = await fetch(`${API}/api/labels`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ folder, action: 'add', label: name }),
+    });
+    const d = await r.json();
+    if (!r.ok) { showToast('✕ ' + (d.detail || r.status), 4000); updatePanel(); return; }
+    projectLabels = d.labels || [...projectLabels, name];
+    showToast(`Label '${name}' added to the project.`);
+  } catch (e) {
+    // no config.json next to this folder — keep it for this session only
+    if (!projectLabels.includes(name)) projectLabels.push(name);
+    showToast(`Label '${name}' added (this session only — no project config found).`, 4000);
+  }
+  if (applyToSel && selSet.size) await changeLabel(name);
+  else updatePanel();
 }
 
