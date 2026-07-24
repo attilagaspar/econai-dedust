@@ -37,9 +37,13 @@ services:
       - ./inbox:/app/inbox             # bulk-ingest staging (PDFs pulled from Blob)
       - dedust-data:/data              # LLM response cache
       - easyocr-models:/root/.EasyOCR  # OCR model weights (downloaded once)
-      # SSH key for GPU server operations (read-only). Project config.json
+      # SSH key for GPU server operations (read-only). Project/profile
       # key_path must then point at /root/.ssh/<keyfile>.
-      - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
+      # NOTE: Docker Compose does NOT expand '~' — SSH_DIR must be an ABSOLUTE
+      # path (e.g. /home/dedust/.ssh). The old '~/.ssh' default silently
+      # mounted nothing, so the key file read back empty ("Unrecognised key
+      # format: ''"). Default kept absolute for the common 'dedust' VM user.
+      - ${SSH_DIR:-/home/dedust/.ssh}:/root/.ssh:ro
     restart: unless-stopped
 
   cloudflared:
