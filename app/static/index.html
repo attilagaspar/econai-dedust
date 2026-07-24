@@ -30,6 +30,7 @@
     <option value="corrected">● corrected</option>
     <option value="verified">✓ verified</option>
     <option value="problem">⚠ problem</option>
+    <option value="skip">⊘ skip (clutter)</option>
   </select>
   <div id="search-wrap" style="display:flex;align-items:center;gap:3px;margin-left:8px;">
     <input id="search-input" type="text" placeholder="search… (Enter)"
@@ -803,6 +804,7 @@
     <div>
       <label class="row" style="margin-bottom:4px;">Operation</label>
       <select id="batch-op" onchange="onBatchOpChange()">
+        <option value="set_status">⊙ Set page status (mark clutter, bulk-verify, …)</option>
         <option value="clear">Clear annotations</option>
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
         <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice + snap + overlaps</option>
@@ -824,6 +826,17 @@
         <option value="auth_lookup">🏛 Authority lookup report (by ID / name list)</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
       </select>
+    </div>
+    <div id="batch-status-opts" style="display:none;">
+      <label class="row" style="margin-bottom:4px;">Set status to</label>
+      <select id="batch-status-value" style="width:100%;">
+        <option value="skip">⊘ skip (clutter — excluded from inference &amp; review)</option>
+        <option value="predicted">● predicted (unreviewed)</option>
+        <option value="corrected">● corrected</option>
+        <option value="verified">✓ verified</option>
+        <option value="problem">⚠ problem</option>
+      </select>
+      <div style="font-size:10px;color:#555;margin-top:3px;">Sets the status on every page in the range below. Does not touch annotations.</div>
     </div>
     <div>
       <label class="row" style="margin-bottom:4px;">Condition <span style="font-size:10px;color:#555;font-weight:400;">(which shapes to process)</span></label>

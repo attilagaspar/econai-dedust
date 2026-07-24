@@ -118,6 +118,7 @@ function closeBatchModal() {
 
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
+  document.getElementById('batch-status-opts').style.display    = op === 'set_status' ? '' : 'none';
   document.getElementById('batch-ol-opts').style.display        = (op === 'overlaps_lattice' || op === 'overlaps_lattice_snap_trim') ? 'flex' : 'none';
   document.getElementById('batch-ocr-opts').style.display = op === 'ocr' ? 'flex' : 'none';
   if (op === 'ocr') _syncBatchOcrCellHeight();
@@ -429,6 +430,27 @@ async function runBatch() {
   if (op === 'ocr') await _syncOcrSettings();
 
   const sorted = [...indices].sort((a, b) => a - b);
+
+  // Set page status: bulk-write flags.status over the range (mark clutter,
+  // bulk-verify a chapter, …). One server call; no annotations touched.
+  if (op === 'set_status') {
+    const stems  = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    const status = document.getElementById('batch-status-value').value;
+    if (!stems.length) { showToast('No pages in range'); return; }
+    if (!confirm(`Set status "${status}" on ${stems.length} page(s)?`)) return;
+    try {
+      const r = await fetch(`${API}/api/pages/status?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ stems, status }),
+      });
+      const d = await r.json();
+      if (!r.ok) { showToast('✕ ' + (d.detail || r.status)); return; }
+      showToast(`Set "${status}" on ${d.changed} page(s).`, 3000);
+      if (pageData) { pageData.flags = pageData.flags || {};
+        if (stems.includes(pages[pageIdx]?.stem)) { pageData.flags.status = status; _syncStatusChip?.(); } }
+    } catch (e) { showToast('✕ ' + (e.message || e)); }
+    return;
+  }
 
   // Authority duplicate / unresolved / lookup report: read-only scan, opens the review table.
   if (op === 'auth_duplicates' || op === 'auth_unresolved' || op === 'auth_lookup') {

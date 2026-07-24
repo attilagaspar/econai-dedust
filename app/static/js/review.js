@@ -21,7 +21,7 @@ function _syncStatusChip() {
   const sel = document.getElementById('page-status');
   if (!sel) return;
   sel.value = (pageData?.flags?.status) || 'predicted';
-  const c = { predicted: '#8a94a6', corrected: '#f0c040', verified: '#22c55e', problem: '#e94560' }[sel.value];
+  const c = { predicted: '#8a94a6', corrected: '#f0c040', verified: '#22c55e', problem: '#e94560', skip: '#6b7280' }[sel.value];
   sel.style.color = c; sel.style.borderColor = c;
 }
 

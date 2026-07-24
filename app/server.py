@@ -3465,15 +3465,46 @@ def api_rows_build(folder: str = Query(...), body: RowsBuildBody = ...):
 
 # ---------------------------------------------------------------------------
 # P3 — page status scoreboard. Status lives in the page's flags.status
-# (predicted | corrected | verified | problem); set via PATCH /api/page/flags.
+# (predicted | corrected | verified | problem | skip); set via PATCH
+# /api/page/flags. "skip" = clutter: excluded from inference and the review
+# queue, and shown as its own bar (not counted as work).
 # ---------------------------------------------------------------------------
+
+class BulkStatusBody(BaseModel):
+    stems:  List[str]
+    status: str
+
+
+_PAGE_STATUSES = ("predicted", "corrected", "verified", "problem", "skip")
+
+
+@app.post("/api/pages/status")
+def api_bulk_set_status(folder: str = Query(...), body: BulkStatusBody = ...):
+    """Set flags.status on many pages at once (batch 'set page status' op).
+    Used to mark clutter ranges 'skip', bulk-verify a finished chapter, etc."""
+    if body.status not in _PAGE_STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown status {body.status!r}; allowed: {_PAGE_STATUSES}")
+    d = _resolve_folder(folder)
+    changed = 0
+    for stem in body.stems:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        with _SHAPE_MERGE_LOCK:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+            data.setdefault("flags", {})["status"] = body.status
+            _write_json(jf, data)
+        changed += 1
+    return {"ok": True, "changed": changed, "status": body.status}
+
 
 @app.get("/api/project/status")
 def api_project_status(folder: str = Query(...)):
     """Per-status page counts for a project's annotation folder — the dashboard
     progress board and the editor's 'next unreviewed page' both read this."""
     d = _resolve_folder(folder)
-    counts = {"predicted": 0, "corrected": 0, "verified": 0, "problem": 0}
+    counts = {"predicted": 0, "corrected": 0, "verified": 0, "problem": 0, "skip": 0}
     pages = []
     for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
         if jf.name.endswith(_RULES_FILENAME):
@@ -3488,7 +3519,11 @@ def api_project_status(folder: str = Query(...)):
         counts[st] += 1
         pages.append({"stem": jf.stem, "status": st,
                       "assignee": flags.get("assignee")})
-    return {"counts": counts, "total": sum(counts.values()), "pages": pages}
+    # "skip" (clutter) is excluded from the work total — it is not part of the
+    # dataset; the dashboard shows it as its own bar. total_work drives the
+    # "how much is left" framing so clutter doesn't inflate the denominator.
+    return {"counts": counts, "total": sum(counts.values()),
+            "total_work": sum(counts.values()) - counts["skip"], "pages": pages}
 
 
 # ---------------------------------------------------------------------------
@@ -3550,7 +3585,10 @@ def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
             data = json.loads(jf.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if body.exclude_verified and (data.get("flags") or {}).get("status") == "verified":
+        _pstatus = (data.get("flags") or {}).get("status")
+        if _pstatus == "skip":                       # clutter is never reviewed
+            continue
+        if body.exclude_verified and _pstatus == "verified":
             continue
         shapes = data.get("shapes", [])
 
@@ -6942,12 +6980,15 @@ def api_apply_predictions(name: str):
     ann_dir  = pdir / "annotations"
     if not pred_dir.exists():
         raise HTTPException(status_code=400, detail="No predictions pulled yet")
-    applied = skipped = 0
+    applied = skipped = skipped_clutter = 0
     for pred_file in pred_dir.glob("*.json"):
         ann_file = ann_dir / pred_file.name
         if not ann_file.exists():
             continue
         ann = _json.loads(ann_file.read_text(encoding="utf-8"))
+        if (ann.get("flags") or {}).get("status") == "skip":   # clutter — never populate
+            skipped_clutter += 1
+            continue
         if ann.get("shapes"):  # already has hand annotations — skip
             skipped += 1
             continue
@@ -6955,7 +6996,8 @@ def api_apply_predictions(name: str):
         ann["shapes"] = pred.get("shapes", [])
         _write_json(ann_file, ann)
         applied += 1
-    return {"applied": applied, "skipped_had_annotations": skipped}
+    return {"applied": applied, "skipped_had_annotations": skipped,
+            "skipped_clutter": skipped_clutter}
 
 
 # ---------------------------------------------------------------------------
