@@ -13,9 +13,15 @@ key file, not a stolen machine).
 """
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 
-_PROFILES_PATH = Path(__file__).parent / "gpu_servers.json"
+# Default lives next to the code (fine for a bare local install). In Docker the
+# code dir is inside the ephemeral image, so a container rebuild would wipe the
+# profiles — set DEDUST_PROFILES_PATH to a file on a VOLUME (e.g.
+# /data/gpu_servers.json) so profiles survive `docker compose up --build`.
+_PROFILES_PATH = Path(os.environ.get("DEDUST_PROFILES_PATH")
+                      or (Path(__file__).parent / "gpu_servers.json"))
 
 FIELDS = ("host", "user", "key_path", "remote_path",
           "predict_remote_path", "passphrase")
@@ -38,6 +44,7 @@ def save(name: str, server: dict) -> dict:
     profiles = load_all()
     clean = {k: v for k, v in server.items() if k in FIELDS and v}
     profiles[name] = clean
+    _PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
     _PROFILES_PATH.write_text(json.dumps(profiles, indent=2, ensure_ascii=False),
                               encoding="utf-8")
     return profiles

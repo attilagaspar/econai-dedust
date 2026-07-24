@@ -31,6 +31,8 @@ services:
       # Blob container for the dashboard's 📥 Inbox (bulk PDF import).
       # Unset = the Inbox button doesn't render. Auth = managed identity.
       DEDUST_INBOX_URL: ${DEDUST_INBOX_URL:-}
+      # GPU-server profiles persisted on a volume (survive container rebuilds).
+      DEDUST_PROFILES_PATH: /data/gpu_servers.json
     volumes:
       - ./projects:/app/projects
       - ./authorities:/app/authorities
