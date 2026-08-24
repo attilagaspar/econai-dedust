@@ -825,6 +825,7 @@
         <option value="auth_unresolved">🏛 Authority unresolved report</option>
         <option value="auth_lookup">🏛 Authority lookup report (by ID / name list)</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
+        <option value="dataset_diagnose">📊 Dataset diagnostics report</option>
       </select>
     </div>
     <div id="batch-status-opts" style="display:none;">
@@ -837,6 +838,12 @@
         <option value="problem">⚠ problem</option>
       </select>
       <div style="font-size:10px;color:#555;margin-top:3px;">Sets the status on every page in the range below. Does not touch annotations.</div>
+    </div>
+    <div id="batch-dataset-opts" style="display:none;">
+      <label class="row" style="margin-bottom:4px;">Dataset declaration</label>
+      <select id="batch-dataset-name" style="width:100%;"></select>
+      <div style="font-size:10px;color:#555;margin-top:3px;">Declarations live in <b>projects/&lt;project&gt;/datasets/*.dataset.json</b>. The report checks structure (columns vs the declaration, slot join), value parsing (dtype), hard min/max and unresolved entities. Read-only: findings are fixed in the report table, then re-run. The page range below further restricts the declaration's own scope.</div>
+      <div id="batch-dataset-info" style="font-size:10px;color:#f87171;margin-top:3px;"></div>
     </div>
     <div>
       <label class="row" style="margin-bottom:4px;">Condition <span style="font-size:10px;color:#555;font-weight:400;">(which shapes to process)</span></label>
@@ -1402,6 +1409,7 @@
 <script src="js/review.js"></script>
 <script src="js/search.js"></script>
 <script src="js/dup_report.js"></script>
+<script src="js/dataset_report.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

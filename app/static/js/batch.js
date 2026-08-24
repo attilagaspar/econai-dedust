@@ -144,6 +144,9 @@ function onBatchOpChange() {
   const isJsonExp = op === 'json_export';
   document.getElementById('batch-jsonexport-opts').style.display = isJsonExp ? 'flex' : 'none';
   if (isJsonExp) _batchPopulateJsonExportLabels();
+  const isDataset = op === 'dataset_diagnose';
+  document.getElementById('batch-dataset-opts').style.display = isDataset ? '' : 'none';
+  if (isDataset) _batchDatasetInit();
 }
 
 // OCR target row height matters only when re-detecting rows from the image
@@ -449,6 +452,17 @@ async function runBatch() {
       if (pageData) { pageData.flags = pageData.flags || {};
         if (stems.includes(pages[pageIdx]?.stem)) { pageData.flags.status = status; _syncStatusChip?.(); } }
     } catch (e) { showToast('✕ ' + (e.message || e)); }
+    return;
+  }
+
+  // Dataset diagnostics: server-side check ladder over the declared dataset,
+  // read-only, opens the findings report. The declaration's own scope
+  // (pattern, page range) governs page selection; the batch page-range field
+  // is passed as an EXTRA restriction (the pattern/parity fields are not —
+  // the declaration's pattern is authoritative).
+  if (op === 'dataset_diagnose') {
+    const name = document.getElementById('batch-dataset-name').value;
+    await runDatasetReport(name, rawPages.trim() || null);
     return;
   }
 
