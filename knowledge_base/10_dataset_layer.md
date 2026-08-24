@@ -58,8 +58,16 @@ Three principles, debated and settled below:
   // What one record is and how multi-slot pages join.
   "record": {
     "unit": "internal_row",        // "internal_row" | "lattice_row"
-    // records of slot 1 and slot 2 pages join positionally:
-    // same (cycle, lattice_row, internal_row_n) = same record
+    // Cross-slot row matching is a property of the DECLARATION, not the
+    // engine (clarified 2026-08-15):
+    //   "positional" (default) — same (cycle, lattice_row, internal_row_n)
+    //                = same record; for books that print one logical table
+    //                across multiple pattern slots (foldbirtok1935 style)
+    //   "keyed"      — match by the key column's value, for books where
+    //                both slots repeat the identifier column
+    // Single-slot datasets (probably most future projects) omit "join"
+    // entirely — the question never arises.
+    "join": "positional",
     "key": { "slot": 1, "column": 2, "dtype": "entity",
              "authority": "places_hu" }
   },
@@ -85,6 +93,12 @@ Three principles, debated and settled below:
 
 Notes:
 
+- **General infrastructure, not a foldbirtok1935 feature**: the declaration
+  format is editor infrastructure like the authority mechanism —
+  foldbirtok1935 is only the first declaration instance, the way `places_hu`
+  is one instance of an authority. Nothing in the schema may assume the
+  two-slot layout of that one book; join semantics live in the declaration
+  precisely so the engine stays project-agnostic.
 - **Slots, not stems**: the mapping is per pattern-slot, so it survives page
   insertion/renumbering, and one declaration covers the whole book. Pages
   whose lattice disagrees with the declaration (missing/extra columns) are
@@ -101,14 +115,17 @@ Notes:
 
 `GET /api/dataset/<name>/build` — assembles records from the page JSONs:
 per cell take the best layer (Human > LLM > OCR), split by internal rows,
-join slots positionally, parse by the declaration. Returns records with full
+join slots per the declaration's join mode, parse by the declaration.
+Returns records with full
 **provenance** per value: `(stem, shape idx, row_i, layer_used)` — that is
 what makes every diagnostic clickable.
 
 `POST /api/dataset/<name>/diagnose` — check ladder, cheap to expensive:
 
 1. **Structure**: pages whose slot has missing/extra columns vs the
-   declaration; rows that fail to join across slots; duplicate/missing keys.
+   declaration; join mismatches — differing row counts across slots under
+   a positional join, key disagreement under a keyed join — surfaced as
+   **loud findings, never a silent wrong join**; duplicate/missing keys.
 2. **Parse**: values that fail their dtype (non-numeric in a numeric
    variable) — in practice a large share of true errors live here.
 3. **Hard constraints**: min/max violations, entity column unresolved.
