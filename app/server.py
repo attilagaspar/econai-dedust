@@ -8215,6 +8215,670 @@ def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
 
 
 # ---------------------------------------------------------------------------
+# Dataset layer — declarations, builder, diagnostics
+# (knowledge_base/10_dataset_layer.md). The page JSONs stay the single source
+# of truth; a dataset is a VIEW assembled on demand from a human-authored
+# declaration at <project>/datasets/<name>.dataset.json.
+# ---------------------------------------------------------------------------
+
+class DatasetParseConv(BaseModel):
+    missing:   List[str] = ["-", "—", "·", ""]
+    thousands: List[str] = [" ", "."]
+    decimal:   str = ","
+
+
+class DatasetScope(BaseModel):
+    labels:  List[str] = []            # shape labels admitted; empty = any lattice cell
+    pattern: str = "1"                 # cyclic 1/0 page pattern; k-th "1" = slot k
+    pages:   Optional[str] = None      # optional 1-indexed page-range restriction
+    tables:  List[int] = [0]           # lattice (table) ids on the page
+
+
+class DatasetKey(BaseModel):
+    slot:      int = 1
+    column:    int                     # super_column, 1-indexed
+    dtype:     str = "entity"
+    authority: Optional[str] = None    # e.g. "places_hu"
+    columns:   Optional[dict] = None   # keyed join: where the identifier column
+                                       # sits on the OTHER slots ({"2": 5});
+                                       # a slot not listed defaults to `column`
+
+
+class DatasetRecordSpec(BaseModel):
+    unit: str = "internal_row"         # "internal_row" | "lattice_row"
+    # Cross-slot row matching is a property of the declaration, not the
+    # engine: "positional" (default) = same (cycle, lattice_row, row_n) is the
+    # same record; "keyed" = match by the key column's value (books where
+    # every slot repeats the identifier column). Single-slot datasets never
+    # consult it. Any join mismatch is a loud structure finding.
+    join: Optional[str] = "positional"
+    key:  DatasetKey
+
+
+class DatasetVariable(BaseModel):
+    name:   str
+    slot:   int = 1
+    column: int
+    dtype:  str = "text"               # "number" | "int" | "text" | "entity"
+    label:  Optional[str] = None       # printed column header, documentation only
+    min:    Optional[float] = None     # hard bounds → diagnostics rung 3
+    max:    Optional[float] = None
+    parse:  Optional[DatasetParseConv] = None   # per-variable override
+
+
+class DatasetDecl(BaseModel):
+    name:      str
+    version:   int = 1
+    scope:     DatasetScope
+    record:    DatasetRecordSpec
+    variables: List[DatasetVariable]
+    parse:     DatasetParseConv = DatasetParseConv()
+
+
+def _datasets_dir(folder: str) -> Path:
+    """Dataset declarations live next to annotations/ at <project>/datasets/."""
+    return _resolve_folder(folder).parent / "datasets"
+
+
+def _ds_pattern_bits(decl: DatasetDecl) -> List[int]:
+    bits = [1 if p.strip() == "1" else 0
+            for p in (decl.scope.pattern or "").split(",") if p.strip() != ""]
+    return bits or [1]
+
+
+def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
+    """Human-readable declaration errors beyond what pydantic types enforce."""
+    probs = []
+    bits = _ds_pattern_bits(decl)
+    n_slots = sum(bits)
+    if n_slots == 0:
+        probs.append("scope.pattern has no '1' page — nothing is ever selected")
+    if decl.record.unit not in ("internal_row", "lattice_row"):
+        probs.append(f"record.unit '{decl.record.unit}' is not internal_row/lattice_row")
+    if decl.record.join not in (None, "positional", "keyed"):
+        probs.append(f"record.join '{decl.record.join}' is not positional/keyed")
+    for sl, c in (decl.record.key.columns or {}).items():
+        try:
+            int(sl), int(c)
+        except (TypeError, ValueError):
+            probs.append(f"record.key.columns: '{sl}': '{c}' is not slot: column")
+    seen = set()
+    for v in decl.variables:
+        if v.name in seen:
+            probs.append(f"variable '{v.name}' is declared twice")
+        seen.add(v.name)
+        if v.dtype not in ("number", "int", "text", "entity"):
+            probs.append(f"variable '{v.name}': unknown dtype '{v.dtype}'")
+        if n_slots and not (1 <= v.slot <= n_slots):
+            probs.append(f"variable '{v.name}': slot {v.slot} outside 1..{n_slots}")
+    if n_slots and not (1 <= decl.record.key.slot <= n_slots):
+        probs.append(f"record.key: slot {decl.record.key.slot} outside 1..{n_slots}")
+    return probs
+
+
+def _ds_load_decl(folder: str, name: str) -> DatasetDecl:
+    f = _datasets_dir(folder) / f"{name}.dataset.json"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail=f"Dataset declaration not found: {f.name}")
+    try:
+        decl = DatasetDecl(**json.loads(f.read_text(encoding="utf-8")))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid declaration {f.name}: {e}")
+    probs = _ds_decl_problems(decl)
+    if probs:
+        raise HTTPException(status_code=400,
+                            detail=f"Declaration {f.name}: " + "; ".join(probs))
+    return decl
+
+
+@app.get("/api/datasets")
+def api_list_datasets(folder: str = Query(...)):
+    """List the project's dataset declarations with a validity summary."""
+    ddir = _datasets_dir(folder)
+    out = []
+    if ddir.exists():
+        for f in sorted(ddir.glob("*.dataset.json")):
+            name = f.name[:-len(".dataset.json")]
+            entry = {"name": name, "file": f.name}
+            try:
+                decl = DatasetDecl(**json.loads(f.read_text(encoding="utf-8")))
+                probs = _ds_decl_problems(decl)
+                entry.update({"variables": len(decl.variables),
+                              "pattern": decl.scope.pattern,
+                              "unit": decl.record.unit})
+                if probs:
+                    entry["error"] = "; ".join(probs)
+            except Exception as e:
+                entry["error"] = str(e)
+            out.append(entry)
+    return {"datasets": out}
+
+
+# ── Value parsing (Hungarian print conventions) ────────────────────────────
+
+def _ds_parse_value(text: str, dtype: str, conv: DatasetParseConv):
+    """Parse one cell/row text by dtype. → (status, value) where status is
+    'missing' | 'ok' | 'error'. Thousands separators are stripped only
+    between digits; the declared decimal mark becomes '.'."""
+    t = (text or "").strip()
+    if not t or t in conv.missing:
+        return "missing", None
+    if dtype in ("text", "entity"):
+        return "ok", t
+    s = t
+    for sep in conv.thousands:
+        if sep:
+            s = re.sub(r"(?<=\d)" + re.escape(sep) + r"(?=\d)", "", s)
+    if conv.decimal and conv.decimal != ".":
+        s = s.replace(conv.decimal, ".")
+    if not re.fullmatch(r"[+-]?\d+(\.\d+)?", s):
+        return "error", None
+    v = float(s)
+    if dtype == "int":
+        if v != int(v):
+            return "error", None
+        return "ok", int(v)
+    return "ok", v
+
+
+# ── Unit extraction (best layer Human > LLM > OCR > PDF) ───────────────────
+
+def _ds_cell_layers(sh: dict) -> dict:
+    return {"human": (sh.get("human_output") or {}).get("human_corrected_text") or "",
+            "llm":   (sh.get("openai_output") or {}).get("response") or "",
+            "ocr":   ((sh.get("tesseract_output") or {}).get("ocr_text")
+                      or (sh.get("easyocr_output") or {}).get("ocr_text") or ""),
+            "pdf":   sh.get("pdf_text") or ""}
+
+
+def _ds_best(layers: dict):
+    for k in ("human", "llm", "ocr", "pdf"):
+        if (layers.get(k) or "").strip():
+            return k, layers[k].strip()
+    return None, ""
+
+
+def _ds_cell_units(idx: int, sh: dict, flat_only: bool) -> List[dict]:
+    """One unit per internal row (or one flat unit). Each carries the four
+    layers, geometry for the crop, and any per-unit authority."""
+    rows = (sh.get("row_struct") or {}).get("rows") or []
+    if rows and not flat_only:
+        return [{"idx": idx, "row_i": ri, "row_n": r.get("n") or ri + 1,
+                 "y0": r.get("y0"), "y1": r.get("y1"),
+                 "blank": bool(r.get("blank")),
+                 "authority": r.get("authority"),
+                 "layers": {"human": r.get("human") or "", "llm": r.get("llm") or "",
+                            "ocr": r.get("ocr") or "", "pdf": r.get("pdf") or ""}}
+                for ri, r in enumerate(rows)]
+    return [{"idx": idx, "row_i": None, "row_n": None, "y0": None, "y1": None,
+             "blank": bool(sh.get("blank")), "authority": sh.get("authority"),
+             "layers": _ds_cell_layers(sh)}]
+
+
+def _ds_page_struct(data: dict, decl: DatasetDecl):
+    """Per table: ordered lattice rows, each a {super_column: (idx, shape)} map.
+    → ({table: {"rows": [(super_row, {col: (idx, sh)})...], "cols": set}}, dups)
+    where dups lists duplicate (table, row, col) cells (annotation errors)."""
+    labels = set(decl.scope.labels or [])
+    tables = set(decl.scope.tables or [0])
+    grid: dict = {}
+    dups = []
+    for i, sh in enumerate(data.get("shapes") or []):
+        sr, sc = sh.get("super_row"), sh.get("super_column")
+        if sr is None or sc is None:
+            continue                                   # lattice cells only
+        tb = sh.get("table") or 0
+        if tb not in tables:
+            continue
+        if labels and sh.get("label") not in labels:
+            continue
+        t = grid.setdefault(tb, {})
+        key = (int(sr), int(sc))
+        if key in t:
+            dups.append({"table": tb, "super_row": int(sr), "super_col": int(sc),
+                         "idx": i})
+            continue                                   # keep the first cell
+        t[key] = (i, sh)
+    out = {}
+    for tb, cells in grid.items():
+        rows_map: dict = {}
+        cols = set()
+        for (sr, sc), v in cells.items():
+            rows_map.setdefault(sr, {})[sc] = v
+            cols.add(sc)
+        out[tb] = {"rows": [(sr, rows_map[sr]) for sr in sorted(rows_map)],
+                   "cols": cols}
+    return out, dups
+
+
+# ── The builder ─────────────────────────────────────────────────────────────
+
+def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
+    """Assemble records from the page JSONs per the declaration.
+
+    Returns (records, findings, stats). Each record's values carry full
+    provenance + the four layer texts (the diagnose report needs them);
+    the build endpoint strips the layers before responding.
+
+    findings: flat list of {check, variable?, stem, idx?, row_i?, row_n?,
+    y0?, y1?, layers?, detail} — the structure rung is emitted here, the
+    parse/constraint rungs are derived from the records by the caller."""
+    jfiles = sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))
+    bits = _ds_pattern_bits(decl)
+    slot_of_pos = {}                                  # position in cycle → slot no.
+    s = 0
+    for pos, b in enumerate(bits):
+        if b:
+            s += 1
+            slot_of_pos[pos] = s
+    n_slots = s
+
+    def _range_pred(spec):
+        ranges = _parse_col_ranges(spec)              # same "1-10,12" syntax, 1-indexed
+        if ranges is None:
+            return lambda i: True
+        return lambda i: any(lo <= i + 1 <= (hi if hi is not None else i + 1)
+                             for lo, hi in ranges)
+    in_decl_range = _range_pred(decl.scope.pages)
+    in_extra_range = _range_pred(extra_pages)
+
+    findings: List[dict] = []
+    key = decl.record.key
+    keyed = decl.record.join == "keyed"
+    flat_only = decl.record.unit == "lattice_row"
+    key_col_of = {}
+    for _sl, _c in (key.columns or {}).items():
+        try:
+            key_col_of[int(_sl)] = int(_c)
+        except (TypeError, ValueError):
+            pass                                    # reported by decl validation
+
+    def _slot_key_col(sl):
+        return key_col_of.get(sl, key.column) if sl != key.slot else key.column
+
+    declared_cols = {sl: set() for sl in range(1, n_slots + 1)}
+    for v in decl.variables:
+        declared_cols[v.slot].add(v.column)
+        if keyed:
+            declared_cols[v.slot].add(_slot_key_col(v.slot))
+    declared_cols.setdefault(key.slot, set()).add(key.column)
+
+    # ── Sweep the book: cycle → slot → page struct ──────────────────────────
+    cycles: dict = {}                                 # cycle → {slot: pagemeta}
+    n_pages_used = 0
+    for i, jf in enumerate(jfiles):
+        pos = i % len(bits)
+        if pos not in slot_of_pos or not (in_decl_range(i) and in_extra_range(i)):
+            continue
+        slot, cycle = slot_of_pos[pos], i // len(bits)
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception as e:
+            findings.append({"check": "structure", "stem": jf.stem,
+                             "detail": f"page JSON unreadable: {e}"})
+            continue
+        if ((data.get("flags") or {}).get("status")) == "skip":
+            findings.append({"check": "structure", "stem": jf.stem,
+                             "detail": f"slot-{slot} page is marked clutter (skip) — "
+                                       "the cycle loses this slot's variables"})
+            continue
+        struct, dups = _ds_page_struct(data, decl)
+        for du in dups:
+            idx = du["idx"]
+            findings.append({"check": "structure", "stem": jf.stem, "idx": idx,
+                             "detail": f"duplicate lattice cell at table {du['table']} "
+                                       f"r{du['super_row']}c{du['super_col']}"})
+        # column presence vs the declaration (per page, per declared table)
+        for tb in decl.scope.tables:
+            cols = struct.get(tb, {}).get("cols", set())
+            if not cols:
+                findings.append({"check": "structure", "stem": jf.stem,
+                                 "detail": f"declared table {tb} has no lattice cells "
+                                           f"on this slot-{slot} page"})
+                continue
+            missing = sorted(declared_cols.get(slot, set()) - cols)
+            extra = sorted(cols - declared_cols.get(slot, set()))
+            if missing:
+                findings.append({"check": "structure", "stem": jf.stem,
+                                 "detail": f"slot {slot} table {tb}: declared column(s) "
+                                           f"{missing} missing on this page"})
+            if extra:
+                findings.append({"check": "structure", "stem": jf.stem,
+                                 "detail": f"slot {slot} table {tb}: undeclared column(s) "
+                                           f"{extra} present (layout drift?)"})
+        cycles.setdefault(cycle, {})[slot] = {"stem": jf.stem, "struct": struct}
+        n_pages_used += 1
+
+    # ── Records: positional join across slots on the key page's rows ────────
+    records: List[dict] = []
+    vars_by_slot: dict = {}
+    for v in decl.variables:
+        vars_by_slot.setdefault(v.slot, []).append(v)
+
+    for cycle in sorted(cycles):
+        slots = cycles[cycle]
+        key_page = slots.get(key.slot)
+        if key_page is None:
+            some = next(iter(slots.values()))
+            findings.append({"check": "structure", "stem": some["stem"],
+                             "detail": f"cycle {cycle}: the key page (slot {key.slot}) "
+                                       "is missing — no records from this cycle"})
+            continue
+        for tb in decl.scope.tables:
+            key_rows = key_page["struct"].get(tb, {}).get("rows", [])
+            mismatched_cells = set()                  # (stem, idx) reported once
+            # positional join: lattice-row count must agree across the slots
+            if not keyed:
+                for sl, pm in slots.items():
+                    if sl == key.slot:
+                        continue
+                    other = pm["struct"].get(tb, {}).get("rows", [])
+                    if other and key_rows and len(other) != len(key_rows):
+                        findings.append({"check": "structure", "stem": pm["stem"],
+                                         "detail": f"cycle {cycle} table {tb}: {len(other)} lattice "
+                                                   f"row(s) here vs {len(key_rows)} on the key page "
+                                                   f"{key_page['stem']} — positional join is unsafe"})
+            # keyed join: index every non-key slot by the identifier column's
+            # folded text. Duplicates make the join ambiguous — loud finding,
+            # never a silent wrong join.
+            slot_lookup: dict = {}                    # sl → fold → entry | "AMBIG"
+            slot_used: dict = {}                      # sl → set of folds matched
+            if keyed:
+                for sl, pm in slots.items():
+                    if sl == key.slot:
+                        continue
+                    kcol = _slot_key_col(sl)
+                    idx_map: dict = {}
+                    for sr2, cols2 in pm["struct"].get(tb, {}).get("rows", []):
+                        kc2 = cols2.get(kcol)
+                        if kc2 is None:
+                            findings.append({"check": "structure", "stem": pm["stem"],
+                                             "detail": f"lattice row r{sr2}: keyed join — the "
+                                                       f"identifier cell (column {kcol}) is missing"})
+                            continue
+                        kunits = _ds_cell_units(kc2[0], kc2[1], flat_only)
+                        m = len(kunits)
+                        col_units = {}
+                        for c2, cell2 in cols2.items():
+                            units2 = _ds_cell_units(cell2[0], cell2[1], flat_only)
+                            if len(units2) == m:
+                                col_units[c2] = units2
+                            elif (pm["stem"], cell2[0]) not in mismatched_cells:
+                                mismatched_cells.add((pm["stem"], cell2[0]))
+                                findings.append({
+                                    "check": "structure", "stem": pm["stem"], "idx": cell2[0],
+                                    "detail": f"{len(units2)} internal row(s) vs {m} in the "
+                                              f"identifier cell — rows do not join"})
+                        for u_j, ku2 in enumerate(kunits):
+                            _kl, kt2 = _ds_best(ku2["layers"])
+                            f2 = _auth_fold(kt2) if kt2.strip() else ""
+                            if not f2 or ku2["blank"] or kt2 in decl.parse.missing:
+                                continue
+                            if f2 in idx_map:
+                                idx_map[f2] = "AMBIG"
+                                findings.append({"check": "structure", "stem": pm["stem"],
+                                                 "idx": kc2[0], "row_i": ku2["row_i"],
+                                                 "row_n": ku2["row_n"],
+                                                 "detail": f"key '{kt2}' appears more than once on "
+                                                           f"this slot-{sl} page — keyed join is ambiguous"})
+                                continue
+                            idx_map[f2] = {"cols": {c2: us[u_j] for c2, us in col_units.items()},
+                                           "text": kt2, "stem": pm["stem"], "idx": kc2[0],
+                                           "row_i": ku2["row_i"], "row_n": ku2["row_n"],
+                                           "y0": ku2["y0"], "y1": ku2["y1"],
+                                           "layers": ku2["layers"]}
+                    slot_lookup[sl] = idx_map
+                    slot_used[sl] = set()
+            nokey_reported = set()                    # (sl, fold) reported once
+            for rank, (sr, key_cols) in enumerate(key_rows):
+                kc = key_cols.get(key.column)
+                if kc is None:
+                    findings.append({"check": "structure", "stem": key_page["stem"],
+                                     "detail": f"lattice row r{sr}: key cell "
+                                               f"(column {key.column}) is missing"})
+                    continue
+                key_units = _ds_cell_units(kc[0], kc[1], flat_only)
+                n = len(key_units)
+                for u_i, ku in enumerate(key_units):
+                    layer, ktext = _ds_best(ku["layers"])
+                    rec = {"cycle": cycle, "table": tb, "lattice_row": sr,
+                           "row_rank": rank, "unit_i": u_i,
+                           "key": {"text": ktext, "layer": layer,
+                                   "blank": ku["blank"],
+                                   "id": (ku.get("authority") or {}).get("id"),
+                                   "name": (ku.get("authority") or {}).get("name"),
+                                   "stem": key_page["stem"], "idx": ku["idx"],
+                                   "row_i": ku["row_i"], "row_n": ku["row_n"],
+                                   "y0": ku["y0"], "y1": ku["y1"],
+                                   "layers": ku["layers"]},
+                           "values": {}}
+                    kfold = _auth_fold(ktext) if ktext.strip() else ""
+                    for sl, vs in vars_by_slot.items():
+                        pm = slots.get(sl)
+                        rowmap = None
+                        keyed_entry = None            # keyed join: this slot's row
+                        if keyed and sl != key.slot:
+                            keyed_entry = slot_lookup.get(sl, {}).get(kfold) if kfold else None
+                            if keyed_entry is not None:
+                                slot_used.get(sl, set()).add(kfold)
+                            elif (pm is not None and kfold
+                                  and (sl, kfold) not in nokey_reported):
+                                nokey_reported.add((sl, kfold))
+                                findings.append({"check": "structure", "stem": pm["stem"],
+                                                 "detail": f"keyed join: no row with key "
+                                                           f"'{ktext}' on the slot-{sl} page"})
+                        elif pm is not None:
+                            rows_l = pm["struct"].get(tb, {}).get("rows", [])
+                            if rank < len(rows_l):
+                                rowmap = rows_l[rank][1]
+                        for var in vs:
+                            val = {"status": "missing", "value": None, "text": "",
+                                   "layer": None, "stem": pm["stem"] if pm else None,
+                                   "idx": None, "row_i": None, "row_n": None,
+                                   "y0": None, "y1": None, "layers": None}
+                            rec["values"][var.name] = val
+                            u = None
+                            if keyed and sl != key.slot:
+                                if keyed_entry is None or keyed_entry == "AMBIG":
+                                    val["status"] = "absent"   # reported above
+                                    continue
+                                u = keyed_entry["cols"].get(var.column)
+                                if u is None:
+                                    val["status"] = "absent"   # column missing / row mismatch
+                                    continue
+                            else:
+                                if rowmap is None:
+                                    val["status"] = "absent"   # page/row gone — reported above
+                                    continue
+                                cell = rowmap.get(var.column)
+                                if cell is None:
+                                    val["status"] = "absent"   # column missing — reported above
+                                    continue
+                                units = _ds_cell_units(cell[0], cell[1], flat_only)
+                                if len(units) != n:
+                                    if (pm["stem"], cell[0]) not in mismatched_cells:
+                                        mismatched_cells.add((pm["stem"], cell[0]))
+                                        findings.append({
+                                            "check": "structure", "stem": pm["stem"],
+                                            "idx": cell[0], "variable": var.name,
+                                            "detail": f"{len(units)} internal row(s) vs {n} in the "
+                                                      f"key cell — rows do not join"})
+                                    val["status"] = "absent"
+                                    continue
+                                u = units[u_i]
+                            layer2, text2 = _ds_best(u["layers"])
+                            conv = var.parse or decl.parse
+                            status, parsed = ("missing", None) if u["blank"] \
+                                else _ds_parse_value(text2, var.dtype, conv)
+                            val.update({"status": status, "value": parsed,
+                                        "text": text2, "layer": layer2,
+                                        "idx": u["idx"], "row_i": u["row_i"],
+                                        "row_n": u["row_n"], "y0": u["y0"],
+                                        "y1": u["y1"], "layers": u["layers"],
+                                        "authority": u.get("authority")})
+                    records.append(rec)
+            # keyed join: slot rows whose key matches NO key-page record
+            for sl, idx_map in slot_lookup.items():
+                for f2, entry in idx_map.items():
+                    if entry == "AMBIG" or f2 in slot_used.get(sl, set()):
+                        continue
+                    findings.append({"check": "structure", "stem": entry["stem"],
+                                     "idx": entry["idx"], "row_i": entry["row_i"],
+                                     "row_n": entry["row_n"],
+                                     "detail": f"keyed join: slot-{sl} row '{entry['text']}' "
+                                               f"matches no row on the key page"})
+
+    stats = {"pages": n_pages_used, "cycles": len(cycles), "records": len(records),
+             "slots": n_slots}
+    return records, findings, stats
+
+
+def _ds_prov(v: dict) -> dict:
+    return {k: v.get(k) for k in ("stem", "idx", "row_i", "row_n", "layer")}
+
+
+@app.get("/api/dataset/{name}/build")
+def api_dataset_build(name: str, folder: str = Query(...),
+                      offset: int = Query(0, ge=0),
+                      limit: int = Query(1000, ge=1, le=100000)):
+    """Assemble the declared dataset from the page JSONs (a view — nothing is
+    written). Values carry provenance; layer texts are stripped for size."""
+    d = _resolve_folder(folder)
+    decl = _ds_load_decl(folder, name)
+    records, findings, stats = _ds_build(d, decl)
+    out = []
+    for rec in records[offset:offset + limit]:
+        r = {"cycle": rec["cycle"], "table": rec["table"],
+             "lattice_row": rec["lattice_row"], "unit_i": rec["unit_i"],
+             "key": {k: rec["key"].get(k) for k in
+                     ("text", "id", "name", "layer", "stem", "idx", "row_i", "row_n")},
+             "values": {vn: {"value": v["value"], "text": v["text"],
+                             "status": v["status"], **_ds_prov(v)}
+                        for vn, v in rec["values"].items()}}
+        out.append(r)
+    return {"dataset": name, "pages": stats["pages"], "cycles": stats["cycles"],
+            "slots": stats["slots"], "n_records": stats["records"],
+            "offset": offset, "returned": len(out),
+            "structure_findings": len(findings), "records": out}
+
+
+class DatasetDiagnoseBody(BaseModel):
+    pages: Optional[str] = None        # extra 1-indexed page-range restriction
+
+
+_DS_MAX_ITEMS = 3000                   # payload cap, like the duplicate report
+
+
+@app.post("/api/dataset/{name}/diagnose")
+def api_dataset_diagnose(name: str, folder: str = Query(...),
+                         body: DatasetDiagnoseBody = ...):
+    """Run the check ladder over the declared dataset:
+    1. structure — pages/cells that disagree with the declaration
+    2. parse     — values that fail their dtype
+    3. hard constraints — min/max violations, unresolved entity cells,
+                          duplicate/missing keys
+    Findings are grouped check → variable in the duplicate-report item shape,
+    so the client renders them in the existing report chassis."""
+    d = _resolve_folder(folder)
+    decl = _ds_load_decl(folder, name)
+    records, findings, stats = _ds_build(d, decl, extra_pages=body.pages)
+    key = decl.record.key
+
+    def item_from_value(v, extra=None):
+        it = {"stem": v.get("stem"), "idx": v.get("idx"), "row_i": v.get("row_i"),
+              "row_n": v.get("row_n"), "y0": v.get("y0"), "y1": v.get("y1")}
+        L = v.get("layers") or {}
+        it.update({"pdf": (L.get("pdf") or "")[:300], "ocr": (L.get("ocr") or "")[:300],
+                   "llm": (L.get("llm") or "")[:300], "human": L.get("human") or ""})
+        if extra:
+            it.update(extra)
+        return it
+
+    groups: dict = {}                  # (check, variable or "") → group
+    # a declared variable sitting on the key position reports unresolved
+    # entities under its own name — don't double-report at the key level
+    key_has_var = any(v.slot == key.slot and v.column == key.column
+                      and v.dtype == "entity" for v in decl.variables)
+
+    def _num(x):
+        return int(x) if isinstance(x, float) and x == int(x) else x
+
+    def add(check, variable, title, item):
+        g = groups.setdefault((check, variable or ""), {
+            "check": check, "variable": variable, "title": title, "items": []})
+        g["items"].append(item)
+
+    # 1 — structure (from the builder)
+    for f in findings:
+        add("structure", f.get("variable"),
+            "Pages / cells that disagree with the declaration",
+            {"stem": f["stem"], "idx": f.get("idx"), "row_i": f.get("row_i"),
+             "row_n": f.get("row_n"), "y0": None, "y1": None,
+             "pdf": "", "ocr": "", "llm": "", "human": "",
+             "detail": f["detail"]})
+
+    # 2 & 3 — per-value checks over the assembled records
+    key_seen: dict = {}
+    for rec in records:
+        k = rec["key"]
+        ktext = (k.get("text") or "").strip()
+        conv = decl.parse
+        if not ktext and not k.get("blank"):
+            add("key", None, "Records with an empty key cell",
+                item_from_value(k, {"detail": "key text is empty"}))
+        elif ktext and ktext not in conv.missing:
+            ident = k.get("id") or ("~" + _auth_fold(ktext))
+            key_seen.setdefault(ident, []).append(rec)
+            if key.dtype == "entity" and not k.get("id") and not key_has_var:
+                add("unresolved", None, "Key cells with no resolved entity",
+                    item_from_value(k, {"detail": f"'{ktext}' unresolved"}))
+        for var in decl.variables:
+            v = rec["values"][var.name]
+            if v["status"] == "error":
+                add("parse", var.name,
+                    f"{var.name}: values that fail dtype {var.dtype}",
+                    item_from_value(v, {"detail": f"'{v['text']}' is not a {var.dtype}"}))
+            elif v["status"] == "ok":
+                if var.dtype in ("number", "int"):
+                    if var.min is not None and v["value"] < var.min:
+                        add("range", var.name, f"{var.name}: below min {_num(var.min)}",
+                            item_from_value(v, {"detail": f"{_num(v['value'])} < {_num(var.min)}"}))
+                    elif var.max is not None and v["value"] > var.max:
+                        add("range", var.name, f"{var.name}: above max {_num(var.max)}",
+                            item_from_value(v, {"detail": f"{_num(v['value'])} > {_num(var.max)}"}))
+                elif var.dtype == "entity" and not (v.get("authority") or {}).get("id"):
+                    add("unresolved", var.name,
+                        f"{var.name}: cells with no resolved entity",
+                        item_from_value(v, {"detail": f"'{v['text']}' unresolved"}))
+
+    for ident, recs in key_seen.items():
+        if len(recs) > 1:
+            for rec in recs:
+                add("duplicate_key", None,
+                    "The same key appears in more than one record",
+                    item_from_value(rec["key"],
+                                    {"detail": f"'{rec['key'].get('name') or rec['key'].get('text')}' "
+                                               f"× {len(recs)}"}))
+
+    order = {"structure": 0, "parse": 1, "range": 2, "unresolved": 3,
+             "key": 4, "duplicate_key": 5}
+    out = sorted(groups.values(),
+                 key=lambda g: (order.get(g["check"], 9), g["variable"] or ""))
+    total = sum(len(g["items"]) for g in out)
+    truncated = False
+    kept, n_items = [], 0
+    for g in out:
+        g["count"] = len(g["items"])
+        if n_items + g["count"] > _DS_MAX_ITEMS:
+            g["items"] = g["items"][:max(0, _DS_MAX_ITEMS - n_items)]
+            truncated = True
+        n_items += len(g["items"])
+        kept.append(g)
+    return {"dataset": name, **stats, "findings_total": total,
+            "truncated": truncated, "groups": kept}
+
+
+# ---------------------------------------------------------------------------
 # Root — redirect to dashboard
 # ---------------------------------------------------------------------------
 
