@@ -8549,11 +8549,30 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
         cycles.setdefault(cycle, {})[slot] = {"stem": jf.stem, "struct": struct}
         n_pages_used += 1
 
-    # ── Records: positional join across slots on the key page's rows ────────
+    # ── Records: join per column SEQUENCE, not per lattice band ─────────────
+    # Reality check (foldbirtok1935, 2026-08-24): the printed lattice bands
+    # (county blocks) are segmented differently on the two pages of a pair —
+    # 6 bands on the slot-1 page vs 3 on the slot-2 page — while the internal
+    # rows run continuously down both. The join unit is therefore the
+    # page-level sequence of internal rows per column (reading order across
+    # bands); the lattice band is provenance only. A column whose sequence
+    # length disagrees with the key column's is NOT joined — loud finding.
     records: List[dict] = []
     vars_by_slot: dict = {}
     for v in decl.variables:
         vars_by_slot.setdefault(v.slot, []).append(v)
+
+    def _col_seq(pm, tb, col):
+        """A column's internal-row units concatenated across the page's
+        lattice bands in reading order, each unit tagged with its band."""
+        seq = []
+        for sr, cols in pm["struct"].get(tb, {}).get("rows", []):
+            cell = cols.get(col)
+            if cell is None:
+                continue                    # band gap → length mismatch below
+            for u in _ds_cell_units(cell[0], cell[1], flat_only):
+                seq.append(dict(u, lattice_row=sr))
+        return seq
 
     for cycle in sorted(cycles):
         slots = cycles[cycle]
@@ -8565,19 +8584,43 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                        "is missing — no records from this cycle"})
             continue
         for tb in decl.scope.tables:
-            key_rows = key_page["struct"].get(tb, {}).get("rows", [])
-            mismatched_cells = set()                  # (stem, idx) reported once
-            # positional join: lattice-row count must agree across the slots
-            if not keyed:
-                for sl, pm in slots.items():
-                    if sl == key.slot:
+            key_seq = _col_seq(key_page, tb, key.column)
+            n = len(key_seq)
+            if not n:
+                if key_page["struct"].get(tb):
+                    findings.append({"check": "structure", "stem": key_page["stem"],
+                                     "detail": f"table {tb}: the key column "
+                                               f"({key.column}) has no rows on this page"})
+                continue
+
+            # positional join: every needed column's sequence, validated
+            # against the key sequence's length. Under a keyed join only the
+            # key slot's own columns join positionally (same physical rows).
+            col_seqs: dict = {}                       # (sl, column) → seq | None
+            for sl, vs in vars_by_slot.items():
+                if keyed and sl != key.slot:
+                    continue
+                pm = slots.get(sl)
+                for c in {v.column for v in vs}:
+                    if sl == key.slot and c == key.column:
+                        col_seqs[(sl, c)] = key_seq
                         continue
-                    other = pm["struct"].get(tb, {}).get("rows", [])
-                    if other and key_rows and len(other) != len(key_rows):
+                    if pm is None:
+                        col_seqs[(sl, c)] = None  # slot page gone — reported
+                        continue
+                    seq = _col_seq(pm, tb, c)
+                    if not seq:
+                        col_seqs[(sl, c)] = None  # column missing — reported
+                    elif len(seq) != n:
+                        col_seqs[(sl, c)] = None
                         findings.append({"check": "structure", "stem": pm["stem"],
-                                         "detail": f"cycle {cycle} table {tb}: {len(other)} lattice "
-                                                   f"row(s) here vs {len(key_rows)} on the key page "
-                                                   f"{key_page['stem']} — positional join is unsafe"})
+                                         "idx": seq[0]["idx"],
+                                         "detail": f"column {c}: {len(seq)} internal row(s) "
+                                                   f"vs {n} in the key column — rows do "
+                                                   f"not join"})
+                    else:
+                        col_seqs[(sl, c)] = seq
+
             # keyed join: index every non-key slot by the identifier column's
             # folded text. Duplicates make the join ambiguous — loud finding,
             # never a silent wrong join.
@@ -8588,135 +8631,109 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                     if sl == key.slot:
                         continue
                     kcol = _slot_key_col(sl)
-                    idx_map: dict = {}
-                    for sr2, cols2 in pm["struct"].get(tb, {}).get("rows", []):
-                        kc2 = cols2.get(kcol)
-                        if kc2 is None:
+                    id_seq = _col_seq(pm, tb, kcol)
+                    if not id_seq:
+                        findings.append({"check": "structure", "stem": pm["stem"],
+                                         "detail": f"keyed join: the identifier column "
+                                                   f"({kcol}) has no rows on this slot-{sl} page"})
+                        slot_lookup[sl] = {}
+                        slot_used[sl] = set()
+                        continue
+                    m = len(id_seq)
+                    cols_here = {v.column for v in vars_by_slot.get(sl, [])}
+                    col_here_seqs = {}
+                    for c in cols_here:
+                        seq = _col_seq(pm, tb, c)
+                        if seq and len(seq) == m:
+                            col_here_seqs[c] = seq
+                        elif seq:
                             findings.append({"check": "structure", "stem": pm["stem"],
-                                             "detail": f"lattice row r{sr2}: keyed join — the "
-                                                       f"identifier cell (column {kcol}) is missing"})
+                                             "idx": seq[0]["idx"],
+                                             "detail": f"column {c}: {len(seq)} internal row(s) "
+                                                       f"vs {m} in the identifier column — rows "
+                                                       f"do not join"})
+                    idx_map: dict = {}
+                    for u_j, ku2 in enumerate(id_seq):
+                        _kl, kt2 = _ds_best(ku2["layers"])
+                        f2 = _auth_fold(kt2) if kt2.strip() else ""
+                        if not f2 or ku2["blank"] or kt2 in decl.parse.missing:
                             continue
-                        kunits = _ds_cell_units(kc2[0], kc2[1], flat_only)
-                        m = len(kunits)
-                        col_units = {}
-                        for c2, cell2 in cols2.items():
-                            units2 = _ds_cell_units(cell2[0], cell2[1], flat_only)
-                            if len(units2) == m:
-                                col_units[c2] = units2
-                            elif (pm["stem"], cell2[0]) not in mismatched_cells:
-                                mismatched_cells.add((pm["stem"], cell2[0]))
-                                findings.append({
-                                    "check": "structure", "stem": pm["stem"], "idx": cell2[0],
-                                    "detail": f"{len(units2)} internal row(s) vs {m} in the "
-                                              f"identifier cell — rows do not join"})
-                        for u_j, ku2 in enumerate(kunits):
-                            _kl, kt2 = _ds_best(ku2["layers"])
-                            f2 = _auth_fold(kt2) if kt2.strip() else ""
-                            if not f2 or ku2["blank"] or kt2 in decl.parse.missing:
-                                continue
-                            if f2 in idx_map:
-                                idx_map[f2] = "AMBIG"
-                                findings.append({"check": "structure", "stem": pm["stem"],
-                                                 "idx": kc2[0], "row_i": ku2["row_i"],
-                                                 "row_n": ku2["row_n"],
-                                                 "detail": f"key '{kt2}' appears more than once on "
-                                                           f"this slot-{sl} page — keyed join is ambiguous"})
-                                continue
-                            idx_map[f2] = {"cols": {c2: us[u_j] for c2, us in col_units.items()},
-                                           "text": kt2, "stem": pm["stem"], "idx": kc2[0],
-                                           "row_i": ku2["row_i"], "row_n": ku2["row_n"],
-                                           "y0": ku2["y0"], "y1": ku2["y1"],
-                                           "layers": ku2["layers"]}
+                        if f2 in idx_map:
+                            idx_map[f2] = "AMBIG"
+                            findings.append({"check": "structure", "stem": pm["stem"],
+                                             "idx": ku2["idx"], "row_i": ku2["row_i"],
+                                             "row_n": ku2["row_n"],
+                                             "detail": f"key '{kt2}' appears more than once on "
+                                                       f"this slot-{sl} page — keyed join is ambiguous"})
+                            continue
+                        idx_map[f2] = {"cols": {c: seq[u_j] for c, seq in col_here_seqs.items()},
+                                       "text": kt2, "stem": pm["stem"], "idx": ku2["idx"],
+                                       "row_i": ku2["row_i"], "row_n": ku2["row_n"],
+                                       "y0": ku2["y0"], "y1": ku2["y1"],
+                                       "layers": ku2["layers"]}
                     slot_lookup[sl] = idx_map
                     slot_used[sl] = set()
             nokey_reported = set()                    # (sl, fold) reported once
-            for rank, (sr, key_cols) in enumerate(key_rows):
-                kc = key_cols.get(key.column)
-                if kc is None:
-                    findings.append({"check": "structure", "stem": key_page["stem"],
-                                     "detail": f"lattice row r{sr}: key cell "
-                                               f"(column {key.column}) is missing"})
-                    continue
-                key_units = _ds_cell_units(kc[0], kc[1], flat_only)
-                n = len(key_units)
-                for u_i, ku in enumerate(key_units):
-                    layer, ktext = _ds_best(ku["layers"])
-                    rec = {"cycle": cycle, "table": tb, "lattice_row": sr,
-                           "row_rank": rank, "unit_i": u_i,
-                           "key": {"text": ktext, "layer": layer,
-                                   "blank": ku["blank"],
-                                   "id": (ku.get("authority") or {}).get("id"),
-                                   "name": (ku.get("authority") or {}).get("name"),
-                                   "stem": key_page["stem"], "idx": ku["idx"],
-                                   "row_i": ku["row_i"], "row_n": ku["row_n"],
-                                   "y0": ku["y0"], "y1": ku["y1"],
-                                   "layers": ku["layers"]},
-                           "values": {}}
-                    kfold = _auth_fold(ktext) if ktext.strip() else ""
-                    for sl, vs in vars_by_slot.items():
-                        pm = slots.get(sl)
-                        rowmap = None
-                        keyed_entry = None            # keyed join: this slot's row
+
+            for u_i, ku in enumerate(key_seq):
+                layer, ktext = _ds_best(ku["layers"])
+                rec = {"cycle": cycle, "table": tb,
+                       "lattice_row": ku.get("lattice_row"), "unit_i": u_i,
+                       "key": {"text": ktext, "layer": layer,
+                               "blank": ku["blank"],
+                               "id": (ku.get("authority") or {}).get("id"),
+                               "name": (ku.get("authority") or {}).get("name"),
+                               "stem": key_page["stem"], "idx": ku["idx"],
+                               "row_i": ku["row_i"], "row_n": ku["row_n"],
+                               "y0": ku["y0"], "y1": ku["y1"],
+                               "layers": ku["layers"]},
+                       "values": {}}
+                kfold = _auth_fold(ktext) if ktext.strip() else ""
+                for sl, vs in vars_by_slot.items():
+                    pm = slots.get(sl)
+                    keyed_entry = None                # keyed join: this slot's row
+                    if keyed and sl != key.slot:
+                        keyed_entry = slot_lookup.get(sl, {}).get(kfold) if kfold else None
+                        if keyed_entry is not None:
+                            slot_used.get(sl, set()).add(kfold)
+                        elif (pm is not None and kfold
+                              and (sl, kfold) not in nokey_reported):
+                            nokey_reported.add((sl, kfold))
+                            findings.append({"check": "structure", "stem": pm["stem"],
+                                             "detail": f"keyed join: no row with key "
+                                                       f"'{ktext}' on the slot-{sl} page"})
+                    for var in vs:
+                        val = {"status": "missing", "value": None, "text": "",
+                               "layer": None, "stem": pm["stem"] if pm else None,
+                               "idx": None, "row_i": None, "row_n": None,
+                               "y0": None, "y1": None, "layers": None}
+                        rec["values"][var.name] = val
+                        u = None
                         if keyed and sl != key.slot:
-                            keyed_entry = slot_lookup.get(sl, {}).get(kfold) if kfold else None
-                            if keyed_entry is not None:
-                                slot_used.get(sl, set()).add(kfold)
-                            elif (pm is not None and kfold
-                                  and (sl, kfold) not in nokey_reported):
-                                nokey_reported.add((sl, kfold))
-                                findings.append({"check": "structure", "stem": pm["stem"],
-                                                 "detail": f"keyed join: no row with key "
-                                                           f"'{ktext}' on the slot-{sl} page"})
-                        elif pm is not None:
-                            rows_l = pm["struct"].get(tb, {}).get("rows", [])
-                            if rank < len(rows_l):
-                                rowmap = rows_l[rank][1]
-                        for var in vs:
-                            val = {"status": "missing", "value": None, "text": "",
-                                   "layer": None, "stem": pm["stem"] if pm else None,
-                                   "idx": None, "row_i": None, "row_n": None,
-                                   "y0": None, "y1": None, "layers": None}
-                            rec["values"][var.name] = val
-                            u = None
-                            if keyed and sl != key.slot:
-                                if keyed_entry is None or keyed_entry == "AMBIG":
-                                    val["status"] = "absent"   # reported above
-                                    continue
-                                u = keyed_entry["cols"].get(var.column)
-                                if u is None:
-                                    val["status"] = "absent"   # column missing / row mismatch
-                                    continue
-                            else:
-                                if rowmap is None:
-                                    val["status"] = "absent"   # page/row gone — reported above
-                                    continue
-                                cell = rowmap.get(var.column)
-                                if cell is None:
-                                    val["status"] = "absent"   # column missing — reported above
-                                    continue
-                                units = _ds_cell_units(cell[0], cell[1], flat_only)
-                                if len(units) != n:
-                                    if (pm["stem"], cell[0]) not in mismatched_cells:
-                                        mismatched_cells.add((pm["stem"], cell[0]))
-                                        findings.append({
-                                            "check": "structure", "stem": pm["stem"],
-                                            "idx": cell[0], "variable": var.name,
-                                            "detail": f"{len(units)} internal row(s) vs {n} in the "
-                                                      f"key cell — rows do not join"})
-                                    val["status"] = "absent"
-                                    continue
-                                u = units[u_i]
-                            layer2, text2 = _ds_best(u["layers"])
-                            conv = var.parse or decl.parse
-                            status, parsed = ("missing", None) if u["blank"] \
-                                else _ds_parse_value(text2, var.dtype, conv)
-                            val.update({"status": status, "value": parsed,
-                                        "text": text2, "layer": layer2,
-                                        "idx": u["idx"], "row_i": u["row_i"],
-                                        "row_n": u["row_n"], "y0": u["y0"],
-                                        "y1": u["y1"], "layers": u["layers"],
-                                        "authority": u.get("authority")})
-                    records.append(rec)
+                            if keyed_entry is None or keyed_entry == "AMBIG":
+                                val["status"] = "absent"   # reported above
+                                continue
+                            u = keyed_entry["cols"].get(var.column)
+                            if u is None:
+                                val["status"] = "absent"   # column missing / misjoin
+                                continue
+                        else:
+                            seq = col_seqs.get((sl, var.column))
+                            if seq is None:
+                                val["status"] = "absent"   # reported above
+                                continue
+                            u = seq[u_i]
+                        layer2, text2 = _ds_best(u["layers"])
+                        conv = var.parse or decl.parse
+                        status, parsed = ("missing", None) if u["blank"] \
+                            else _ds_parse_value(text2, var.dtype, conv)
+                        val.update({"status": status, "value": parsed,
+                                    "text": text2, "layer": layer2,
+                                    "idx": u["idx"], "row_i": u["row_i"],
+                                    "row_n": u["row_n"], "y0": u["y0"],
+                                    "y1": u["y1"], "layers": u["layers"],
+                                    "authority": u.get("authority")})
+                records.append(rec)
             # keyed join: slot rows whose key matches NO key-page record
             for sl, idx_map in slot_lookup.items():
                 for f2, entry in idx_map.items():

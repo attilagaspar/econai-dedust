@@ -205,6 +205,49 @@ def test_unknown_dataset_404(client, ds_folder):
     assert r.status_code == 404
 
 
+def test_join_survives_different_lattice_banding(client, tmp_path):
+    """foldbirtok1935 reality (2026-08-24): the county bands are segmented
+    differently on the two pages of a pair (e.g. 2 bands vs 1) while the
+    internal rows run continuously. The join is per column SEQUENCE, so this
+    must produce clean records, not findings."""
+    ann = tmp_path / "proj" / "annotations"
+    ann.mkdir(parents=True)
+    dsd = tmp_path / "proj" / "datasets"
+    dsd.mkdir()
+    decl = dict(DECL, name="banded",
+                variables=[v for v in DECL["variables"] if v["slot"] == 1
+                           or v["name"] == "n_tractors"])
+    (dsd / "banded.dataset.json").write_text(json.dumps(decl), encoding="utf-8")
+
+    def page(stem, shapes):
+        (ann / f"{stem}.json").write_text(json.dumps(
+            {"shapes": shapes, "flags": {}, "imagePath": f"{stem}.jpg",
+             "imageWidth": 900, "imageHeight": 500}), encoding="utf-8")
+        Image.new("RGB", (900, 500), "white").save(ann / f"{stem}.jpg")
+
+    # key page: TWO bands (2 + 1 internal rows); slot-2 page: ONE band of 3
+    page("p1", [
+        _cell(1, 2, rows=[{"human": "Aporka"}, {"human": "Kisvaszar"}]),
+        _cell(1, 3, rows=[{"human": "10"}, {"human": "20"}]),
+        _cell(2, 2, rows=[{"human": "Szentes"}]),
+        _cell(2, 3, rows=[{"human": "30"}]),
+    ])
+    page("p2", [
+        _cell(1, 6, rows=[{"human": "1"}, {"human": "2"}, {"human": "3"}]),
+    ])
+    r = client.get("/api/dataset/banded/build", params={"folder": str(ann)})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["n_records"] == 3
+    by_key = {rec["key"]["text"]: rec for rec in d["records"]}
+    assert by_key["Szentes"]["values"]["n_tractors"]["value"] == 3
+    assert by_key["Szentes"]["values"]["area_total"]["value"] == 30.0
+    assert by_key["Szentes"]["lattice_row"] == 2          # band = provenance
+    dg = client.post("/api/dataset/banded/diagnose",
+                     params={"folder": str(ann)}, json={}).json()
+    assert not [g for g in dg["groups"] if g["check"] == "structure"]
+
+
 # ── Keyed join (record.join = "keyed") ─────────────────────────────────────
 
 KEYED_DECL = {
