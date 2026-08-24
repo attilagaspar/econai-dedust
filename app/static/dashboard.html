@@ -929,17 +929,19 @@ async function loadReviewBoard() {
     const r = await fetch(`/api/project/status?folder=${folder}`);
     const d = await r.json();
     const c = d.counts, total = d.total || 1;
+    const work = d.total_work || 1;   // pages excluding clutter — the real denominator
     const seg = (n, color) => n ? `<div style="width:${(100 * n / total).toFixed(1)}%;background:${color};"></div>` : '';
     el.innerHTML = `
       <div style="display:flex;height:16px;border-radius:4px;overflow:hidden;background:#0b1426;border:1px solid #22304a;">
-        ${seg(c.verified, '#22c55e')}${seg(c.corrected, '#f0c040')}${seg(c.problem, '#e94560')}${seg(c.predicted, '#3a4a6a')}
+        ${seg(c.verified, '#22c55e')}${seg(c.corrected, '#f0c040')}${seg(c.problem, '#e94560')}${seg(c.predicted, '#3a4a6a')}${seg(c.skip, '#4b5563')}
       </div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:12px;">
         <span style="color:#22c55e;">✓ ${c.verified} verified</span>
         <span style="color:#f0c040;">● ${c.corrected} corrected</span>
         <span style="color:#e94560;">⚠ ${c.problem} problem</span>
         <span style="color:#8a94a6;">● ${c.predicted} unreviewed</span>
-        <span style="color:#667;">— ${total} pages, ${(100 * c.verified / total).toFixed(0)}% verified</span>
+        ${c.skip ? `<span style="color:#6b7280;">⊘ ${c.skip} clutter</span>` : ''}
+        <span style="color:#667;">— ${work} working pages, ${(100 * c.verified / work).toFixed(0)}% verified${c.skip ? ` (+${c.skip} clutter)` : ''}</span>
       </div>`;
   } catch (e) {
     el.innerHTML = '<span style="color:#e94560;">Could not load status.</span>';
