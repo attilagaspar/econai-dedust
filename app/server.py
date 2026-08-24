@@ -8252,6 +8252,13 @@ class DatasetRecordSpec(BaseModel):
     # every slot repeats the identifier column). Single-slot datasets never
     # consult it. Any join mismatch is a loud structure finding.
     join: Optional[str] = "positional"
+    # Printed structure rows inside the data bands — "Összesen" totals,
+    # district/county header lines — are rows but not records. A row whose
+    # KEY text matches any of these regexes (tested case-insensitively
+    # against the raw text AND its accent-stripped lowercase form) is
+    # excluded from the records; it still occupies its position in the
+    # join sequence.
+    exclude_keys: List[str] = []
     key:  DatasetKey
 
 
@@ -8297,6 +8304,11 @@ def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
         probs.append(f"record.unit '{decl.record.unit}' is not internal_row/lattice_row")
     if decl.record.join not in (None, "positional", "keyed"):
         probs.append(f"record.join '{decl.record.join}' is not positional/keyed")
+    for pat in decl.record.exclude_keys:
+        try:
+            re.compile(pat, re.IGNORECASE)
+        except re.error as e:
+            probs.append(f"record.exclude_keys '{pat}': invalid regex ({e})")
     for sl, c in (decl.record.key.columns or {}).items():
         try:
             int(sl), int(c)
@@ -8559,6 +8571,16 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
     # length disagrees with the key column's is NOT joined — loud finding.
     records: List[dict] = []
     n_separators = [0]                    # flat cells skipped as separators
+    n_excluded = [0]                      # rows skipped via record.exclude_keys
+    exclude_res = [re.compile(p, re.IGNORECASE) for p in decl.record.exclude_keys]
+
+    def _key_excluded(text: str) -> bool:
+        t = (text or "").strip()
+        if not t or not exclude_res:
+            return False
+        tf = (_unidecode(t) if _unidecode is not None else t).lower()
+        return any(rx.search(t) or rx.search(tf) for rx in exclude_res)
+
     vars_by_slot: dict = {}
     for v in decl.variables:
         vars_by_slot.setdefault(v.slot, []).append(v)
@@ -8680,7 +8702,8 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                     for u_j, ku2 in enumerate(id_seq):
                         _kl, kt2 = _ds_best(ku2["layers"])
                         f2 = _auth_fold(kt2) if kt2.strip() else ""
-                        if not f2 or ku2["blank"] or kt2 in decl.parse.missing:
+                        if (not f2 or ku2["blank"] or kt2 in decl.parse.missing
+                                or _key_excluded(kt2)):
                             continue
                         if f2 in idx_map:
                             idx_map[f2] = "AMBIG"
@@ -8701,6 +8724,9 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
 
             for u_i, ku in enumerate(key_seq):
                 layer, ktext = _ds_best(ku["layers"])
+                if _key_excluded(ktext):
+                    n_excluded[0] += 1    # printed total/header row — not a record
+                    continue
                 rec = {"cycle": cycle, "table": tb,
                        "lattice_row": ku.get("lattice_row"), "unit_i": u_i,
                        "key": {"text": ktext, "layer": layer,
@@ -8770,7 +8796,8 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                                f"matches no row on the key page"})
 
     stats = {"pages": n_pages_used, "cycles": len(cycles), "records": len(records),
-             "slots": n_slots, "separator_cells": n_separators[0]}
+             "slots": n_slots, "separator_cells": n_separators[0],
+             "excluded_records": n_excluded[0]}
     return records, findings, stats
 
 
@@ -8800,6 +8827,7 @@ def api_dataset_build(name: str, folder: str = Query(...),
     return {"dataset": name, "pages": stats["pages"], "cycles": stats["cycles"],
             "slots": stats["slots"], "n_records": stats["records"],
             "separator_cells": stats["separator_cells"],
+            "excluded_records": stats["excluded_records"],
             "offset": offset, "returned": len(out),
             "structure_findings": len(findings), "records": out}
 

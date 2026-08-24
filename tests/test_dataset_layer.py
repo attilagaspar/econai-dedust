@@ -314,6 +314,55 @@ def test_flat_cells_are_separators_not_records(client, tmp_path):
                for rec in b["records"])
 
 
+def test_exclude_keys_skips_printed_totals(client, tmp_path):
+    """'Összesen' / district-header rows live INSIDE the data bands' row
+    structures. record.exclude_keys drops them from the records (no
+    duplicate-key / unresolved / parse noise) while they keep their position
+    in the join sequence."""
+    ann = tmp_path / "proj" / "annotations"
+    ann.mkdir(parents=True)
+    dsd = tmp_path / "proj" / "datasets"
+    dsd.mkdir()
+    decl = dict(DECL, name="excl",
+                record=dict(DECL["record"],
+                            exclude_keys=["^osszesen", "jaras"]),
+                variables=[v for v in DECL["variables"] if v["slot"] == 1
+                           or v["name"] == "n_tractors"])
+    (dsd / "excl.dataset.json").write_text(
+        json.dumps(decl, ensure_ascii=False), encoding="utf-8")
+
+    def page(stem, shapes):
+        (ann / f"{stem}.json").write_text(json.dumps(
+            {"shapes": shapes, "flags": {}, "imagePath": f"{stem}.jpg",
+             "imageWidth": 900, "imageHeight": 500}), encoding="utf-8")
+        Image.new("RGB", (900, 500), "white").save(ann / f"{stem}.jpg")
+
+    page("p1", [
+        _cell(1, 2, rows=[{"human": "Aporka", "auth": _auth("M2", "Aporka")},
+                          {"human": "Összesen"},
+                          {"human": "2. Hegyháti járás."},
+                          {"human": "Szentes", "auth": _auth("M3", "Szentes")}]),
+        _cell(1, 3, rows=[{"human": "10"}, {"human": "10"},
+                          {"human": "-"}, {"human": "30"}]),
+    ])
+    page("p2", [
+        _cell(1, 6, rows=[{"human": "1"}, {"human": "99"},
+                          {"human": "-"}, {"human": "3"}]),
+    ])
+    r = client.get("/api/dataset/excl/build", params={"folder": str(ann)})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["n_records"] == 2 and d["excluded_records"] == 2
+    by_key = {rec["key"]["text"]: rec for rec in d["records"]}
+    assert set(by_key) == {"Aporka", "Szentes"}
+    # position preserved: Szentes (sequence slot 4) still gets its own values
+    assert by_key["Szentes"]["values"]["n_tractors"]["value"] == 3
+    dg = client.post("/api/dataset/excl/diagnose",
+                     params={"folder": str(ann)}, json={}).json()
+    assert not [g for g in dg["groups"]
+                if g["check"] in ("duplicate_key", "unresolved", "structure")]
+
+
 # ── Keyed join (record.join = "keyed") ─────────────────────────────────────
 
 KEYED_DECL = {
