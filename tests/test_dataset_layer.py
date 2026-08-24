@@ -248,6 +248,72 @@ def test_join_survives_different_lattice_banding(client, tmp_path):
     assert not [g for g in dg["groups"] if g["check"] == "structure"]
 
 
+def test_flat_cells_are_separators_not_records(client, tmp_path):
+    """foldbirtok1935 reality: county headers / 'Összesen' totals sit in flat
+    (unconverted) lattice bands BETWEEN the row-converted data bands, and the
+    two slots of a pair carry DIFFERENT separator bands. In internal_row mode
+    flat cells are separators — skipped from the join sequence, never
+    records — so the pair below must join cleanly. A data column left
+    entirely flat must still fail loudly."""
+    ann = tmp_path / "proj" / "annotations"
+    ann.mkdir(parents=True)
+    dsd = tmp_path / "proj" / "datasets"
+    dsd.mkdir()
+    decl = dict(DECL, name="seps",
+                variables=[v for v in DECL["variables"] if v["slot"] == 1
+                           or v["name"] == "n_tractors"])
+    (dsd / "seps.dataset.json").write_text(json.dumps(decl), encoding="utf-8")
+
+    def page(stem, shapes):
+        (ann / f"{stem}.json").write_text(json.dumps(
+            {"shapes": shapes, "flags": {}, "imagePath": f"{stem}.jpg",
+             "imageWidth": 900, "imageHeight": 500}), encoding="utf-8")
+        Image.new("RGB", (900, 500), "white").save(ann / f"{stem}.jpg")
+
+    # key page: header band (flat) / 2 data rows / 'Összesen' (flat) /
+    # district header (flat) / 1 data row — separators in cols 2 AND 3
+    page("p1", [
+        _cell(1, 2, text="1. Baranyavári járás."), _cell(1, 3, text=""),
+        _cell(2, 2, rows=[{"human": "Aporka"}, {"human": "Kisvaszar"}]),
+        _cell(2, 3, rows=[{"human": "10"}, {"human": "20"}]),
+        _cell(3, 2, text="Összesen"), _cell(3, 3, text="30"),
+        _cell(4, 2, text="2. Hegyháti járás."), _cell(4, 3, text=""),
+        _cell(5, 2, rows=[{"human": "Szentes"}]),
+        _cell(5, 3, rows=[{"human": "30"}]),
+    ])
+    # slot-2 page: DIFFERENT separators (one leading flat band only)
+    page("p2", [
+        _cell(1, 6, text="hdr"),
+        _cell(2, 6, rows=[{"human": "1"}, {"human": "2"}, {"human": "3"}]),
+    ])
+    r = client.get("/api/dataset/seps/build", params={"folder": str(ann)})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["n_records"] == 3                        # no 'Összesen' record
+    assert d["separator_cells"] > 0
+    by_key = {rec["key"]["text"]: rec for rec in d["records"]}
+    assert set(by_key) == {"Aporka", "Kisvaszar", "Szentes"}
+    assert by_key["Szentes"]["values"]["n_tractors"]["value"] == 3
+    assert by_key["Szentes"]["values"]["area_total"]["value"] == 30.0
+    dg = client.post("/api/dataset/seps/diagnose",
+                     params={"folder": str(ann)}, json={}).json()
+    assert not [g for g in dg["groups"] if g["check"] == "structure"]
+
+    # leave a DATA column entirely flat → loud mismatch, no silent join
+    p2 = json.loads((ann / "p2.json").read_text(encoding="utf-8"))
+    del p2["shapes"][1]["row_struct"]
+    p2["shapes"][1]["human_output"] = {"human_corrected_text": "1\n2\n3"}
+    (ann / "p2.json").write_text(json.dumps(p2), encoding="utf-8")
+    dg = client.post("/api/dataset/seps/diagnose",
+                     params={"folder": str(ann)}, json={}).json()
+    st = [it for g in dg["groups"] if g["check"] == "structure"
+          for it in g["items"]]
+    assert any("column 6: only flat" in it["detail"] for it in st)
+    b = client.get("/api/dataset/seps/build", params={"folder": str(ann)}).json()
+    assert all(rec["values"]["n_tractors"]["status"] == "absent"
+               for rec in b["records"])
+
+
 # ── Keyed join (record.join = "keyed") ─────────────────────────────────────
 
 KEYED_DECL = {

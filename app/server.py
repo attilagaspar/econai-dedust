@@ -8558,18 +8558,32 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
     # bands); the lattice band is provenance only. A column whose sequence
     # length disagrees with the key column's is NOT joined — loud finding.
     records: List[dict] = []
+    n_separators = [0]                    # flat cells skipped as separators
     vars_by_slot: dict = {}
     for v in decl.variables:
         vars_by_slot.setdefault(v.slot, []).append(v)
 
     def _col_seq(pm, tb, col):
         """A column's internal-row units concatenated across the page's
-        lattice bands in reading order, each unit tagged with its band."""
+        lattice bands in reading order, each unit tagged with its band.
+
+        In internal_row mode, records ARE internal rows: a flat
+        (never row-converted) cell is a separator band — county headers,
+        'Összesen' totals, header carryovers — not a record, and is skipped.
+        The slots of a pair carry different separator bands, so keeping them
+        would misalign every positional join. A *data* column left flat still
+        surfaces loudly: its sequence shortens and the length-mismatch
+        finding fires (an all-flat key column raises 'key column has no
+        rows'). lattice_row mode keeps flat cells — there they are the
+        records."""
         seq = []
         for sr, cols in pm["struct"].get(tb, {}).get("rows", []):
             cell = cols.get(col)
             if cell is None:
                 continue                    # band gap → length mismatch below
+            if not flat_only and not ((cell[1].get("row_struct") or {}).get("rows")):
+                n_separators[0] += 1
+                continue
             for u in _ds_cell_units(cell[0], cell[1], flat_only):
                 seq.append(dict(u, lattice_row=sr))
         return seq
@@ -8610,7 +8624,13 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                         continue
                     seq = _col_seq(pm, tb, c)
                     if not seq:
-                        col_seqs[(sl, c)] = None  # column missing — reported
+                        col_seqs[(sl, c)] = None
+                        # column absent → already reported by the presence
+                        # check; present but all-flat → report here
+                        if c in pm["struct"].get(tb, {}).get("cols", set()):
+                            findings.append({"check": "structure", "stem": pm["stem"],
+                                             "detail": f"column {c}: only flat (unconverted) "
+                                                       f"cells — no internal rows to join"})
                     elif len(seq) != n:
                         col_seqs[(sl, c)] = None
                         findings.append({"check": "structure", "stem": pm["stem"],
@@ -8646,6 +8666,10 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                         seq = _col_seq(pm, tb, c)
                         if seq and len(seq) == m:
                             col_here_seqs[c] = seq
+                        elif not seq and c in pm["struct"].get(tb, {}).get("cols", set()):
+                            findings.append({"check": "structure", "stem": pm["stem"],
+                                             "detail": f"column {c}: only flat (unconverted) "
+                                                       f"cells — no internal rows to join"})
                         elif seq:
                             findings.append({"check": "structure", "stem": pm["stem"],
                                              "idx": seq[0]["idx"],
@@ -8746,7 +8770,7 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                                f"matches no row on the key page"})
 
     stats = {"pages": n_pages_used, "cycles": len(cycles), "records": len(records),
-             "slots": n_slots}
+             "slots": n_slots, "separator_cells": n_separators[0]}
     return records, findings, stats
 
 
@@ -8775,6 +8799,7 @@ def api_dataset_build(name: str, folder: str = Query(...),
         out.append(r)
     return {"dataset": name, "pages": stats["pages"], "cycles": stats["cycles"],
             "slots": stats["slots"], "n_records": stats["records"],
+            "separator_cells": stats["separator_cells"],
             "offset": offset, "returned": len(out),
             "structure_findings": len(findings), "records": out}
 
