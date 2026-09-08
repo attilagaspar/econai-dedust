@@ -107,6 +107,43 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
 
 ---
 
+## P9. Minor build list (small items, grab one on a build day)
+
+*Training-loop items added 2026-09-08 from the compass_1874 fine-tuning session:*
+
+1. **Include empty pages in training data (checkbox + flag).** Today empties are
+   dropped twice: `cocosplit --having-annotations` in BOTH generated train
+   scripts (Train and finetune-from), and Detectron2's
+   `DATALOADER.FILTER_EMPTY_ANNOTATIONS` default (True). The naive fix is
+   removing both, but that would turn every *not-yet-annotated* page into a
+   poison negative ("this page contains nothing"). Safe design: empty pages
+   enter the COCO export only when explicitly marked — either
+   `flags.status == "verified"` with zero shapes, or a dedicated
+   `empty_verified` flag — plus a dashboard checkbox to enable inclusion.
+   "An empty page is an annotation, not an absence."
+2. **Self-fine-tune: allow source == target in finetune-from.** The dashboard
+   guard (`Source and target project must be different`) exists because the
+   training script wipes `outputs/<target>/*.pth` before training — with
+   source == target it would delete the weights it is about to warm-start
+   from. Fix: copy the source weights aside (e.g. `bootstrap_weights.pth`)
+   before the checkpoint cleanup, point `MODEL.WEIGHTS` at the copy, then
+   lift the JS guard. Until then the workaround is a full Train.
+3. **Training export honors page status (contamination guard).** The COCO
+   export takes every shape on every page — uncorrected predictions train as
+   ground truth, indistinguishable from human work. P3 status flags already
+   exist (`predicted / corrected / verified`): filter the training export to
+   corrected+verified pages (with an override checkbox), and the
+   active-learning loop can no longer poison itself when an unreviewed batch
+   sits in the project at train time. Composes with item 1: a *verified*
+   empty page is a negative example; a *predicted* empty page is nothing.
+4. **Persistent train/test split.** `cocosplit` re-rolls the 80/20 split every
+   run, so eval metrics are not comparable across training cycles. Seed it
+   per project (or store `test.json` once and reuse) so the loop's progress
+   is measurable run over run.
+5. *(carried from P8)* Pin frequently-used panel groups to the top.
+
+---
+
 ## Suggested sequencing
 
 1. **P7.1/2/5** (cache, atomic writes, hygiene) — one short session, removes recurring pain.
