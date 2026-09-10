@@ -896,6 +896,12 @@
         <div style="font-size:11px;color:#aaa;margin-bottom:6px;">Lattice labels to include:</div>
         <div id="batch-label-checks"></div>
       </div>
+      <label class="row" title="Split the selected labels at annotations of other types or at large empty bands between them, and build one lattice per table (stacked tables only)">
+        <input type="checkbox" id="batch-multi-lattice"
+               onchange="localStorage.setItem('batchMultiLattice', this.checked ? '1' : '0')"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Multiple tables per page (split at other annotations / large gaps)</span>
+      </label>
     </div>
 
     <!-- OCR options -->

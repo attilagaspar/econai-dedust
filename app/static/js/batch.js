@@ -76,6 +76,8 @@ function _batchPopulateLabels(containerId, storageKey) {
 
 function openBatchModal() {
   _batchPopulateLabels('batch-label-checks',           'latticeLabels');
+  const multiCb = document.getElementById('batch-multi-lattice');
+  if (multiCb) multiCb.checked = localStorage.getItem('batchMultiLattice') === '1';
   _batchPopulateLabels('batch-ocr-label-checks',       'batchOcrLabels');
   _batchPopulateLabels('batch-llm-label-checks',       'batchLlmLabels');
   _batchPopulateLabels('batch-score-label-checks',     'batchScoreLabels');
@@ -815,7 +817,8 @@ async function runBatch() {
         // Temporarily swap pageData so _latticeDetect operates on loaded shapes
         const savedPageData = pageData;
         pageData = { shapes };
-        _latticeDetect(selectedLabels);
+        if (document.getElementById('batch-multi-lattice')?.checked) _latticeDetectMulti(selectedLabels);
+        else _latticeDetect(selectedLabels);
         shapes = pageData.shapes;
         pageData = savedPageData;
       }
@@ -847,7 +850,8 @@ async function runBatch() {
       if (selectedLabels.length) {
         const savedPageData = pageData;
         pageData = { shapes };
-        _latticeDetect(selectedLabels);
+        if (document.getElementById('batch-multi-lattice')?.checked) _latticeDetectMulti(selectedLabels);
+        else _latticeDetect(selectedLabels);
         shapes = pageData.shapes;
         pageData = savedPageData;
       }

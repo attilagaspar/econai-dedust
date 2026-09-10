@@ -654,6 +654,78 @@ function _latticeDetect(selectedLabels, opts = {}) {
   return useful.length;
 }
 
+// ── Multi-lattice segmentation (stacked tables) ───────────────────────────────
+// Split the selected-label shapes into vertically stacked groups wherever a
+// divider separates them: an annotation of a NON-selected type sitting in the
+// gap, or a large horizontal band of empty space. Without this, two stacked
+// tables that overlap horizontally are merged into one lattice by
+// _latticeMergeRegions. Returns shape arrays top-to-bottom (length 1 = no split).
+function _latticeSegmentStacked(selectedLabels) {
+  const labelSet = new Set(selectedLabels);
+  const valid = s => s.points?.length >= 2;
+  const top   = s => Math.min(...s.points.map(p => p[1]));
+  const bot   = s => Math.max(...s.points.map(p => p[1]));
+  const left  = s => Math.min(...s.points.map(p => p[0]));
+  const right = s => Math.max(...s.points.map(p => p[0]));
+  const sel = pageData.shapes.filter(s => labelSet.has(s.label) && valid(s));
+  if (sel.length < 2) return sel.length ? [sel] : [];
+  const others = pageData.shapes.filter(s => !labelSet.has(s.label) && valid(s));
+
+  // Merge the selected shapes' y-intervals into coverage bands; the gaps
+  // between consecutive bands are the candidate split points.
+  const iv = sel.map(s => [top(s), bot(s)]).sort((a, b) => a[0] - b[0]);
+  const bands = [];
+  for (const [t, b] of iv) {
+    const last = bands[bands.length - 1];
+    if (last && t <= last[1]) last[1] = Math.max(last[1], b);
+    else bands.push([t, b]);
+  }
+  if (bands.length < 2) return [sel];
+
+  const selL = Math.min(...sel.map(left)), selR = Math.max(...sel.map(right));
+  const medH = _median(sel.map(s => bot(s) - top(s)));
+  const bigGap = Math.max(3 * medH, 60);   // "significant empty space"
+
+  const cuts = [];
+  for (let i = 0; i < bands.length - 1; i++) {
+    const g1 = bands[i][1], g2 = bands[i + 1][0];
+    let split = (g2 - g1) >= bigGap;
+    if (!split) {
+      // A non-selected annotation lying mostly inside the gap and horizontally
+      // overlapping the tables is a divider (e.g. a title between two tables).
+      // The majority-inside test keeps row-height gaps from splitting on
+      // marginal annotations that merely graze them.
+      split = others.some(o => {
+        if (right(o) <= selL || left(o) >= selR) return false;
+        const ot = top(o), ob = bot(o);
+        const inGap = Math.min(ob, g2) - Math.max(ot, g1);
+        return inGap > 0 && inGap >= 0.5 * (ob - ot);
+      });
+    }
+    if (split) cuts.push((g1 + g2) / 2);
+  }
+  if (!cuts.length) return [sel];
+
+  const groups = cuts.map(() => []).concat([[]]);
+  sel.forEach(s => {
+    const cy = (top(s) + bot(s)) / 2;
+    let gi = cuts.findIndex(c => cy < c);
+    if (gi < 0) gi = cuts.length;
+    groups[gi].push(s);
+  });
+  return groups.filter(g => g.length);
+}
+
+// Lattice detection with one table per stacked segment: table ids 0..n-1,
+// numbered top to bottom. Falls back to a single _latticeDetect when no
+// divider is found.
+function _latticeDetectMulti(selectedLabels) {
+  const groups = _latticeSegmentStacked(selectedLabels);
+  let n = 0;
+  groups.forEach((g, i) => { n += _latticeDetect(selectedLabels, {subset: g, table: i}); });
+  return { tables: groups.length, shapes: n };
+}
+
 function _latticeIdentifyRegions(useful) {
   const PROX = 600;
   const processed = new Set();

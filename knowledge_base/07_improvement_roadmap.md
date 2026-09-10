@@ -109,6 +109,31 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
 
 ## P9. Minor build list (small items, grab one on a build day)
 
+**HIGH PRIORITY (added 2026-09-10):**
+
+0. ~~**Multi-lattice-per-page option in batch lattice correction.**~~ ✅ Built
+   2026-09-10: `_latticeSegmentStacked` + `_latticeDetectMulti` in
+   `lattice.js`, checkbox `batch-multi-lattice` in the shared
+   `batch-ol-opts` panel (covers both batch modes), persisted in
+   localStorage. Stacked tables only; splits at coverage gaps ≥
+   max(3×median cell height, 60px) or at a non-selected annotation
+   lying mostly inside a gap and x-overlapping the tables.
+   Original spec: Both batch
+   modes (`overlaps_lattice` and `overlaps_lattice_snap_trim` in `batch.js`)
+   run `_latticeDetect(selectedLabels)` over ALL selected annotation types on
+   the page — so when a page holds two (or more) tables, e.g. text_cell +
+   numerical_cell + cell header from both, they are merged into one monster
+   lattice. In reality separate tables are almost always divided by something:
+   an annotation of a *different* (non-selected) type, or a significant band
+   of empty space. Add a checkbox to each batch lattice-correction mode which,
+   when checked, pre-segments the selected shapes into groups by those
+   dividers — a non-selected annotation type lying between them, or a large
+   gap — and runs lattice detection per group, producing two or more separate
+   lattices. Implementation hook: `_latticeDetect` in `lattice.js` already
+   accepts `opts.subset` + `opts.table` and shapes carry a `table` id, so the
+   segmentation pass just needs to partition shapes and call it once per
+   partition with distinct table ids.
+
 *Training-loop items added 2026-09-08 from the compass_1874 fine-tuning session:*
 
 1. **Include empty pages in training data (checkbox + flag).** Today empties are
