@@ -898,16 +898,12 @@ function _latticeCompleteRegion(regionShapes) {
     };
   });
 
-  // Stitch bands edge-to-edge (as snap-to-grid does): raw median bands of
-  // adjacent rows/columns routinely overlap each other, which made predicted
-  // cells bleed into neighbouring slots and trip the overlap guard below —
-  // holes that only a second lattice run (on cleaned geometry) would fill.
-  const sortedCols = Object.keys(colBands).map(Number).sort((a, b) => colBands[a].left - colBands[b].left);
-  for (let i = 0; i < sortedCols.length - 1; i++)
-    colBands[sortedCols[i]].right = colBands[sortedCols[i + 1]].left;
-  const sortedRows = Object.keys(rowBands).map(Number).sort((a, b) => rowBands[a].top - rowBands[b].top);
-  for (let i = 0; i < sortedRows.length - 1; i++)
-    rowBands[sortedRows[i]].bot = rowBands[sortedRows[i + 1]].top;
+  // Do NOT stitch these bands edge-to-edge (tried once): stitching shrinks the
+  // predicted cell wherever adjacent bands overlap, so a neighbour's unstitched
+  // box intrudes into a smaller slot and trips the guard below even harder —
+  // and identically on every rerun, so the hole never heals until a snap.
+  // Predicted cells use the full median band; slight overlap with neighbours
+  // is exactly what trim / snap / overlap-removal are for.
 
   // Most frequent label across the whole region (fallback)
   const labelCount = {};
