@@ -898,6 +898,17 @@ function _latticeCompleteRegion(regionShapes) {
     };
   });
 
+  // Stitch bands edge-to-edge (as snap-to-grid does): raw median bands of
+  // adjacent rows/columns routinely overlap each other, which made predicted
+  // cells bleed into neighbouring slots and trip the overlap guard below —
+  // holes that only a second lattice run (on cleaned geometry) would fill.
+  const sortedCols = Object.keys(colBands).map(Number).sort((a, b) => colBands[a].left - colBands[b].left);
+  for (let i = 0; i < sortedCols.length - 1; i++)
+    colBands[sortedCols[i]].right = colBands[sortedCols[i + 1]].left;
+  const sortedRows = Object.keys(rowBands).map(Number).sort((a, b) => rowBands[a].top - rowBands[b].top);
+  for (let i = 0; i < sortedRows.length - 1; i++)
+    rowBands[sortedRows[i]].bot = rowBands[sortedRows[i + 1]].top;
+
   // Most frequent label across the whole region (fallback)
   const labelCount = {};
   regionShapes.forEach(s => { labelCount[s.label] = (labelCount[s.label]||0)+1; });
@@ -917,7 +928,10 @@ function _latticeCompleteRegion(regionShapes) {
     return existRects.some(r => {
       const ix = Math.max(0, Math.min(x2,r.x2) - Math.max(x1,r.x1));
       const iy = Math.max(0, Math.min(y2,r.y2) - Math.max(y1,r.y1));
-      return ix*iy > 0.10*area;          // >10% of the predicted cell covered
+      // >50% of the predicted cell covered. A spanning cell covers the phantom
+      // slot near-fully, so it still blocks; a sloppily-drawn neighbour merely
+      // grazing the slot (10-30%) no longer leaves a hole.
+      return ix*iy > 0.50*area;
     });
   };
 
