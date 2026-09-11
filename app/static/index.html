@@ -750,6 +750,13 @@
     <h3>🔲 Lattice Detect</h3>
     <p>Select which label types to include in row / column detection:</p>
     <div id="lattice-label-checks"></div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;cursor:pointer;margin-top:8px;"
+           title="Split the selected labels at annotations of other types or at large empty bands between them, and build one lattice per table (stacked tables only)">
+      <input type="checkbox" id="lattice-multi"
+             onchange="localStorage.setItem('latticeMulti', this.checked ? '1' : '0')"
+             style="accent-color:#e94560;width:13px;height:13px;">
+      <span>Multiple tables on page (split at other annotations / large gaps)</span>
+    </label>
     <div id="lattice-modal-btns">
       <button id="lattice-cancel-btn" onclick="closeLatticeModal()">Cancel</button>
       <button id="lattice-run-btn" onclick="runLatticeDetect()">Run</button>

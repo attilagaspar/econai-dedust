@@ -175,6 +175,8 @@ function openLatticeModal() {
     const checked = (lbl in remembered) ? remembered[lbl] : true;
     return `<label><input type="checkbox" value="${lbl}" ${checked?'checked':''}> ${lbl}</label>`;
   }).join('');
+  const multiCb = document.getElementById('lattice-multi');
+  if (multiCb) multiCb.checked = localStorage.getItem('latticeMulti') === '1';
   document.getElementById('lattice-modal').classList.add('show');
 }
 
@@ -194,7 +196,12 @@ async function runLatticeDetect() {
   if (!selectedLabels.length) { showToast('Select at least one label'); return; }
   closeLatticeModal();
   pushUndo();
-  _latticeDetect(selectedLabels);
+  let nTables = 1;
+  if (document.getElementById('lattice-multi')?.checked) {
+    nTables = _latticeDetectMulti(selectedLabels).tables;
+  } else {
+    _latticeDetect(selectedLabels);
+  }
   await replaceAllShapes();
   const n = pageData.shapes.filter(s => s.super_row != null).length;
   // Show grid automatically after first run
@@ -215,7 +222,7 @@ async function runLatticeDetect() {
     gridBtn.textContent = '📐 Hide Grid';
   }
   drawOverlay(); updatePanel();
-  showToast(`Lattice assigned to ${n} shapes`);
+  showToast(`Lattice assigned to ${n} shapes` + (nTables > 1 ? ` in ${nTables} tables` : ''));
 }
 
 // Detect a separate lattice (a new table) on the currently-selected shapes only.
