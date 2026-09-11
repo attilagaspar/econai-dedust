@@ -78,6 +78,12 @@ function openBatchModal() {
   _batchPopulateLabels('batch-label-checks',           'latticeLabels');
   const multiCb = document.getElementById('batch-multi-lattice');
   if (multiCb) multiCb.checked = localStorage.getItem('batchMultiLattice') === '1';
+  const segGaps = document.getElementById('batch-seg-gaps');
+  if (segGaps) segGaps.checked = localStorage.getItem('latticeSegGaps') !== '0';
+  const segDivs = document.getElementById('batch-seg-dividers');
+  if (segDivs) segDivs.checked = localStorage.getItem('latticeSegDividers') !== '0';
+  const fillDir = document.getElementById('batch-fill-dir');
+  if (fillDir) fillDir.value = localStorage.getItem('latticeFillDir') === 'horizontal' ? 'horizontal' : 'vertical';
   _batchPopulateLabels('batch-ocr-label-checks',       'batchOcrLabels');
   _batchPopulateLabels('batch-llm-label-checks',       'batchLlmLabels');
   _batchPopulateLabels('batch-score-label-checks',     'batchScoreLabels');

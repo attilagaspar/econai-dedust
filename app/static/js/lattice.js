@@ -177,6 +177,8 @@ function openLatticeModal() {
   }).join('');
   const multiCb = document.getElementById('lattice-multi');
   if (multiCb) multiCb.checked = localStorage.getItem('latticeMulti') === '1';
+  const fillDirSel = document.getElementById('lattice-fill-dir');
+  if (fillDirSel) fillDirSel.value = localStorage.getItem('latticeFillDir') === 'horizontal' ? 'horizontal' : 'vertical';
   document.getElementById('lattice-modal').classList.add('show');
 }
 
@@ -661,13 +663,25 @@ function _latticeDetect(selectedLabels, opts = {}) {
   return useful.length;
 }
 
+// Which split rules multi-lattice segmentation applies. Persisted from the
+// batch modal's sub-checkboxes; the workspace Lattice button follows the same
+// stored preference. Both default ON. (try/catch: no localStorage in tests.)
+function _latticeSegRules() {
+  const get = (k) => {
+    try { return localStorage.getItem(k) !== '0'; } catch (e) { return true; }
+  };
+  return { gaps: get('latticeSegGaps'), dividers: get('latticeSegDividers') };
+}
+
 // ── Multi-lattice segmentation (stacked tables) ───────────────────────────────
 // Split the selected-label shapes into vertically stacked groups wherever a
 // divider separates them: an annotation of a NON-selected type sitting in the
 // gap, or a large horizontal band of empty space. Without this, two stacked
 // tables that overlap horizontally are merged into one lattice by
 // _latticeMergeRegions. Returns shape arrays top-to-bottom (length 1 = no split).
-function _latticeSegmentStacked(selectedLabels) {
+// opts {gaps, dividers} selects the split rules; defaults to _latticeSegRules().
+function _latticeSegmentStacked(selectedLabels, opts) {
+  const rules = opts || _latticeSegRules();
   const labelSet = new Set(selectedLabels);
   const valid = s => s.points?.length >= 2;
   const top   = s => Math.min(...s.points.map(p => p[1]));
@@ -697,7 +711,7 @@ function _latticeSegmentStacked(selectedLabels) {
 
   const cuts = [];
   // (a) a large empty band between coverage bands
-  for (let i = 0; i < bands.length - 1; i++) {
+  if (rules.gaps) for (let i = 0; i < bands.length - 1; i++) {
     const g1 = bands[i][1], g2 = bands[i + 1][0];
     if ((g2 - g1) >= bigGap) cuts.push((g1 + g2) / 2);
   }
@@ -710,7 +724,7 @@ function _latticeSegmentStacked(selectedLabels) {
   // cannot block the split; a divider inside a table has a whole row of
   // straddlers and never cuts.
   const yMin = bands[0][0], yMax = bands[bands.length - 1][1];
-  others.forEach(o => {
+  if (rules.dividers) others.forEach(o => {
     const xOverlap = Math.min(right(o), selR) - Math.max(left(o), selL);
     if (xOverlap < 0.25 * (selR - selL)) return;   // margin notes don't cut
     const cy = (top(o) + bot(o)) / 2;
@@ -947,8 +961,15 @@ function _latticeCompleteRegion(regionShapes) {
     });
   };
 
+  // Where a predicted cell inherits its label from: 'vertical' = the cell
+  // above (columns share a type), 'horizontal' = the cell beside (rows share
+  // a type). Project-dependent — user-set, persisted from the lattice modals.
+  let fillDir = 'vertical';
+  try { if (localStorage.getItem('latticeFillDir') === 'horizontal') fillDir = 'horizontal'; } catch (e) {}
+
   let added = 0, skipped = 0;
-  // Iterate top-to-bottom so "above" lookups can find just-created shapes
+  // Iterate top-to-bottom, left-to-right, so "above"/"beside" lookups can find
+  // just-created shapes
   for (let r = minRow; r <= maxRow; r++) {
     for (let c = minCol; c <= maxCol; c++) {
       if (posMap.has(`${r},${c}`)) continue;
@@ -956,9 +977,11 @@ function _latticeCompleteRegion(regionShapes) {
       if (!rb || !cb) continue;
       if (overlapsExisting(cb.left, rb.top, cb.right, rb.bot)) { skipped++; continue; }
 
-      // Type: cell directly above in the same column; fall back to most frequent
-      const above = posMap.get(`${r-1},${c}`);
-      const label = above ? above.label : mostFreqLabel;
+      // Type from the neighbour in the chosen direction; fall back to most frequent
+      const neighbor = fillDir === 'horizontal'
+        ? (posMap.get(`${r},${c-1}`) || posMap.get(`${r},${c+1}`))
+        : posMap.get(`${r-1},${c}`);
+      const label = neighbor ? neighbor.label : mostFreqLabel;
 
       const newShape = {
         label,

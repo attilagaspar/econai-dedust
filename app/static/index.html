@@ -757,6 +757,15 @@
              style="accent-color:#e94560;width:13px;height:13px;">
       <span>Multiple tables on page (split at other annotations / large gaps)</span>
     </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;margin-top:8px;"
+           title="Label given to cells the lattice predicts into empty slots: inherited from the cell above (columns share a type) or the cell beside (rows share a type)">
+      <span>New cells inherit type from</span>
+      <select id="lattice-fill-dir" onchange="localStorage.setItem('latticeFillDir', this.value)"
+              style="background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:2px 6px;">
+        <option value="vertical">cell above (column type)</option>
+        <option value="horizontal">cell beside (row type)</option>
+      </select>
+    </label>
     <div id="lattice-modal-btns">
       <button id="lattice-cancel-btn" onclick="closeLatticeModal()">Cancel</button>
       <button id="lattice-run-btn" onclick="runLatticeDetect()">Run</button>
@@ -907,7 +916,29 @@
         <input type="checkbox" id="batch-multi-lattice"
                onchange="localStorage.setItem('batchMultiLattice', this.checked ? '1' : '0')"
                style="accent-color:#e94560;width:13px;height:13px;">
-        <span>Multiple tables per page (split at other annotations / large gaps)</span>
+        <span>Multiple tables per page</span>
+      </label>
+      <div style="margin-left:22px;display:flex;flex-direction:column;gap:4px;font-size:11px;color:#aaa;">
+        <label class="row" title="Cut where a wide horizontal band of empty space separates the selected cells">
+          <input type="checkbox" id="batch-seg-gaps"
+                 onchange="localStorage.setItem('latticeSegGaps', this.checked ? '1' : '0')"
+                 style="accent-color:#e94560;width:12px;height:12px;">
+          <span>split at large empty bands</span>
+        </label>
+        <label class="row" title="Cut at annotations of non-selected types (titles etc.) lying between the tables">
+          <input type="checkbox" id="batch-seg-dividers"
+                 onchange="localStorage.setItem('latticeSegDividers', this.checked ? '1' : '0')"
+                 style="accent-color:#e94560;width:12px;height:12px;">
+          <span>split at other annotations (titles etc.)</span>
+        </label>
+      </div>
+      <label class="row" title="Label given to cells the lattice predicts into empty slots: inherited from the cell above (columns share a type) or the cell beside (rows share a type)">
+        <span style="white-space:nowrap;">New cells inherit type from</span>
+        <select id="batch-fill-dir" onchange="localStorage.setItem('latticeFillDir', this.value)"
+                style="background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:11px;padding:2px 6px;">
+          <option value="vertical">cell above (column type)</option>
+          <option value="horizontal">cell beside (row type)</option>
+        </select>
       </label>
     </div>
 
