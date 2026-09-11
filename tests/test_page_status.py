@@ -61,3 +61,30 @@ def test_review_queue_excludes_skip(client, status_folder):
                     json={"signals": ["disagree"]}).json()["queue"]
     stems = {it["stem"] for it in q}
     assert "p1" in stems and "p3" in stems and "p2" not in stems
+
+
+# ── the guarantee behind "leave this page unannotated": a page whose status is
+#    "skip" is NEVER populated by apply-predictions ────────────────────────────
+
+def test_apply_predictions_never_populates_skip_pages(client, tmp_path, monkeypatch):
+    import app.pipeline as pipeline
+    monkeypatch.setattr(pipeline, "PROJECTS_ROOT", tmp_path)
+    ann = tmp_path / "tp" / "annotations"
+    pred = tmp_path / "tp" / "predictions"
+    ann.mkdir(parents=True); pred.mkdir()
+    pshape = [{"label": "cell", "points": [[1, 1], [50, 50]],
+               "shape_type": "rectangle", "flags": {}}]
+    for stem, flags in [("unannotated", {"status": "skip"}), ("normal", {})]:
+        (ann / f"{stem}.json").write_text(json.dumps(
+            {"shapes": [], "flags": flags, "imagePath": f"{stem}.jpg",
+             "imageWidth": 100, "imageHeight": 100}), encoding="utf-8")
+        (pred / f"{stem}.json").write_text(json.dumps({"shapes": pshape}),
+                                           encoding="utf-8")
+    r = client.post("/api/project/tp/apply-predictions")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["applied"] == 1 and d["skipped_clutter"] == 1
+    kept = json.loads((ann / "unannotated.json").read_text())
+    assert kept["shapes"] == []                      # rubbish never landed
+    normal = json.loads((ann / "normal.json").read_text())
+    assert len(normal["shapes"]) == 1                # normal page still populated

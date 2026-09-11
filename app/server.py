@@ -3466,8 +3466,10 @@ def api_rows_build(folder: str = Query(...), body: RowsBuildBody = ...):
 # ---------------------------------------------------------------------------
 # P3 — page status scoreboard. Status lives in the page's flags.status
 # (predicted | corrected | verified | problem | skip); set via PATCH
-# /api/page/flags. "skip" = clutter: excluded from inference and the review
-# queue, and shown as its own bar (not counted as work).
+# /api/page/flags. "skip" = this page receives no annotations (clutter, or
+# deliberately left unannotated): excluded from inference (apply-predictions
+# never populates it) and the review queue, and shown as its own bar (not
+# counted as work).
 # ---------------------------------------------------------------------------
 
 class BulkStatusBody(BaseModel):
@@ -3586,7 +3588,7 @@ def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
         except Exception:
             continue
         _pstatus = (data.get("flags") or {}).get("status")
-        if _pstatus == "skip":                       # clutter is never reviewed
+        if _pstatus == "skip":                       # skip pages are never reviewed
             continue
         if body.exclude_verified and _pstatus == "verified":
             continue
@@ -6986,7 +6988,8 @@ def api_apply_predictions(name: str):
         if not ann_file.exists():
             continue
         ann = _json.loads(ann_file.read_text(encoding="utf-8"))
-        if (ann.get("flags") or {}).get("status") == "skip":   # clutter — never populate
+        # status "skip" = the page receives no annotations — never populate
+        if (ann.get("flags") or {}).get("status") == "skip":
             skipped_clutter += 1
             continue
         if ann.get("shapes"):  # already has hand annotations — skip

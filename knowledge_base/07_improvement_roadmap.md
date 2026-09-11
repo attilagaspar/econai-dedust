@@ -146,6 +146,13 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
    `flags.status == "verified"` with zero shapes, or a dedicated
    `empty_verified` flag — plus a dashboard checkbox to enable inclusion.
    "An empty page is an annotation, not an absence."
+   *Update 2026-09-11: the inference half is covered by the EXISTING `skip`
+   status — apply-predictions never populates skip pages (now
+   regression-tested; UI relabeled "no annotations" so it's discoverable).
+   Note for the training-export build: skip conflates "deliberately
+   unannotated" with genuine clutter, and a skipped TABLE page must not
+   train as a negative — so the verified-empty negative marker introduced
+   here must be distinct from `skip`.*
 2. **Self-fine-tune: allow source == target in finetune-from.** The dashboard
    guard (`Source and target project must be different`) exists because the
    training script wipes `outputs/<target>/*.pth` before training — with

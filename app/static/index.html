@@ -30,7 +30,7 @@
     <option value="corrected">● corrected</option>
     <option value="verified">✓ verified</option>
     <option value="problem">⚠ problem</option>
-    <option value="skip">⊘ skip (clutter)</option>
+    <option value="skip">⊘ skip (no annotations)</option>
   </select>
   <div id="search-wrap" style="display:flex;align-items:center;gap:3px;margin-left:8px;">
     <input id="search-input" type="text" placeholder="search… (Enter)"
@@ -847,7 +847,7 @@
     <div id="batch-status-opts" style="display:none;">
       <label class="row" style="margin-bottom:4px;">Set status to</label>
       <select id="batch-status-value" style="width:100%;">
-        <option value="skip">⊘ skip (clutter — excluded from inference &amp; review)</option>
+        <option value="skip">⊘ skip (receives no annotations — never gets predictions, excluded from review)</option>
         <option value="predicted">● predicted (unreviewed)</option>
         <option value="corrected">● corrected</option>
         <option value="verified">✓ verified</option>

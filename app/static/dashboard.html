@@ -940,8 +940,8 @@ async function loadReviewBoard() {
         <span style="color:#f0c040;">● ${c.corrected} corrected</span>
         <span style="color:#e94560;">⚠ ${c.problem} problem</span>
         <span style="color:#8a94a6;">● ${c.predicted} unreviewed</span>
-        ${c.skip ? `<span style="color:#6b7280;">⊘ ${c.skip} clutter</span>` : ''}
-        <span style="color:#667;">— ${work} working pages, ${(100 * c.verified / work).toFixed(0)}% verified${c.skip ? ` (+${c.skip} clutter)` : ''}</span>
+        ${c.skip ? `<span style="color:#6b7280;">⊘ ${c.skip} skipped</span>` : ''}
+        <span style="color:#667;">— ${work} working pages, ${(100 * c.verified / work).toFixed(0)}% verified${c.skip ? ` (+${c.skip} skipped)` : ''}</span>
       </div>`;
   } catch (e) {
     el.innerHTML = '<span style="color:#e94560;">Could not load status.</span>';
