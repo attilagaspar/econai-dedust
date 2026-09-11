@@ -680,31 +680,40 @@ function _latticeSegmentStacked(selectedLabels) {
     if (last && t <= last[1]) last[1] = Math.max(last[1], b);
     else bands.push([t, b]);
   }
-  if (bands.length < 2) return [sel];
+  // NOTE: a single coverage band does NOT mean "one table" — one over-tall box
+  // bridging two tables merges the bands, and the divider rule below must
+  // still get its chance. No early return here.
 
   const selL = Math.min(...sel.map(left)), selR = Math.max(...sel.map(right));
   const medH = _median(sel.map(s => bot(s) - top(s)));
   const bigGap = Math.max(3 * medH, 60);   // "significant empty space"
 
   const cuts = [];
+  // (a) a large empty band between coverage bands
   for (let i = 0; i < bands.length - 1; i++) {
     const g1 = bands[i][1], g2 = bands[i + 1][0];
-    let split = (g2 - g1) >= bigGap;
-    if (!split) {
-      // A non-selected annotation lying mostly inside the gap and horizontally
-      // overlapping the tables is a divider (e.g. a title between two tables).
-      // The majority-inside test keeps row-height gaps from splitting on
-      // marginal annotations that merely graze them.
-      split = others.some(o => {
-        if (right(o) <= selL || left(o) >= selR) return false;
-        const ot = top(o), ob = bot(o);
-        const inGap = Math.min(ob, g2) - Math.max(ot, g1);
-        return inGap > 0 && inGap >= 0.5 * (ob - ot);
-      });
-    }
-    if (split) cuts.push((g1 + g2) / 2);
+    if ((g2 - g1) >= bigGap) cuts.push((g1 + g2) / 2);
   }
+  // (b) divider annotations: a non-selected shape spanning a meaningful part
+  // of the tables' width cuts at its y-center when (almost) no selected shape
+  // straddles that line. Deliberately NOT conditioned on a gap in the selected
+  // shapes' coverage: one over-tall raw box bridging the divider would merge
+  // the coverage bands and defeat a gap-based test (seen on real pages), but
+  // it is only a single straddler here. Tolerance is 1 so a lone bridging box
+  // cannot block the split; a divider inside a table has a whole row of
+  // straddlers and never cuts.
+  const yMin = bands[0][0], yMax = bands[bands.length - 1][1];
+  others.forEach(o => {
+    const xOverlap = Math.min(right(o), selR) - Math.max(left(o), selL);
+    if (xOverlap < 0.25 * (selR - selL)) return;   // margin notes don't cut
+    const cy = (top(o) + bot(o)) / 2;
+    if (cy <= yMin || cy >= yMax) return;          // above/below all cells
+    let straddlers = 0;
+    for (const s of sel) if (top(s) < cy && bot(s) > cy && ++straddlers > 1) return;
+    cuts.push(cy);
+  });
   if (!cuts.length) return [sel];
+  cuts.sort((a, b) => a - b);
 
   const groups = cuts.map(() => []).concat([[]]);
   sel.forEach(s => {
