@@ -168,11 +168,72 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
    active-learning loop can no longer poison itself when an unreviewed batch
    sits in the project at train time. Composes with item 1: a *verified*
    empty page is a negative example; a *predicted* empty page is nothing.
+   *→ promoted to P10.2 (2026-09-11).*
 4. **Persistent train/test split.** `cocosplit` re-rolls the 80/20 split every
    run, so eval metrics are not comparable across training cycles. Seed it
    per project (or store `test.json` once and reuse) so the loop's progress
-   is measurable run over run.
+   is measurable run over run. *→ promoted to P10.1 (2026-09-11).*
 5. *(carried from P8)* Pin frequently-used panel groups to the top.
+
+---
+
+## P10. Learning diagnostics (added 2026-09-11)
+
+*Background and the reasoning in plain language:
+[11_learning_diagnostics.md](11_learning_diagnostics.md). Motivation: several
+sources with tens of thousands of pages are coming; the "does more annotation
+still help?" question must be a measurement, not a feeling. Items 1–2 absorb
+P9 items 4 and 3 — they are the prerequisites for everything below.*
+
+1. **Frozen test set (absorbs P9.4).** Per project: a hand-picked (or
+   stratified-random) list of verified pages stored as
+   `intermediate/test_stems.json`; the training export always EXCLUDES them
+   from training data and always evaluates on exactly them. Dashboard UI:
+   create/inspect the set ("freeze N verified pages"), warn when a frozen
+   page's annotations change afterwards. Without this, no two training runs
+   are comparable.
+2. **Status-filtered training export (absorbs P9.3).** Only corrected +
+   verified pages enter the training COCO (override checkbox). Also the
+   verified-empty negative marker from P9.1 — distinct from `skip`, which
+   must never train as a negative. This removes the most likely artificial
+   ceiling (the model training on its own uncorrected output).
+3. **Training ledger.** Every Train / finetune-from appends one row to a
+   project-level `training_log.json`: timestamp, mode, training-page counts
+   by status, config essentials (iterations, base weights), and — once item 4
+   exists — the evaluation scores. Dashboard table, newest first. Turns every
+   training into a data point instead of an anecdote.
+4. **Auto-evaluation after training (corrections-per-page).** After training,
+   run inference on the frozen test set and score it TWO ways: standard AP,
+   and the human-cost metric — match predicted boxes to verified boxes (same
+   label + IoU threshold), then count ADDED (missed by model), DELETED
+   (invented), MOVED (matched but edges off beyond tolerance), per page and
+   per label. Store in the ledger row. The added/deleted/moved split is the
+   error-audit input (see the explainer's residue table).
+5. **Learning-curve run.** A "train on subset" option (fraction + fixed seed,
+   nested so 50% ⊂ 100%) so 2–3 runs produce the score-vs-quantity curve from
+   ledger rows alone; the dashboard renders the curve when a project has
+   ledger entries at multiple training sizes. GPU is exclusive-use, so this
+   stays a deliberate sequence of runs, not a parallel batch.
+6. **Correction telemetry (the real curve, for free).** When a page
+   transitions predicted → corrected, snapshot-diff its shapes (the batch-undo
+   zip machinery already snapshots pages) and log actual human
+   corrections-per-page over time. This measures the true objective
+   continuously on real work, without dedicating GPU time — the learning
+   curve's cheap everyday complement.
+7. **Error audit view.** Per-page visual diff of predicted vs corrected/
+   verified (added = green, deleted = red, moved = amber) plus per-label and
+   per-page aggregates. Turns "considerable manual post-processing" into
+   numbers that point at one of: post-processing work, data cleaning, or
+   targeted annotation.
+8. **Transfer check.** Evaluate a chosen model on the frozen test set of a
+   DIFFERENT project (new year / volume / source) with the same
+   corrections-per-page report — the "annotate at scale or fine-tune first?"
+   decision for every new source, measured on 10–20 pages before committing
+   to thousands.
+
+*Sequencing within P10: 1 + 2 first (small, and every later number is
+meaningless without them); 3 + 4 next (the ledger makes each future training
+a free data point); 5–8 as the sources arrive.*
 
 ---
 

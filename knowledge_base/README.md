@@ -14,6 +14,8 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 | [07_improvement_roadmap.md](07_improvement_roadmap.md) | Concrete plans to make human–machine interaction faster and shorten raw-data → final-product time |
 | [08_remote_and_collaboration.md](08_remote_and_collaboration.md) | Plan: expose the server via Cloudflare Tunnel + domain, mobile review PWA, multi-user identity & page locks, optional hosted deployment |
 | [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md) | Phase H plan: region detection (firm_header/text_block/table/figure), per-decade models via fine-tune chaining, structure inside tables, cross-page record grouping (group_id sweep), records export |
+| [10_dataset_layer.md](10_dataset_layer.md) | Dataset declarations, join, and diagnostics: page-level column sequences, separator bands, record exclusion, batch diagnose report |
+| [11_learning_diagnostics.md](11_learning_diagnostics.md) | Plain-language explainer: frozen test sets, corrections-per-page, learning curves, error audits, transfer checks — how to know whether more annotation still helps (build items: roadmap P10) |
 
 Conventions for AI assistants:
 - The editor is `app/static/index.html` (HTML skeleton) + `app/static/js/*.js` — nine ordered classic scripts sharing one global scope (load order in index.html is load-bearing; no load-time calls into later files). Styles in `app/static/css/editor.css`. The backend is `app/server.py` (~5.4k lines). Grep across `js/` before you assume something doesn't exist — most features do exist but are hard to find.
