@@ -174,6 +174,14 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
    per project (or store `test.json` once and reuse) so the loop's progress
    is measurable run over run. *→ promoted to P10.1 (2026-09-11).*
 5. *(carried from P8)* Pin frequently-used panel groups to the top.
+6. **Trash page in the dashboard (added 2026-09-12).** One view over both
+   trash locations — whole projects in `projects/_trash`, per-project pages
+   in `<project>/_trash_pages` — showing stem/file count/size/mtime, with
+   Restore (move back; REFUSE if a live page with the same stem exists —
+   never clobber live work) and Delete-forever (confirm states the bytes
+   freed; per item + "empty this project's trash"). Kills the last reason
+   to SSH for file management (root-owned container files made `rm` painful).
+   Endpoints: list / restore / purge + collision-rule tests.
 
 ---
 

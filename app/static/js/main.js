@@ -49,6 +49,33 @@ document.addEventListener('keydown', e => {
   if (e.key==='ArrowUp')    { navigateLattice('up');    return; }
 });
 
+// ── Page-status coloring of the page selector ────────────────────────────────
+// stem → status ('predicted'/'corrected'/'verified'/'problem'/'skip').
+let pageStatuses = {};
+const PAGE_STATUS_COLORS = {
+  skip: '#9ca3af', corrected: '#60a5fa', verified: '#22c55e', problem: '#e94560',
+};   // predicted / unknown keep the select's default (white)
+
+function colorizePageSelect() {
+  const sel = document.getElementById('page-select');
+  if (!sel) return;
+  [...sel.options].forEach(o => {
+    const stem = pages[+o.value]?.stem;
+    o.style.color = PAGE_STATUS_COLORS[pageStatuses[stem]] || '';
+  });
+}
+
+async function refreshPageStatuses() {
+  try {
+    const r = await fetch(`${API}/api/project/status?folder=${encodeURIComponent(folder)}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    pageStatuses = {};
+    (d.pages || []).forEach(p => { pageStatuses[p.stem] = p.status; });
+    colorizePageSelect();
+  } catch (e) { /* cosmetic — never block page loading */ }
+}
+
 // ── Page loading ─────────────────────────────────────────────────────────────
 async function reloadPageData() {
   const p=pages[pageIdx];
@@ -65,6 +92,7 @@ async function removeStemsFromPageList(stems) {
   pages = pages.filter(p => !gone.has(p.stem));
   const sel = document.getElementById('page-select');
   sel.innerHTML = pages.map((p, i) => `<option value="${i}">${p.stem}</option>`).join('');
+  colorizePageSelect();
   if (!pages.length) {
     pageData = null; pageIdx = 0;
     document.getElementById('page-total').textContent = '/ 0';
@@ -111,6 +139,7 @@ async function loadFolder() {
   const sel=document.getElementById('page-select');
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';
+  refreshPageStatuses();   // async — colors the options when statuses arrive
   document.getElementById('mode-btn').disabled=false;
   document.getElementById('delete-page-btn').disabled=false;
   document.getElementById('autofill-btn').disabled=false;

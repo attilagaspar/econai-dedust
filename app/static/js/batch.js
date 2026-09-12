@@ -457,6 +457,8 @@ async function runBatch() {
       const d = await r.json();
       if (!r.ok) { showToast('✕ ' + (d.detail || r.status)); return; }
       showToast(`Set "${status}" on ${d.changed} page(s).`, 3000);
+      stems.forEach(s => { pageStatuses[s] = status; });
+      colorizePageSelect?.();
       if (pageData) { pageData.flags = pageData.flags || {};
         if (stems.includes(pages[pageIdx]?.stem)) { pageData.flags.status = status; _syncStatusChip?.(); } }
     } catch (e) { showToast('✕ ' + (e.message || e)); }

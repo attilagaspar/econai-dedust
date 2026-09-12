@@ -12,6 +12,8 @@ async function setPageStatus(status, opts = {}) {
       body: JSON.stringify({ flags: { status } }),
     });
     if (pageData) { pageData.flags = pageData.flags || {}; pageData.flags.status = status; }
+    pageStatuses[stem] = status;
+    colorizePageSelect();
     _syncStatusChip();
     if (!opts.silent) showToast(`Page marked: ${status}`);
   } catch (e) { showToast('Status save failed: ' + (e.message || e)); }
