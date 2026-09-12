@@ -57,6 +57,43 @@ async function reloadPageData() {
   computeDiagnostics();
 }
 
+// Drop deleted stems from the client page list and land on a sane page.
+// Shared by the editor delete button and the batch delete-pages op.
+async function removeStemsFromPageList(stems) {
+  const gone = new Set(stems);
+  const curStem = pages[pageIdx]?.stem;
+  pages = pages.filter(p => !gone.has(p.stem));
+  const sel = document.getElementById('page-select');
+  sel.innerHTML = pages.map((p, i) => `<option value="${i}">${p.stem}</option>`).join('');
+  if (!pages.length) {
+    pageData = null; pageIdx = 0;
+    document.getElementById('page-total').textContent = '/ 0';
+    document.getElementById('page-num-input').value = '';
+    showToast('No pages left in this folder');
+    return;
+  }
+  let idx = pages.findIndex(p => p.stem === curStem);   // current survived?
+  if (idx < 0) idx = Math.min(pageIdx, pages.length - 1);
+  await loadPage(idx);
+}
+
+async function deleteCurrentPage() {
+  if (!pages.length || !pages[pageIdx]) return;
+  const stem = pages[pageIdx].stem;
+  if (!confirm(`Delete page "${stem}" — image + annotations?\n` +
+               `Files move to the project's _trash_pages folder (recoverable).`)) return;
+  try {
+    const r = await fetch(`${API}/api/pages/delete?folder=${encodeURIComponent(folder)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stems: [stem] }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    showToast(`Page ${stem} moved to trash (${d.deleted} deleted)`);
+    await removeStemsFromPageList([stem]);
+  } catch (e) { showToast('Delete failed: ' + (e.message || e)); }
+}
+
 async function loadFolder() {
   folder=document.getElementById('folder-input').value.trim();
   if (!folder) return;
@@ -75,6 +112,7 @@ async function loadFolder() {
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';
   document.getElementById('mode-btn').disabled=false;
+  document.getElementById('delete-page-btn').disabled=false;
   document.getElementById('autofill-btn').disabled=false;
   document.getElementById('table-btn').disabled=false;
   document.getElementById('persp-btn').disabled=false;

@@ -562,6 +562,9 @@ async function runBatch() {
 
   if (op === 'clear') {
     if (!confirm(`Clear annotations on ${sorted.length} page(s)? This cannot be undone.`)) return;
+  } else if (op === 'delete_pages') {
+    if (!confirm(`Delete ${sorted.length} page(s) — images + annotations?\n`
+                 + `Files move to the project's _trash_pages folder (recoverable by moving them back).`)) return;
   } else if (op === 'overlaps_lattice') {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
   } else if (op === 'overlaps_lattice_snap_trim') {
@@ -617,10 +620,36 @@ async function runBatch() {
   if (verboseEl) { verboseEl.textContent = ''; verboseEl.style.display = _batchVerbose ? 'block' : 'none'; }
 
   // Snapshot for one-step undo before anything writes (submissions and
-  // exports don't modify pages — no snapshot needed for those).
-  if (op !== 'json_export' && op !== 'llm_batchapi') {
+  // exports don't modify pages — no snapshot needed; delete_pages is its own
+  // undo: the files sit intact in _trash_pages).
+  if (op !== 'json_export' && op !== 'llm_batchapi' && op !== 'delete_pages') {
     progText.textContent = 'Snapshotting pages for undo…';
     await _batchTakeSnapshot(sorted.map(i => pages[i]?.stem).filter(Boolean), op);
+  }
+
+  // Delete pages — one server call, files move to <project>/_trash_pages.
+  if (op === 'delete_pages') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    progText.textContent = `Deleting ${stems.length} page(s)…`;
+    try {
+      const r = await fetch(`${API}/api/pages/delete?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stems }),
+      });
+      const dd = await r.json();
+      if (!r.ok) throw new Error(dd.detail || r.status);
+      progText.style.color = '#4caf50';
+      progText.textContent = `✓ ${dd.deleted} page(s) moved to trash`
+        + (dd.not_found ? ` (${dd.not_found} not found)` : '');
+      showToast(`Deleted ${dd.deleted} page(s) → _trash_pages`, 5000);
+      await removeStemsFromPageList(stems);
+    } catch (e) { progText.style.color = '#ff9800'; progText.textContent = '✕ ' + (e.message || e); }
+    _batchRunning = false;
+    document.getElementById('batch-run-btn').textContent = 'Run';
+    document.getElementById('batch-run-btn').disabled = false;
+    document.getElementById('batch-cancel-btn').textContent = 'Cancel';
+    return;
   }
 
   // Structural-blank ink scan — one server-side call (free, local, no API).

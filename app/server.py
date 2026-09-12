@@ -3501,6 +3501,45 @@ def api_bulk_set_status(folder: str = Query(...), body: BulkStatusBody = ...):
     return {"ok": True, "changed": changed, "status": body.status}
 
 
+class DeletePagesBody(BaseModel):
+    stems: List[str]
+
+
+@app.post("/api/pages/delete")
+def api_delete_pages(folder: str = Query(...), body: DeletePagesBody = ...):
+    """Soft-delete pages: move each page's files (annotation JSON + image, any
+    extension, plus its predictions/<stem>.json if present) into
+    <project>/_trash_pages/ next to the annotation folder. Recoverable by
+    moving the files back; mirrors the project-level soft delete."""
+    import shutil
+    d = _resolve_folder(folder)
+    if not body.stems:
+        raise HTTPException(status_code=400, detail="No stems given")
+    trash = d.parent / "_trash_pages"
+    trash.mkdir(exist_ok=True)
+    moved, missing = 0, 0
+    for stem in body.stems:
+        with _SHAPE_MERGE_LOCK:
+            found = [p for p in d.iterdir() if p.is_file() and p.stem == stem]
+            if not found:
+                missing += 1
+                continue
+            for p in found:
+                dst = trash / p.name
+                if dst.exists():
+                    dst.unlink()
+                shutil.move(str(p), str(dst))
+            pred = d.parent / "predictions" / f"{stem}.json"
+            if pred.exists():
+                (trash / "predictions").mkdir(exist_ok=True)
+                dstp = trash / "predictions" / pred.name
+                if dstp.exists():
+                    dstp.unlink()
+                shutil.move(str(pred), str(dstp))
+            moved += 1
+    return {"ok": True, "deleted": moved, "not_found": missing, "trash": str(trash)}
+
+
 @app.get("/api/project/status")
 def api_project_status(folder: str = Query(...)):
     """Per-status page counts for a project's annotation folder — the dashboard
