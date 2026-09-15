@@ -198,21 +198,34 @@ function _newsflowReconstruct(opts = {}) {
   }
 
   // ── D. per band × column: merge text runs, split at breakers ───────────────
-  // text coverage per column (tight y-intervals of the actual boxes)
+  // Horror vacui inside a continuous column: a band × column is divided into
+  // free segments by the breakers; every free segment that contains ANY text
+  // coverage becomes exactly ONE element, and where the segment is bounded by
+  // a breaker the element extends flush to it. So text-gap-text (no breaker
+  // between) merges into one element, and in a text-title-text flow the text
+  // touches the title on both sides. At band edges (fold, page top/bottom) the
+  // detected extent is kept — the extend-columns pass below aligns those.
   const elements = [];   // {kind:'text'|'breaker', label, rect, band, col, span, shape?}
   for (let b = 0; b < bands.length; b++) {
     const band = bands[b];
     const perCol = columns.map((_, c) => {
-      const clip = iv => _nfSubtractIntervals(
-        iv.map(i => [Math.max(i[0], band.y1), Math.min(i[1], band.y2)]), []);
       const cover = _nfMergeIntervals(
         textShapes.filter(s => textCols(_nfRect(s)).includes(c))
                   .map(s => { const r = _nfRect(s); return [r.y1, r.y2]; }));
       const brk = _nfMergeIntervals(
         breakerMerged.filter(m => coveredCols(m.rect).includes(c))
                      .map(m => [m.rect.y1, m.rect.y2]));
-      const runs = clip(_nfSubtractIntervals(cover, brk))
-        .filter(([y1, y2]) => y2 - y1 >= 15);   // drop sub-line slivers
+      const runs = [];
+      _nfSubtractIntervals([[band.y1, band.y2]], brk).forEach(([s1, s2]) => {
+        const inside = cover
+          .map(i => [Math.max(i[0], s1), Math.min(i[1], s2)])
+          .filter(i => i[1] - i[0] > 1);
+        if (!inside.length) return;                      // never invent elements
+        const covTop = inside[0][0], covBot = inside[inside.length - 1][1];
+        if (covBot - covTop < 15) return;                // drop sub-line slivers
+        runs.push([s1 > band.y1 + 1 ? s1 : covTop,       // flush to breaker above
+                   s2 < band.y2 - 1 ? s2 : covBot]);     // flush to breaker below
+      });
       return { runs, brk };
     });
 
