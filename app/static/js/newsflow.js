@@ -125,6 +125,17 @@ function _newsflowReconstruct(opts = {}) {
       .reduce((b, c) => xCover(r, c) > xCover(r, b) ? c : b, 0)];
   };
 
+  // Furniture (page header / masthead) spans the full page by definition —
+  // widen its boxes to the columns' joint extent; the y range stays detected.
+  if (columns.length) {
+    const fullL = Math.round(columns[0].x1);
+    const fullR = Math.round(columns[columns.length - 1].x2);
+    furniture.forEach(s => {
+      const r = _nfRect(s);
+      s.points = [[fullL, Math.round(r.y1)], [fullR, Math.round(r.y2)]];
+    });
+  }
+
   const pageTop = Math.min(...[...textShapes, ...breakerShapes, ...furniture].map(s => _nfRect(s).y1));
   const pageBot = Math.max(...[...textShapes, ...breakerShapes, ...furniture].map(s => _nfRect(s).y2));
 
