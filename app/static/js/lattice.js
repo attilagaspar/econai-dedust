@@ -1110,6 +1110,22 @@ function drawOverlay() {
       svgOverlay.appendChild(rect);
     });
 
+    // Newsflow badge: reading order + article group, top-left of the element
+    if (shape.flow_order != null) {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', tl.x + 4);
+      t.setAttribute('y', tl.y + 14);
+      t.setAttribute('fill', '#e94560');
+      t.setAttribute('font-size', '13');
+      t.setAttribute('font-weight', '700');
+      t.setAttribute('paint-order', 'stroke');
+      t.setAttribute('stroke', '#fff');
+      t.setAttribute('stroke-width', '3');
+      t.textContent = `#${shape.flow_order + 1}·a${shape.group_id ?? 0}`;
+      t.style.pointerEvents = 'none';
+      svgOverlay.appendChild(t);
+    }
+
     // Authority badge: green dot = fully resolved, amber = partially (rows)
     const _ab = _authBadgeState(shape);
     if (_ab) {

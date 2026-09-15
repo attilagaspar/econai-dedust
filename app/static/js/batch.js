@@ -571,6 +571,9 @@ async function runBatch() {
     if (!confirm(`Run overlap removal + lattice correction on ${sorted.length} page(s)?`)) return;
   } else if (op === 'overlaps_lattice_snap_trim') {
     if (!confirm(`Run overlap removal + lattice correction + snap + overlap removal on ${sorted.length} page(s)?`)) return;
+  } else if (op === 'newsflow') {
+    if (!confirm(`Reconstruct newspaper flow on ${sorted.length} page(s)?\n`
+                 + `Text boxes are MERGED into column elements (label roles as saved in the 📰 Flow modal).`)) return;
   } else if (op === 'ocr') {
     const eng = document.getElementById('batch-ocr-engine').value;
     const scp = document.getElementById('batch-ocr-scope').value;
@@ -830,6 +833,30 @@ async function runBatch() {
       await fetch(`${API}/api/page/shapes?${params}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shapes: [] }),
+      });
+
+    } else if (op === 'newsflow') {
+      // Load page, run flow reconstruction on its shapes, save.
+      const res  = await fetch(`${API}/api/page?${params}`);
+      const data = await res.json();
+      let shapes = data.shapes || [];
+      if (shapes.length) {
+        // Roles/options come from what the 📰 Flow modal last saved.
+        let roles = {};
+        try { roles = JSON.parse(localStorage.getItem('newsflowRoles') || '{}'); } catch (e) {}
+        const savedPageData = pageData;
+        pageData = { shapes };
+        _newsflowReconstruct({
+          roles: Object.keys(roles).length ? roles : undefined,
+          whitespaceCuts: localStorage.getItem('newsflowWsCuts') !== '0',
+          minGap: parseInt(localStorage.getItem('newsflowMinGap')) || 40,
+        });
+        shapes = pageData.shapes;
+        pageData = savedPageData;
+      }
+      await fetch(`${API}/api/page/shapes?${params}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shapes }),
       });
 
     } else if (op === 'overlaps_lattice') {

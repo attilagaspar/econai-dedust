@@ -150,6 +150,7 @@ async function loadFolder() {
   document.getElementById('trim-overlaps-btn').disabled=false;
   document.getElementById('lattice-btn').disabled=false;
   document.getElementById('lattice-sel-btn').disabled=false;
+  document.getElementById('newsflow-btn').disabled=false;
   document.getElementById('ocr-view-btn').disabled=false;
   document.getElementById('smart-correct-btn').disabled=false;
   pageIdx=0; initViewer(); await loadPage(0);

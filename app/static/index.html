@@ -75,6 +75,8 @@
                 title="Detect lattice rows and columns from annotated cells (whole page = one table)">🔲 Lattice</button>
         <button class="nav-btn" id="lattice-sel-btn" onclick="runLatticeDetectSelection()" disabled
                 title="Detect a separate lattice on the SELECTED shapes only (a new table). Ctrl+drag / Ctrl+click to select the cells of one table, then click this.">🔲＋ Lattice (sel)</button>
+        <button class="nav-btn" id="newsflow-btn" onclick="openNewsflowModal()" disabled
+                title="Reconstruct newspaper reading flow: find columns and bands, merge text boxes into clean elements, split at titles, stamp reading order + article groups">📰 Flow</button>
         <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
                 title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
         <button class="nav-btn" id="lattice-col-sep-btn" onclick="toggleLatticeSepMode('col')" disabled style="display:none"
@@ -776,6 +778,28 @@
   </div>
 </div>
 
+<!-- Newspaper flow reconstruction modal -->
+<div id="newsflow-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#16213e;border:2px solid #e94560;border-radius:8px;padding:22px 26px;min-width:300px;max-width:420px;display:flex;flex-direction:column;gap:12px;">
+    <h3 style="color:#e94560;font-size:14px;font-weight:700;margin:0;">📰 Reconstruct newspaper flow</h3>
+    <p style="color:#aaa;font-size:12px;margin:0;">Role of each label (remembered). Text boxes are MERGED into
+      column elements and split at titles/breakers; furniture cuts bands; run this BEFORE OCR.</p>
+    <div id="newsflow-role-rows" style="display:flex;flex-direction:column;gap:6px;"></div>
+    <label style="display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px;cursor:pointer;"
+           title="Also cut horizontal bands where a whitespace gap lines up across ALL columns">
+      <input type="checkbox" id="newsflow-ws-cuts" style="accent-color:#e94560;width:13px;height:13px;">
+      <span>band cuts at page-wide whitespace, min gap</span>
+      <input type="number" id="newsflow-min-gap" value="40" min="10" max="400"
+             style="width:56px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:2px 4px;">
+      <span>px</span>
+    </label>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <button onclick="closeNewsflowModal()" style="background:#0f3460;border:1px solid #555;border-radius:4px;color:#ccc;padding:7px 14px;font-size:13px;cursor:pointer;">Cancel</button>
+      <button onclick="runNewsflow()" style="background:#e94560;border:none;border-radius:4px;color:#fff;padding:7px 18px;font-size:13px;font-weight:600;cursor:pointer;">Run</button>
+    </div>
+  </div>
+</div>
+
 <!-- Review queue setup modal -->
 <div id="review-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:2100;align-items:center;justify-content:center;">
   <div style="background:#0d1b35;border:1px solid #16588e;border-radius:8px;width:min(460px,92vw);padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 8px 40px #000a;">
@@ -828,6 +852,7 @@
         <option value="delete_pages">🗑 Delete pages (image + annotations → trash)</option>
         <option value="overlaps_lattice">Remove overlaps + lattice correction</option>
         <option value="overlaps_lattice_snap_trim">Remove overlaps + lattice + snap + overlaps</option>
+        <option value="newsflow">📰 Reconstruct newspaper flow (merge/split + reading order)</option>
         <option value="ocr">OCR (EasyOCR / Tesseract)</option>
         <option value="mark_blanks">🚫 Mark structural blanks (ink scan — free, no API)</option>
         <option value="llm">LLM</option>
@@ -1449,6 +1474,7 @@
 <script src="js/core.js"></script>
 <script src="js/rules_clips.js"></script>
 <script src="js/lattice.js"></script>
+<script src="js/newsflow.js"></script>
 <script src="js/rows_panel.js"></script>
 <script src="js/batch.js"></script>
 <script src="js/export_ocr.js"></script>
