@@ -148,7 +148,19 @@ function _newsflowReconstruct(opts = {}) {
   //     fold rule itself is not detected as a shape. (Real case: Népszava
   //     page folds leave only a ~25px common gap because detection is tight.)
   const cutIntervals = [];
-  furniture.forEach(s => { const r = _nfRect(s); cutIntervals.push([r.y1, r.y2]); });
+  // Furniture detections (fejléc especially) are often much too tall — text
+  // and titles ALWAYS take precedence: a furniture cut only removes the parts
+  // of its y-interval where no text/title/breaker coverage exists, so an
+  // oversized fejléc can never eat the first lines of the columns.
+  const contentIv = _nfMergeIntervals(
+    [...textShapes, ...breakerShapes]
+      .map(s => { const r = _nfRect(s); return [r.y1, r.y2]; }));
+  furniture.forEach(s => {
+    const r = _nfRect(s);
+    _nfSubtractIntervals([[r.y1, r.y2]], contentIv)
+      .filter(iv => iv[1] - iv[0] >= 8)
+      .forEach(iv => cutIntervals.push(iv));
+  });
   breakerShapes.forEach(s => {
     const r = _nfRect(s);
     if (coveredCols(r).length === columns.length) cutIntervals.push([r.y1, r.y2]);
