@@ -130,7 +130,12 @@ function _newsflowReconstruct(opts = {}) {
 
   // ── A+C. band cuts ─────────────────────────────────────────────────────────
   // (1) furniture always cuts; (2) a breaker covering EVERY column cuts;
-  // (3) optional: whitespace gaps aligned across all columns.
+  // (3) optional: whitespace gaps aligned across all columns. Gaps are
+  //     measured against TEXT coverage only, and a narrow common gap still
+  //     counts when a title/breaker overlaps it — a page-wide text gap with a
+  //     title in it is what a fold (e.g. the tárca line) looks like when the
+  //     fold rule itself is not detected as a shape. (Real case: Népszava
+  //     page folds leave only a ~25px common gap because detection is tight.)
   const cutIntervals = [];
   furniture.forEach(s => { const r = _nfRect(s); cutIntervals.push([r.y1, r.y2]); });
   breakerShapes.forEach(s => {
@@ -138,15 +143,20 @@ function _newsflowReconstruct(opts = {}) {
     if (coveredCols(r).length === columns.length) cutIntervals.push([r.y1, r.y2]);
   });
   if (whitespaceCuts && columns.length > 1) {
-    // per-column occupied y-intervals (all flow content incl. breakers)
+    // per-column occupied y-intervals (text only — breakers sit inside folds)
     const occ = columns.map((_, c) => _nfMergeIntervals(
-      [...textShapes, ...breakerShapes]
+      textShapes
         .filter(s => xCover(_nfRect(s), c) >= 0.4 * colW(c))
         .map(s => { const r = _nfRect(s); return [r.y1, r.y2]; })));
     // gaps per column, intersected across all columns
     let common = [[pageTop, pageBot]];
     occ.forEach(iv => { common = _nfSubtractIntervals(common, iv); });
-    common.filter(g => g[1] - g[0] >= minGap)
+    const brkOverlaps = g => breakerShapes.some(s => {
+      const r = _nfRect(s);
+      return Math.min(r.y2, g[1]) - Math.max(r.y1, g[0]) > 0;
+    });
+    common.filter(g => (g[1] - g[0] >= minGap) ||
+                       (g[1] - g[0] >= 15 && brkOverlaps(g)))
           .forEach(g => cutIntervals.push([g[0], g[1]]));
   }
   const cuts = _nfMergeIntervals(cutIntervals);
