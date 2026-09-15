@@ -205,14 +205,27 @@ function _newsflowReconstruct(opts = {}) {
       return { runs, brk };
     });
 
-    // Optional: extend each column's first/last text run to the band's common
-    // extent (detection often cuts column bottoms short — this recovers the
-    // under-covered lines). Extension never crosses a breaker in that column
-    // and never invents elements in empty columns.
-    if (opts.extendCols && perCol.some(pc => pc.runs.length)) {
-      const cTop = Math.min(...perCol.filter(pc => pc.runs.length).map(pc => pc.runs[0][0]));
-      const cBot = Math.max(...perCol.filter(pc => pc.runs.length)
-                                     .map(pc => pc.runs[pc.runs.length - 1][1]));
+    // Optional (default on): extend each column's first/last text run to the
+    // band's common extent (detection often cuts column bottoms short — this
+    // recovers the under-covered lines). Titles/breakers count toward the
+    // common extent, so a title north of the text columns pulls them up to
+    // its latitude. Extension never crosses a breaker in its own column and
+    // never invents elements in empty columns.
+    if (opts.extendCols !== false && perCol.some(pc => pc.runs.length)) {
+      const tops = [], bots = [];
+      perCol.forEach(pc => {
+        if (pc.runs.length) {
+          tops.push(pc.runs[0][0]);
+          bots.push(pc.runs[pc.runs.length - 1][1]);
+        }
+        pc.brk.forEach(([b1, b2]) => {
+          if (b2 > band.y1 && b1 < band.y2) {
+            tops.push(Math.max(b1, band.y1));
+            bots.push(Math.min(b2, band.y2));
+          }
+        });
+      });
+      const cTop = Math.min(...tops), cBot = Math.max(...bots);
       perCol.forEach(({ runs, brk }) => {
         if (!runs.length) return;
         let topLim = band.y1, botLim = band.y2;
@@ -307,7 +320,7 @@ function openNewsflowModal() {
   document.getElementById('newsflow-min-gap').value =
     localStorage.getItem('newsflowMinGap') || '40';
   document.getElementById('newsflow-extend-cols').checked =
-    localStorage.getItem('newsflowExtendCols') === '1';
+    localStorage.getItem('newsflowExtendCols') !== '0';   // default ON
   document.getElementById('newsflow-modal').style.display = 'flex';
 }
 

@@ -850,7 +850,7 @@ async function runBatch() {
           roles: Object.keys(roles).length ? roles : undefined,
           whitespaceCuts: localStorage.getItem('newsflowWsCuts') !== '0',
           minGap: parseInt(localStorage.getItem('newsflowMinGap')) || 40,
-          extendCols: localStorage.getItem('newsflowExtendCols') === '1',
+          extendCols: localStorage.getItem('newsflowExtendCols') !== '0',
         });
         shapes = pageData.shapes;
         pageData = savedPageData;
