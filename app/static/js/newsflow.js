@@ -180,8 +180,8 @@ function _newsflowReconstruct(opts = {}) {
   // text coverage per column (tight y-intervals of the actual boxes)
   const elements = [];   // {kind:'text'|'breaker', label, rect, band, col, span, shape?}
   for (let b = 0; b < bands.length; b++) {
-    for (let c = 0; c < columns.length; c++) {
-      const band = bands[b];
+    const band = bands[b];
+    const perCol = columns.map((_, c) => {
       const clip = iv => _nfSubtractIntervals(
         iv.map(i => [Math.max(i[0], band.y1), Math.min(i[1], band.y2)]), []);
       const cover = _nfMergeIntervals(
@@ -192,11 +192,33 @@ function _newsflowReconstruct(opts = {}) {
                      .map(m => [m.rect.y1, m.rect.y2]));
       const runs = clip(_nfSubtractIntervals(cover, brk))
         .filter(([y1, y2]) => y2 - y1 >= 15);   // drop sub-line slivers
-      runs.forEach(([y1, y2]) => elements.push({
-        kind: 'text', label: null, band: b, col: c, span: 1,
-        rect: { x1: columns[c].x1, y1, x2: columns[c].x2, y2 },
-      }));
+      return { runs, brk };
+    });
+
+    // Optional: extend each column's first/last text run to the band's common
+    // extent (detection often cuts column bottoms short — this recovers the
+    // under-covered lines). Extension never crosses a breaker in that column
+    // and never invents elements in empty columns.
+    if (opts.extendCols && perCol.some(pc => pc.runs.length)) {
+      const cTop = Math.min(...perCol.filter(pc => pc.runs.length).map(pc => pc.runs[0][0]));
+      const cBot = Math.max(...perCol.filter(pc => pc.runs.length)
+                                     .map(pc => pc.runs[pc.runs.length - 1][1]));
+      perCol.forEach(({ runs, brk }) => {
+        if (!runs.length) return;
+        let topLim = band.y1, botLim = band.y2;
+        brk.forEach(([b1, b2]) => {
+          if (b2 <= runs[0][0]) topLim = Math.max(topLim, b2);
+          if (b1 >= runs[runs.length - 1][1]) botLim = Math.min(botLim, b1);
+        });
+        runs[0][0] = Math.max(cTop, topLim);
+        runs[runs.length - 1][1] = Math.min(cBot, botLim);
+      });
     }
+
+    perCol.forEach(({ runs }, c) => runs.forEach(([y1, y2]) => elements.push({
+      kind: 'text', label: null, band: b, col: c, span: 1,
+      rect: { x1: columns[c].x1, y1, x2: columns[c].x2, y2 },
+    })));
   }
   // breaker elements: one per merged breaker, anchored at its leftmost column
   breakerMerged.forEach(m => {
@@ -274,6 +296,8 @@ function openNewsflowModal() {
     localStorage.getItem('newsflowWsCuts') !== '0';
   document.getElementById('newsflow-min-gap').value =
     localStorage.getItem('newsflowMinGap') || '40';
+  document.getElementById('newsflow-extend-cols').checked =
+    localStorage.getItem('newsflowExtendCols') === '1';
   document.getElementById('newsflow-modal').style.display = 'flex';
 }
 
@@ -289,10 +313,12 @@ function _newsflowReadModalOpts() {
   });
   const whitespaceCuts = document.getElementById('newsflow-ws-cuts').checked;
   const minGap = parseInt(document.getElementById('newsflow-min-gap').value) || 40;
+  const extendCols = document.getElementById('newsflow-extend-cols').checked;
   localStorage.setItem('newsflowRoles', JSON.stringify(roles));
   localStorage.setItem('newsflowWsCuts', whitespaceCuts ? '1' : '0');
   localStorage.setItem('newsflowMinGap', String(minGap));
-  return { roles, whitespaceCuts, minGap };
+  localStorage.setItem('newsflowExtendCols', extendCols ? '1' : '0');
+  return { roles, whitespaceCuts, minGap, extendCols };
 }
 
 async function runNewsflow() {
