@@ -428,6 +428,14 @@ function _batchApplyPattern(indices) {
 }
 
 async function runBatch() {
+  // The Run button doubles as "■ Stop" while a batch is in flight — a click
+  // then must only signal the running loop to stop, never re-enter and start
+  // a second loop from page 1.
+  if (_batchRunning) {
+    _batchStop = true;
+    document.getElementById('batch-progress').textContent = 'Stopping after the current item…';
+    return;
+  }
   const op       = document.getElementById('batch-op').value;
   const rawPages   = document.getElementById('batch-pages').value;
   const indices    = _parsePageRange(rawPages);
@@ -946,7 +954,11 @@ async function runBatch() {
       const overwrite  = document.getElementById('batch-ocr-overwrite').checked;
       const cellHeight = parseInt(document.getElementById('batch-ocr-cellheight').value) || 26;
       const labelSet   = new Set(selLabels);
-      const resultField = engine === 'tesseract' ? 'tesseract_output' : 'easyocr_output';
+      // EVERY engine stores its result in tesseract_output (historical field
+      // name; the engine is recorded inside it — easyocr_output is a legacy
+      // field nothing writes). Checking easyocr_output made "overwrite off"
+      // re-OCR everything when the engine was EasyOCR.
+      const hasOcr = sh => !!(sh.tesseract_output?.ocr_text || sh.easyocr_output?.ocr_text);
 
       const res    = await fetch(`${API}/api/page?${params}`);
       const pdata  = await res.json();
@@ -961,7 +973,7 @@ async function runBatch() {
         if (!labelSet.has(sh.label)) continue;
         if (condFilter !== null && !condFilter.has(si)) continue;
         if (colFilter  !== null && !colFilter.has(si))  continue;
-        if (!overwrite && sh[resultField]?.ocr_text) continue;
+        if (!overwrite && hasOcr(sh)) continue;
         progText.textContent = `Page ${idx + 1}/${pages.length} — shape ${si + 1}/${shapes.length} (${sh.label})${condFilter ? ` [${condFilter.size} flagged]` : ''}${colFilter ? ` [col filter]` : ''}`;
         batchLog(`[${stem}] shape ${si} (${sh.label}) row=${sh.super_row} col=${sh.super_column}`);
         try {
