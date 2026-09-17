@@ -473,6 +473,41 @@ async function runBatch() {
     return;
   }
 
+  // Newspaper flow → Markdown: one server call builds a single .md from the
+  // reconstructed flow of the selected pages (titles as headings, text as
+  // paragraphs, page + article markers as comments) and the browser saves it.
+  if (op === 'newsflow_md') {
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    if (!stems.length) { showToast('No pages in range'); return; }
+    let roles = {};
+    try { roles = JSON.parse(localStorage.getItem('newsflowRoles') || '{}'); } catch (e) {}
+    const btn = document.getElementById('batch-run-btn');
+    const prog = document.getElementById('batch-progress');
+    const old = btn.textContent; btn.disabled = true; btn.textContent = '…';
+    if (prog) prog.textContent = `Building Markdown from ${stems.length} page(s)…`;
+    try {
+      const r = await fetch(`${API}/api/export/newsflow-md?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stems, roles }),
+      });
+      if (!r.ok) { showToast('Export failed: ' + r.status); return; }
+      const nPages = r.headers.get('X-EconAI-Pages') || '?';
+      const nMiss  = parseInt(r.headers.get('X-EconAI-Missing') || '0');
+      const nArt   = r.headers.get('X-EconAI-Articles') || '?';
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'newsflow_export.md';
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      if (prog) prog.textContent = `✓ ${nPages} page(s), ${nArt} article(s)`
+        + (nMiss ? ` — ⚠ ${nMiss} page(s) without flow reconstruction` : '');
+      showToast(`Markdown export: ${nPages} page(s), ${nArt} article(s)`
+        + (nMiss ? ` (${nMiss} without flow!)` : ''), 5000);
+    } catch (e) { showToast('Export error: ' + (e?.message || e)); }
+    finally { btn.disabled = false; btn.textContent = old; }
+    return;
+  }
+
   // Dataset diagnostics: server-side check ladder over the declared dataset,
   // read-only, opens the findings report. The declaration's own scope
   // (pattern, page range) governs page selection; the batch page-range field

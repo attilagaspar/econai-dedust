@@ -8188,6 +8188,95 @@ def _shape_topleft(sh: dict):
     return (min(ys), min(xs))
 
 
+class NewsflowMdRequest(BaseModel):
+    stems: List[str] = []      # ordered pages to export
+    roles: dict = {}           # label -> text|title|breaker|furniture|ignore
+                               # (the client's saved newsflow role mapping)
+
+
+@app.post("/api/export/newsflow-md")
+def api_export_newsflow_md(folder: str = Query(...), body: NewsflowMdRequest = ...):
+    """Export the reconstructed newspaper flow of the selected pages as ONE
+    Markdown file. Elements are taken in flow_order (stamped by the 📰 Flow
+    reconstruction): titles become headings (level from the column span the
+    label encodes: 3sav '#', 2sav '##', otherwise '###'), text elements become
+    paragraphs (best layer: human > llm > ocr > pdf), other breakers become
+    *[label]* placeholders. Pages appear in the given order behind
+    '<!-- ===== page <stem> ===== -->' markers; every article change emits an
+    '<!-- article <stem>:<n> -->' comment (article 0 = carryover text before
+    the page's first title) so downstream mining can segment."""
+    d = _resolve_folder(folder)
+    roles = body.roles or {}
+
+    def role_of(label: str) -> str:
+        if label in roles:
+            return roles[label]
+        low = (label or "").lower()
+        if "szoveg" in low or "text" in low or "cikk" in low:
+            return "text"
+        if low.startswith("cim") or "title" in low:
+            return "title"
+        return "breaker"
+
+    def heading(label: str) -> str:
+        low = (label or "").lower()
+        if "3sav" in low:
+            return "#"
+        if "2sav" in low:
+            return "##"
+        return "###"
+
+    out: list = []
+    pages_done = pages_missing = articles = 0
+    for stem in body.stems:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            continue
+        out.append(f"\n<!-- ===== page {stem} ===== -->\n")
+        flow = [s for s in shapes if s.get("flow_order") is not None]
+        if not flow:
+            out.append("\n<!-- no flow reconstruction on this page -->\n")
+            pages_missing += 1
+            continue
+        pages_done += 1
+        flow.sort(key=lambda s: s["flow_order"])
+        last_gid = object()
+        for s in flow:
+            gid = s.get("group_id") or 0
+            if gid != last_gid:
+                out.append(f"\n<!-- article {stem}:{gid}"
+                           + (" carryover" if gid == 0 else "") + " -->\n")
+                if gid != 0:
+                    articles += 1
+                last_gid = gid
+            label = s.get("label") or ""
+            role = role_of(label)
+            txt = _best_shape_text(s)
+            if role == "title":
+                out.append(f"\n{heading(label)} {txt or '(üres cím)'}\n")
+            elif role == "text":
+                out.append(f"\n{txt}\n" if txt else "\n<!-- empty text element -->\n")
+            elif role in ("breaker",):
+                out.append(f"\n*[{label}]*" + (f" {txt}" if txt else "") + "\n")
+            # furniture / ignore never carry flow_order, but be safe: skip
+    from fastapi.responses import Response
+    md = "".join(out).lstrip("\n")
+    return Response(
+        content=md.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="newsflow_export.md"',
+            "X-EconAI-Pages": str(pages_done),
+            "X-EconAI-Missing": str(pages_missing),
+            "X-EconAI-Articles": str(articles),
+        },
+    )
+
+
 @app.post("/api/export/json")
 def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
     """Export structured (JSON) records across the selected pages.
