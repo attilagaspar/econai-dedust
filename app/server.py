@@ -7149,12 +7149,15 @@ def _auto_detect_page_quad(img_np):
 @app.post("/api/page/perspective")
 def api_perspective(body: PerspectiveRequest):
     """
-    Perspective (trapezoid→rectangle) correction.
+    Perspective (trapezoid→rectangle) correction. The four points — in ANY
+    order — become the corners of the corrected image (output = exactly the
+    quad; no canvas expansion).
 
     points=[]   → auto-detect page corners, return preview + detected_points.
-    points=[×4] → use the supplied corners (manual or re-submit of detected).
-    save=False  → base64 JPEG preview only.
-    save=True   → overwrite image, clear shapes, update JSON dimensions.
+    points=[×4] → use the supplied corners (manual tokens or adjusted detect).
+    save=False  → downscaled base64 JPEG preview + output dimensions.
+    save=True   → overwrite the image file, remap all shape points through the
+                  same homography, update JSON dimensions.
     """
     import base64, io, math
     import cv2
@@ -7193,45 +7196,38 @@ def api_perspective(body: PerspectiveRequest):
     else:
         detected_points = [[float(v) for v in p] for p in body.points]
 
-    # Sort into TL, TR, BR, BL regardless of supplied order
+    # Sort into TL, TR, BR, BL regardless of supplied order. The sum/diff
+    # method is robust to mild rotation (a y-sort mis-pairs corners when two
+    # corners on the same side land at nearly equal heights).
     pts = [tuple(p) for p in detected_points]
-    by_y   = sorted(pts, key=lambda p: p[1])
-    top    = sorted(by_y[:2], key=lambda p: p[0])
-    bottom = sorted(by_y[2:], key=lambda p: p[0])
-    tl, tr = top[0],    top[1]
-    bl, br = bottom[0], bottom[1]
+    tl = min(pts, key=lambda p: p[0] + p[1])
+    br = max(pts, key=lambda p: p[0] + p[1])
+    tr = max(pts, key=lambda p: p[0] - p[1])
+    bl = min(pts, key=lambda p: p[0] - p[1])
+    if len({tl, tr, br, bl}) != 4:
+        raise HTTPException(status_code=400,
+                            detail="Corner ordering failed — the four points "
+                                   "do not form a usable quadrilateral")
 
-    w_top  = math.dist(tl, tr);  w_bot  = math.dist(bl, br)
+    w_top  = math.dist(tl, tr);  w_bot   = math.dist(bl, br)
     h_left = math.dist(tl, bl);  h_right = math.dist(tr, br)
-    dst_w  = int(max(w_top, w_bot))
-    dst_h  = int(max(h_left, h_right))
+    dst_w  = int(round(max(w_top, w_bot)))
+    dst_h  = int(round(max(h_left, h_right)))
 
     if dst_w < 2 or dst_h < 2:
         raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
 
-    # ── Build homography and warp the full image ───────────────────────────────
+    # ── Warp: the four points BECOME the image corners ─────────────────────────
+    # (The old version expanded the canvas to contain the whole warped image,
+    # so the result was the corrected quad floating in stretched margins —
+    # never what the user asked for. The output is exactly the quad.)
     src_arr = np.float32([tl, tr, br, bl])
     dst_arr = np.float32([(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)])
     H_mat   = cv2.getPerspectiveTransform(src_arr, dst_arr)
-
-    # Project all four image corners through H to find the full output canvas.
-    img_corners = np.float32(
-        [[0, 0], [W_img, 0], [W_img, H_img], [0, H_img]]
-    ).reshape(-1, 1, 2)
-    wc = cv2.perspectiveTransform(img_corners, H_mat).reshape(-1, 2)
-
-    min_x, min_y = float(wc[:, 0].min()), float(wc[:, 1].min())
-    max_x, max_y = float(wc[:, 0].max()), float(wc[:, 1].max())
-
-    # Translate so all pixels land in non-negative coordinates.
-    T = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]],
-                 dtype=np.float64)
-    H_eff = (T @ H_mat.astype(np.float64)).astype(np.float32)
-    out_w  = int(round(max_x - min_x))
-    out_h  = int(round(max_y - min_y))
+    out_w, out_h = dst_w, dst_h
 
     try:
-        out_np = cv2.warpPerspective(img_np, H_eff, (out_w, out_h),
+        out_np = cv2.warpPerspective(img_np, H_mat, (out_w, out_h),
                                      flags=cv2.INTER_CUBIC)
         out = Image.fromarray(out_np)
     except Exception:
@@ -7250,14 +7246,35 @@ def api_perspective(body: PerspectiveRequest):
             img_path.suffix.lstrip(".").lower(), "JPEG")
         save_kw = {"quality": 92} if fmt == "JPEG" else {}
         out.save(str(img_path), format=fmt, **save_kw)
-        data["shapes"]      = []
+        # Transform existing shapes through the same homography instead of
+        # clearing them (each point is mapped exactly; rectangles stay
+        # axis-aligned only approximately — re-run lattice if precision
+        # matters). Shapes fully outside the kept quad land off-canvas.
+        moved = 0
+        for sh in data.get("shapes", []):
+            pts_arr = sh.get("points") or []
+            if not pts_arr:
+                continue
+            src = np.float32(pts_arr).reshape(-1, 1, 2)
+            warped = cv2.perspectiveTransform(src, H_mat).reshape(-1, 2)
+            sh["points"] = [[round(float(x), 1), round(float(y), 1)]
+                            for x, y in warped]
+            moved += 1
         data["imageWidth"]  = out_w
         data["imageHeight"] = out_h
         _write_json(jf, data)
-        return {"ok": True, "width": out_w, "height": out_h}
+        return {"ok": True, "width": out_w, "height": out_h,
+                "shapes_transformed": moved}
     else:
+        # Preview at reduced size — the modal only needs a visual check.
+        prev = out
+        long_side = max(out_w, out_h)
+        if long_side > 1400:
+            scale = 1400 / long_side
+            prev = out.resize((max(1, int(out_w * scale)),
+                               max(1, int(out_h * scale))))
         buf = io.BytesIO()
-        out.save(buf, format="JPEG", quality=88)
+        prev.save(buf, format="JPEG", quality=88)
         buf.seek(0)
         b64 = base64.b64encode(buf.read()).decode()
         return {"ok": True, "preview": b64,

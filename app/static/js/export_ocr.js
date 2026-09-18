@@ -85,74 +85,157 @@ async function finishTable() {
 }
 
 // ── Perspective correction ────────────────────────────────────────────────────
-// Auto-detect mode: clicking the button immediately triggers server-side
-// corner detection and shows the corrected preview.  No manual corner picking.
-async function startPerspMode() {
+// Manual token mode: the page opens in the modal, the user places 4 corner
+// tokens in ANY order (drag to adjust; ✨ Auto-detect proposes them), Preview
+// shows the projection where the tokens become the image corners, Accept
+// warps the full image over the original file and maps the shapes through
+// the same homography.
+
+let _perspTokens = [];        // [x,y] in IMAGE coordinates, max 4, any order
+let _perspDrag   = null;      // index of the token being dragged
+let _perspJustDragged = false;
+
+function startPerspMode() {
+  if (!pages.length || !pages[pageIdx]) return;
   if (editMode) toggleEditMode();
   if (tableMode) cancelTableMode();
-  perspPoints = [];
-  document.getElementById('persp-btn').classList.add('active');
-  showToast('Auto-detecting page boundaries…', 8000);
+  _perspTokens = [];
+  const img = document.getElementById('persp-pick-img');
+  img.src = `${API}/api/image?folder=${encodeURIComponent(folder)}`
+          + `&stem=${encodeURIComponent(pages[pageIdx].stem)}&t=${Date.now()}`;
+  _perspStage('pick');
+  document.getElementById('persp-modal').classList.add('show');
+  _perspRenderTokens();
+}
+
+function _perspStage(stage) {
+  document.getElementById('persp-pick-wrap').style.display   = stage === 'pick' ? 'block' : 'none';
+  document.getElementById('persp-pick-btns').style.display   = stage === 'pick' ? 'flex'  : 'none';
+  document.getElementById('persp-preview').style.display     = stage === 'preview' ? 'block' : 'none';
+  document.getElementById('persp-accept-btns').style.display = stage === 'preview' ? 'flex'  : 'none';
+  if (stage === 'pick') _perspInfo();
+}
+
+function _perspInfo() {
+  document.getElementById('persp-modal-info').textContent =
+    `Click the page's 4 corners in any order — ${_perspTokens.length} / 4 placed. `
+    + `Drag a token to fine-tune; the tokens become the corners of the corrected image.`;
+  document.getElementById('persp-preview-btn').disabled = _perspTokens.length !== 4;
+}
+
+// displayed-pixel → image-pixel mapping for the pick image
+function _perspToImageCoords(e) {
+  const img = document.getElementById('persp-pick-img');
+  const r = img.getBoundingClientRect();
+  return [
+    (e.clientX - r.left) * (img.naturalWidth  / r.width),
+    (e.clientY - r.top)  * (img.naturalHeight / r.height),
+  ];
+}
+
+function perspImgClick(e) {
+  if (_perspJustDragged) { _perspJustDragged = false; return; }
+  if (_perspTokens.length >= 4) return;
+  _perspTokens.push(_perspToImageCoords(e));
+  _perspRenderTokens(); _perspInfo();
+}
+
+function _perspRenderTokens() {
+  const wrap = document.getElementById('persp-pick-wrap');
+  const img  = document.getElementById('persp-pick-img');
+  wrap.querySelectorAll('.persp-token').forEach(t => t.remove());
+  if (!img.naturalWidth) return;
+  const r = img.getBoundingClientRect();
+  _perspTokens.forEach(([x, y], i) => {
+    const t = document.createElement('div');
+    t.className = 'persp-token';
+    t.textContent = i + 1;
+    t.style.cssText =
+      'position:absolute;width:22px;height:22px;border-radius:50%;' +
+      'background:#e94560;border:2px solid #fff;color:#fff;font:700 12px/18px sans-serif;' +
+      'text-align:center;transform:translate(-50%,-50%);cursor:grab;z-index:5;' +
+      `left:${x * r.width / img.naturalWidth}px;top:${y * r.height / img.naturalHeight}px;`;
+    t.addEventListener('mousedown', e => {
+      e.preventDefault(); e.stopPropagation();
+      _perspDrag = i;
+      const move = ev => {
+        _perspTokens[_perspDrag] = _perspToImageCoords(ev);
+        _perspRenderTokens();
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        _perspDrag = null; _perspJustDragged = true;
+        setTimeout(() => { _perspJustDragged = false; }, 150);
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+    wrap.appendChild(t);
+  });
+}
+
+function perspResetTokens() { _perspTokens = []; _perspRenderTokens(); _perspInfo(); }
+
+async function perspAutoDetect() {
+  document.getElementById('persp-modal-info').textContent = 'Auto-detecting page corners…';
   try {
     const r = await fetch(`${API}/api/page/perspective`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        folder, stem: pages[pageIdx].stem,
-        points: [], save: false,
-      }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: [], save: false }),
     });
-    if (!r.ok) {
-      const txt = await r.text();
-      showToast(`Detection failed: ${txt.slice(0, 200)}`, 8000);
-      document.getElementById('persp-btn').classList.remove('active');
-      return;
-    }
-    const data = await r.json();
-    // Store detected corners so acceptPerspective() can re-submit them for save.
-    perspPoints = data.detected_points || [];
-    document.getElementById('persp-preview').src =
-      `data:image/jpeg;base64,${data.preview}`;
-    document.getElementById('persp-modal-info').textContent =
-      `Auto-corrected preview: ${data.width} × ${data.height} px — accept to save, reject to discard`;
-    document.getElementById('persp-modal').classList.add('show');
-  } catch(err) {
-    showToast(`Network error: ${err.message}`, 6000);
-    document.getElementById('persp-btn').classList.remove('active');
-  }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(`Detection failed: ${(data.detail || '').slice(0, 160)}`, 6000); _perspInfo(); return; }
+    _perspTokens = (data.detected_points || []).slice(0, 4);
+    _perspRenderTokens(); _perspInfo();
+    showToast('Corners proposed — drag the tokens to adjust, then Preview');
+  } catch (e) { showToast('Network error: ' + (e.message || e), 6000); _perspInfo(); }
 }
 
-function cancelPerspMode() {
-  perspPoints = [];
-  svgOverlay.style.cursor = '';
-  document.getElementById('persp-btn').classList.remove('active');
-  document.getElementById('persp-toolbar').style.display = 'none';
-  svgOverlay.style.pointerEvents = (editMode || tableMode) ? 'all' : 'none';
-  drawOverlay();
+async function perspPreview() {
+  if (_perspTokens.length !== 4) return;
+  document.getElementById('persp-modal-info').textContent = 'Computing projection…';
+  try {
+    const r = await fetch(`${API}/api/page/perspective`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: _perspTokens, save: false }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(`Projection failed: ${(data.detail || '').slice(0, 160)}`, 6000); _perspInfo(); return; }
+    document.getElementById('persp-preview').src = `data:image/jpeg;base64,${data.preview}`;
+    document.getElementById('persp-modal-info').textContent =
+      `Corrected: ${data.width} × ${data.height} px — Accept overwrites the image file (shapes are remapped).`;
+    _perspStage('preview');
+  } catch (e) { showToast('Network error: ' + (e.message || e), 6000); _perspInfo(); }
 }
+
+function perspBackToTokens() { _perspStage('pick'); _perspRenderTokens(); }
 
 async function acceptPerspective() {
-  document.getElementById('persp-modal').classList.remove('show');
-  showToast('Saving…', 3000);
-  const r = await fetch(`${API}/api/page/perspective`, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      folder, stem: pages[pageIdx].stem,
-      points: perspPoints, save: true,
-    }),
-  });
-  if (!r.ok) { showToast(`Save error: ${await r.text()}`); return; }
-  cancelPerspMode();
-  loadPage._bust = true;
-  await loadPage(pageIdx);
-  showToast('Perspective correction saved. Shapes cleared.');
+  document.getElementById('persp-modal-info').textContent = 'Saving…';
+  try {
+    const r = await fetch(`${API}/api/page/perspective`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: _perspTokens, save: true }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast(`Save error: ${(data.detail || '').slice(0, 160)}`, 6000); return; }
+    document.getElementById('persp-modal').classList.remove('show');
+    _perspTokens = [];
+    loadPage._bust = true;
+    await loadPage(pageIdx);
+    showToast(`Perspective saved: ${data.width}×${data.height}px`
+      + (data.shapes_transformed ? `, ${data.shapes_transformed} shape(s) remapped` : ''));
+  } catch (e) { showToast('Save error: ' + (e.message || e), 6000); }
 }
 
 function rejectPerspective() {
   document.getElementById('persp-modal').classList.remove('show');
-  document.getElementById('persp-btn').classList.remove('active');
-  perspPoints = [];
-  showToast('Rejected — click Perspective to try again');
+  _perspTokens = [];
 }
+
+// kept for the Esc handler in main.js (the old canvas corner mode is retired)
+function cancelPerspMode() { rejectPerspective(); }
 
 // ── Excel export ─────────────────────────────────────────────────────────────
 function openExcelExportModal() {

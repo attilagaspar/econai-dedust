@@ -1467,13 +1467,26 @@
   </div>
 </div>
 
-<!-- Perspective preview modal -->
+<!-- Perspective correction modal: place 4 corner tokens, preview, save -->
 <div id="persp-modal">
-  <p id="persp-modal-info">Perspective correction preview</p>
-  <img id="persp-preview" src="" alt="preview" />
-  <div class="modal-btns">
+  <p id="persp-modal-info">Perspective correction</p>
+  <div id="persp-pick-wrap" style="position:relative;display:none;line-height:0;">
+    <img id="persp-pick-img" src="" alt="page" draggable="false" onclick="perspImgClick(event)"
+         style="border:2px solid #0f3460;user-select:none;cursor:crosshair;" />
+  </div>
+  <img id="persp-preview" src="" alt="preview" style="display:none;" />
+  <div class="modal-btns" id="persp-pick-btns" style="display:none;">
+    <button onclick="perspAutoDetect()" style="background:#0f3460;color:#ccc;"
+            title="Let the server propose the 4 page corners — then adjust the tokens">✨ Auto-detect</button>
+    <button onclick="perspResetTokens()" style="background:#0f3460;color:#ccc;">↺ Reset</button>
+    <button id="persp-preview-btn" onclick="perspPreview()" disabled
+            style="background:#4caf50;color:#fff;">Preview ➜</button>
+    <button onclick="rejectPerspective()" style="background:#e94560;color:#fff;">✗ Cancel</button>
+  </div>
+  <div class="modal-btns" id="persp-accept-btns" style="display:none;">
     <button id="persp-accept" onclick="acceptPerspective()">✓ Accept & save</button>
-    <button id="persp-reject" onclick="rejectPerspective()">✗ Reject</button>
+    <button onclick="perspBackToTokens()" style="background:#0f3460;color:#ccc;">← Adjust corners</button>
+    <button id="persp-reject" onclick="rejectPerspective()">✗ Cancel</button>
   </div>
 </div>
 
