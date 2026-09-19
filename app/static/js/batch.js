@@ -74,6 +74,48 @@ function _batchPopulateLabels(containerId, storageKey) {
   }).join('');
 }
 
+// ── Server-side OCR job: polling + stop ──────────────────────────────────────
+let _ocrJobTimer = null;
+
+function ocrJobPollStart() {
+  const row = document.getElementById('batch-ocr-job-row');
+  if (row) row.style.display = 'flex';
+  if (_ocrJobTimer) clearInterval(_ocrJobTimer);
+  _ocrJobPoll();
+  _ocrJobTimer = setInterval(_ocrJobPoll, 2000);
+}
+
+async function _ocrJobPoll() {
+  const el = document.getElementById('batch-ocr-job-status');
+  if (!el) { clearInterval(_ocrJobTimer); _ocrJobTimer = null; return; }
+  try {
+    const r = await fetch(`${API}/api/batch/ocr/status?folder=${encodeURIComponent(folder)}`);
+    const d = await r.json();
+    const j = d.job;
+    if (!j) { el.textContent = 'no server OCR job'; clearInterval(_ocrJobTimer); _ocrJobTimer = null; return; }
+    el.textContent = `server job [${j.state}] page ${j.stems_done}/${j.stems_total}`
+      + (j.current ? ` — ${j.current}` : '')
+      + ` · ${j.cells_done} cell(s)` + (j.cells_err ? ` · ${j.cells_err} error(s)` : '');
+    const bar = document.getElementById('batch-progress-bar');
+    const wrap = document.getElementById('batch-progress-bar-wrap');
+    if (wrap) wrap.style.display = '';
+    if (bar && j.stems_total) bar.style.width = `${Math.round(100 * j.stems_done / j.stems_total)}%`;
+    if (j.state !== 'running') {
+      clearInterval(_ocrJobTimer); _ocrJobTimer = null;
+      if (j.state === 'done') showToast(`Server OCR finished: ${j.cells_done} cell(s)`
+        + (j.cells_err ? `, ${j.cells_err} error(s)` : ''), 6000);
+      if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    }
+  } catch (e) { /* transient poll failure — keep trying */ }
+}
+
+async function ocrJobStop() {
+  try {
+    await fetch(`${API}/api/batch/ocr/stop?folder=${encodeURIComponent(folder)}`, { method: 'POST' });
+    showToast('Stop signalled — the job halts after the current cell');
+  } catch (e) { showToast('Stop failed: ' + (e.message || e)); }
+}
+
 function openBatchModal() {
   _batchPopulateLabels('batch-label-checks',           'latticeLabels');
   const multiCb = document.getElementById('batch-multi-lattice');
@@ -84,6 +126,13 @@ function openBatchModal() {
   if (segDivs) segDivs.checked = localStorage.getItem('latticeSegDividers') !== '0';
   const fillDir = document.getElementById('batch-fill-dir');
   if (fillDir) fillDir.value = localStorage.getItem('latticeFillDir') === 'horizontal' ? 'horizontal' : 'vertical';
+  const sj = document.getElementById('batch-ocr-serverjob');
+  if (sj) sj.checked = localStorage.getItem('batchOcrServerJob') !== '0';
+  // Re-attach to a server OCR job that is still running for this folder
+  document.getElementById('batch-ocr-job-row').style.display = 'none';
+  fetch(`${API}/api/batch/ocr/status?folder=${encodeURIComponent(folder)}`)
+    .then(r => r.json()).then(d => { if (d.job && d.job.state === 'running') ocrJobPollStart(); })
+    .catch(() => {});
   _batchPopulateLabels('batch-ocr-label-checks',       'batchOcrLabels');
   _batchPopulateLabels('batch-llm-label-checks',       'batchLlmLabels');
   _batchPopulateLabels('batch-score-label-checks',     'batchScoreLabels');
@@ -653,6 +702,41 @@ async function runBatch() {
     if (!confirm(`Strip short lines from ${fieldLabel} text on ${sorted.length} page(s)?`)) return;
   } else if (op === 'trim_overlaps') {
     if (!confirm(`Trim overlapping annotation pairs on ${sorted.length} page(s)?`)) return;
+  }
+
+  // OCR as a server-side background job: one request starts it, the server
+  // does page-at-a-time OCR (image loaded once, JSON written once per page),
+  // and the job survives closing the browser. Condition filters are computed
+  // client-side, so they force the in-browser loop.
+  if (op === 'ocr' && document.getElementById('batch-ocr-serverjob').checked) {
+    if (document.getElementById('batch-condition').value !== 'none') {
+      showToast('Condition filter set — running in-browser (server job doesn\'t support conditions)', 5000);
+    } else {
+      const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+      const checks = document.querySelectorAll('#batch-ocr-label-checks input[type=checkbox]');
+      const remembered = {}; const selLabels = [];
+      checks.forEach(cb => { remembered[cb.value] = cb.checked; if (cb.checked) selLabels.push(cb.value); });
+      localStorage.setItem('batchOcrLabels', JSON.stringify(remembered));
+      if (!selLabels.length) { showToast('Select at least one label'); return; }
+      try {
+        const r = await fetch(`${API}/api/batch/ocr/start?folder=${encodeURIComponent(folder)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stems, labels: selLabels,
+            engine: document.getElementById('batch-ocr-engine').value === 'tesseract' ? 'tesseract' : 'easyocr',
+            scope: document.getElementById('batch-ocr-scope').value,
+            cell_height: parseInt(document.getElementById('batch-ocr-cellheight').value) || 26,
+            overwrite: document.getElementById('batch-ocr-overwrite').checked,
+            col_filter: document.getElementById('batch-col-filter').value.trim() || null,
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast('✕ ' + (d.detail || r.status), 6000); if (r.status === 409) ocrJobPollStart(); return; }
+        showToast(`Server OCR job started: ${stems.length} page(s) — safe to close the browser`, 5000);
+        ocrJobPollStart();
+      } catch (e) { showToast('✕ ' + (e.message || e), 6000); }
+      return;
+    }
   }
 
   _batchRunning = true;

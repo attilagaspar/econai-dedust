@@ -1402,6 +1402,32 @@ def get_cell(
     return StreamingResponse(buf, media_type="image/jpeg")
 
 
+def _tess_group_lines(tess: dict) -> tuple:
+    """Group confident Tesseract words by (block, paragraph, line), sorted by
+    visual top coordinate (block_num order ≠ top-to-bottom order). Returns
+    (ocr_text, mean_conf). Shared by the single-cell endpoint and batch OCR."""
+    from collections import defaultdict
+    line_words: dict = defaultdict(list)
+    line_top:   dict = defaultdict(lambda: float("inf"))
+    conf_values: list = []
+    for txt, conf, blk, par, ln, top in zip(
+        tess["text"], tess["conf"],
+        tess["block_num"], tess["par_num"], tess["line_num"],
+        tess["top"],
+    ):
+        c = int(conf)
+        if txt.strip() and c > 0:
+            key = (blk, par, ln)
+            line_words[key].append(txt)
+            line_top[key] = min(line_top[key], int(top))
+            conf_values.append(c)
+    sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
+    lines = [" ".join(line_words[k]) for k in sorted_keys]
+    ocr_text  = "\n".join(lines).strip()
+    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+    return ocr_text, mean_conf
+
+
 @app.post("/api/page/shape/ocr")
 def api_ocr_cell(
     folder: str = Query(...),
@@ -1450,30 +1476,7 @@ def api_ocr_cell(
         output_type=pytesseract.Output.DICT,
     )
 
-    # Group confident words by (block, paragraph, line) to preserve layout.
-    # Also track the minimum top-coordinate of each line so we can sort by
-    # actual pixel position (Tesseract block_num order ≠ visual top-to-bottom order).
-    from collections import defaultdict
-    line_words: dict = defaultdict(list)
-    line_top:   dict = defaultdict(lambda: float("inf"))
-    conf_values: list = []
-    for txt, conf, blk, par, ln, top in zip(
-        tess["text"], tess["conf"],
-        tess["block_num"], tess["par_num"], tess["line_num"],
-        tess["top"],
-    ):
-        c = int(conf)
-        if txt.strip() and c > 0:
-            key = (blk, par, ln)
-            line_words[key].append(txt)
-            line_top[key] = min(line_top[key], int(top))
-            conf_values.append(c)
-
-    # Sort lines by their top pixel coordinate (visual reading order)
-    sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
-    lines = [" ".join(line_words[k]) for k in sorted_keys]
-    ocr_text  = "\n".join(lines).strip()
-    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+    ocr_text, mean_conf = _tess_group_lines(tess)
 
     shapes[idx]["tesseract_output"] = {
         "ocr_text":  ocr_text,
@@ -3131,6 +3134,291 @@ def api_batch_snapshot_restore(folder: str = Query(...)):
             _write_json(d / name, data)      # atomic per page
             restored += 1
     return {"ok": True, "restored": restored}
+
+
+# ---------------------------------------------------------------------------
+# Background batch OCR — a server-side job over many pages, so a 1000-page run
+# survives closing the browser and skips the per-cell HTTP + per-cell JSON-
+# rewrite overhead of the old client-driven loop: per page the image/shadow is
+# loaded ONCE, all selected cells are OCRed, and the JSON is written ONCE.
+# Same job pattern as the inbox import (in-memory registry + polling + stop
+# flag); the job dies with the server process (restart = re-run; with
+# overwrite=False finished cells are skipped, so re-runs are cheap).
+# ---------------------------------------------------------------------------
+
+_OCR_JOBS: dict = {}          # resolved folder path (str) -> job status dict
+_OCR_JOBS_LOCK = threading.Lock()
+
+
+class OcrBatchBody(BaseModel):
+    stems:       List[str]
+    labels:      List[str]
+    engine:      str = "tesseract"     # tesseract | easyocr
+    scope:       str = "whole"         # whole | rows-keep | rows-detect
+    cell_height: int = 26
+    overwrite:   bool = False
+    col_filter:  Optional[str] = None  # super_column ranges, e.g. "3, 2-4, 7-"
+    lang:        str = "hun"           # tesseract language
+    langs:       str = "en,hu"         # easyocr languages
+
+
+def _parse_col_ranges_srv(raw):
+    ranges = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            try:
+                ranges.append((int(lo), int(hi) if hi.strip() else 10 ** 9))
+            except ValueError:
+                return None
+        else:
+            try:
+                v = int(part)
+                ranges.append((v, v))
+            except ValueError:
+                return None
+    return ranges or None
+
+
+def _ocr_shape_whole(engine, crop, lang, langs):
+    """OCR one whole-cell crop. Mirrors the single-cell endpoints exactly."""
+    if engine == "tesseract":
+        import pytesseract, shutil
+        if not shutil.which("tesseract"):
+            pytesseract.pytesseract.tesseract_cmd = \
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        tess = pytesseract.image_to_data(
+            crop.convert("L"), lang=lang, config="--psm 4",
+            output_type=pytesseract.Output.DICT)
+        text, conf = _tess_group_lines(tess)
+        return text, conf, {"lang": lang}
+    import numpy as np
+    reader = _get_easyocr_reader([l.strip() for l in langs.split(",") if l.strip()])
+    results = reader.readtext(np.array(crop.convert("RGB")),
+                              allowlist="0123456789-", min_size=6,
+                              text_threshold=0.5, low_text=0.3)
+    results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+    lines = [t for _, t, _ in results]
+    confs = [c for _, _, c in results]
+    text = "\n".join(lines).strip()
+    conf = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+    return text, conf, {"engine": "easyocr", "langs": langs}
+
+
+def _ocr_shape_rows(engine, shape, crop, crop_top, cell_height, rows_source,
+                    lang, langs):
+    """Row-by-row OCR of one crop. Mirrors the linebyline endpoints (digit
+    whitelist, per-engine upscaling); writes rows via _apply_layer_rows and
+    returns (combined_text, mean_conf, extra_fields)."""
+    from PIL import Image as PILImage, ImageOps
+    rows = _rows_for_source(shape, crop, crop_top, cell_height, rows_source)
+    line_texts, conf_values = [], []
+    if engine == "tesseract":
+        import pytesseract, shutil
+        if not shutil.which("tesseract"):
+            pytesseract.pytesseract.tesseract_cmd = \
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        for i, (top, bottom) in enumerate(rows):
+            row_pad = max(4, cell_height // 6)
+            rt = max(0, top - row_pad)
+            rb = min(crop.height, bottom + row_pad)
+            row_img = crop.crop((0, rt, crop.width, rb))
+            if row_img.height < 48:
+                scale = 48 / row_img.height
+                row_img = row_img.resize(
+                    (int(row_img.width * scale), 48), PILImage.LANCZOS)
+            grey = ImageOps.autocontrast(row_img.convert("L"))
+            try:
+                tess = pytesseract.image_to_data(
+                    grey, lang=lang,
+                    config="--psm 7 -c tessedit_char_whitelist=0123456789-",
+                    output_type=pytesseract.Output.DICT)
+                words = [(t, int(c)) for t, c in zip(tess["text"], tess["conf"])
+                         if t.strip() and int(c) > 0]
+                text = " ".join(t for t, _ in words).strip() or "-"
+                conf = round(sum(c for _, c in words) / len(words), 1) if words else 0.0
+            except Exception:
+                text, conf = "-", 0.0
+            line_texts.append(text); conf_values.append(conf)
+        extra = {"lang": lang, "mode": "linebyline"}
+    else:
+        import numpy as np
+        reader = _get_easyocr_reader([l.strip() for l in langs.split(",") if l.strip()])
+        crop_bin = crop.convert("L")
+        for i, (top, bottom) in enumerate(rows):
+            row_pad = max(4, cell_height // 6)
+            prev_bottom = rows[i - 1][1] if i > 0 else 0
+            next_top    = rows[i + 1][0] if i < len(rows) - 1 else crop_bin.height
+            rt = max(0, max(top - row_pad, (prev_bottom + top) // 2))
+            rb = min(crop_bin.height, min(bottom + row_pad, (bottom + next_top) // 2))
+            row_img = crop_bin.crop((0, rt, crop_bin.width, rb))
+            target_h = 128
+            row_img = row_img.resize(
+                (int(row_img.width * (target_h / row_img.height)), target_h),
+                PILImage.LANCZOS).convert("RGB")
+            try:
+                results = reader.readtext(np.array(row_img),
+                                          allowlist="0123456789-", min_size=4,
+                                          text_threshold=0.4, low_text=0.3)
+                results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+                texts = [t for _, t, _ in results]
+                confs = [c for _, _, c in results]
+                text = " ".join(texts).strip() or "-"
+                conf = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+            except Exception:
+                text, conf = "-", 0.0
+            line_texts.append(text); conf_values.append(conf)
+        extra = {"engine": "easyocr", "mode": "linebyline"}
+    combined  = "\n".join(line_texts)
+    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+    _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                      "ocr", line_texts, "linebyline")
+    return combined, mean_conf, extra
+
+
+def _run_ocr_batch_job(folder: str, d: Path, body: OcrBatchBody, job: dict):
+    from PIL import Image as PILImage
+    label_set = set(body.labels)
+    ranges = _parse_col_ranges_srv(body.col_filter) if body.col_filter else None
+    col_ok = (lambda c: c is not None and any(lo <= c <= hi for lo, hi in ranges)) \
+             if ranges else (lambda c: True)
+    rows_source = "detect" if body.scope == "rows-detect" else "existing"
+    has_ocr = lambda sh: bool((sh.get("tesseract_output") or {}).get("ocr_text")
+                              or (sh.get("easyocr_output") or {}).get("ocr_text"))
+    try:
+        for stem in body.stems:
+            if job["stop"]:
+                job["state"] = "stopped"
+                break
+            job["current"] = stem
+            jf = d / f"{stem}.json"
+            img_path = _find_image(d, stem)
+            if not jf.exists() or img_path is None:
+                job["stems_done"] += 1
+                continue
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+            except Exception as exc:
+                job["errors"].append(f"{stem}: JSON unreadable ({exc})")
+                job["stems_done"] += 1
+                continue
+            shapes = data.get("shapes", [])
+            todo = [i for i, sh in enumerate(shapes)
+                    if sh.get("label") in label_set
+                    and len(sh.get("points") or []) >= 2
+                    and col_ok(sh.get("super_column"))
+                    and (body.overwrite or not has_ocr(sh))]
+            if not todo:
+                job["stems_done"] += 1
+                continue
+            shadow = _get_shadow_page(folder, stem, img_path)
+            sw, sh_ = shadow.size
+            touched = []
+            for i in todo:
+                if job["stop"]:
+                    break
+                sh = shapes[i]
+                pts = sh["points"]
+                xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+                pad = 4
+                crop = shadow.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
+                                    min(sw, int(x2) + pad), min(sh_, int(y2) + pad)))
+                try:
+                    if body.scope == "whole":
+                        text, conf, extra = _ocr_shape_whole(
+                            body.engine, crop, body.lang, body.langs)
+                        sh["tesseract_output"] = {"ocr_text": text,
+                                                  "mean_conf": conf, **extra}
+                        _distribute_flat_to_rows(sh, "ocr", text)
+                    else:
+                        crop_top = max(0, int(y1) - pad)
+                        text, conf, extra = _ocr_shape_rows(
+                            body.engine, sh, crop, crop_top, body.cell_height,
+                            rows_source, body.lang, body.langs)
+                        sh["tesseract_output"] = {"ocr_text": text,
+                                                  "mean_conf": conf, **extra}
+                    touched.append(i)
+                    job["cells_done"] += 1
+                except Exception as exc:
+                    job["cells_err"] += 1
+                    if len(job["errors"]) < 50:
+                        job["errors"].append(f"{stem}[{i}]: {exc}")
+            if touched:
+                # Re-read under the lock and graft only the OCRed shapes onto
+                # the fresh document, so edits made in the editor on OTHER
+                # shapes while this page was being OCRed are not clobbered.
+                with _SHAPE_MERGE_LOCK:
+                    try:
+                        fresh = json.loads(jf.read_text(encoding="utf-8"))
+                        if len(fresh.get("shapes", [])) == len(shapes):
+                            for i in touched:
+                                fresh["shapes"][i] = shapes[i]
+                            _write_json(jf, fresh)
+                        else:               # page restructured meanwhile — ours wins
+                            _write_json(jf, data)
+                    except Exception:
+                        _write_json(jf, data)
+            job["stems_done"] += 1
+        if job["state"] == "running":
+            job["state"] = "done"
+    except Exception as exc:
+        job["state"] = "error"
+        job["errors"].append(f"job crashed: {exc}")
+    finally:
+        job["finished"] = time.time()
+        job["current"] = ""
+
+
+@app.post("/api/batch/ocr/start")
+def api_batch_ocr_start(folder: str = Query(...), body: OcrBatchBody = ...):
+    """Start a background batch-OCR job over the given stems. One job per
+    folder; poll /api/batch/ocr/status, stop via /api/batch/ocr/stop. The job
+    runs in the server process (survives browser close, dies with the server)."""
+    if body.engine not in ("tesseract", "easyocr"):
+        raise HTTPException(status_code=400, detail=f"Unknown engine {body.engine!r}")
+    if body.scope not in ("whole", "rows-keep", "rows-detect"):
+        raise HTTPException(status_code=400, detail=f"Unsupported scope {body.scope!r}")
+    if not body.stems or not body.labels:
+        raise HTTPException(status_code=400, detail="stems and labels required")
+    d = _resolve_folder(folder)
+    key = str(d)
+    with _OCR_JOBS_LOCK:
+        j = _OCR_JOBS.get(key)
+        if j and j["state"] == "running":
+            raise HTTPException(status_code=409,
+                                detail="A batch OCR job is already running for this folder")
+        job = {"state": "running", "stop": False, "current": "",
+               "stems_total": len(body.stems), "stems_done": 0,
+               "cells_done": 0, "cells_err": 0, "errors": [],
+               "engine": body.engine, "scope": body.scope,
+               "started": time.time(), "finished": None}
+        _OCR_JOBS[key] = job
+    threading.Thread(target=_run_ocr_batch_job, args=(folder, d, body, job),
+                     daemon=True).start()
+    return {"ok": True, "stems": len(body.stems)}
+
+
+@app.get("/api/batch/ocr/status")
+def api_batch_ocr_status(folder: str = Query(...)):
+    d = _resolve_folder(folder)
+    with _OCR_JOBS_LOCK:
+        j = _OCR_JOBS.get(str(d))
+        return {"job": dict(j) if j else None}
+
+
+@app.post("/api/batch/ocr/stop")
+def api_batch_ocr_stop(folder: str = Query(...)):
+    d = _resolve_folder(folder)
+    with _OCR_JOBS_LOCK:
+        j = _OCR_JOBS.get(str(d))
+        if not j or j["state"] != "running":
+            return {"ok": False, "detail": "No running job"}
+        j["stop"] = True
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

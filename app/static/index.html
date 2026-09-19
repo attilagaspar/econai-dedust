@@ -1001,6 +1001,16 @@
                  style="width:60px;flex:none;" />
         </label>
       </div>
+      <label class="row" title="The OCR runs inside the server process: one image load and one save per page (much faster), survives closing the browser/laptop, progress shown here while the modal is open. Condition filters need the in-browser mode.">
+        <input type="checkbox" id="batch-ocr-serverjob" checked
+               onchange="localStorage.setItem('batchOcrServerJob', this.checked ? '1' : '0')"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>Run as server job (background — survives closing the browser)</span>
+      </label>
+      <div id="batch-ocr-job-row" style="display:none;align-items:center;gap:8px;font-size:11px;">
+        <span id="batch-ocr-job-status" style="color:#9fd;"></span>
+        <button onclick="ocrJobStop()" style="background:#e94560;border:none;border-radius:3px;color:#fff;font-size:11px;padding:2px 10px;cursor:pointer;">⏹ Stop job</button>
+      </div>
       <label class="row">
         <input type="checkbox" id="batch-ocr-overwrite"
                style="accent-color:#e94560;width:13px;height:13px;">
