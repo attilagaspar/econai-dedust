@@ -7339,6 +7339,9 @@ class PerspectiveRequest(BaseModel):
     stem:   str
     points: list = []  # [[x,y]×4] for manual; empty [] triggers auto-detection
     save:   bool = False
+    margin: float = 0  # px: push each corner outward so exact corner clicks
+                       # don't shave content off; may reach outside the image
+                       # (those pixels come out black)
 
 
 def _auto_detect_page_quad(img_np):
@@ -7496,6 +7499,21 @@ def api_perspective(body: PerspectiveRequest):
         raise HTTPException(status_code=400,
                             detail="Corner ordering failed — the four points "
                                    "do not form a usable quadrilateral")
+
+    # Optional safety margin: push each corner radially away from the quad's
+    # centroid, so clicking the exact table corners keeps a little surrounding
+    # area instead of shaving the corners off.
+    if body.margin and body.margin > 0:
+        m  = float(body.margin)
+        cx = sum(p[0] for p in (tl, tr, br, bl)) / 4.0
+        cy = sum(p[1] for p in (tl, tr, br, bl)) / 4.0
+
+        def _push(p):
+            dx, dy = p[0] - cx, p[1] - cy
+            dist = math.hypot(dx, dy) or 1.0
+            return (p[0] + m * dx / dist, p[1] + m * dy / dist)
+
+        tl, tr, br, bl = _push(tl), _push(tr), _push(br), _push(bl)
 
     w_top  = math.dist(tl, tr);  w_bot   = math.dist(bl, br)
     h_left = math.dist(tl, bl);  h_right = math.dist(tr, br)

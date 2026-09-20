@@ -94,13 +94,25 @@ async function finishTable() {
 let _perspTokens = [];        // [x,y] in IMAGE coordinates, max 4, any order
 let _perspDrag   = null;      // index of the token being dragged
 let _perspJustDragged = false;
+let _perspZoom   = 1;         // 1 = image fitted to the viewport
+let _perspBaseW  = 0;         // displayed width at zoom 1
 
 function startPerspMode() {
   if (!pages.length || !pages[pageIdx]) return;
   if (editMode) toggleEditMode();
   if (tableMode) cancelTableMode();
   _perspTokens = [];
+  _perspZoom = 1;
+  const mEl = document.getElementById('persp-margin');
+  if (mEl) mEl.value = localStorage.getItem('perspMargin') ?? '20';
   const img = document.getElementById('persp-pick-img');
+  img.onload = () => {
+    // fit the image into the viewport at zoom 1
+    const maxW = window.innerWidth * 0.86, maxH = window.innerHeight * 0.68;
+    const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+    _perspBaseW = Math.max(50, img.naturalWidth * scale);
+    _perspApplyZoom();
+  };
   img.src = `${API}/api/image?folder=${encodeURIComponent(folder)}`
           + `&stem=${encodeURIComponent(pages[pageIdx].stem)}&t=${Date.now()}`;
   _perspStage('pick');
@@ -108,18 +120,63 @@ function startPerspMode() {
   _perspRenderTokens();
 }
 
+function _perspApplyZoom() {
+  const img = document.getElementById('persp-pick-img');
+  if (_perspBaseW) img.style.width = `${_perspBaseW * _perspZoom}px`;
+  _perspRenderTokens();
+}
+
+function _perspMargin() {
+  return Math.max(0, parseInt(document.getElementById('persp-margin')?.value) || 0);
+}
+
 function _perspStage(stage) {
-  document.getElementById('persp-pick-wrap').style.display   = stage === 'pick' ? 'block' : 'none';
+  document.getElementById('persp-viewport').style.display    = stage === 'pick' ? 'block' : 'none';
   document.getElementById('persp-pick-btns').style.display   = stage === 'pick' ? 'flex'  : 'none';
   document.getElementById('persp-preview').style.display     = stage === 'preview' ? 'block' : 'none';
   document.getElementById('persp-accept-btns').style.display = stage === 'preview' ? 'flex'  : 'none';
   if (stage === 'pick') _perspInfo();
 }
 
+// Zoom (wheel, anchored at the cursor) + pan (right-button drag) on the
+// pick viewport. Attached once at load; the elements are static in the DOM.
+(function _perspViewportInit() {
+  const vp  = document.getElementById('persp-viewport');
+  const img = document.getElementById('persp-pick-img');
+  if (!vp || !img) return;
+  vp.addEventListener('wheel', e => {
+    if (!_perspBaseW) return;
+    e.preventDefault();
+    const rect = img.getBoundingClientRect();
+    const fx = (e.clientX - rect.left) / rect.width;
+    const fy = (e.clientY - rect.top)  / rect.height;
+    _perspZoom = Math.min(8, Math.max(1, _perspZoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18)));
+    _perspApplyZoom();
+    // keep the point under the cursor stationary
+    const nw = _perspBaseW * _perspZoom;
+    const nh = nw * (img.naturalHeight / img.naturalWidth);
+    const vpRect = vp.getBoundingClientRect();
+    vp.scrollLeft = fx * nw - (e.clientX - vpRect.left);
+    vp.scrollTop  = fy * nh - (e.clientY - vpRect.top);
+  }, { passive: false });
+  vp.addEventListener('contextmenu', e => e.preventDefault());
+  vp.addEventListener('mousedown', e => {
+    if (e.button !== 2) return;             // right button = pan
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    const sl = vp.scrollLeft, st = vp.scrollTop;
+    const move = ev => { vp.scrollLeft = sl - (ev.clientX - sx); vp.scrollTop = st - (ev.clientY - sy); };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+})();
+
 function _perspInfo() {
   document.getElementById('persp-modal-info').textContent =
-    `Click the page's 4 corners in any order — ${_perspTokens.length} / 4 placed. `
-    + `Drag a token to fine-tune; the tokens become the corners of the corrected image.`;
+    `Click the 4 corners in any order — ${_perspTokens.length} / 4 placed. `
+    + `Wheel = zoom, right-drag = pan, drag a token to fine-tune. `
+    + `The tokens (+ margin) become the corners of the corrected image.`;
   document.getElementById('persp-preview-btn').disabled = _perspTokens.length !== 4;
 }
 
@@ -198,7 +255,8 @@ async function perspPreview() {
   try {
     const r = await fetch(`${API}/api/page/perspective`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: _perspTokens, save: false }),
+      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: _perspTokens,
+                             save: false, margin: _perspMargin() }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { showToast(`Projection failed: ${(data.detail || '').slice(0, 160)}`, 6000); _perspInfo(); return; }
@@ -216,7 +274,8 @@ async function acceptPerspective() {
   try {
     const r = await fetch(`${API}/api/page/perspective`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: _perspTokens, save: true }),
+      body: JSON.stringify({ folder, stem: pages[pageIdx].stem, points: _perspTokens,
+                             save: true, margin: _perspMargin() }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { showToast(`Save error: ${(data.detail || '').slice(0, 160)}`, 6000); return; }

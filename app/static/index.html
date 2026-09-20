@@ -1480,12 +1480,23 @@
 <!-- Perspective correction modal: place 4 corner tokens, preview, save -->
 <div id="persp-modal">
   <p id="persp-modal-info">Perspective correction</p>
-  <div id="persp-pick-wrap" style="position:relative;display:none;line-height:0;">
-    <img id="persp-pick-img" src="" alt="page" draggable="false" onclick="perspImgClick(event)"
-         style="border:2px solid #0f3460;user-select:none;cursor:crosshair;" />
+  <div id="persp-viewport" style="display:none;overflow:auto;max-width:88vw;max-height:70vh;border:2px solid #0f3460;background:#111;"
+       title="Mouse wheel: zoom (anchored at the cursor). Right-button drag: pan. Left click: place a token.">
+    <div id="persp-pick-wrap" style="position:relative;line-height:0;">
+      <img id="persp-pick-img" src="" alt="page" draggable="false" onclick="perspImgClick(event)"
+           style="max-width:none;max-height:none;user-select:none;cursor:crosshair;display:block;" />
+    </div>
   </div>
   <img id="persp-preview" src="" alt="preview" style="display:none;" />
-  <div class="modal-btns" id="persp-pick-btns" style="display:none;">
+  <div class="modal-btns" id="persp-pick-btns" style="display:none;align-items:center;">
+    <label style="display:flex;align-items:center;gap:5px;color:#aaa;font-size:12px;"
+           title="Safety margin: the kept area extends this many pixels beyond the tokens, so exact corner clicks don't shave content off">
+      <span>margin</span>
+      <input type="number" id="persp-margin" value="20" min="0" max="300"
+             onchange="localStorage.setItem('perspMargin', this.value)"
+             style="width:56px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:3px 4px;">
+      <span>px</span>
+    </label>
     <button onclick="perspAutoDetect()" style="background:#0f3460;color:#ccc;"
             title="Let the server propose the 4 page corners — then adjust the tokens">✨ Auto-detect</button>
     <button onclick="perspResetTokens()" style="background:#0f3460;color:#ccc;">↺ Reset</button>

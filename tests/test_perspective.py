@@ -62,6 +62,19 @@ def test_save_crops_image_and_remaps_shapes(client, persp_folder):
     assert abs(x1) < 1 and abs(y1) < 1 and abs(x2 - 50) < 1 and abs(y2 - 25) < 1
 
 
+def test_margin_expands_the_kept_area(client, persp_folder):
+    import math
+    r = client.post("/api/page/perspective", json={
+        "folder": str(persp_folder), "stem": "q1",
+        "points": QUAD_SHUFFLED, "save": False, "margin": 10})
+    assert r.status_code == 200
+    d = r.json()
+    # radial push by m on a w×h rectangle scales it by (1 + m/half-diagonal)
+    f = 1 + 10 / math.hypot(50, 25)
+    assert abs(d["width"] - round(100 * f)) <= 1
+    assert abs(d["height"] - round(50 * f)) <= 1
+
+
 def test_degenerate_points_rejected(client, persp_folder):
     r = client.post("/api/page/perspective", json={
         "folder": str(persp_folder), "stem": "q1",
