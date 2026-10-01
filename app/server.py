@@ -3763,6 +3763,9 @@ def api_rows_build(folder: str = Query(...), body: RowsBuildBody = ...):
 class BulkStatusBody(BaseModel):
     stems:  List[str]
     status: str
+    exclude_current: List[str] = []   # leave pages whose CURRENT status is in
+                                      # this list unchanged (e.g. ["skip"] for
+                                      # "bulk-verify everything I didn't skip")
 
 
 _PAGE_STATUSES = ("predicted", "corrected", "verified", "problem", "skip")
@@ -3776,17 +3779,23 @@ def api_bulk_set_status(folder: str = Query(...), body: BulkStatusBody = ...):
         raise HTTPException(status_code=400,
                             detail=f"Unknown status {body.status!r}; allowed: {_PAGE_STATUSES}")
     d = _resolve_folder(folder)
-    changed = 0
+    excl = set(body.exclude_current or [])
+    changed = excluded = 0
     for stem in body.stems:
         jf = d / f"{stem}.json"
         if not jf.exists():
             continue
         with _SHAPE_MERGE_LOCK:
             data = json.loads(jf.read_text(encoding="utf-8"))
+            cur = (data.get("flags") or {}).get("status") or "predicted"
+            if cur in excl:
+                excluded += 1
+                continue
             data.setdefault("flags", {})["status"] = body.status
             _write_json(jf, data)
         changed += 1
-    return {"ok": True, "changed": changed, "status": body.status}
+    return {"ok": True, "changed": changed, "excluded": excluded,
+            "status": body.status}
 
 
 class DeletePagesBody(BaseModel):

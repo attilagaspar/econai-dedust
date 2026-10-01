@@ -888,6 +888,13 @@
         <option value="verified">✓ verified</option>
         <option value="problem">⚠ problem</option>
       </select>
+      <label class="row" style="margin-top:6px;"
+             title="Pages whose current status is ⊘ skip keep it — so after a verification pass you can bulk-verify everything you did NOT skip">
+        <input type="checkbox" id="batch-status-keep-skip" checked
+               onchange="localStorage.setItem('batchStatusKeepSkip', this.checked ? '1' : '0')"
+               style="accent-color:#e94560;width:13px;height:13px;">
+        <span>leave ⊘ skip pages unchanged</span>
+      </label>
       <div style="font-size:10px;color:#555;margin-top:3px;">Sets the status on every page in the range below. Does not touch annotations.</div>
     </div>
     <div id="batch-dataset-opts" style="display:none;">

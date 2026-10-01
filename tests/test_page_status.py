@@ -63,6 +63,21 @@ def test_review_queue_excludes_skip(client, status_folder):
     assert "p1" in stems and "p3" in stems and "p2" not in stems
 
 
+def test_bulk_set_status_excludes_current(client, status_folder):
+    # mark p2 as skip, then bulk-verify everything EXCEPT current-skip pages
+    client.post("/api/pages/status", params={"folder": str(status_folder)},
+                json={"stems": ["p2"], "status": "skip"})
+    r = client.post("/api/pages/status", params={"folder": str(status_folder)},
+                    json={"stems": ["p1", "p2", "p3"], "status": "verified",
+                          "exclude_current": ["skip"]})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["changed"] == 2 and d["excluded"] == 1
+    for stem, exp in [("p1", "verified"), ("p2", "skip"), ("p3", "verified")]:
+        doc = json.loads((status_folder / f"{stem}.json").read_text())
+        assert (doc.get("flags") or {}).get("status") == exp
+
+
 # ── the guarantee behind "leave this page unannotated": a page whose status is
 #    "skip" is NEVER populated by apply-predictions ────────────────────────────
 

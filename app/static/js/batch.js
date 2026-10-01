@@ -128,6 +128,8 @@ function openBatchModal() {
   if (fillDir) fillDir.value = localStorage.getItem('latticeFillDir') === 'horizontal' ? 'horizontal' : 'vertical';
   const sj = document.getElementById('batch-ocr-serverjob');
   if (sj) sj.checked = localStorage.getItem('batchOcrServerJob') !== '0';
+  const ks = document.getElementById('batch-status-keep-skip');
+  if (ks) ks.checked = localStorage.getItem('batchStatusKeepSkip') !== '0';
   // Re-attach to a server OCR job that is still running for this folder
   document.getElementById('batch-ocr-job-row').style.display = 'none';
   fetch(`${API}/api/batch/ocr/status?folder=${encodeURIComponent(folder)}`)
@@ -504,20 +506,28 @@ async function runBatch() {
   if (op === 'set_status') {
     const stems  = sorted.map(i => pages[i]?.stem).filter(Boolean);
     const status = document.getElementById('batch-status-value').value;
+    const keepSkip = document.getElementById('batch-status-keep-skip').checked
+                     && status !== 'skip';   // meaningless when SETTING skip
     if (!stems.length) { showToast('No pages in range'); return; }
-    if (!confirm(`Set status "${status}" on ${stems.length} page(s)?`)) return;
+    if (!confirm(`Set status "${status}" on ${stems.length} page(s)?`
+                 + (keepSkip ? '\n(⊘ skip pages keep their status.)' : ''))) return;
     try {
       const r = await fetch(`${API}/api/pages/status?folder=${encodeURIComponent(folder)}`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ stems, status }),
+        body: JSON.stringify({ stems, status,
+                               exclude_current: keepSkip ? ['skip'] : [] }),
       });
       const d = await r.json();
       if (!r.ok) { showToast('✕ ' + (d.detail || r.status)); return; }
-      showToast(`Set "${status}" on ${d.changed} page(s).`, 3000);
-      stems.forEach(s => { pageStatuses[s] = status; });
-      colorizePageSelect?.();
-      if (pageData) { pageData.flags = pageData.flags || {};
-        if (stems.includes(pages[pageIdx]?.stem)) { pageData.flags.status = status; _syncStatusChip?.(); } }
+      showToast(`Set "${status}" on ${d.changed} page(s)`
+        + (d.excluded ? ` — ${d.excluded} ⊘ skip page(s) left unchanged` : ''), 4000);
+      // re-fetch authoritative statuses (the server decided which pages changed)
+      await refreshPageStatuses?.();
+      if (pageData && pages[pageIdx]) {
+        pageData.flags = pageData.flags || {};
+        pageData.flags.status = pageStatuses[pages[pageIdx].stem] || pageData.flags.status;
+        _syncStatusChip?.();
+      }
     } catch (e) { showToast('✕ ' + (e.message || e)); }
     return;
   }
