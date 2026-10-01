@@ -294,7 +294,7 @@ header span { color: #888; font-size: 0.85rem; }
         <input id="ib-name" placeholder="project name" />
       </div>
       <div class="field-row">
-        <label>Preset</label>
+        <label title="Fill the labels from a preset, or copy the label set of an existing project — pick the project you will later run inference / fine-tune FROM, so the label sets match and the guards don't refuse">Labels from</label>
         <select id="ib-preset" onchange="ibPresetChanged()"></select>
       </div>
       <div class="field-row">
@@ -420,8 +420,13 @@ async function openInboxModal() {
     ibPresets = (await (await fetch('/api/label-presets')).json()).presets || {};
   } catch (e) { ibPresets = {}; }
   const ps = document.getElementById('ib-preset');
-  ps.innerHTML = Object.keys(ibPresets).map(n => `<option>${n}</option>`).join('')
-    + '<option value="__custom__">(custom)</option>';
+  ps.innerHTML =
+    '<optgroup label="Presets">'
+    + Object.keys(ibPresets).map(n => `<option>${n}</option>`).join('')
+    + '<option value="__custom__">(custom)</option></optgroup>'
+    + '<optgroup label="Copy labels from project">'
+    + projects.map(p => `<option value="project:${p.name}">⧉ ${p.name}</option>`).join('')
+    + '</optgroup>';
   ibPresetChanged();
   document.getElementById('ib-name').addEventListener('input', () => { ibNameEdited = true; }, { once: true });
   await ibLoadFolders();
@@ -456,8 +461,22 @@ function ibDestChanged() {
   const isNew = document.getElementById('ib-dest').value === '__new__';
   document.getElementById('ib-new-fields').style.display = isNew ? '' : 'none';
 }
-function ibPresetChanged() {
+async function ibPresetChanged() {
   const name = document.getElementById('ib-preset').value;
+  if (name.startsWith('project:')) {
+    // Copy the label set of an existing project (so infer-from / finetune-from
+    // label guards can't trip later). Labels come from the project's config.
+    const src = name.slice('project:'.length);
+    const el = document.getElementById('ib-labels');
+    el.value = 'loading…';
+    try {
+      const d = await (await fetch(`/api/project/${encodeURIComponent(src)}`)).json();
+      const labels = (d.config || {}).labels || [];
+      el.value = labels.join(' ');
+      if (!labels.length) el.value = '';
+    } catch (e) { el.value = ''; }
+    return;
+  }
   if (ibPresets[name]) document.getElementById('ib-labels').value = ibPresets[name].join(' ');
 }
 
