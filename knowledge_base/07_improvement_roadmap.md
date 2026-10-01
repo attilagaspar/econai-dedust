@@ -136,7 +136,11 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
 
 *Training-loop items added 2026-09-08 from the compass_1874 fine-tuning session:*
 
-1. **Include empty pages in training data (checkbox + flag).** Today empties are
+1. ~~**Include empty pages in training data (checkbox + flag).**~~ ✅ Built
+   2026-10-01 as part of P10.2: a VERIFIED page with zero shapes trains as a
+   negative (dashboard checkbox, `FILTER_EMPTY_ANNOTATIONS False` baked into
+   the script when negatives are present); predicted empties stay out; skip
+   never trains. Original spec: Today empties are
    dropped twice: `cocosplit --having-annotations` in BOTH generated train
    scripts (Train and finetune-from), and Detectron2's
    `DATALOADER.FILTER_EMPTY_ANNOTATIONS` default (True). The naive fix is
@@ -153,7 +157,10 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
    unannotated" with genuine clutter, and a skipped TABLE page must not
    train as a negative — so the verified-empty negative marker introduced
    here must be distinct from `skip`.*
-2. **Self-fine-tune: allow source == target in finetune-from.** The dashboard
+2. ~~**Self-fine-tune: allow source == target in finetune-from.**~~ ✅ Built
+   2026-10-01: weights copied aside as `bootstrap_weights.pth` before the
+   checkpoint cleanup; checkpoint rm narrowed to `model_*.pth`; dashboard
+   guard became a confirm. Original spec: The dashboard
    guard (`Source and target project must be different`) exists because the
    training script wipes `outputs/<target>/*.pth` before training — with
    source == target it would delete the weights it is about to warm-start
@@ -174,7 +181,10 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
    per project (or store `test.json` once and reuse) so the loop's progress
    is measurable run over run. *→ promoted to P10.1 (2026-09-11).*
 5. *(carried from P8)* Pin frequently-used panel groups to the top.
-6. **Trash page in the dashboard (added 2026-09-12).** One view over both
+6. ~~**Trash page in the dashboard (added 2026-09-12).**~~ ✅ Built 2026-10-01:
+   `app/trash.py` + `/api/trash` list/restore/purge endpoints (restore refuses
+   live-stem/live-name collisions), 🗑 button + modal in the dashboard
+   sidebar; tests in test_trash.py. Original spec: One view over both
    trash locations — whole projects in `projects/_trash`, per-project pages
    in `<project>/_trash_pages` — showing stem/file count/size/mtime, with
    Restore (move back; REFUSE if a live page with the same stem exists —
@@ -185,7 +195,18 @@ Review queue and page-status scoreboard shipped together. Editor: **⚡ Review**
 
 ---
 
-## P10. Learning diagnostics (added 2026-09-11)
+## P10. Learning diagnostics (added 2026-09-11) — **BUILT 2026-10-01 (items 1–6 + 8; 7 partial)**
+
+*Build notes (2026-10-01): items 1–4 shipped as designed (modules
+`app/training_meta.py` + `app/eval_diff.py`, endpoints `/test-set`,
+`/training-log`, `/test-eval`, `/corrections-log`, dashboard "Model Quality"
+card; tests in test_training_meta.py). Item 5 = `train_fraction` field with
+hash-ranked NESTED subsets. Item 6 logs predicted→corrected diffs against the
+stored prediction file on every status change. Item 7: the numeric half
+exists (per-label + worst-first per-page tables in the test-eval result);
+the in-editor visual overlay diff remains. Item 8 needs no new code — run
+infer-from with the chosen model into the target project, Pull predictions,
+then "Score predictions on test set" against the target's frozen set.*
 
 *Background and the reasoning in plain language:
 [11_learning_diagnostics.md](11_learning_diagnostics.md). Motivation: several

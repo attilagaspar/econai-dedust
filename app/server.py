@@ -4617,6 +4617,71 @@ def api_delete_project(name: str):
             detail=f"Delete failed — is the folder open in another program? {e}")
 
 
+# ── Trash management (P9.6) — restore / purge without SSH ────────────────────
+
+class TrashProjectBody(BaseModel):
+    entry: str                       # folder name under projects/_trash
+
+class TrashPagesBody(BaseModel):
+    project: str
+    stems:   Optional[List[str]] = None   # None in purge = empty whole trash
+
+
+@app.get("/api/trash")
+def api_trash_list():
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    return trash.list_trash(PROJECTS_ROOT)
+
+
+@app.post("/api/trash/restore-project")
+def api_trash_restore_project(body: TrashProjectBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    try:
+        name = trash.restore_project(PROJECTS_ROOT, body.entry)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True, "restored": name}
+
+
+@app.post("/api/trash/restore-pages")
+def api_trash_restore_pages(body: TrashPagesBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    if not body.stems:
+        raise HTTPException(status_code=400, detail="No stems given")
+    try:
+        result = trash.restore_pages(PROJECTS_ROOT, body.project, body.stems)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, **result}
+
+
+@app.post("/api/trash/purge-project")
+def api_trash_purge_project(body: TrashProjectBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    try:
+        freed = trash.purge_project(PROJECTS_ROOT, body.entry)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "bytes": freed}
+
+
+@app.post("/api/trash/purge-pages")
+def api_trash_purge_pages(body: TrashPagesBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    try:
+        result = trash.purge_pages(PROJECTS_ROOT, body.project, body.stems)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, **result}
+
+
 class CloneProject(BaseModel):
     new_name: str
 

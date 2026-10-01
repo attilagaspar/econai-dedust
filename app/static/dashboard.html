@@ -200,6 +200,8 @@ header span { color: #888; font-size: 0.85rem; }
       <button id="btn-new-project" onclick="openNewProjectModal()">+ New</button>
       <button id="btn-inbox" onclick="openInboxModal()" style="display:none;background:#1a5c38;border:none;color:#eee;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;position:relative;"
               title="Bulk import: pick a folder of PDFs from the storage inbox and render it into a project">📥 Inbox<span id="inbox-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#f0c040;animation:pulse 1.2s infinite;"></span></button>
+      <button id="btn-trash" onclick="openTrashModal()" style="background:#2a2a3e;border:none;color:#aaa;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;"
+              title="Deleted projects and pages — restore them or delete forever">🗑</button>
     </div>
     <div id="project-list">
       <div class="empty"><div class="big">📂</div>Loading…</div>
@@ -264,6 +266,22 @@ header span { color: #888; font-size: 0.85rem; }
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeNewProjectModal()">Cancel</button>
       <button class="btn btn-primary" id="np-submit-btn" onclick="submitNewProject()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trash modal (P9.6) -->
+<div class="modal-bg" id="trash-modal">
+  <div class="modal" style="max-width:720px;">
+    <h3>🗑 Trash</h3>
+    <p style="font-size:0.8rem;color:#888;margin:0 0 10px;">
+      Soft-deleted projects and pages. <b>Restore</b> moves them back (it refuses
+      if live work with the same name exists — nothing is ever overwritten).
+      <b>Delete forever</b> frees the space permanently.
+    </p>
+    <div id="trash-body" style="max-height:420px;overflow-y:auto;font-size:0.82rem;">Loading…</div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeTrashModal()">Close</button>
     </div>
   </div>
 </div>
@@ -404,6 +422,119 @@ async function ibUpdateBadge() {
     const active = Object.values(jobs).some(j => !j.done);
     document.getElementById('inbox-badge').style.display = active ? '' : 'none';
   } catch (e) {}
+}
+
+// ============================================================
+// Trash (P9.6)
+// ============================================================
+function openTrashModal() {
+  document.getElementById('trash-modal').classList.add('open');
+  loadTrash();
+}
+function closeTrashModal() {
+  document.getElementById('trash-modal').classList.remove('open');
+}
+function _mb(b) { return b >= 1e6 ? (b/1e6).toFixed(1) + ' MB' : (b/1e3).toFixed(0) + ' KB'; }
+
+async function loadTrash() {
+  const el = document.getElementById('trash-body');
+  el.textContent = 'Loading…';
+  try {
+    const d = await (await fetch('/api/trash')).json();
+    if (!d.projects.length && !d.pages.length) {
+      el.innerHTML = '<span style="color:#667;">Trash is empty.</span>';
+      return;
+    }
+    let html = '';
+    if (d.projects.length) {
+      html += '<b style="color:#aaa;">Deleted projects</b><table style="border-collapse:collapse;width:100%;margin:4px 0 12px;">';
+      for (const p of d.projects) {
+        html += `<tr>
+          <td style="padding:3px 8px 3px 0;color:#ccc;">${p.name}</td>
+          <td style="padding:3px 8px;color:#667;">${p.deleted ? p.deleted.replace('_', ' ') : ''}</td>
+          <td style="padding:3px 8px;color:#888;">${p.files} files · ${_mb(p.bytes)}</td>
+          <td style="padding:3px 8px;white-space:nowrap;">
+            <button class="btn btn-secondary" style="padding:2px 8px;font-size:0.75rem;"
+              onclick="trashRestoreProject('${p.entry}')">↩ Restore</button>
+            <button class="btn btn-secondary" style="padding:2px 8px;font-size:0.75rem;color:#e94560;"
+              onclick="trashPurgeProject('${p.entry}', '${p.name}', ${p.bytes})">✕ Delete forever</button>
+          </td></tr>`;
+      }
+      html += '</table>';
+    }
+    if (d.pages.length) {
+      const byProj = {};
+      for (const pg of d.pages) (byProj[pg.project] ??= []).push(pg);
+      html += '<b style="color:#aaa;">Deleted pages</b>';
+      for (const [proj, pages] of Object.entries(byProj)) {
+        const totalB = pages.reduce((s, p) => s + p.bytes, 0);
+        html += `<div style="margin:6px 0 2px;color:#7dd3fc;">${proj}
+          <button class="btn btn-secondary" style="padding:1px 8px;font-size:0.72rem;color:#e94560;margin-left:8px;"
+            onclick="trashPurgePages('${proj}', null, ${totalB})">✕ empty this project's trash (${_mb(totalB)})</button></div>
+          <table style="border-collapse:collapse;width:100%;">`;
+        for (const pg of pages) {
+          html += `<tr>
+            <td style="padding:2px 8px 2px 0;color:#ccc;">${pg.stem}</td>
+            <td style="padding:2px 8px;color:#888;">${pg.files} file(s) · ${_mb(pg.bytes)}</td>
+            <td style="padding:2px 8px;white-space:nowrap;">
+              <button class="btn btn-secondary" style="padding:1px 8px;font-size:0.72rem;"
+                onclick="trashRestorePages('${proj}', '${pg.stem}')">↩ Restore</button>
+              <button class="btn btn-secondary" style="padding:1px 8px;font-size:0.72rem;color:#e94560;"
+                onclick="trashPurgePages('${proj}', '${pg.stem}', ${pg.bytes})">✕</button>
+            </td></tr>`;
+        }
+        html += '</table>';
+      }
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<span style="color:#e94560;">Could not load trash: ${e?.message || e}</span>`;
+  }
+}
+
+async function trashRestoreProject(entry) {
+  const res = await fetch('/api/trash/restore-project', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ entry }),
+  });
+  const d = await res.json();
+  if (res.ok) { showToast(`Restored project '${d.restored}'.`); loadTrash(); loadProjects(); }
+  else alert(errMsg(d));
+}
+
+async function trashPurgeProject(entry, name, bytes) {
+  if (!confirm(`Delete project '${name}' FOREVER? This frees ${_mb(bytes)} and cannot be undone.`)) return;
+  const res = await fetch('/api/trash/purge-project', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ entry }),
+  });
+  const d = await res.json();
+  if (res.ok) { showToast(`Deleted forever — ${_mb(d.bytes)} freed.`); loadTrash(); }
+  else alert(errMsg(d));
+}
+
+async function trashRestorePages(project, stem) {
+  const res = await fetch('/api/trash/restore-pages', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ project, stems: [stem] }),
+  });
+  const d = await res.json();
+  if (!res.ok) { alert(errMsg(d)); return; }
+  if (d.refused.length) alert(`Not restored: a live page named '${stem}' exists in '${project}' — restore never overwrites live work.`);
+  else showToast(`Restored page '${stem}'.`);
+  loadTrash();
+}
+
+async function trashPurgePages(project, stem, bytes) {
+  const what = stem ? `page '${stem}'` : `ALL trashed pages of '${project}'`;
+  if (!confirm(`Delete ${what} FOREVER? This frees ${_mb(bytes)} and cannot be undone.`)) return;
+  const res = await fetch('/api/trash/purge-pages', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ project, stems: stem ? [stem] : null }),
+  });
+  const d = await res.json();
+  if (res.ok) { showToast(`Deleted forever — ${_mb(d.bytes)} freed.`); loadTrash(); }
+  else alert(errMsg(d));
 }
 
 async function openInboxModal() {
