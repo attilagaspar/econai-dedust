@@ -41,6 +41,7 @@ document.addEventListener('keydown', e => {
   if (e.key==='a'||e.key==='A') { pageData.shapes.forEach((_,i)=>selSet.add(i)); selIdx=selSet.size?[...selSet][0]:-1; updatePanel(); drawOverlay(); return; }
   if (e.key==='n'||e.key==='N') { goPage(+1); return; }
   if (e.key==='m'||e.key==='M') { goPage(-1); return; }
+  if (e.key==='s'||e.key==='S') { if (pages.length) setPageStatus('skip'); return; }
   if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
   if (e.key==='o'||e.key==='O') { cloneSelectionToPage(-2); return; }
   if (e.key==='ArrowRight') { navigateLattice('right'); return; }

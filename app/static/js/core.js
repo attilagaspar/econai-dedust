@@ -864,6 +864,7 @@ function _shToggle() {
         ${row('H', 'Focus the Human correction field')}
         ${row('B', 'Mark / un-mark the cell as a structural blank')}
         ${row('V', 'Verify this page & jump to the next unverified page')}
+        ${row('S', 'Mark this page ⊘ skip (no annotations)')}
         ${row('⚡', 'Review button: step through only the suspect cells')}
         ${row('Ctrl+K', 'Command palette (every button, searchable)')}
         ${row('?', 'This cheatsheet')}
