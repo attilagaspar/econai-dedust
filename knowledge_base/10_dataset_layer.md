@@ -176,9 +176,12 @@ without interaction.
 2. **Distribution diagnostics** — robust outlier flags per variable, the
    10,000× case; review/fix loop in the report.
 3. **Tidy export** — CSV/dta from the declaration; retire the renames.
-4. **Later**: dataset-level rules; a declaration-authoring UI; cross-project
-   joins by entity id; optional materialized SQLite/parquet if analysis ever
-   needs SQL directly.
+4. **Later**: dataset-level rules; a declaration-authoring UI; optional
+   materialized SQLite/parquet if analysis ever needs SQL directly.
+   Cross-project joins by entity id have grown into their own roadmap entry:
+   **P12 (entity index)** in 07_improvement_roadmap.md — records stay in
+   their projects, the authority ID is the join key, the index is computed
+   and rebuildable. The evaluation summary over builds is **P11** there.
 
 ## Debated and rejected
 

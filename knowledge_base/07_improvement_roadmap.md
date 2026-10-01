@@ -245,6 +245,60 @@ a free data point); 5–8 as the sources arrive.*
 
 ---
 
+## P11. Data-evaluation dashboard (added 2026-10-01)
+
+One place that answers "how clean is my processed data?" without opening a
+single page. Aggregates what the dataset layer already (or soon) produces:
+
+1. Per project / per dataset summary card: record count, findings by severity
+   (structure, parse, distribution), outlier counts per variable, share of
+   records with unresolved authority, last-build timestamp.
+2. Trend since previous build (findings resolved vs introduced) — the build
+   report becomes a progress instrument, not a snapshot.
+3. Click-through: every number drills down to the existing findings review
+   table (report chassis from dataset Phase 1), which already deep-links to
+   page/row.
+
+**Depends on**: dataset layer Phase 2 (distribution diagnostics) — the
+outlier numbers this dashboard summarizes. Build Phase 2 first, then this is
+mostly an aggregation endpoint + one dashboard card/page.
+
+---
+
+## P12. Authority-bound cross-project linkage — the entity index (added 2026-10-01)
+
+Goal: when a row in any dataset resolves to an authority element (e.g. a
+settlement), that element immediately exposes every OTHER record across all
+projects that resolved to it — machinery row ↔ census record ↔ land-use
+record. The authority becomes the spine of a growing linked historical
+database, which is the actual research product.
+
+**Design stance (debated 2026-10-01): no new materialized store.** Records
+stay in their projects; the authority ID that resolved rows already carry IS
+the join key. What gets built is an **entity index** — computed, rebuildable,
+never hand-edited:
+
+1. **Index builder**: scan all projects' built datasets for authority-resolved
+   records → `authorities/<authority>/entity_index.json` (or sqlite if it
+   grows): authority ID → list of (project, dataset, record ref). Rebuild is
+   idempotent; staleness is shown, never silently wrong.
+2. **Entity view**: look up an authority element → everything known about it,
+   grouped by project/dataset, each record with full provenance (project,
+   page, row — paper-grade citeability is non-negotiable).
+3. **Cross-project tidy export**: pick N datasets + an authority → one wide
+   or long table keyed by authority ID (the "merge on telep_id in Stata"
+   step, done where the provenance lives).
+4. **Temporal identity is a prerequisite, not a nice-to-have**: linking an
+   1895 machinery row to a 1930 census record requires the authority system's
+   planned temporal layer (same settlement across renames/merges). Until it
+   exists, the index links within one authority vintage and says so.
+
+**Depends on**: dataset layer Phase 1 (shipped — records + keys exist),
+authority resolution (exists), temporal authority (planned, gates item 4).
+Absorbs the old dataset-layer "Later: cross-project joins by entity id" note.
+
+---
+
 ## Suggested sequencing
 
 1. **P7.1/2/5** (cache, atomic writes, hygiene) — one short session, removes recurring pain.
