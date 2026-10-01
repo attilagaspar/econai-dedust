@@ -121,6 +121,56 @@ def test_missing_frozen_stem_reported(proj):
     assert r["missing_test_stems"] == ["ghost"]
 
 
+def test_train_fraction_nested(proj):
+    full = _prep(proj)                                     # 4 training pages
+    half = _prep(proj, train_fraction=0.5)
+    assert half["n_train_pages"] == 2
+    assert half["n_train_pool"] == full["n_train_pages"]
+    # nested: the 50% stems are a subset of the 75% stems
+    def stems(frac):
+        _prep(proj, train_fraction=frac)
+        coco = json.loads((proj / "intermediate" / "annotations.json").read_text())
+        return {im["file_name"] for im in coco["images"]}
+    assert stems(0.5) <= stems(0.75) <= stems(1.0)
+
+
+# ── correction telemetry ─────────────────────────────────────────────────────
+
+def test_record_correction_and_summary(tmp_path):
+    pdir = tmp_path
+    (pdir / "annotations").mkdir()
+    (pdir / "predictions").mkdir()
+    # model predicted one cell; the human kept it and added a header
+    _page(pdir / "predictions", "p1", "predicted", [_box("cell")])
+    _page(pdir / "annotations", "p1", "corrected",
+          [_box("cell"), _box("header", 10, 10, 90, 40)])
+    row = training_meta.record_correction(pdir, "p1", "predicted", "corrected")
+    assert row and row["added"] == 1 and row["ok"] == 1 and row["corrections"] == 1
+    # irrelevant transitions are not logged
+    assert training_meta.record_correction(pdir, "p1", "corrected", "verified") is None
+    assert training_meta.record_correction(pdir, "nope", "predicted", "verified") is None
+    s = training_meta.corrections_summary(pdir)
+    assert s["n"] == 1 and s["recent_avg_corrections_per_page"] == 1.0
+    # re-correcting the same page replaces its row instead of double-counting
+    training_meta.record_correction(pdir, "p1", "predicted", "verified")
+    assert training_meta.corrections_summary(pdir)["n"] == 1
+
+
+def test_status_change_endpoint_logs_correction(client, api_proj):
+    pdir = PROJECTS_ROOT / api_proj
+    (pdir / "predictions").mkdir(exist_ok=True)
+    _page(pdir / "predictions", "p3", "predicted", [_box("cell")])
+    _page(pdir / "annotations", "p3", "predicted",
+          [_box("cell"), _box("header", 10, 10, 90, 40)])
+    folder = str(pdir / "annotations")
+    r = client.patch(f"/api/page/flags?folder={folder}&stem=p3",
+                     json={"flags": {"status": "corrected"}})
+    assert r.status_code == 200
+    s = client.get(f"/api/project/{api_proj}/corrections-log").json()
+    assert s["n"] == 1 and s["rows"][0]["stem"] == "p3"
+    assert s["rows"][0]["added"] == 1
+
+
 # ── ledger ───────────────────────────────────────────────────────────────────
 
 def test_ledger_append_update(tmp_path):

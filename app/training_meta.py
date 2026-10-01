@@ -183,6 +183,68 @@ def ledger_update(pdir: Path, row_id: str, **fields):
     return False
 
 
+# ── correction telemetry (P10.6) ─────────────────────────────────────────────
+# When a page transitions predicted → corrected/verified, diff the model's
+# stored prediction against the human-corrected result and log it: the true
+# corrections-per-page curve, measured on real work, no GPU time spent.
+
+CORRECTIONS_LOG = "corrections_log.json"   # under <project>/
+
+
+def record_correction(pdir: Path, stem: str,
+                      old_status: str, new_status: str) -> dict | None:
+    """Call on any page-status change; logs only the meaningful transition
+    (predicted → corrected/verified with a prediction file present).
+    Never raises — telemetry must not break a save."""
+    try:
+        if old_status != "predicted" or new_status not in ("corrected", "verified"):
+            return None
+        pred_f = pdir / "predictions" / f"{stem}.json"
+        ann_f  = pdir / "annotations" / f"{stem}.json"
+        if not pred_f.exists() or not ann_f.exists():
+            return None
+        from app.eval_diff import diff_page
+        gt   = json.loads(ann_f.read_text(encoding="utf-8")).get("shapes", [])
+        pred = json.loads(pred_f.read_text(encoding="utf-8")).get("shapes", [])
+        per_label = diff_page(gt, pred)
+        tot = {"added": 0, "deleted": 0, "moved": 0, "ok": 0}
+        for c in per_label.values():
+            for k in tot:
+                tot[k] += c[k]
+        row = {"stem": stem, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "to": new_status, **tot,
+               "corrections": tot["added"] + tot["deleted"] + tot["moved"]}
+        log_f = pdir / CORRECTIONS_LOG
+        rows = []
+        if log_f.exists():
+            try:
+                rows = json.loads(log_f.read_text(encoding="utf-8"))
+            except Exception:
+                rows = []
+        rows = [r for r in rows if r.get("stem") != stem]   # re-correction replaces
+        rows.append(row)
+        log_f.write_text(json.dumps(rows, indent=2, ensure_ascii=False),
+                         encoding="utf-8")
+        return row
+    except Exception:
+        return None
+
+
+def corrections_summary(pdir: Path, window: int = 20) -> dict:
+    log_f = pdir / CORRECTIONS_LOG
+    rows = []
+    if log_f.exists():
+        try:
+            rows = json.loads(log_f.read_text(encoding="utf-8"))
+        except Exception:
+            rows = []
+    recent = rows[-window:]
+    avg = (round(sum(r["corrections"] for r in recent) / len(recent), 2)
+           if recent else None)
+    return {"n": len(rows), "recent_n": len(recent),
+            "recent_avg_corrections_per_page": avg, "rows": rows}
+
+
 def parse_d2_metrics(text: str) -> dict | None:
     """Pull the LAST evaluation scores out of detectron2's metrics.json
     content (one JSON object per line; eval lines carry bbox/AP keys)."""

@@ -3793,6 +3793,9 @@ def api_bulk_set_status(folder: str = Query(...), body: BulkStatusBody = ...):
                 continue
             data.setdefault("flags", {})["status"] = body.status
             _write_json(jf, data)
+        if cur != body.status:
+            from app import training_meta
+            training_meta.record_correction(d.parent, stem, cur, body.status)
         changed += 1
     return {"ok": True, "changed": changed, "excluded": excluded,
             "status": body.status}
@@ -5637,9 +5640,16 @@ def api_page_flags(folder: str = Query(...), stem: str = Query(...),
         raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
     data = json.loads(jf.read_text(encoding="utf-8"))
     flags = data.get("flags") or {}
+    old_status = flags.get("status") or "predicted"
     flags.update(body.flags or {})
     data["flags"] = flags
     _write_json(jf, data)
+    # correction telemetry (P10.6): predicted → corrected/verified gets diffed
+    # against the stored prediction — the free, continuous learning curve
+    if "status" in (body.flags or {}) and flags.get("status") != old_status:
+        from app import training_meta
+        training_meta.record_correction(d.parent, stem,
+                                        old_status, flags["status"])
     return {"ok": True, "flags": flags}
 
 
@@ -6382,6 +6392,7 @@ class PrepareRequest(BaseModel):
     # P10.2 export hygiene — defaults are the safe choices
     status_filter:          bool = True   # only corrected+verified pages train
     include_empty_verified: bool = True   # verified-empty page = negative example
+    train_fraction:         float = 1.0   # P10.5: nested subset for learning curves
 
 
 def _frozen_test_stems(pdir) -> list:
@@ -6415,6 +6426,7 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             status_filter          = body.status_filter,
             include_empty_verified = body.include_empty_verified,
             test_stems             = _frozen_test_stems(pdir),
+            train_fraction         = body.train_fraction,
         )
         return {"ok": True, **result}
     except FileNotFoundError as e:
@@ -6460,6 +6472,14 @@ def api_training_log(name: str):
     from app import training_meta
     rows = training_meta.load_ledger(project_dir(name))
     return {"rows": list(reversed(rows))}
+
+
+@app.get("/api/project/{name}/corrections-log")
+def api_corrections_log(name: str, window: int = 20):
+    """Correction telemetry (P10.6): logged predicted→corrected page diffs and
+    the rolling corrections-per-page average — the free learning curve."""
+    from app import training_meta
+    return training_meta.corrections_summary(project_dir(name), window=window)
 
 
 class TestEvalRequest(BaseModel):
@@ -6747,7 +6767,8 @@ def _ledger_row_from_summary(inter: Path, mode: str, **extra) -> dict:
     keys = ("max_iter", "base_lr", "ims_per_batch", "n_train_pages",
             "n_test_pages", "n_negatives", "n_excluded_status",
             "n_annotations", "status_filter", "include_empty_verified",
-            "server_side_split", "status_counts")
+            "server_side_split", "status_counts", "train_fraction",
+            "n_train_pool")
     row = {"mode": mode, **{k: summary[k] for k in keys if k in summary}}
     row.update(extra)
     return row

@@ -112,7 +112,8 @@ def prepare_training_data(project_name: str, ann_dir: Path,
                           ims_per_batch: int = 2, num_workers: int = 2,
                           status_filter: bool = True,
                           include_empty_verified: bool = True,
-                          test_stems: list[str] | None = None) -> dict:
+                          test_stems: list[str] | None = None,
+                          train_fraction: float = 1.0) -> dict:
     """
     1. Convert LabelMe JSONs → COCO annotations.json (status-filtered).
     2. When a frozen test set is given: write train.json/test.json here
@@ -167,6 +168,25 @@ def prepare_training_data(project_name: str, ann_dir: Path,
                 train_pages.append(p)          # legacy: cocosplit pools it
             continue
         train_pages.append(p)
+
+    # P10.5 learning-curve runs: train on a deterministic NESTED subset.
+    # Ordering by each stem's hash is stable across runs and projects, so the
+    # 50% subset is always contained in the 75% subset is contained in 100% —
+    # score-vs-quantity curves compare like with like.
+    try:
+        train_fraction = float(train_fraction)
+    except (TypeError, ValueError):
+        train_fraction = 1.0
+    train_fraction = min(1.0, max(0.0, train_fraction)) or 1.0
+    n_before_fraction = len(train_pages)
+    if train_fraction < 1.0 and train_pages:
+        import hashlib
+        ranked = sorted(train_pages,
+                        key=lambda p: hashlib.sha1(p["stem"].encode()).hexdigest())
+        keep = max(1, round(len(ranked) * train_fraction))
+        kept_stems = {p["stem"] for p in ranked[:keep]}
+        train_pages = [p for p in train_pages if p["stem"] in kept_stems]
+        n_negatives = sum(1 for p in train_pages if p["n_shapes"] == 0)
 
     server_side_split = bool(test_set)
 
@@ -273,6 +293,8 @@ echo "=== Inference complete ==="
         "status_filter":          status_filter,
         "include_empty_verified": include_empty_verified,
         "server_side_split":      server_side_split,
+        "train_fraction":         train_fraction,
+        "n_train_pool":           n_before_fraction,
         "n_train_pages":          len(train_pages),
         "n_test_pages":           len(test_pages),
         "n_negatives":            n_negatives,

@@ -786,6 +786,12 @@ function renderDetail() {
           <input type="checkbox" id="tp-include-empty" checked style="accent-color:#e94560;width:14px;height:14px">
           Verified-empty pages train as negatives
         </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;"
+               title="Learning-curve runs: train on this share of the training pages (deterministic NESTED subsets — the 50% set is contained in the 100% set), so 2-3 runs at different fractions show whether more annotation still helps. Leave at 1 for normal training.">
+          Train fraction
+          <input id="tp-train-fraction" type="number" min="0.05" max="1" step="0.05" value="1"
+                 style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        </label>
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
@@ -814,6 +820,7 @@ function renderDetail() {
         </button>
       </div>
       <div id="test-eval-result" style="font-size:0.8rem;color:#888;margin-top:8px"></div>
+      <div id="corrections-telemetry" style="font-size:0.8rem;color:#888;margin-top:8px"></div>
       <div id="training-log" style="font-size:0.8rem;color:#888;margin-top:10px">Loading…</div>
     </div>
 
@@ -969,6 +976,7 @@ function renderDetail() {
   // Frozen test set + training history (P10)
   loadTestSet();
   loadTrainingLog();
+  loadCorrectionsTelemetry();
 
   // Load docker config into the card
   dockerLoad();
@@ -1081,9 +1089,33 @@ async function runTestEval() {
     <span style="color:#22c55e;">${t.ok} accepted as-is</span>
     <details style="margin-top:4px;"><summary style="cursor:pointer;color:#888;">per label</summary>
       <table style="border-collapse:collapse;margin-top:4px;">${labelRows}</table>
+    </details>
+    <details style="margin-top:4px;"><summary style="cursor:pointer;color:#888;">per page (worst first)</summary>
+      <table style="border-collapse:collapse;margin-top:4px;">
+      ${d.per_page.slice().sort((a, b) => b.corrections - a.corrections).map(p =>
+        `<tr><td style="padding:2px 10px 2px 0;color:#aaa;">${p.stem}</td>
+         <td style="padding:2px 10px;color:#ccc;">${p.corrections} corr</td>
+         <td style="padding:2px 10px;color:#e94560;">+${p.added}</td>
+         <td style="padding:2px 10px;color:#f0c040;">−${p.deleted}</td>
+         <td style="padding:2px 10px;color:#7dd3fc;">↔${p.moved}</td>
+         <td style="padding:2px 10px;color:#22c55e;">✓${p.ok}</td></tr>`).join('')}
+      </table>
     </details>`;
   showToast('Recorded in the training history.');
   loadTrainingLog();
+}
+
+async function loadCorrectionsTelemetry() {
+  const el = document.getElementById('corrections-telemetry');
+  if (!el || !activeProj) return;
+  try {
+    const d = await (await fetch(`/api/project/${activeProj.name}/corrections-log`)).json();
+    if (!d.n) { el.innerHTML = ''; return; }
+    el.innerHTML = `📉 Correction telemetry: <b style="color:#ccc;">`
+      + `${d.recent_avg_corrections_per_page} corrections/page</b> `
+      + `<span style="color:#667;">(rolling avg of the last ${d.recent_n} corrected pages; `
+      + `${d.n} logged in total — falls as the model learns)</span>`;
+  } catch (e) { el.innerHTML = ''; }
 }
 
 async function loadTrainingLog() {
@@ -1097,7 +1129,9 @@ async function loadTrainingLog() {
     }
     const rows = d.rows.map(r => {
       const date  = (r.started || '').replace('T', ' ').slice(0, 16);
-      const mode  = r.mode === 'finetune' ? `⚡ ft ← ${r.source || '?'}` : '🚀 train';
+      let mode  = r.mode === 'finetune' ? `⚡ ft ← ${r.source || '?'}` : '🚀 train';
+      if (r.train_fraction && r.train_fraction < 1)
+        mode += ` <span style="color:#7dd3fc;" title="learning-curve run: trained on a nested subset">${Math.round(r.train_fraction * 100)}%</span>`;
       const pages = r.n_train_pages != null
         ? `${r.n_train_pages}${r.n_negatives ? `+${r.n_negatives}⊘` : ''}` : '—';
       const ap    = r.ap ? `${r.ap.AP ?? '—'}` : '—';
@@ -1397,6 +1431,7 @@ async function prepareTrainingData() {
     num_workers:   (nw === '' || nw == null) ? undefined : parseInt(nw, 10),
     status_filter:          document.getElementById('tp-status-filter')?.checked ?? true,
     include_empty_verified: document.getElementById('tp-include-empty')?.checked ?? true,
+    train_fraction:         parseFloat(document.getElementById('tp-train-fraction')?.value) || 1.0,
   };
   try {
     const res  = await fetch(`/api/project/${activeProj.name}/prepare`, {
