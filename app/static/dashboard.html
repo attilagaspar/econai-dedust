@@ -775,10 +775,46 @@ function renderDetail() {
                  style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
         </label>
       </div>
+      <div class="btn-row" style="align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;cursor:pointer"
+               title="Only pages marked corrected or verified enter the training data. Uncheck to train on everything (risk: uncorrected predictions train as ground truth and the loop learns its own mistakes). Skip pages never train either way.">
+          <input type="checkbox" id="tp-status-filter" checked style="accent-color:#e94560;width:14px;height:14px">
+          Train only on corrected + verified pages
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;cursor:pointer"
+               title="A VERIFIED page with zero annotations is a real statement ('nothing here') and trains as a negative example. Merely predicted empty pages stay out either way.">
+          <input type="checkbox" id="tp-include-empty" checked style="accent-color:#e94560;width:14px;height:14px">
+          Verified-empty pages train as negatives
+        </label>
+      </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
       </div>
       <div id="prepare-result" style="font-size:0.8rem;color:#888;margin-top:10px"></div>
+    </div>
+
+    <!-- Frozen test set + training history (P10) -->
+    <div class="card">
+      <h3>Model Quality</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:10px">
+        Freeze a test set of verified pages: they are always excluded from training and always
+        evaluated on, so scores are comparable across training runs. Every Train / Fine-tune
+        appends a row to the training history below.
+      </p>
+      <div id="test-set-status" style="font-size:0.82rem;color:#aaa;margin-bottom:8px">Loading…</div>
+      <div class="btn-row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+        <label style="font-size:0.8rem;color:#aaa;">Pages</label>
+        <input id="ts-n" type="number" min="1" step="1" value="10"
+               style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        <button class="btn btn-secondary" onclick="freezeTestSet()">❄ Freeze test set</button>
+        <button class="btn btn-secondary" onclick="unfreezeTestSet()">Unfreeze</button>
+        <button class="btn btn-secondary" onclick="runTestEval()"
+                title="Score the pulled predictions against the frozen pages' verified annotations: boxes the model missed (added), invented (deleted), or misplaced (moved) — i.e. how much human correction a page costs.">
+          📏 Score predictions on test set
+        </button>
+      </div>
+      <div id="test-eval-result" style="font-size:0.8rem;color:#888;margin-top:8px"></div>
+      <div id="training-log" style="font-size:0.8rem;color:#888;margin-top:10px">Loading…</div>
     </div>
 
     <!-- Train & Infer -->
@@ -930,6 +966,10 @@ function renderDetail() {
   // Review progress board (P3)
   loadReviewBoard();
 
+  // Frozen test set + training history (P10)
+  loadTestSet();
+  loadTrainingLog();
+
   // Load docker config into the card
   dockerLoad();
 
@@ -964,6 +1004,130 @@ async function loadReviewBoard() {
       </div>`;
   } catch (e) {
     el.innerHTML = '<span style="color:#e94560;">Could not load status.</span>';
+  }
+}
+
+// ============================================================
+// Frozen test set + training history (P10)
+// ============================================================
+async function loadTestSet() {
+  const el = document.getElementById('test-set-status');
+  if (!el || !activeProj) return;
+  try {
+    const d = await (await fetch(`/api/project/${activeProj.name}/test-set`)).json();
+    if (!d.exists) {
+      el.innerHTML = 'No frozen test set yet — training uses a random 80/20 split '
+        + '(scores not comparable across runs). Freeze one below.';
+      return;
+    }
+    let warn = '';
+    if (d.missing.length)
+      warn += ` <span style="color:#e94560;">⚠ ${d.missing.length} page(s) missing: ${d.missing.join(', ')}</span>`;
+    if (d.changed.length)
+      warn += ` <span style="color:#f0c040;">⚠ ${d.changed.length} page(s) edited since freezing: ${d.changed.join(', ')} — scores before/after the edit are not comparable.</span>`;
+    el.innerHTML = `❄ <b style="color:#7dd3fc;">${d.n} pages frozen</b> (${d.frozen_at.slice(0,10)}): `
+      + `<span style="color:#667;">${d.stems.slice(0, 8).join(', ')}${d.n > 8 ? ', …' : ''}</span>${warn}`;
+  } catch (e) {
+    el.textContent = 'Could not load test set.';
+  }
+}
+
+async function freezeTestSet() {
+  if (!activeProj) return;
+  const n = parseInt(document.getElementById('ts-n').value, 10) || 0;
+  if (!confirm(`Freeze ${n} verified page(s) as the permanent test set? They will be `
+    + `excluded from ALL future training of this project and used for every evaluation.`)) return;
+  const res = await fetch(`/api/project/${activeProj.name}/test-set`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ n }),
+  });
+  const d = await res.json();
+  if (res.ok && d.ok) { showToast(`Frozen: ${d.n} pages.`); loadTestSet(); }
+  else alert('Freeze failed: ' + errMsg(d));
+}
+
+async function unfreezeTestSet() {
+  if (!activeProj) return;
+  if (!confirm('Remove the frozen test set? Earlier evaluation scores become '
+    + 'incomparable with future ones. (The pages themselves are untouched.)')) return;
+  await fetch(`/api/project/${activeProj.name}/test-set`, { method: 'DELETE' });
+  showToast('Test set removed.');
+  loadTestSet();
+}
+
+async function runTestEval() {
+  if (!activeProj) return;
+  const el = document.getElementById('test-eval-result');
+  el.textContent = 'Scoring predictions against the frozen test set…';
+  const res = await fetch(`/api/project/${activeProj.name}/test-eval`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}',
+  });
+  const d = await res.json();
+  if (!res.ok) { el.innerHTML = `<span style="color:#e94560;">${errMsg(d)}</span>`; return; }
+  const t = d.totals;
+  const labelRows = Object.entries(d.per_label).map(([lbl, c]) =>
+    `<tr><td style="padding:2px 10px 2px 0;color:#aaa;">${lbl}</td>
+     <td style="padding:2px 10px;color:#e94560;">+${c.added}</td>
+     <td style="padding:2px 10px;color:#f0c040;">−${c.deleted}</td>
+     <td style="padding:2px 10px;color:#7dd3fc;">↔${c.moved}</td>
+     <td style="padding:2px 10px;color:#22c55e;">✓${c.ok}</td></tr>`).join('');
+  el.innerHTML = `
+    <b style="color:#ccc;">${d.corrections_per_page} corrections/page</b>
+    over ${d.n_pages} test page(s)
+    ${d.n_missing_predictions ? `<span style="color:#f0c040;">(⚠ ${d.n_missing_predictions} page(s) had no prediction file)</span>` : ''}<br>
+    <span style="color:#e94560;">${t.added} to add (model missed)</span> ·
+    <span style="color:#f0c040;">${t.deleted} to delete (model invented)</span> ·
+    <span style="color:#7dd3fc;">${t.moved} to adjust</span> ·
+    <span style="color:#22c55e;">${t.ok} accepted as-is</span>
+    <details style="margin-top:4px;"><summary style="cursor:pointer;color:#888;">per label</summary>
+      <table style="border-collapse:collapse;margin-top:4px;">${labelRows}</table>
+    </details>`;
+  showToast('Recorded in the training history.');
+  loadTrainingLog();
+}
+
+async function loadTrainingLog() {
+  const el = document.getElementById('training-log');
+  if (!el || !activeProj) return;
+  try {
+    const d = await (await fetch(`/api/project/${activeProj.name}/training-log`)).json();
+    if (!d.rows.length) {
+      el.innerHTML = '<span style="color:#667;">No training runs recorded yet.</span>';
+      return;
+    }
+    const rows = d.rows.map(r => {
+      const date  = (r.started || '').replace('T', ' ').slice(0, 16);
+      const mode  = r.mode === 'finetune' ? `⚡ ft ← ${r.source || '?'}` : '🚀 train';
+      const pages = r.n_train_pages != null
+        ? `${r.n_train_pages}${r.n_negatives ? `+${r.n_negatives}⊘` : ''}` : '—';
+      const ap    = r.ap ? `${r.ap.AP ?? '—'}` : '—';
+      const cpp   = r.test_eval ? r.test_eval.corrections_per_page : '—';
+      const stat  = r.status === 'running'
+        ? '<span style="color:#f0c040;">running</span>'
+        : '<span style="color:#22c55e;">done</span>';
+      const unfiltered = r.status_filter === false
+        ? ' <span style="color:#e94560;" title="trained on ALL pages incl. uncorrected predictions">⚠unfiltered</span>' : '';
+      return `<tr>
+        <td style="padding:2px 10px 2px 0;color:#888;">${date}</td>
+        <td style="padding:2px 10px;color:#ccc;">${mode}${unfiltered}</td>
+        <td style="padding:2px 10px;color:#aaa;" title="training pages (+n verified-empty negatives)">${pages}</td>
+        <td style="padding:2px 10px;color:#aaa;">${r.max_iter ?? '—'} it</td>
+        <td style="padding:2px 10px;color:#7dd3fc;" title="COCO AP on the test set">${ap}</td>
+        <td style="padding:2px 10px;color:#f0c040;" title="corrections per page on the frozen test set">${cpp}</td>
+        <td style="padding:2px 10px;">${stat}</td></tr>`;
+    }).join('');
+    el.innerHTML = `
+      <b style="color:#aaa;">Training history</b>
+      <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse;margin-top:4px;">
+        <tr style="color:#667;font-size:11px;">
+          <td style="padding:2px 10px 2px 0;">when</td><td style="padding:2px 10px;">mode</td>
+          <td style="padding:2px 10px;">pages</td><td style="padding:2px 10px;">iters</td>
+          <td style="padding:2px 10px;">AP</td><td style="padding:2px 10px;">corr/page</td><td></td>
+        </tr>${rows}
+      </table></div>`;
+  } catch (e) {
+    el.textContent = 'Could not load training history.';
   }
 }
 
@@ -1231,6 +1395,8 @@ async function prepareTrainingData() {
     base_lr:       parseFloat(document.getElementById('tp-base-lr').value)      || undefined,
     ims_per_batch: parseInt(document.getElementById('tp-ims-batch').value, 10)  || undefined,
     num_workers:   (nw === '' || nw == null) ? undefined : parseInt(nw, 10),
+    status_filter:          document.getElementById('tp-status-filter')?.checked ?? true,
+    include_empty_verified: document.getElementById('tp-include-empty')?.checked ?? true,
   };
   try {
     const res  = await fetch(`/api/project/${activeProj.name}/prepare`, {
@@ -1239,7 +1405,16 @@ async function prepareTrainingData() {
     });
     const data = await res.json();
     if (data.ok) {
+      const hygiene = [];
+      hygiene.push(`${data.n_train_pages} training page(s)` +
+                   (data.n_negatives ? ` (incl. ${data.n_negatives} verified-empty negatives)` : ''));
+      if (data.server_side_split) hygiene.push(`${data.n_test_pages} frozen test page(s)`);
+      if (data.n_excluded_status) hygiene.push(`<span style="color:#f0c040;">${data.n_excluded_status} not-yet-corrected page(s) excluded</span>`);
+      if (data.n_skip)            hygiene.push(`${data.n_skip} skip page(s) excluded`);
+      if ((data.missing_test_stems || []).length)
+        hygiene.push(`<span style="color:#e94560;">⚠ frozen test page(s) missing: ${data.missing_test_stems.join(', ')}</span>`);
       el.innerHTML = `✓ ${data.n_annotated} annotated pages · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
+        ${hygiene.join(' · ')}<br>
         Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch} · NUM_WORKERS=${data.num_workers}</code><br>
         COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
       showToast('Training data prepared.');
@@ -1406,7 +1581,9 @@ async function runFinetuneFrom() {
   if (!activeProj) return;
   const src = document.getElementById('infer-from-src').value;
   if (!src) { alert('Select a source project first (the "Bootstrap from model" dropdown).'); return; }
-  if (src === activeProj.name) { alert('Source and target project must be different.'); return; }
+  if (src === activeProj.name &&
+      !confirm('Self-fine-tune: continue training this project\'s own model on its ' +
+               'current corrected annotations (warm start from its own weights). Continue?')) return;
   await saveServerConfig();
   const reupload = document.getElementById('chk-reupload')?.checked ?? true;
   const maxIter  = parseInt(document.getElementById('ft-max-iter')?.value ?? '500', 10);
@@ -1423,7 +1600,9 @@ async function runFinetuneFrom() {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ passphrase: getPassphrase(), max_iter: maxIter,
-                              base_lr: baseLr, skip_image_upload: !reupload }),
+                              base_lr: baseLr, skip_image_upload: !reupload,
+                              status_filter:          document.getElementById('tp-status-filter')?.checked ?? true,
+                              include_empty_verified: document.getElementById('tp-include-empty')?.checked ?? true }),
     signal:  ctrl.signal,
   }).then(async res => {
     if (!res.ok) {

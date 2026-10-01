@@ -1,9 +1,26 @@
 """
 LabelMe JSON → COCO JSON conversion for Detectron2 / layout-model-training.
 
-Only shapes that have been annotated (shapes[] non-empty) contribute to the
-COCO output.  Pages with no shapes are included in the images list but have
-no annotations — cocosplit.py will put them in the unannotated pool.
+Two layers of hygiene around the raw conversion (P10.1 + P10.2):
+
+Status filter — only pages whose `flags.status` is corrected or verified
+enter the training data (override with status_filter=False). Uncorrected
+predictions training as ground truth is how an active-learning loop poisons
+itself. `skip` pages NEVER enter, in any mode: skip conflates "clutter" with
+"deliberately unannotated", so a skipped table page must not train as a
+negative example.
+
+Verified-empty negatives — a VERIFIED page with zero shapes is a real
+statement ("there is nothing here") and enters the training set as a
+negative example (include_empty_verified=False to disable). A merely
+predicted empty page is nothing and stays out. "An empty page is an
+annotation, not an absence."
+
+Frozen test set — when test_stems is given, the train/test split is done
+HERE (train.json + test.json written next to annotations.json) and the
+generated train.sh skips cocosplit entirely, so evaluation runs on exactly
+the frozen pages every time. Without test_stems the legacy cocosplit
+random-split path is kept.
 """
 
 from __future__ import annotations
@@ -11,10 +28,25 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+TRAIN_STATUSES = ("corrected", "verified")
 
-def labelme_to_coco(ann_dir: Path, labels: list[str]) -> dict:
-    """
-    Convert all LabelMe JSONs in ann_dir to a single COCO dict.
+
+def collect_pages(ann_dir: Path) -> list[dict]:
+    """All annotation pages with the facts the filters need."""
+    pages = []
+    for jf in sorted(ann_dir.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
+        data = json.loads(jf.read_text(encoding="utf-8"))
+        pages.append({
+            "stem":     jf.stem,
+            "data":     data,
+            "status":   (data.get("flags") or {}).get("status") or "predicted",
+            "n_shapes": len(data.get("shapes") or []),
+        })
+    return pages
+
+
+def pages_to_coco(pages: list[dict], labels: list[str]) -> dict:
+    """Convert the given pages to a single COCO dict.
     labels: ordered list of category names — determines category IDs (1-based).
     """
     label_to_id = {lbl: i + 1 for i, lbl in enumerate(labels)}
@@ -25,12 +57,9 @@ def labelme_to_coco(ann_dir: Path, labels: list[str]) -> dict:
     images, annotations = [], []
     ann_id = 1
 
-    json_files = sorted(ann_dir.glob("*.json"),
-                        key=lambda p: _page_sort_key(p.stem))
-
-    for img_id, jf in enumerate(json_files, start=1):
-        data = json.loads(jf.read_text(encoding="utf-8"))
-        fname = data.get("imagePath", jf.stem + ".jpg")
+    for img_id, page in enumerate(pages, start=1):
+        data = page["data"]
+        fname = data.get("imagePath", page["stem"] + ".jpg")
         w = data.get("imageWidth", 0)
         h = data.get("imageHeight", 0)
 
@@ -71,16 +100,26 @@ def labelme_to_coco(ann_dir: Path, labels: list[str]) -> dict:
             "categories": categories}
 
 
+def labelme_to_coco(ann_dir: Path, labels: list[str]) -> dict:
+    """Legacy entry point: every page in ann_dir, no filtering."""
+    return pages_to_coco(collect_pages(ann_dir), labels)
+
+
 def prepare_training_data(project_name: str, ann_dir: Path,
                           labels: list[str], intermediate_dir: Path,
                           base_yaml_path: Path,
                           max_iter: int = 2000, base_lr: float = 0.00125,
-                          ims_per_batch: int = 2, num_workers: int = 2) -> dict:
+                          ims_per_batch: int = 2, num_workers: int = 2,
+                          status_filter: bool = True,
+                          include_empty_verified: bool = True,
+                          test_stems: list[str] | None = None) -> dict:
     """
-    1. Convert LabelMe JSONs → COCO annotations.json
-    2. Copy + patch the base yaml config (NUM_CLASSES).
-    3. Generate the training .sh script (with hand-editable solver params).
-    Returns paths dict.
+    1. Convert LabelMe JSONs → COCO annotations.json (status-filtered).
+    2. When a frozen test set is given: write train.json/test.json here
+       (deterministic split) instead of letting cocosplit re-roll it.
+    3. Copy + patch the base yaml config (NUM_CLASSES).
+    4. Generate the training .sh script (with hand-editable solver params).
+    Returns paths dict + export counts.
     """
     # Guard against junk values from the UI
     max_iter      = max(1, int(max_iter or 2000))
@@ -98,8 +137,41 @@ def prepare_training_data(project_name: str, ann_dir: Path,
         base_lr = 0.00125
     intermediate_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. COCO JSON
-    coco = labelme_to_coco(ann_dir, labels)
+    # ── 1. page selection ────────────────────────────────────────────────────
+    pages = collect_pages(ann_dir)
+    test_set = set(test_stems or [])
+    missing_test = sorted(test_set - {p["stem"] for p in pages})
+
+    counts = {"verified": 0, "corrected": 0, "predicted": 0, "problem": 0,
+              "skip": 0}
+    train_pages, test_pages = [], []
+    n_excluded_status = 0
+    n_negatives = 0
+    for p in pages:
+        counts[p["status"]] = counts.get(p["status"], 0) + 1
+        if p["status"] == "skip":
+            continue                           # never trains, never evaluates
+        if p["stem"] in test_set:
+            test_pages.append(p)               # frozen pages evaluate, period
+            continue
+        if status_filter and p["status"] not in TRAIN_STATUSES:
+            n_excluded_status += 1
+            continue
+        if p["n_shapes"] == 0:
+            # empty page: a verified empty is a negative example (opt-out);
+            # any other empty is just "not annotated yet" and must stay out.
+            if include_empty_verified and p["status"] == "verified":
+                n_negatives += 1
+                train_pages.append(p)
+            elif not status_filter:
+                train_pages.append(p)          # legacy: cocosplit pools it
+            continue
+        train_pages.append(p)
+
+    server_side_split = bool(test_set)
+
+    # ── 2. COCO JSON(s) ──────────────────────────────────────────────────────
+    coco = pages_to_coco(train_pages + test_pages, labels)
     n_annotated = sum(1 for im in coco["images"]
                       if any(a["image_id"] == im["id"]
                              for a in coco["annotations"]))
@@ -107,10 +179,24 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     coco_path.write_text(json.dumps(coco, indent=2, ensure_ascii=False),
                          encoding="utf-8")
 
-    # 2. Detectron2 config yaml — patch NUM_CLASSES
+    if server_side_split:
+        train_coco = pages_to_coco(train_pages, labels)
+        test_coco  = pages_to_coco(test_pages, labels)
+        (intermediate_dir / "train.json").write_text(
+            json.dumps(train_coco, indent=2, ensure_ascii=False), encoding="utf-8")
+        (intermediate_dir / "test.json").write_text(
+            json.dumps(test_coco, indent=2, ensure_ascii=False), encoding="utf-8")
+    else:
+        # stale local splits from an earlier frozen set must not get pushed
+        for f in ("train.json", "test.json"):
+            try:
+                (intermediate_dir / f).unlink()
+            except FileNotFoundError:
+                pass
+
+    # ── 3. Detectron2 config yaml — patch NUM_CLASSES ────────────────────────
     n_classes = len(labels)
     yaml_src = base_yaml_path.read_text(encoding="utf-8")
-    # patch all NUM_CLASSES occurrences
     import re
     yaml_patched = re.sub(r"NUM_CLASSES:\s*\d+",
                           f"NUM_CLASSES: {n_classes}", yaml_src)
@@ -119,20 +205,17 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     cfg_path = cfg_dir / "fast_rcnn_R_50_FPN_3x.yaml"
     cfg_path.write_text(yaml_patched, encoding="utf-8")
 
-    # 3. Training shell script
+    # ── 4. Training shell script ─────────────────────────────────────────────
     remote_ws = "/workspace"
+    split_block = make_split_block(project_name, server_side_split)
+    extra_opts = ""
+    if n_negatives:
+        # otherwise detectron2 silently drops the negative examples
+        extra_opts = " \\\n    DATALOADER.FILTER_EMPTY_ANNOTATIONS False"
     sh = f"""#!/bin/bash
 set -e
 echo "=== EconAI: {project_name} training ==="
-echo "Running cocosplit..."
-cd {remote_ws}/layout-model-training
-python3 utils/cocosplit.py \\
-    --annotation-path {remote_ws}/{project_name}/annotations.json \\
-    --train            {remote_ws}/{project_name}/train.json \\
-    --test             {remote_ws}/{project_name}/test.json \\
-    --split-ratio      0.8 \\
-    --having-annotations
-
+{split_block}
 echo "=== Cleaning previous checkpoints ==="
 rm -f {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/*.pth
 rm -f {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/last_checkpoint
@@ -151,13 +234,13 @@ python3 train_net.py \\
     SOLVER.IMS_PER_BATCH {ims_per_batch} \\
     SOLVER.BASE_LR {base_lr} \\
     SOLVER.MAX_ITER {max_iter} \\
-    DATALOADER.NUM_WORKERS {num_workers}
+    DATALOADER.NUM_WORKERS {num_workers}{extra_opts}
 echo "=== Training complete ==="
 """
     sh_path = intermediate_dir / "train.sh"
     sh_path.write_text(sh, encoding="utf-8")
 
-    # 4. Inference shell script
+    # ── 5. Inference shell script ────────────────────────────────────────────
     infer_sh = f"""#!/bin/bash
 set -e
 echo "=== EconAI: {project_name} inference ==="
@@ -173,7 +256,7 @@ echo "=== Inference complete ==="
     infer_sh_path = intermediate_dir / "infer.sh"
     infer_sh_path.write_text(infer_sh, encoding="utf-8")
 
-    return {
+    result = {
         "coco_path":    str(coco_path),
         "config_path":  str(cfg_path),
         "train_sh":     str(sh_path),
@@ -186,7 +269,39 @@ echo "=== Inference complete ==="
         "base_lr":      base_lr,
         "ims_per_batch": ims_per_batch,
         "num_workers":  num_workers,
+        # export hygiene facts (ledger + UI)
+        "status_filter":          status_filter,
+        "include_empty_verified": include_empty_verified,
+        "server_side_split":      server_side_split,
+        "n_train_pages":          len(train_pages),
+        "n_test_pages":           len(test_pages),
+        "n_negatives":            n_negatives,
+        "n_excluded_status":      n_excluded_status,
+        "n_skip":                 counts.get("skip", 0),
+        "status_counts":          counts,
+        "missing_test_stems":     missing_test,
     }
+    (intermediate_dir / "train_summary.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
+def make_split_block(project_name: str, server_side_split: bool) -> str:
+    """The train/test-split section of a training script: either 'splits were
+    computed locally and uploaded' (frozen test set) or the legacy cocosplit
+    re-roll. Shared by Train and fine-tune-from script generation."""
+    remote_ws = "/workspace"
+    if server_side_split:
+        return (f'echo "Using uploaded train/test split '
+                f'(frozen test set — no cocosplit)."')
+    return f"""echo "Running cocosplit..."
+cd {remote_ws}/layout-model-training
+python3 utils/cocosplit.py \\
+    --annotation-path {remote_ws}/{project_name}/annotations.json \\
+    --train            {remote_ws}/{project_name}/train.json \\
+    --test             {remote_ws}/{project_name}/test.json \\
+    --split-ratio      0.8 \\
+    --having-annotations"""
 
 
 def _page_sort_key(name: str) -> tuple:

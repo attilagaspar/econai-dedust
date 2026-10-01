@@ -6379,13 +6379,24 @@ class PrepareRequest(BaseModel):
     base_lr:       Optional[float] = None
     ims_per_batch: Optional[int]   = None
     num_workers:   Optional[int]   = None
+    # P10.2 export hygiene — defaults are the safe choices
+    status_filter:          bool = True   # only corrected+verified pages train
+    include_empty_verified: bool = True   # verified-empty page = negative example
+
+
+def _frozen_test_stems(pdir) -> list:
+    """Frozen test-set stems for the training export, [] when none frozen."""
+    from app import training_meta
+    ts = training_meta.load_test_set(pdir)
+    return list(ts.get("stems", [])) if ts else []
 
 
 @app.post("/api/project/{name}/prepare")
 def api_prepare(name: str, body: Optional[PrepareRequest] = None):
     """Convert annotated LabelMe JSONs → COCO JSON + generate training scripts.
     Optional solver params (max_iter / base_lr / ims_per_batch / num_workers) are
-    hand-edited in the dashboard and baked into the generated train.sh."""
+    hand-edited in the dashboard and baked into the generated train.sh.
+    Status filter + frozen test set are applied here (P10.1/P10.2)."""
     from app.coco_convert import prepare_training_data
     body = body or PrepareRequest()
     try:
@@ -6401,12 +6412,92 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             base_lr         = body.base_lr       or 0.00125,
             ims_per_batch   = body.ims_per_batch or 2,
             num_workers     = 2 if body.num_workers is None else body.num_workers,
+            status_filter          = body.status_filter,
+            include_empty_verified = body.include_empty_verified,
+            test_stems             = _frozen_test_stems(pdir),
         )
         return {"ok": True, **result}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Frozen test set + training ledger (P10.1–P10.4) ─────────────────────────
+
+class FreezeRequest(BaseModel):
+    n:     int = 0
+    stems: Optional[list] = None
+    force: bool = False
+
+
+@app.get("/api/project/{name}/test-set")
+def api_test_set_get(name: str):
+    from app import training_meta
+    return training_meta.test_set_status(project_dir(name))
+
+
+@app.post("/api/project/{name}/test-set")
+def api_test_set_freeze(name: str, body: FreezeRequest):
+    from app import training_meta
+    try:
+        ts = training_meta.freeze_test_set(project_dir(name), n=body.n,
+                                           stems=body.stems, force=body.force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "n": len(ts["stems"]), "stems": ts["stems"]}
+
+
+@app.delete("/api/project/{name}/test-set")
+def api_test_set_unfreeze(name: str):
+    from app import training_meta
+    return {"ok": True,
+            "removed": training_meta.unfreeze_test_set(project_dir(name))}
+
+
+@app.get("/api/project/{name}/training-log")
+def api_training_log(name: str):
+    from app import training_meta
+    rows = training_meta.load_ledger(project_dir(name))
+    return {"rows": list(reversed(rows))}
+
+
+class TestEvalRequest(BaseModel):
+    iou_match: float = 0.5
+    iou_tight: float = 0.9
+    record:    bool  = True    # attach the result to the latest ledger row
+
+
+@app.post("/api/project/{name}/test-eval")
+def api_test_eval(name: str, body: TestEvalRequest = TestEvalRequest()):
+    """Score pulled predictions against the frozen test set's verified
+    annotations: added / deleted / moved per label and page — the
+    corrections-per-page number for the learning curve (P10.4)."""
+    from app import training_meta, eval_diff
+    pdir = project_dir(name)
+    ts = training_meta.load_test_set(pdir)
+    if not ts:
+        raise HTTPException(status_code=400,
+                            detail="No frozen test set — freeze one first.")
+    pred_dir = pdir / "predictions"
+    if not pred_dir.exists():
+        raise HTTPException(status_code=400,
+                            detail="No predictions pulled yet — run inference "
+                                   "and 'Pull predictions' first.")
+    result = eval_diff.evaluate_test_set(pdir / "annotations", pred_dir,
+                                         ts.get("stems", []),
+                                         iou_match=body.iou_match,
+                                         iou_tight=body.iou_tight)
+    if body.record:
+        rows = training_meta.load_ledger(pdir)
+        if rows:
+            compact = {k: result[k] for k in
+                       ("n_pages", "totals", "corrections_total",
+                        "corrections_per_page", "per_label",
+                        "n_missing_predictions")}
+            training_meta.ledger_update(pdir, rows[-1]["id"],
+                                        test_eval=compact)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -6511,6 +6602,14 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
         dest = f"{remote}/{name}/annotations.json"
         yield f"[push] {inter/'annotations.json'} → {dest}"
         sftp.put(str(inter / "annotations.json"), dest)
+
+        # Frozen-test-set mode: the split was computed locally — upload it
+        # (train.sh then skips cocosplit, so these files are authoritative).
+        for split in ("train.json", "test.json"):
+            if (inter / split).exists():
+                dest = f"{remote}/{name}/{split}"
+                yield f"[push] {inter/split} → {dest}  (frozen split)"
+                sftp.put(str(inter / split), dest)
 
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
         dest = f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
@@ -6637,6 +6736,47 @@ def _gpu_busy_warning(_quick, tag: str):
                f"`docker ps` on the server, stop the culprit, retry.")
 
 
+def _ledger_row_from_summary(inter: Path, mode: str, **extra) -> dict:
+    """Build a training-ledger row from the prepare step's train_summary.json
+    (counts + export hygiene facts), plus mode-specific extras."""
+    summary = {}
+    try:
+        summary = json.loads((inter / "train_summary.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    keys = ("max_iter", "base_lr", "ims_per_batch", "n_train_pages",
+            "n_test_pages", "n_negatives", "n_excluded_status",
+            "n_annotations", "status_filter", "include_empty_verified",
+            "server_side_split", "status_counts")
+    row = {"mode": mode, **{k: summary[k] for k in keys if k in summary}}
+    row.update(extra)
+    return row
+
+
+def _ledger_finish(_quick, pdir: Path, ledger_id: str, remote: str,
+                   name: str, tag: str):
+    """Mark the ledger row finished + pull detectron2's final eval scores
+    (bbox AP) from the remote metrics.json. Generator: yields log lines."""
+    from app import training_meta
+    import time as _time
+    fields = {"status": "finished",
+              "finished": _time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        metrics_path = (f"{remote}/layout-model-training/outputs/{name}/"
+                        f"fast_rcnn_R_50_FPN_3x/metrics.json")
+        text = _quick(f"tail -c 200000 {metrics_path} 2>/dev/null || true")
+        ap = training_meta.parse_d2_metrics(text)
+        if ap:
+            fields["ap"] = ap
+            yield (f"[{tag}] Eval on test set: AP={ap.get('AP')}  "
+                   f"AP50={ap.get('AP50')}  (ledger updated)")
+        else:
+            yield f"[{tag}] No eval scores found in metrics.json (ledger row closed without AP)."
+    except Exception as e:
+        yield f"[{tag}] Could not fetch eval metrics: {e}"
+    training_meta.ledger_update(pdir, ledger_id, **fields)
+
+
 @app.post("/api/project/{name}/train")
 async def api_train(name: str, body: TrainRequest = TrainRequest()):
     """Push data to server then run training inside Docker. Streams log via SSE.
@@ -6670,6 +6810,9 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             return result
 
         def full_gen():
+            from app import training_meta
+            ledger_id = None
+
             # ── Check if training is already running ──────────────────────────
             already_running = False
             try:
@@ -6681,6 +6824,10 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
 
             if already_running:
                 yield "[train] Training already running — re-attaching to log..."
+                rows = training_meta.load_ledger(pdir)
+                ledger_id = next((r["id"] for r in reversed(rows)
+                                  if r.get("status") == "running"
+                                  and r.get("mode") == "train"), None)
             else:
                 # ── Validate + push data ──────────────────────────────────────
                 if not (inter / "annotations.json").exists():
@@ -6697,6 +6844,9 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 yield f"[train] {launch_result.strip()}"
                 yield from _job_instant_death_check(_quick, launch_result,
                                                     _train_container(srv), log_path, "train")
+                if re.search(r"LAUNCHED:\d+", launch_result or ""):
+                    ledger_id = training_meta.ledger_append(
+                        pdir, _ledger_row_from_summary(inter, mode="train"))
 
             # ── Stream log, stop when process exits ───────────────────────────
             yield "[train] Streaming log — closing browser won't stop training..."
@@ -6709,14 +6859,21 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # disconnect closes this generator before reaching here, so a detached
             # job is never killed). Verify the PID is gone, then stop the
             # container to free the GPU / host resources.
+            finished = True
             if not body.keep_container:
                 still = _quick(_job_still_running_cmd(_train_container(srv), pid_path))
                 if "RUNNING" in still:
                     yield "[train] Stream ended but training still running — container left up."
+                    finished = False
                 else:
                     yield f"[train] Training finished — stopping container '{_train_container(srv)}'..."
                     _quick(f"docker stop {_train_container(srv)}")
                     yield f"[train] Container '{_train_container(srv)}' stopped."
+
+            if finished and ledger_id:
+                yield from _ledger_finish(_quick, pdir, ledger_id,
+                                          srv["remote_path"].rstrip("/"),
+                                          name, "train")
 
         return await _sse_stream(full_gen())
 
@@ -7111,6 +7268,8 @@ class FinetuneFromRequest(BaseModel):
     base_lr:           float = 0.00025    # gentle: don't wreck what the model knows
     skip_image_upload: bool = False
     keep_container:    bool = False
+    status_filter:          bool = True   # P10.2: only corrected+verified train
+    include_empty_verified: bool = True
 
 
 @app.post("/api/project/{name}/finetune-from/{source}")
@@ -7150,33 +7309,43 @@ async def api_finetune_from(name: str, source: str,
         # Regenerate COCO + config locally from the CURRENT (corrected)
         # annotations. Standard solver params here so the normal train.sh that
         # gets pushed alongside is not silently rewritten with fine-tune values.
-        prepare_training_data(
+        from app.coco_convert import make_split_block
+        prep = prepare_training_data(
             project_name     = name,
             ann_dir          = pdir / "annotations",
             labels           = cfg["labels"],
             intermediate_dir = inter,
             base_yaml_path   = BASE_YAML,
+            status_filter          = body.status_filter,
+            include_empty_verified = body.include_empty_verified,
+            test_stems             = _frozen_test_stems(pdir),
         )
 
         # The fine-tune script: identical to train.sh except MODEL.WEIGHTS
         # points at the source model and the solver is short + gentle.
+        out_dir = (f"/workspace/layout-model-training/outputs/{name}/"
+                   f"fast_rcnn_R_50_FPN_3x")
         src_weights = (f"/workspace/layout-model-training/outputs/{source}/"
                        f"fast_rcnn_R_50_FPN_3x/model_final.pth")
+        # Self-fine-tune (source == target): the checkpoint cleanup below would
+        # delete the very weights we warm-start from — copy them aside first.
+        bootstrap_block = ""
+        if source == name:
+            bootstrap_block = f"""
+echo "=== Self-fine-tune: copying current weights aside ==="
+cp {src_weights} {out_dir}/bootstrap_weights.pth
+"""
+            src_weights = f"{out_dir}/bootstrap_weights.pth"
+        split_block = make_split_block(name, prep.get("server_side_split"))
+        extra_opts = (" \\\n    DATALOADER.FILTER_EMPTY_ANNOTATIONS False"
+                      if prep.get("n_negatives") else "")
         ft_script = f"""#!/bin/bash
 set -e
 echo "=== Dedust: fine-tune {name} from {source} model ==="
-echo "Running cocosplit..."
-cd /workspace/layout-model-training
-python3 utils/cocosplit.py \\
-    --annotation-path /workspace/{name}/annotations.json \\
-    --train            /workspace/{name}/train.json \\
-    --test             /workspace/{name}/test.json \\
-    --split-ratio      0.8 \\
-    --having-annotations
-
+{split_block}
+{bootstrap_block}
 echo "=== Cleaning previous checkpoints of {name} ==="
-rm -f /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/*.pth
-rm -f /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/last_checkpoint
+rm -f {out_dir}/model_*.pth {out_dir}/last_checkpoint
 
 echo "=== Starting fine-tune (warm start from {source}) ==="
 cd /workspace/layout-model-training/tools
@@ -7187,12 +7356,12 @@ python3 train_net.py \\
     --json_annotation_val   /workspace/{name}/test.json \\
     --image_path_val        /workspace/{name}/images \\
     --config-file           /workspace/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml \\
-    OUTPUT_DIR  /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/ \\
+    OUTPUT_DIR  {out_dir}/ \\
     MODEL.WEIGHTS {src_weights} \\
     SOLVER.IMS_PER_BATCH 2 \\
     SOLVER.BASE_LR {base_lr} \\
     SOLVER.MAX_ITER {max_iter} \\
-    DATALOADER.NUM_WORKERS 2
+    DATALOADER.NUM_WORKERS 2{extra_opts}
 echo "=== Fine-tune complete ==="
 """
 
@@ -7208,6 +7377,9 @@ echo "=== Fine-tune complete ==="
             return result
 
         def full_gen():
+            from app import training_meta
+            ledger_id = None
+
             # ── Re-attach if a fine-tune is already running ────────────────────
             already_running = False
             try:
@@ -7219,6 +7391,10 @@ echo "=== Fine-tune complete ==="
 
             if already_running:
                 yield "[ft] Fine-tune already running — re-attaching to log..."
+                rows = training_meta.load_ledger(pdir)
+                ledger_id = next((r["id"] for r in reversed(rows)
+                                  if r.get("status") == "running"
+                                  and r.get("mode") == "finetune"), None)
             else:
                 yield f"[ft] source model : {source}"
                 yield f"[ft] target project: {name}"
@@ -7259,6 +7435,11 @@ echo "=== Fine-tune complete ==="
                 yield f"[ft] {launch_result.strip()}"
                 yield from _job_instant_death_check(_quick, launch_result,
                                                     _train_container(srv), log_path, "ft")
+                if re.search(r"LAUNCHED:\d+", launch_result or ""):
+                    ledger_id = training_meta.ledger_append(
+                        pdir, _ledger_row_from_summary(
+                            inter, mode="finetune", source=source,
+                            max_iter=max_iter, base_lr=base_lr))
 
             # ── Stream log until the process exits ─────────────────────────────
             yield "[ft] Streaming log — closing browser won't stop the fine-tune..."
@@ -7267,16 +7448,22 @@ echo "=== Fine-tune complete ==="
             yield from ssh_ops.stream_command(
                 srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
 
+            finished = True
             if not body.keep_container:
                 still = _quick(_job_still_running_cmd(_train_container(srv), pid_path))
                 if "RUNNING" in still:
                     yield "[ft] Stream ended but fine-tune still running — container left up."
+                    finished = False
                 else:
                     yield f"[ft] Finished — stopping container '{_train_container(srv)}'..."
                     _quick(f"docker stop {_train_container(srv)}")
                     yield f"[ft] Container '{_train_container(srv)}' stopped."
                     yield (f"[ft] Done. '{name}' now has its own fine-tuned model — "
                            f"'Run inference' on this project will use it.")
+
+            if finished and ledger_id:
+                yield from _ledger_finish(_quick, pdir, ledger_id, remote,
+                                          name, "ft")
 
         return await _sse_stream(full_gen())
 
