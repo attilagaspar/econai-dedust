@@ -988,6 +988,7 @@ async function runBatch() {
           whitespaceCuts: localStorage.getItem('newsflowWsCuts') !== '0',
           minGap: parseInt(localStorage.getItem('newsflowMinGap')) || 40,
           extendCols: localStorage.getItem('newsflowExtendCols') !== '0',
+          outputLabel: localStorage.getItem('newsflowOutLabel') || '',
         });
         shapes = pageData.shapes;
         pageData = savedPageData;

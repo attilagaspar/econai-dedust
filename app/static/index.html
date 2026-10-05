@@ -337,6 +337,17 @@
           <div class="field-label">Row / Column</div>
           <div id="f-super" class="field-value">—</div>
         </div>
+        <div class="field-group" id="fg-flow" style="display:none">
+          <div class="field-label" title="Newspaper reading flow: position on the page (#, as on the badge) and article number (a). Edit either to fix a wrong reconstruction — saved immediately.">Flow # · article</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span style="color:#888;font-size:11px;">#</span>
+            <input type="number" id="f-flow-order" min="1" onchange="applyFlowEdit()"
+                   style="width:58px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:2px 4px;">
+            <span style="color:#888;font-size:11px;">a</span>
+            <input type="number" id="f-flow-article" min="0" onchange="applyFlowEdit()"
+                   style="width:58px;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:2px 4px;">
+          </div>
+        </div>
         <!-- Internal row structure: OCR / LLM / Human side by side -->
         <div class="field-group" id="fg-rows" style="display:none">
           <div class="field-label-row">
@@ -797,6 +808,12 @@
            title="Stretch each column's first/last text element to the band's common top/bottom (recovers lines the detector cut off). Never crosses a title or image.">
       <input type="checkbox" id="newsflow-extend-cols" checked style="accent-color:#e94560;width:13px;height:13px;">
       <span>extend columns to the longest column's height (titles count)</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;color:#aaa;font-size:12px;"
+           title="Label given to the MERGED text elements. Empty = the first label mapped to the text role above.">
+      <span style="white-space:nowrap;">output label</span>
+      <input type="text" id="newsflow-out-label" placeholder="(first text-role label)"
+             style="flex:1;background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:12px;padding:3px 6px;">
     </label>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
       <button onclick="closeNewsflowModal()" style="background:#0f3460;border:1px solid #555;border-radius:4px;color:#ccc;padding:7px 14px;font-size:13px;cursor:pointer;">Cancel</button>

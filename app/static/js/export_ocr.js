@@ -573,6 +573,27 @@ function selectShape(idx, addToSel=false) {
   drawOverlay(); updatePanel();
 }
 
+// Apply edits to the selected shape's reading-flow fields (# is 1-based on
+// the badge and in the input; stored flow_order is 0-based).
+async function applyFlowEdit() {
+  if (selIdx < 0 || !pageData?.shapes?.[selIdx]) return;
+  const shape = pageData.shapes[selIdx];
+  if (shape.flow_order == null) return;
+  const ord = parseInt(document.getElementById('f-flow-order').value);
+  const art = parseInt(document.getElementById('f-flow-article').value);
+  if (isNaN(ord) || ord < 1 || isNaN(art) || art < 0) {
+    showToast('Flow #: ≥1, article: ≥0');
+    document.getElementById('f-flow-order').value   = shape.flow_order + 1;
+    document.getElementById('f-flow-article').value = shape.group_id ?? 0;
+    return;
+  }
+  shape.flow_order = ord - 1;
+  shape.group_id   = art;
+  await replaceAllShapes();
+  drawOverlay();
+  showToast(`Flow updated: #${ord}·a${art}`);
+}
+
 function updatePanel() {
   const noSel=document.getElementById('no-selection');
   const content=document.getElementById('fields-content');
@@ -602,6 +623,7 @@ function updatePanel() {
       + '<option value="__new__">➕ new label…</option>';
     document.getElementById('fg-score').style.display='none';
     document.getElementById('fg-super').style.display='none';
+    document.getElementById('fg-flow').style.display='none';
 
     // Show OCR/LLM panels so the user can run/clear on all selected shapes
     const selArr = [...selSet];
@@ -686,6 +708,15 @@ function updatePanel() {
   shape.super_row!=null
     ? (fgSuper.style.display='flex', document.getElementById('f-super').textContent=`row ${shape.super_row}  col ${shape.super_column}`)
     : (fgSuper.style.display='none');
+
+  // Newspaper flow fields: editable, so a wrong reconstruction (#·a badge)
+  // can be fixed in place instead of being baked in.
+  const fgFlow=document.getElementById('fg-flow');
+  if (shape.flow_order!=null) {
+    fgFlow.style.display='flex';
+    document.getElementById('f-flow-order').value   = shape.flow_order + 1;  // badge is 1-based
+    document.getElementById('f-flow-article').value = shape.group_id ?? 0;
+  } else fgFlow.style.display='none';
 
   const fgOcr=document.getElementById('fg-ocr');
   fgOcr.style.display='flex';

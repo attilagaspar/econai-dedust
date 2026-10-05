@@ -299,7 +299,11 @@ function _newsflowReconstruct(opts = {}) {
   elements.sort((a, b) =>
     bandOf(a) - bandOf(b) || a.col - b.col || a.rect.y1 - b.rect.y1);
 
-  const textLabel = Object.keys(roles).find(l => roles[l] === 'text') || 'cikkszoveg';
+  // Label of the merged text elements: user override, else the first label
+  // mapped to the text role (the flow is used on non-newspaper sources too —
+  // nothing should coerce a newspaper-specific label onto them).
+  const textLabel = (opts.outputLabel || '').trim()
+    || Object.keys(roles).find(l => roles[l] === 'text') || 'cikkszoveg';
   let order = 0, group = 0;
   const newShapes = [];
   for (const e of elements) {
@@ -357,6 +361,8 @@ function openNewsflowModal() {
     localStorage.getItem('newsflowMinGap') || '40';
   document.getElementById('newsflow-extend-cols').checked =
     localStorage.getItem('newsflowExtendCols') !== '0';   // default ON
+  document.getElementById('newsflow-out-label').value =
+    localStorage.getItem('newsflowOutLabel') || '';
   document.getElementById('newsflow-modal').style.display = 'flex';
 }
 
@@ -373,11 +379,13 @@ function _newsflowReadModalOpts() {
   const whitespaceCuts = document.getElementById('newsflow-ws-cuts').checked;
   const minGap = parseInt(document.getElementById('newsflow-min-gap').value) || 40;
   const extendCols = document.getElementById('newsflow-extend-cols').checked;
+  const outputLabel = document.getElementById('newsflow-out-label').value.trim();
   localStorage.setItem('newsflowRoles', JSON.stringify(roles));
   localStorage.setItem('newsflowWsCuts', whitespaceCuts ? '1' : '0');
   localStorage.setItem('newsflowMinGap', String(minGap));
   localStorage.setItem('newsflowExtendCols', extendCols ? '1' : '0');
-  return { roles, whitespaceCuts, minGap, extendCols };
+  localStorage.setItem('newsflowOutLabel', outputLabel);
+  return { roles, whitespaceCuts, minGap, extendCols, outputLabel };
 }
 
 async function runNewsflow() {
