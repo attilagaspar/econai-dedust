@@ -8890,9 +8890,13 @@ def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
     it has one), ignore (skip), or propagate (a non-structured title annotation
     whose text is carried into every later record under a key named after the
     label, until the next annotation of that label resets it). Records are taken
-    in reading order (top→bottom, then left→right) within each page, pages in the
-    given order. Returns one JSON file (mode=single) or a zip of one file per
-    record (mode=per_annotation)."""
+    in READING order within each page: flow_order when the page carries a
+    newsflow reconstruction (columns are read column-by-column, so a propagated
+    title never leaks across columns), else top→bottom by position. Pages in
+    the given order; the carry persists across pages (a street section
+    continuing on the next page keeps its street until the next title).
+    Returns one JSON file (mode=single) or a zip of one file per record
+    (mode=per_annotation)."""
     import io as _io
     d = _resolve_folder(folder)
     modes = body.label_modes or {}
@@ -8909,7 +8913,16 @@ def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
             shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
         except Exception:
             continue
-        order = sorted(range(len(shapes)), key=lambda i: _shape_topleft(shapes[i]))
+        if any(s.get("flow_order") is not None for s in shapes):
+            # newsflow page: the stamped reading order IS the truth — a raw
+            # top-to-bottom sort would zig-zag between columns and assign
+            # propagated titles to the wrong column's records
+            order = sorted(range(len(shapes)), key=lambda i:
+                           (0, shapes[i]["flow_order"])
+                           if shapes[i].get("flow_order") is not None
+                           else (1,) + _shape_topleft(shapes[i]))
+        else:
+            order = sorted(range(len(shapes)), key=lambda i: _shape_topleft(shapes[i]))
         for i in order:
             sh = shapes[i]
             mode = modes.get(sh.get("label", ""))
