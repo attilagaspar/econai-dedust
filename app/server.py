@@ -2450,8 +2450,11 @@ def _llm_complete_raw(client, model, messages, max_out, temperature=0, response_
     model = _bare_model(model)
     rf = {"response_format": response_format} if response_format else {}
     if _is_reasoning_model(model):
+        # Same reasoning-headroom logic as _llm_batch_line: JSON answers need
+        # budget beyond the hidden reasoning tokens or they truncate.
+        _floor = 8000 if response_format else 2000
         kwargs = dict(model=model, messages=messages,
-                      max_completion_tokens=max(max_out, 2000), **rf)
+                      max_completion_tokens=max(max_out, _floor), **rf)
         try:
             return client.chat.completions.create(reasoning_effort="low", **kwargs)
         except Exception:
@@ -2580,7 +2583,13 @@ def _llm_batch_line(custom_id: str, model: str, messages, max_out: int,
     if response_format:
         body["response_format"] = response_format
     if _is_reasoning_model(model):
-        body["max_completion_tokens"] = max(max_out, 2000)
+        # Reasoning models spend completion budget on HIDDEN reasoning before
+        # writing the answer (observed: ~1500 reasoning tokens of a 2048 cap,
+        # leaving ~500 for the JSON → finish_reason=length, unparseable).
+        # Structured JSON answers can be thousands of tokens, so give them
+        # real headroom; the cap costs nothing unless used.
+        floor = 8000 if response_format else 2000
+        body["max_completion_tokens"] = max(max_out, floor)
         body["reasoning_effort"] = "low"
     else:
         body["max_tokens"] = max_out

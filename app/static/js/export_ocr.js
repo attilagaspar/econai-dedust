@@ -623,7 +623,8 @@ function updatePanel() {
       + '<option value="__new__">➕ new label…</option>';
     document.getElementById('fg-score').style.display='none';
     document.getElementById('fg-super').style.display='none';
-    document.getElementById('fg-flow').style.display='none';
+    const _fgf = document.getElementById('fg-flow');
+    if (_fgf) _fgf.style.display='none';
 
     // Show OCR/LLM panels so the user can run/clear on all selected shapes
     const selArr = [...selSet];
@@ -710,13 +711,17 @@ function updatePanel() {
     : (fgSuper.style.display='none');
 
   // Newspaper flow fields: editable, so a wrong reconstruction (#·a badge)
-  // can be fixed in place instead of being baked in.
+  // can be fixed in place instead of being baked in. Null-guarded: a stale
+  // cached index.html without the element must never abort updatePanel and
+  // take the rest of the inspector (OCR/LLM/structured) down with it.
   const fgFlow=document.getElementById('fg-flow');
-  if (shape.flow_order!=null) {
-    fgFlow.style.display='flex';
-    document.getElementById('f-flow-order').value   = shape.flow_order + 1;  // badge is 1-based
-    document.getElementById('f-flow-article').value = shape.group_id ?? 0;
-  } else fgFlow.style.display='none';
+  if (fgFlow) {
+    if (shape.flow_order!=null) {
+      fgFlow.style.display='flex';
+      document.getElementById('f-flow-order').value   = shape.flow_order + 1;  // badge is 1-based
+      document.getElementById('f-flow-article').value = shape.group_id ?? 0;
+    } else fgFlow.style.display='none';
+  }
 
   const fgOcr=document.getElementById('fg-ocr');
   fgOcr.style.display='flex';
