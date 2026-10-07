@@ -1053,7 +1053,8 @@ function _applyLatticeDrag(adjustments, origPts, delta, axis) {
 function drawOverlay() {
   if (!svgOverlay || !pageData) return;
   while (svgOverlay.firstChild) svgOverlay.removeChild(svgOverlay.firstChild);
-  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode || clipMode) ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode || clipMode
+    || (typeof flowGridVisible !== 'undefined' && flowGridVisible)) ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
     // Region layer visibility (Phase H): region-labeled shapes can be hidden
@@ -1704,6 +1705,9 @@ function drawOverlay() {
       svgOverlay.appendChild(r);
     });
   }
+
+  // Newspaper flow grid (view + drag/split/merge) — lives in newsflow.js
+  if (typeof _newsflowDrawGrid === 'function') _newsflowDrawGrid();
 
   // Perspective corner points
   if (perspMode && perspPoints.length > 0) {

@@ -77,6 +77,10 @@
                 title="Detect a separate lattice on the SELECTED shapes only (a new table). Ctrl+drag / Ctrl+click to select the cells of one table, then click this.">🔲＋ Lattice (sel)</button>
         <button class="nav-btn" id="newsflow-btn" onclick="openNewsflowModal()" disabled
                 title="Reconstruct newspaper reading flow: find columns and bands, merge text boxes into clean elements, split at titles, stamp reading order + article groups">📰 Flow</button>
+        <button class="nav-btn" id="newsflow-grid-btn" onclick="toggleFlowGrid()" disabled style="display:none"
+                title="Show the flow grid: column gutters (drag to move both columns' edge), per-column element boundaries (drag to resize both neighbours, Alt+click to merge), dashed band cuts">▦ Flow grid</button>
+        <button class="nav-btn" id="newsflow-split-btn" onclick="toggleFlowSplitMode()" disabled style="display:none"
+                title="Split mode: click inside a flow element to cut it in two at that height (the lower half starts with no text; reading order renumbers automatically)">✂ Split element</button>
         <button class="nav-btn" id="lattice-grid-btn" onclick="toggleLatticeGrid()" disabled style="display:none"
                 title="Show / hide the detected lattice grid overlay">📐 Show Grid</button>
         <button class="nav-btn" id="lattice-col-sep-btn" onclick="toggleLatticeSepMode('col')" disabled style="display:none"

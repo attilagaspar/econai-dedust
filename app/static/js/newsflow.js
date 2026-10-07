@@ -398,4 +398,301 @@ async function runNewsflow() {
   const n = pageData.shapes.filter(s => s.flow_order != null).length;
   showToast(`Flow: ${n} element(s) in ${res.columns.length} column(s), `
             + `${res.bands.length} band(s), ${res.articles} article(s)`);
+  _nfShowGridBtns(true);
+}
+
+// ── Flow grid (view + edit) ───────────────────────────────────────────────────
+// A lattice-style grid for flow-reconstructed pages, with one structural
+// difference: horizontal boundaries are COLUMN-LOCAL (no shared rows, no row
+// numbering — reading order lives in flow_order). Everything is DERIVED live
+// from the stamped shapes; nothing new is persisted.
+//   view : column gutters (vertical), band cuts (dashed, full width),
+//          per-column shared edges between consecutive elements
+//   edit : drag a boundary (moves both neighbours' shared edge), drag a
+//          gutter (moves both columns' shared edge), ✂ split mode (click
+//          inside an element to cut it in two), Alt+click a boundary to
+//          merge the two elements. Reading order renumbers automatically
+//          after split/merge (same band → column → y rule as the
+//          reconstruction); article numbers are preserved.
+
+let flowGridVisible = false;
+let flowSplitMode   = false;
+
+function _nfFlowItems() {
+  return (pageData?.shapes || [])
+    .map((s, i) => ({ s, i }))
+    .filter(x => x.s.flow_order != null && (x.s.points?.length || 0) >= 2);
+}
+
+// Shared edges between vertically consecutive elements of the same column.
+// Only flush pairs (≤3px apart) form a draggable boundary — stacked titles
+// with a real printed margin keep their own edges.
+function _nfGridBoundaries() {
+  const groups = {};
+  _nfFlowItems().forEach(x => {
+    const key = `${x.s.flow_band || 0}|${x.s.flow_column || 0}`;
+    (groups[key] ??= []).push(x);
+  });
+  const bounds = [];
+  Object.values(groups).forEach(list => {
+    list.sort((a, b) => _nfRect(a.s).y1 - _nfRect(b.s).y1);
+    for (let k = 0; k + 1 < list.length; k++) {
+      const a = _nfRect(list[k].s), b = _nfRect(list[k + 1].s);
+      if (Math.abs(a.y2 - b.y1) <= 3) {
+        bounds.push({ y: (a.y2 + b.y1) / 2,
+                      x1: Math.min(a.x1, b.x1), x2: Math.max(a.x2, b.x2),
+                      upper: list[k].i, lower: list[k + 1].i });
+      }
+    }
+  });
+  return bounds;
+}
+
+// Column extents (single-span elements only — wide breakers don't define
+// column edges) and the gutters between adjacent columns.
+function _nfGridColumns() {
+  const cols = {};
+  _nfFlowItems().forEach(x => {
+    if ((x.s.flow_span || 1) > 1) return;
+    const c = x.s.flow_column || 0;
+    const r = _nfRect(x.s);
+    const e = cols[c] ??= { x1: Infinity, x2: -Infinity,
+                            y1: Infinity, y2: -Infinity };
+    e.x1 = Math.min(e.x1, r.x1); e.x2 = Math.max(e.x2, r.x2);
+    e.y1 = Math.min(e.y1, r.y1); e.y2 = Math.max(e.y2, r.y2);
+  });
+  return cols;
+}
+
+// Band extents, for the dashed full-width cut lines between bands.
+function _nfGridBands() {
+  const bands = {};
+  _nfFlowItems().forEach(x => {
+    const b = x.s.flow_band || 0;
+    const r = _nfRect(x.s);
+    const e = bands[b] ??= { y1: Infinity, y2: -Infinity,
+                             x1: Infinity, x2: -Infinity };
+    e.y1 = Math.min(e.y1, r.y1); e.y2 = Math.max(e.y2, r.y2);
+    e.x1 = Math.min(e.x1, r.x1); e.x2 = Math.max(e.x2, r.x2);
+  });
+  return bands;
+}
+
+// Re-stamp flow_order from current geometry (band → column → top y), the same
+// ordering rule the reconstruction uses. Article numbers are left untouched.
+function _nfRenumber() {
+  const items = _nfFlowItems();
+  items.sort((a, b) =>
+    (a.s.flow_band || 0) - (b.s.flow_band || 0)
+    || (a.s.flow_column || 0) - (b.s.flow_column || 0)
+    || _nfRect(a.s).y1 - _nfRect(b.s).y1);
+  items.forEach((x, k) => { x.s.flow_order = k; });
+}
+
+function _nfSetRect(shape, r) {
+  shape.points = [[Math.round(r.x1), Math.round(r.y1)],
+                  [Math.round(r.x2), Math.round(r.y2)]];
+}
+
+function _nfShowGridBtns(hasFlow) {
+  ['newsflow-grid-btn', 'newsflow-split-btn'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) { b.style.display = hasFlow ? '' : 'none'; b.disabled = !hasFlow; }
+  });
+  if (!hasFlow) { flowGridVisible = false; flowSplitMode = false; }
+  _nfUpdateGridBtns();
+}
+
+function toggleFlowGrid() {
+  flowGridVisible = !flowGridVisible;
+  if (!flowGridVisible) flowSplitMode = false;
+  _nfUpdateGridBtns();
+  drawOverlay();
+}
+
+function toggleFlowSplitMode() {
+  flowSplitMode = !flowSplitMode;
+  if (flowSplitMode && !flowGridVisible) flowGridVisible = true;
+  _nfUpdateGridBtns();
+  drawOverlay();
+}
+
+function _nfUpdateGridBtns() {
+  const g = document.getElementById('newsflow-grid-btn');
+  if (g) { g.textContent = flowGridVisible ? '▦ Hide flow grid' : '▦ Flow grid';
+           g.classList.toggle('active', flowGridVisible); }
+  const sp = document.getElementById('newsflow-split-btn');
+  if (sp) sp.classList.toggle('active', flowSplitMode);
+}
+
+// generic screen→image drag helper for grid lines
+let _nfDragging = false;
+function _nfDragStart(e, onMove, onDone) {
+  if (_nfDragging) return;      // one drag at a time
+  _nfDragging = true;
+  e.preventDefault(); e.stopPropagation();
+  const p0 = imgToScreen(0, 0), p1 = imgToScreen(100, 100);
+  const sx = (p1.x - p0.x) / 100, sy = (p1.y - p0.y) / 100;
+  const startX = e.clientX, startY = e.clientY;
+  const move = ev => { onMove((ev.clientX - startX) / sx, (ev.clientY - startY) / sy); drawOverlay(); };
+  const up = async () => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    _nfDragging = false;
+    await onDone();
+    drawOverlay(); if (typeof updatePanel === 'function') updatePanel();
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+}
+
+async function _nfMergeBoundary(b) {
+  const up = pageData.shapes[b.upper], lo = pageData.shapes[b.lower];
+  if (!up || !lo) return;
+  pushUndo();
+  const ru = _nfRect(up), rl = _nfRect(lo);
+  _nfSetRect(up, { x1: Math.min(ru.x1, rl.x1), y1: ru.y1,
+                   x2: Math.max(ru.x2, rl.x2), y2: rl.y2 });
+  // the upper element survives (its text layers and article number win);
+  // the lower one — and any text it carried — is absorbed
+  pageData.shapes.splice(pageData.shapes.indexOf(lo), 1);
+  _nfRenumber();
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast('Elements merged — re-run OCR on the merged element if it had text');
+}
+
+async function _nfSplitAt(idx, yImg) {
+  const s = pageData.shapes[idx];
+  const r = _nfRect(s);
+  if (yImg < r.y1 + 10 || yImg > r.y2 - 10) {
+    showToast('Split point too close to the element edge'); return;
+  }
+  pushUndo();
+  const clone = {
+    label: s.label, shape_type: 'rectangle', flags: {},
+    group_id: s.group_id ?? 0,
+    points: [[r.x1, Math.round(yImg)], [r.x2, r.y2]],
+    flow_band: s.flow_band ?? 0, flow_column: s.flow_column ?? 0,
+    flow_span: s.flow_span || 1,
+    flow_order: (s.flow_order ?? 0) + 0.5,   // provisional; renumber fixes it
+  };
+  _nfSetRect(s, { x1: r.x1, y1: r.y1, x2: r.x2, y2: Math.round(yImg) });
+  pageData.shapes.push(clone);   // the clone starts with NO text layers
+  _nfRenumber();
+  await replaceAllShapes();
+  drawOverlay(); updatePanel();
+  showToast('Element split — the lower half starts empty (upper keeps any text)');
+}
+
+// Draw the grid + wire the interactions. Called from drawOverlay.
+function _newsflowDrawGrid() {
+  if (!flowGridVisible || !svgOverlay || !pageData) return;
+  const items = _nfFlowItems();
+  if (!items.length) return;
+  const NS = 'http://www.w3.org/2000/svg';
+
+  const line = (x1i, y1i, x2i, y2i, color, dash, cursor, hook) => {
+    const a = imgToScreen(x1i, y1i), b = imgToScreen(x2i, y2i);
+    if (!a || !b) return;
+    const vis = document.createElementNS(NS, 'line');
+    vis.setAttribute('x1', a.x); vis.setAttribute('y1', a.y);
+    vis.setAttribute('x2', b.x); vis.setAttribute('y2', b.y);
+    vis.setAttribute('stroke', color);
+    vis.setAttribute('stroke-width', '1.6');
+    if (dash) vis.setAttribute('stroke-dasharray', dash);
+    vis.style.pointerEvents = 'none';
+    svgOverlay.appendChild(vis);
+    if (hook) {
+      const hit = document.createElementNS(NS, 'line');
+      hit.setAttribute('x1', a.x); hit.setAttribute('y1', a.y);
+      hit.setAttribute('x2', b.x); hit.setAttribute('y2', b.y);
+      hit.setAttribute('stroke', 'rgba(0,0,0,0)');
+      hit.setAttribute('stroke-width', '9');
+      hit.style.pointerEvents = 'stroke';
+      hit.style.cursor = cursor;
+      hook(hit);
+      svgOverlay.appendChild(hit);
+    }
+  };
+
+  // band cuts (visual only)
+  const bands = _nfGridBands();
+  const bkeys = Object.keys(bands).map(Number).sort((a, b) => a - b);
+  for (let k = 0; k + 1 < bkeys.length; k++) {
+    const y = (bands[bkeys[k]].y2 + bands[bkeys[k + 1]].y1) / 2;
+    const x1 = Math.min(bands[bkeys[k]].x1, bands[bkeys[k + 1]].x1);
+    const x2 = Math.max(bands[bkeys[k]].x2, bands[bkeys[k + 1]].x2);
+    line(x1, y, x2, y, '#f59e0b', '9,5', null, null);
+  }
+
+  // column gutters (draggable: both columns' shared edge moves together)
+  const cols = _nfGridColumns();
+  const ckeys = Object.keys(cols).map(Number).sort((a, b) => a - b);
+  for (let k = 0; k + 1 < ckeys.length; k++) {
+    const L = cols[ckeys[k]], R = cols[ckeys[k + 1]];
+    const x = (L.x2 + R.x1) / 2;
+    const y1 = Math.min(L.y1, R.y1), y2 = Math.max(L.y2, R.y2);
+    const cL = ckeys[k], cR = ckeys[k + 1];
+    line(x, y1, x, y2, '#38bdf8', null, 'col-resize', hit => {
+      hit.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        pushUndo();
+        const left  = _nfFlowItems().filter(z => (z.s.flow_span || 1) === 1 && (z.s.flow_column || 0) === cL);
+        const right = _nfFlowItems().filter(z => (z.s.flow_span || 1) === 1 && (z.s.flow_column || 0) === cR);
+        const orig = new Map();
+        [...left, ...right].forEach(z => orig.set(z.i, _nfRect(z.s)));
+        const lo = Math.max(...left.map(z => orig.get(z.i).x1 + 15));
+        const hi = Math.min(...right.map(z => orig.get(z.i).x2 - 15));
+        _nfDragStart(e, (dx) => {
+          const v = Math.max(lo, Math.min(hi, x + dx));
+          left.forEach(z  => { const r = orig.get(z.i); _nfSetRect(z.s, { ...r, x2: v }); });
+          right.forEach(z => { const r = orig.get(z.i); _nfSetRect(z.s, { ...r, x1: v }); });
+        }, async () => { await replaceAllShapes(); });
+      });
+    });
+  }
+
+  // per-column element boundaries (drag = resize both; Alt+click = merge)
+  _nfGridBoundaries().forEach(b => {
+    line(b.x1, b.y, b.x2, b.y, '#22c55e', null, 'row-resize', hit => {
+      hit.addEventListener('mousedown', e => {
+        if (e.button !== 0) return;
+        if (e.altKey) { _nfMergeBoundary(b); return; }
+        pushUndo();
+        const up = pageData.shapes[b.upper], lo2 = pageData.shapes[b.lower];
+        const ru = _nfRect(up), rl = _nfRect(lo2);
+        const minY = ru.y1 + 10, maxY = rl.y2 - 10;
+        _nfDragStart(e, (dx, dy) => {
+          const v = Math.max(minY, Math.min(maxY, b.y + dy));
+          _nfSetRect(up,  { ...ru, y2: v });
+          _nfSetRect(lo2, { ...rl, y1: v });
+        }, async () => { await replaceAllShapes(); });
+      });
+    });
+  });
+
+  // split mode: a transparent capture layer takes the next click
+  if (flowSplitMode) {
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', 0); rect.setAttribute('y', 0);
+    rect.setAttribute('width', '100%'); rect.setAttribute('height', '100%');
+    rect.setAttribute('fill', 'rgba(34,197,94,0.04)');
+    rect.style.pointerEvents = 'all';
+    rect.style.cursor = 'crosshair';
+    rect.addEventListener('mousedown', e => {
+      e.stopPropagation();
+      const box = svgOverlay.getBoundingClientRect();
+      const p0 = imgToScreen(0, 0), p1 = imgToScreen(100, 100);
+      const xi = (e.clientX - box.left - p0.x) / ((p1.x - p0.x) / 100);
+      const yi = (e.clientY - box.top  - p0.y) / ((p1.y - p0.y) / 100);
+      const hitEl = _nfFlowItems().find(z => {
+        const r = _nfRect(z.s);
+        return xi >= r.x1 && xi <= r.x2 && yi >= r.y1 && yi <= r.y2;
+      });
+      if (hitEl) _nfSplitAt(hitEl.i, yi);
+      else showToast('Click inside a flow element to split it');
+    });
+    svgOverlay.appendChild(rect);
+  }
 }

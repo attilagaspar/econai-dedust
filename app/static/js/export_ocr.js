@@ -14,7 +14,8 @@ function cancelTableMode() {
   tableMode = false; tableRect = null; tableColSeps = []; tableRowSeps = []; tableTool = null;
   document.getElementById('table-toolbar').style.display = 'none';
   document.getElementById('table-btn').classList.remove('active');
-  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode) ? 'all' : 'none';
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode
+    || (typeof flowGridVisible !== 'undefined' && flowGridVisible)) ? 'all' : 'none';
   drawOverlay();
 }
 

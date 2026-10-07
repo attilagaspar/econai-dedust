@@ -29,6 +29,9 @@ document.addEventListener('keydown', e => {
     if (perspMode) { cancelPerspMode(); return; }
     if (tableMode) { cancelTableMode(); return; }
     if (latticeSepMode) { latticeSepMode = null; _updateLatticeSepBtns(); drawOverlay(); return; }
+    if (typeof flowSplitMode !== 'undefined' && flowSplitMode) {
+      flowSplitMode = false; _nfUpdateGridBtns(); drawOverlay(); return;
+    }
   }
   if ((e.ctrlKey||e.metaKey)&&e.key==='s') { e.preventDefault(); saveCorrection(); return; }
   if ((e.ctrlKey||e.metaKey)&&e.key==='z') { e.preventDefault(); if(tableMode) tableUndo(); else undo(); return; }
@@ -175,6 +178,9 @@ async function loadPage(idx) {
   loadPage._bust = false;
   if (ocrViewActive) { _shadowResetTransform(); loadShadowPreview(); }
   buildLegend();
+  // Show the flow-grid buttons if this page carries a newsflow reconstruction
+  if (typeof _nfShowGridBtns === 'function')
+    _nfShowGridBtns(!!pageData?.shapes?.some(s => s.flow_order != null));
   // Show grid button if this page already has lattice data
   const hasLattice = pageData?.shapes?.some(s => s.super_row != null);
   const gridBtn = document.getElementById('lattice-grid-btn');
