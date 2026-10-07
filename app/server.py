@@ -9029,6 +9029,25 @@ class DatasetVariable(BaseModel):
     min:    Optional[float] = None     # hard bounds → diagnostics rung 3
     max:    Optional[float] = None
     parse:  Optional[DatasetParseConv] = None   # per-variable override
+    # Phase 2 diagnostics (app/diagnostics.py)
+    stats:  bool = True                # False = no distribution / trailing-1 tests
+                                       # (serial numbers, codes)
+    scale:  Optional[str] = None       # "log" | "raw"; default log when all ≥ 0
+    esd:    bool = False               # run Generalized ESD on this variable
+
+
+class DatasetIdentity(BaseModel):
+    total: str                         # variable that must equal …
+    parts: List[str]                   # … the sum of these (dash = 0)
+    label: Optional[str] = None
+
+
+class DatasetTotals(BaseModel):
+    # key text of a printed total row ("Összesen"); matched against the raw
+    # text and its accent-stripped lowercase form. Such rows must ALSO match
+    # record.exclude_keys (they are not records).
+    row_pattern: str
+    min_match:   Optional[float] = None
 
 
 class DatasetDecl(BaseModel):
@@ -9038,6 +9057,9 @@ class DatasetDecl(BaseModel):
     record:    DatasetRecordSpec
     variables: List[DatasetVariable]
     parse:     DatasetParseConv = DatasetParseConv()
+    identities:  List[DatasetIdentity] = []
+    totals:      Optional[DatasetTotals] = None
+    diagnostics: dict = {}             # overrides of diagnostics.DEFAULTS
 
 
 def _datasets_dir(folder: str) -> Path:
@@ -9072,6 +9094,19 @@ def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
             int(sl), int(c)
         except (TypeError, ValueError):
             probs.append(f"record.key.columns: '{sl}': '{c}' is not slot: column")
+    var_names = {v.name for v in decl.variables}
+    for ident in decl.identities:
+        for vn in [ident.total] + list(ident.parts):
+            if vn not in var_names:
+                probs.append(f"identity '{ident.label or ident.total}': unknown variable '{vn}'")
+    if decl.totals:
+        try:
+            re.compile(decl.totals.row_pattern, re.IGNORECASE)
+        except re.error as e:
+            probs.append(f"totals.row_pattern: invalid regex ({e})")
+    for v in decl.variables:
+        if v.scale not in (None, "log", "raw"):
+            probs.append(f"variable '{v.name}': scale must be 'log' or 'raw'")
     seen = set()
     for v in decl.variables:
         if v.name in seen:
@@ -9223,12 +9258,18 @@ def _ds_page_struct(data: dict, decl: DatasetDecl):
 
 # ── The builder ─────────────────────────────────────────────────────────────
 
-def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
+def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
+              keep_excluded: bool = False):
     """Assemble records from the page JSONs per the declaration.
 
     Returns (records, findings, stats). Each record's values carry full
     provenance + the four layer texts (the diagnose report needs them);
     the build endpoint strips the layers before responding.
+
+    keep_excluded: rows matching record.exclude_keys (printed totals, header
+    lines) are returned too, in reading order, marked rec["excluded"] = True
+    — the printed-totals check needs them. Callers must filter them out of
+    anything that treats records as data.
 
     findings: flat list of {check, variable?, stem, idx?, row_i?, row_n?,
     y0?, y1?, layers?, detail} — the structure rung is emitted here, the
@@ -9482,9 +9523,11 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
 
             for u_i, ku in enumerate(key_seq):
                 layer, ktext = _ds_best(ku["layers"])
-                if _key_excluded(ktext):
+                is_excluded = _key_excluded(ktext)
+                if is_excluded:
                     n_excluded[0] += 1    # printed total/header row — not a record
-                    continue
+                    if not keep_excluded:
+                        continue
                 rec = {"cycle": cycle, "table": tb,
                        "lattice_row": ku.get("lattice_row"), "unit_i": u_i,
                        "key": {"text": ktext, "layer": layer,
@@ -9496,6 +9539,8 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                "y0": ku["y0"], "y1": ku["y1"],
                                "layers": ku["layers"]},
                        "values": {}}
+                if is_excluded:
+                    rec["excluded"] = True
                 kfold = _auth_fold(ktext) if ktext.strip() else ""
                 for sl, vs in vars_by_slot.items():
                     pm = slots.get(sl)
@@ -9553,7 +9598,8 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                      "detail": f"keyed join: slot-{sl} row '{entry['text']}' "
                                                f"matches no row on the key page"})
 
-    stats = {"pages": n_pages_used, "cycles": len(cycles), "records": len(records),
+    stats = {"pages": n_pages_used, "cycles": len(cycles),
+             "records": sum(1 for r in records if not r.get("excluded")),
              "slots": n_slots, "separator_cells": n_separators[0],
              "excluded_records": n_excluded[0]}
     return records, findings, stats
@@ -9591,107 +9637,204 @@ def api_dataset_build(name: str, folder: str = Query(...),
 
 
 class DatasetDiagnoseBody(BaseModel):
-    pages: Optional[str] = None        # extra 1-indexed page-range restriction
+    pages:          Optional[str] = None   # extra 1-indexed page-range restriction
+    phase2:         bool = True            # totals / identities / statistics
+    record_history: bool = True            # update the adjudication history
+                                           # (ignored for page-restricted runs)
 
 
-_DS_MAX_ITEMS = 3000                   # payload cap, like the duplicate report
+_DS_MAX_ITEMS = 6000                   # payload cap, like the duplicate report
+
+# report order: exact errors first, then statistics, then bookkeeping
+_DS_CHECK_ORDER = {"structure": 0, "parse": 1, "range": 2, "identity": 3,
+                   "totals": 4, "trailing1_cell": 5, "outlier": 6, "digits": 7,
+                   "trailing1": 8, "unresolved": 9, "key": 10,
+                   "duplicate_key": 11, "totals_unanchored": 12}
+# checks a reviewer may mark "confirmed genuine" (statistical / arithmetic
+# flags — a parse error or a structure mismatch is never "genuine")
+_DS_CONFIRMABLE = {"outlier", "digits", "trailing1", "trailing1_cell",
+                   "identity", "totals", "totals_unanchored", "range"}
 
 
-@app.post("/api/dataset/{name}/diagnose")
-def api_dataset_diagnose(name: str, folder: str = Query(...),
-                         body: DatasetDiagnoseBody = ...):
-    """Run the check ladder over the declared dataset:
-    1. structure — pages/cells that disagree with the declaration
-    2. parse     — values that fail their dtype
-    3. hard constraints — min/max violations, unresolved entity cells,
-                          duplicate/missing keys
-    Findings are grouped check → variable in the duplicate-report item shape,
-    so the client renders them in the existing report chassis."""
+def _ds_side_path(folder: str, name: str, kind: str) -> Path:
+    """Per-dataset side files next to the declaration:
+    <name>.confirmed.json (genuine-value confirmations) and
+    <name>.diag_history.json (adjudication across runs)."""
+    return _datasets_dir(folder) / f"{name}.{kind}.json"
+
+
+def _ds_side_load(folder: str, name: str, kind: str) -> dict:
+    p = _ds_side_path(folder, name, kind)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _ds_side_save(folder: str, name: str, kind: str, data: dict):
+    p = _ds_side_path(folder, name, kind)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(p, data)
+
+
+def _ds_run_diagnostics(folder: str, name: str, pages: Optional[str] = None,
+                        phase2: bool = True, record_history: bool = True) -> dict:
+    """The whole check ladder (Phase 1 + Phase 2) for one dataset.
+    Returns the report payload: groups (report chassis items), counts, the
+    per-variable quality stats, the trailing-1 heat map, identity/total
+    stats, the adjudication table and the run history."""
+    from app import diagnostics as dg
     d = _resolve_folder(folder)
     decl = _ds_load_decl(folder, name)
-    records, findings, stats = _ds_build(d, decl, extra_pages=body.pages)
+    rows, findings, stats = _ds_build(d, decl, extra_pages=pages, keep_excluded=True)
+    records = [r for r in rows if not r.get("excluded")]
+    for r in rows:                     # accent-folded key for pattern tests
+        t = r["key"].get("text") or ""
+        r["key"]["fold"] = (_unidecode(t) if _unidecode is not None else t).lower()
     key = decl.record.key
+    P = dg.params(decl.diagnostics)
 
-    def item_from_value(v, extra=None):
-        it = {"stem": v.get("stem"), "idx": v.get("idx"), "row_i": v.get("row_i"),
-              "row_n": v.get("row_n"), "y0": v.get("y0"), "y1": v.get("y1")}
-        L = v.get("layers") or {}
-        it.update({"pdf": (L.get("pdf") or "")[:300], "ocr": (L.get("ocr") or "")[:300],
-                   "llm": (L.get("llm") or "")[:300], "human": L.get("human") or ""})
-        if extra:
-            it.update(extra)
-        return it
+    raw: List[dict] = []               # uniform finding dicts (see diagnostics.py)
 
-    groups: dict = {}                  # (check, variable or "") → group
-    # a declared variable sitting on the key position reports unresolved
-    # entities under its own name — don't double-report at the key level
+    # 1 — structure (from the builder)
+    for f in findings:
+        raw.append({"check": "structure", "variable": f.get("variable"),
+                    "severity": "error",
+                    "ref": {"stem": f["stem"], "idx": f.get("idx"),
+                            "row_i": f.get("row_i"), "row_n": f.get("row_n")},
+                    "detail": f["detail"],
+                    "group_title": "Pages / cells that disagree with the declaration"})
+
+    # 2 & 3 — per-value checks over the assembled records
     key_has_var = any(v.slot == key.slot and v.column == key.column
                       and v.dtype == "entity" for v in decl.variables)
 
     def _num(x):
         return int(x) if isinstance(x, float) and x == int(x) else x
 
-    def add(check, variable, title, item):
-        g = groups.setdefault((check, variable or ""), {
-            "check": check, "variable": variable, "title": title, "items": []})
-        g["items"].append(item)
-
-    # 1 — structure (from the builder)
-    for f in findings:
-        add("structure", f.get("variable"),
-            "Pages / cells that disagree with the declaration",
-            {"stem": f["stem"], "idx": f.get("idx"), "row_i": f.get("row_i"),
-             "row_n": f.get("row_n"), "y0": None, "y1": None,
-             "pdf": "", "ocr": "", "llm": "", "human": "",
-             "detail": f["detail"]})
-
-    # 2 & 3 — per-value checks over the assembled records
     key_seen: dict = {}
     for rec in records:
         k = rec["key"]
         ktext = (k.get("text") or "").strip()
         conv = decl.parse
         if not ktext and not k.get("blank"):
-            add("key", None, "Records with an empty key cell",
-                item_from_value(k, {"detail": "key text is empty"}))
+            raw.append({"check": "key", "severity": "error", "ref": k,
+                        "detail": "key text is empty",
+                        "group_title": "Records with an empty key cell"})
         elif ktext and ktext not in conv.missing:
             ident = k.get("id") or ("~" + _auth_fold(ktext))
             key_seen.setdefault(ident, []).append(rec)
             if key.dtype == "entity" and not k.get("id") and not key_has_var:
-                add("unresolved", None, "Key cells with no resolved entity",
-                    item_from_value(k, {"detail": f"'{ktext}' unresolved"}))
+                raw.append({"check": "unresolved", "severity": "mild", "ref": k,
+                            "detail": f"'{ktext}' unresolved",
+                            "group_title": "Key cells with no resolved entity"})
         for var in decl.variables:
             v = rec["values"][var.name]
             if v["status"] == "error":
-                add("parse", var.name,
-                    f"{var.name}: values that fail dtype {var.dtype}",
-                    item_from_value(v, {"detail": f"'{v['text']}' is not a {var.dtype}"}))
+                raw.append({"check": "parse", "variable": var.name, "severity": "error",
+                            "ref": v, "detail": f"'{v['text']}' is not a {var.dtype}",
+                            "group_title": f"{var.name}: values that fail dtype {var.dtype}"})
             elif v["status"] == "ok":
                 if var.dtype in ("number", "int"):
                     if var.min is not None and v["value"] < var.min:
-                        add("range", var.name, f"{var.name}: below min {_num(var.min)}",
-                            item_from_value(v, {"detail": f"{_num(v['value'])} < {_num(var.min)}"}))
+                        raw.append({"check": "range", "variable": var.name,
+                                    "severity": "error", "ref": v,
+                                    "detail": f"{_num(v['value'])} < {_num(var.min)}",
+                                    "group_title": f"{var.name}: below min {_num(var.min)}"})
                     elif var.max is not None and v["value"] > var.max:
-                        add("range", var.name, f"{var.name}: above max {_num(var.max)}",
-                            item_from_value(v, {"detail": f"{_num(v['value'])} > {_num(var.max)}"}))
+                        raw.append({"check": "range", "variable": var.name,
+                                    "severity": "error", "ref": v,
+                                    "detail": f"{_num(v['value'])} > {_num(var.max)}",
+                                    "group_title": f"{var.name}: above max {_num(var.max)}"})
                 elif var.dtype == "entity" and not (v.get("authority") or {}).get("id"):
-                    add("unresolved", var.name,
-                        f"{var.name}: cells with no resolved entity",
-                        item_from_value(v, {"detail": f"'{v['text']}' unresolved"}))
-
+                    raw.append({"check": "unresolved", "variable": var.name,
+                                "severity": "mild", "ref": v,
+                                "detail": f"'{v['text']}' unresolved",
+                                "group_title": f"{var.name}: cells with no resolved entity"})
     for ident, recs in key_seen.items():
         if len(recs) > 1:
             for rec in recs:
-                add("duplicate_key", None,
-                    "The same key appears in more than one record",
-                    item_from_value(rec["key"],
-                                    {"detail": f"'{rec['key'].get('name') or rec['key'].get('text')}' "
-                                               f"× {len(recs)}"}))
+                raw.append({"check": "duplicate_key", "severity": "mild",
+                            "ref": rec["key"],
+                            "detail": f"'{rec['key'].get('name') or rec['key'].get('text')}' "
+                                      f"× {len(recs)}",
+                            "group_title": "The same key appears in more than one record"})
 
-    order = {"structure": 0, "parse": 1, "range": 2, "unresolved": 3,
-             "key": 4, "duplicate_key": 5}
-    out = sorted(groups.values(),
-                 key=lambda g: (order.get(g["check"], 9), g["variable"] or ""))
+    # Phase 2 — arithmetic + statistics
+    quality: dict = {"params": P}
+    if phase2:
+        f_id, id_stats = dg.check_identities(records, [i.model_dump() for i in decl.identities], P)
+        raw += f_id
+        f_tot, tot_stats = dg.check_totals(
+            rows, decl.totals.model_dump() if decl.totals else None, decl.variables, P)
+        raw += f_tot
+        f_dist, var_stats = dg.check_distributions(records, decl.variables, P)
+        raw += f_dist
+        f_t1, heat = dg.check_trailing_one(records, decl.variables, var_stats, P)
+        raw += f_t1
+        quality.update({"identities": id_stats, "totals": tot_stats,
+                        "variables": var_stats, "trailing_heat": heat})
+
+    # confirmations ("genuine") + adjudication history
+    confirmed = _ds_side_load(folder, name, "confirmed")
+    confirmable = [f for f in raw if f["check"] in _DS_CONFIRMABLE]
+    others = [f for f in raw if f["check"] not in _DS_CONFIRMABLE]
+    open_c, conf = dg.apply_confirmations(confirmable, confirmed)
+    open_all = others + open_c
+    counts: dict = {}
+    for f in open_all:
+        counts[f["check"]] = counts.get(f["check"], 0) + 1
+    history = _ds_side_load(folder, name, "diag_history")
+    full_run = not pages
+    if record_history and full_run:
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        history = dg.update_history(history, open_all, conf, ts,
+                                    {"records": len(records), "open": len(open_all),
+                                     "confirmed": len(conf), "counts": counts,
+                                     "phase2": phase2})
+        _ds_side_save(folder, name, "diag_history", history)
+    quality["adjudication"] = dg.adjudication(history, open_all, conf)
+    quality["runs"] = (history.get("runs") or [])[-20:]
+    quality["confirmed_n"] = len(conf)
+
+    # → report chassis items, grouped check → variable
+    def to_item(f):
+        r = f.get("ref") or {}
+        L = r.get("layers") or {}
+        it = {"stem": r.get("stem"), "idx": r.get("idx"), "row_i": r.get("row_i"),
+              "row_n": r.get("row_n"), "y0": r.get("y0"), "y1": r.get("y1"),
+              "pdf": (L.get("pdf") or "")[:300], "ocr": (L.get("ocr") or "")[:300],
+              "llm": (L.get("llm") or "")[:300], "human": L.get("human") or "",
+              "detail": f.get("detail"), "check": f["check"],
+              "severity": f.get("severity"), "method": f.get("method"),
+              "params": f.get("params"), "flag_id": dg.flag_id(f),
+              "value_text": dg.value_text_of(f),
+              "confirmable": f["check"] in _DS_CONFIRMABLE,
+              "key": ((f.get("rec") or {}).get("key") or {}).get("text")}
+        fix = f.get("culprit")
+        if not fix and f.get("suggest"):
+            fix = {"stem": r.get("stem"), "idx": r.get("idx"), "row_i": r.get("row_i"),
+                   "value": f["suggest"]["value"], "variable": f.get("variable")}
+        if fix and fix.get("idx") is not None:
+            it["fix"] = {k: fix.get(k) for k in ("stem", "idx", "row_i", "value",
+                                                 "variable", "who")}
+        return it
+
+    groups: dict = {}
+    for f in open_all:
+        g = groups.setdefault((f["check"], f.get("variable") or ""), {
+            "check": f["check"], "variable": f.get("variable"),
+            "title": f.get("group_title") or f["check"], "items": [], "_raw": []})
+        g["_raw"].append(f)
+    sev_rank = {"error": 0, "extreme": 1, "mild": 2, "info": 3}
+    out = []
+    for g in sorted(groups.values(),
+                    key=lambda g: (_DS_CHECK_ORDER.get(g["check"], 99), g["variable"] or "")):
+        fs = sorted(g.pop("_raw"), key=lambda f: sev_rank.get(f.get("severity"), 9))
+        g["items"] = [to_item(f) for f in fs]
+        out.append(g)
     total = sum(len(g["items"]) for g in out)
     truncated = False
     kept, n_items = [], 0
@@ -9703,7 +9846,55 @@ def api_dataset_diagnose(name: str, folder: str = Query(...),
         n_items += len(g["items"])
         kept.append(g)
     return {"dataset": name, **stats, "findings_total": total,
-            "truncated": truncated, "groups": kept}
+            "truncated": truncated, "groups": kept, "counts": counts,
+            "full_run": full_run, "quality": quality,
+            "variables_meta": [{"name": v.name, "label": v.label, "dtype": v.dtype,
+                                "stats": v.stats} for v in decl.variables]}
+
+
+@app.post("/api/dataset/{name}/diagnose")
+def api_dataset_diagnose(name: str, folder: str = Query(...),
+                         body: DatasetDiagnoseBody = ...):
+    """Run the check ladder over the declared dataset (knowledge_base/
+    10_dataset_layer.md):
+    Phase 1 — structure, parse, range, unresolved entities, keys;
+    Phase 2 — row identities, printed total rows, IQR/MAD outliers (log
+    scale), digit length, trailing-'1' column-rule artifacts, optional
+    Generalized ESD.
+    Findings are grouped check → variable in the duplicate-report item shape
+    (the editor's report chassis); `quality` feeds the data-quality page."""
+    return _ds_run_diagnostics(folder, name, pages=body.pages, phase2=body.phase2,
+                               record_history=body.record_history)
+
+
+class DatasetConfirmBody(BaseModel):
+    flag_id:    str
+    value_text: str = ""
+    note:       Optional[str] = None
+    undo:       bool = False
+
+
+@app.post("/api/dataset/{name}/confirm")
+def api_dataset_confirm(name: str, folder: str = Query(...),
+                        body: DatasetConfirmBody = ...):
+    """Mark a flag 'confirmed genuine' (the value matches the scan — Budapest
+    is big; the book's own arithmetic is wrong), or undo that. The
+    confirmation holds only while the cell text stays `value_text`."""
+    _ds_load_decl(folder, name)                      # 404 for unknown datasets
+    check = body.flag_id.split("|", 1)[0]
+    if check not in _DS_CONFIRMABLE:
+        raise HTTPException(status_code=400,
+                            detail=f"'{check}' findings cannot be confirmed as genuine — fix them")
+    with _SHAPE_MERGE_LOCK:
+        conf = _ds_side_load(folder, name, "confirmed")
+        if body.undo:
+            conf.pop(body.flag_id, None)
+        else:
+            conf[body.flag_id] = {"value_text": body.value_text,
+                                  "note": body.note,
+                                  "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        _ds_side_save(folder, name, "confirmed", conf)
+    return {"ok": True, "confirmed": len(conf)}
 
 
 # ---------------------------------------------------------------------------
