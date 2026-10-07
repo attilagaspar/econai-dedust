@@ -279,10 +279,21 @@ single page. Aggregates what the dataset layer already (or soon) produces:
 3. Click-through: every number drills down to the existing findings review
    table (report chassis from dataset Phase 1), which already deep-links to
    page/row.
+4. *(added 2026-10-07, from the RA's test proposal)* Per-variable panel:
+   top/bottom-N list, log-scale histogram with flagged values marked, mild
+   vs extreme (1.5× / 3× IQR) counts, zero share, and the trailing-1 excess
+   per physical column (effect size, not just p).
+5. **Adjudication table = the paper appendix.** Per check: flagged /
+   corrected (was a transcription error) / confirmed genuine / still open,
+   with method + parameters stated. Exportable. "Every flagged value was
+   checked against the source scan" is the defensible appendix claim; this
+   table is its evidence.
 
-**Depends on**: dataset layer Phase 2 (distribution diagnostics) — the
-outlier numbers this dashboard summarizes. Build Phase 2 first, then this is
-mostly an aggregation endpoint + one dashboard card/page.
+**Depends on**: dataset layer Phase 2 — fully specified 2026-10-07 in
+10_dataset_layer.md ("Phase 2 specification": printed-totals check, log-scale
+IQR/MAD, digit length, trailing-1 with geometry cross-check, optional
+Generalized ESD, persistent "confirmed genuine" state). Build Phase 2 first,
+then this is mostly an aggregation endpoint + one dashboard card/page.
 
 ---
 
@@ -313,6 +324,18 @@ never hand-edited:
    1895 machinery row to a 1930 census record requires the authority system's
    planned temporal layer (same settlement across renames/merges). Until it
    exists, the index links within one authority vintage and says so.
+
+5. **First consumers: linked diagnostics** *(added 2026-10-07)*. Once the
+   index exists, two checks from the RA's proposal become possible:
+   - **Year-to-year change outliers (Hidiroglou–Berthelot)** — the
+     official-statistics standard for period-to-period ratio editing, run on
+     the same settlement across volumes/years (needs item 4).
+   - **Ratio outliers against another source** — e.g. machines or land per
+     capita using a census population variable from a different project;
+     IQR on the (log) ratio, plus histogram in the P11 dashboard.
+   k-NN / isolation-forest longitudinal methods are deliberately held back
+   (less explainable to referees, slower to review against a crop); revisit
+   only if HB demonstrably misses error classes.
 
 **Depends on**: dataset layer Phase 1 (shipped — records + keys exist),
 authority resolution (exists), temporal authority (planned, gates item 4).
