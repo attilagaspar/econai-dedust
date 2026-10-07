@@ -275,7 +275,8 @@ at. The dashboard's counts (flagged / corrected / confirmed per check)
 are the appendix table.
 
 **H. Histograms.** Per variable, log-scale histogram with flagged values
-marked; part of the dashboard (P11) rather than the findings list.
+marked; shown in the dashboard (P11, built in the same push) rather than
+in the findings list.
 
 ### Deferred to the entity index (P12) — need cross-project linkage
 
@@ -298,10 +299,16 @@ marked; part of the dashboard (P11) rather than the findings list.
    build endpoint, findings for structural mismatch and unparseable values,
    shown in the report chassis. (Biggest immediate value: catches the layout
    and OCR breakage that today surfaces as Stata outliers.)
-2. **Diagnostics** — checks A–G of the Phase 2 specification (printed
-   totals first, then extremes, IQR/MAD on log scale, digit length,
-   trailing-1 with geometry cross-check, optional ESD), plus the persistent
-   "confirmed genuine" state; review/fix loop in the report.
+2. **Diagnostics + evaluation dashboard (one build, decided 2026-10-07)** —
+   checks A–G of the Phase 2 specification (printed totals first, then
+   extremes, IQR/MAD on log scale, digit length, trailing-1 with geometry
+   cross-check, optional ESD), the persistent "confirmed genuine" state, the
+   review/fix loop in the findings report, AND the P11 dashboard on top
+   (per-variable panels with histograms, mild/extreme counts, trailing-1 per
+   column, build-over-build trend, adjudication table). Built together
+   because the checks alone are a long findings list that doesn't show where
+   problems concentrate, and the dashboard is mostly aggregation of numbers
+   the checks produce anyway.
 3. **Tidy export** — CSV/dta from the declaration; retire the renames.
 4. **Later**: dataset-level rules; a declaration-authoring UI; optional
    materialized SQLite/parquet if analysis ever needs SQL directly.

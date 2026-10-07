@@ -268,6 +268,9 @@ a free data point); 5–8 as the sources arrive.*
 
 ## P11. Data-evaluation dashboard (added 2026-10-01)
 
+*Decided 2026-10-07: built in ONE push together with dataset-layer Phase 2
+(the diagnostics). See 10_dataset_layer.md, Phasing item 2.*
+
 One place that answers "how clean is my processed data?" without opening a
 single page. Aggregates what the dataset layer already (or soon) produces:
 
