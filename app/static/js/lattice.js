@@ -1053,8 +1053,10 @@ function _applyLatticeDrag(adjustments, origPts, delta, axis) {
 function drawOverlay() {
   if (!svgOverlay || !pageData) return;
   while (svgOverlay.firstChild) svgOverlay.removeChild(svgOverlay.firstChild);
-  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode || clipMode
-    || (typeof flowGridVisible !== 'undefined' && flowGridVisible)) ? 'all' : 'none';
+  // Flow grid lines carry their own hit-lines (pointer-events:stroke), so the
+  // overlay can stay 'none' while the grid is visible — panning keeps working.
+  svgOverlay.style.pointerEvents = (editMode || tableMode || perspMode || clipMode)
+    ? 'all' : 'none';
 
   (pageData.shapes || []).forEach((shape, i) => {
     // Region layer visibility (Phase H): region-labeled shapes can be hidden
