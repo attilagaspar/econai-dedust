@@ -146,10 +146,44 @@ Reuse the **report chassis** (duplicate/unresolved/lookup reports): a
 row with crop, layers, editable Human, click-to-jump, minimizable pill.
 Findings are fixed in place; re-run to converge. No new interaction concepts.
 
-Declaration authoring: start with the JSON file edited by hand (Claude can
-draft it from an existing do-file's renames — the mapping already exists in
-Stata spaghetti and can be translated once). A small UI (column header row →
-variable names) can come later; it is not on the critical path.
+Declaration authoring: **the editor's 📋 Dataset window** (built 2026-10-08,
+`app/static/js/dataset_decl.js`; toolbar button next to ⚖ Rules). A side
+panel, so the page stays visible:
+
+1. *Which pages* — page cycle + which positions belong (the pattern), with
+   the slot map shown in the builder's own page order
+   (`POST /api/dataset/page-map`) and "this page is slot k"; page range;
+   which cell labels are read; advanced: record unit, join mode, tables.
+2. *Columns → variables* — "⬇ Read columns from this page" lists every
+   lattice column of the current page as a variable of its slot (do it once
+   per slot), with sample values; name / type / printed header / min / max /
+   stats; a radio marks the key (the first text column is pre-selected as
+   an entity key). Hovering a row highlights that column's cells on the page.
+   No header cells are annotated in foldbirtok1935, so names are typed, not
+   read.
+3. *Rows that are not records* — exclude patterns (+ one-click Hungarian
+   statistics defaults incl. the "… j." district rows) and the printed-total
+   pattern.
+4. *Sums the book guarantees* — declared identities as chips; "🔍 Find sums
+   in the data" (`POST /api/dataset/suggest-identities`: runs of consecutive
+   same-type columns, ≥80% hold, top-2 disjoint runs per total, end columns
+   that are almost always a dash rejected — on foldbirtok it rediscovers
+   every hand-found identity and adds area_total = cultivation branches);
+   "⇩ Import from ⚖ Rules" maps column rules (1+2=4) onto named variables.
+5. *How numbers are printed* — thousands separators, decimal mark incl.
+   "none", no-value marks.
+
+▶ Test builds the dataset without saving (`POST /api/dataset/preview`:
+records, layout problems with page links, read ✓/✗ per variable with
+examples, identity hold rates, printed-total anchoring). 💾 Save validates
+server-side and keeps the previous version as `<name>.dataset.json.prev`;
+🗑 renames to `.deleted-<ts>`. Unknown fields of a loaded declaration are
+preserved. Verified 2026-10-08: built from scratch in the window,
+foldbirtok_main reproduces the hand-written declaration (33 variables,
+3,413 records). Finding from the test: with decimal mark "none" and "," as a
+thousands separator, foldbirtok has 94 fewer unreadable values and 91 more
+matching printed-total cells — left as Attila's call (only right if the book
+prints no decimals).
 
 ## The export
 

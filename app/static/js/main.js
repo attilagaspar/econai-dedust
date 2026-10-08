@@ -212,6 +212,7 @@ async function loadPage(idx) {
   const revBtn = document.getElementById('review-btn');
   if (revBtn) revBtn.disabled = false;
   if (typeof _syncStatusChip === 'function') _syncStatusChip();
+  if (typeof _ddOnPageChange === 'function') _ddOnPageChange();
 }
 
 function goPage(delta) { const n=pageIdx+delta; if(n>=0&&n<pages.length) loadPage(n); }

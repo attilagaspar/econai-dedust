@@ -9107,6 +9107,11 @@ def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
     for v in decl.variables:
         if v.scale not in (None, "log", "raw"):
             probs.append(f"variable '{v.name}': scale must be 'log' or 'raw'")
+        conv = v.parse or decl.parse
+        if conv.decimal and conv.decimal in (conv.thousands or []):
+            probs.append(f"variable '{v.name}': '{conv.decimal}' is both the decimal "
+                         f"mark and a thousands separator")
+            break
     seen = set()
     for v in decl.variables:
         if v.name in seen:
@@ -10086,22 +10091,35 @@ def api_dataset_suggest_identities(folder: str = Query(...),
         gv, gb, gok = vals[:, g], bad[:, g], ok[:, g]
         P = np.concatenate([np.zeros((R, 1)), np.cumsum(gv, axis=1)], axis=1)
         Q = np.concatenate([np.zeros((R, 1), dtype=np.int32), np.cumsum(gb, axis=1)], axis=1)
+
+        def _hold(t, a, b):
+            s = P[:, b + 1] - P[:, a]
+            testable = gok[:, t] & ((Q[:, b + 1] - Q[:, a]) == 0)
+            n = int(testable.sum())
+            h = int((np.abs(s[testable] - gv[testable, t]) <= 0.51).sum()) if n else 0
+            return h, n, testable
+
         for t in range(G):
             for a in range(G):
                 for b in range(a, min(G, a + 12)):
                     if a <= t <= b:
                         continue
-                    s = P[:, b + 1] - P[:, a]
-                    testable = gok[:, t] & ((Q[:, b + 1] - Q[:, a]) == 0)
-                    n = int(testable.sum())
+                    h, n, testable = _hold(t, a, b)
                     if n < min_test:
                         continue
                     # a run that is all zeros matches a zero total trivially
                     if int((testable & (gv[:, t] != 0)).sum()) < min_test // 2:
                         continue
-                    h = int((np.abs(s[testable] - gv[testable, t]) <= 0.51).sum())
                     rate = h / n
                     if rate < 0.8:
+                        continue
+                    # an end column that is (almost) always a dash adds nothing:
+                    # if the run without it holds about as often, it is not part
+                    # of the sum (foldbirtok: area_cult_total = n_above3000 +
+                    # area_total was the equality area_cult_total = area_total
+                    # plus a column that is '-' in 90% of rows)
+                    if b > a and (_hold(t, a + 1, b)[0] >= 0.98 * h
+                                  or _hold(t, a, b - 1)[0] >= 0.98 * h):
                         continue
                     tname = nv[g[t]].name
                     best.setdefault(tname, []).append(

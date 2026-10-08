@@ -135,6 +135,8 @@
         <span id="diagnostic-count" style="font-size:11px;color:#e94560;min-width:28px;"></span>
         <button class="nav-btn" onclick="openRuleEditor()"
                 title="Define arithmetic rules between lattice columns (e.g. 1+2=4); each rule appears in the Diagnose dropdown">⚖ Rules</button>
+        <button class="nav-btn" onclick="openDatasetDecl()"
+                title="Dataset declaration: name the columns of this table, mark the key, the total rows and the sums the book guarantees — this is what the data-quality checks and the tidy export read">📋 Dataset</button>
         <button class="nav-btn" onclick="openRuleFix()"
                 title="List all violations of the active ROW RULE on this page and ask the LLM to propose corrections">🛠 Fix rule</button>
         <button class="nav-btn" id="smart-correct-btn" onclick="runSmartCorrect()" disabled
@@ -1552,6 +1554,7 @@
 <script src="js/search.js"></script>
 <script src="js/dup_report.js"></script>
 <script src="js/dataset_report.js"></script>
+<script src="js/dataset_decl.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>
