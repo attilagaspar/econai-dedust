@@ -240,5 +240,9 @@ if (urlParams.get('region_labels')) {   // per-project override of the region vo
 }
 if (urlParams.get('folder')) {
   document.getElementById('folder-input').value=urlParams.get('folder');
-  loadFolder();
+  // ?stem=&idx= opens a specific page/shape (links from the data-quality page)
+  loadFolder().then(() => {
+    const s = urlParams.get('stem');
+    if (s) _searchJump({stem: s, idx: parseInt(urlParams.get('idx') ?? '-1', 10)});
+  });
 }

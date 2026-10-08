@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data quality — Dedust</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0;
+       min-height: 100vh; font-size: 13px; }
+header { background: #16213e; padding: 12px 22px; display: flex; align-items: center; gap: 14px;
+         border-bottom: 1px solid #0f3460; position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 1.15rem; color: #e94560; font-weight: 600; }
+header .sub { color: #888; }
+.btn { background: #0f3460; color: #e0e0e0; border: 1px solid #1d4a8a; border-radius: 4px;
+       padding: 6px 12px; cursor: pointer; font-size: 0.82rem; }
+.btn:hover { background: #1d4a8a; }
+.btn.primary { background: #e94560; border-color: #e94560; color: #fff; }
+.btn.primary:hover { background: #c73652; }
+.btn.small { padding: 2px 8px; font-size: 0.75rem; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+main { padding: 18px 22px 60px; max-width: 1500px; margin: 0 auto; }
+.card { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 14px 16px;
+        margin-bottom: 16px; }
+.card h2 { font-size: 0.95rem; color: #e0e0e0; margin-bottom: 4px; }
+.card .lead { color: #8a94a6; font-size: 0.8rem; margin-bottom: 10px; max-width: 900px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 10px 12px; }
+.tile .num { font-size: 1.5rem; font-weight: 600; }
+.tile .lbl { color: #8a94a6; font-size: 0.76rem; margin-top: 2px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th { text-align: left; color: #8a94a6; font-weight: 500; font-size: 0.74rem; padding: 4px 8px;
+     border-bottom: 1px solid #0f3460; white-space: nowrap; }
+td { padding: 4px 8px; border-bottom: 1px solid #1d2a4a; vertical-align: middle; }
+tr.clk { cursor: pointer; }
+tr.clk:hover td { background: #1d2e50; }
+.num { font-variant-numeric: tabular-nums; }
+.err { color: #f87171; } .warn { color: #fbbf24; } .ok { color: #22c55e; } .dim { color: #667; }
+.mild { color: #93c5fd; } .ext { color: #fb923c; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip { border: 1px solid #1d4a8a; border-radius: 12px; padding: 2px 10px; cursor: pointer;
+        font-size: 0.76rem; color: #aab; background: #1a1a2e; }
+.chip.on { background: #0f3460; color: #fff; border-color: #e94560; }
+.panel { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 10px 12px;
+         margin: 6px 0 10px; }
+.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .cols2 { grid-template-columns: 1fr; } }
+.crop { max-height: 30px; max-width: 160px; display: block; background: #fff; }
+a { color: #93c5fd; }
+#status { color: #fbbf24; }
+.strip { display: flex; gap: 1px; flex-wrap: wrap; max-width: 560px; }
+.strip span { width: 6px; height: 12px; display: inline-block; border-radius: 1px; }
+.empty { padding: 30px; text-align: center; color: #8a94a6; }
+.toast { position: fixed; bottom: 18px; right: 18px; background: #0f3460; color: #fff;
+         padding: 8px 14px; border-radius: 6px; border: 1px solid #1d4a8a; z-index: 50; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📈 Data quality</h1>
+  <span class="sub" id="hdr-sub"></span>
+  <div style="flex:1"></div>
+  <span id="status"></span>
+  <button class="btn primary" id="run-btn" onclick="runChecks()">▶ Run checks</button>
+  <button class="btn" onclick="exportAppendix()" title="Per check: method, parameters, and how many flags were corrected / confirmed genuine / still open — the data-cleaning appendix">⬇ Appendix table (CSV)</button>
+</header>
+<main id="main">
+  <div class="empty">Run the checks to see the dataset's quality report.</div>
+</main>
+
+<script>
+const qs      = new URLSearchParams(location.search);
+const FOLDER  = qs.get('folder') || '';
+const DATASET = qs.get('dataset') || '';
+const PROJECT = qs.get('project') || '';
+const LABELS  = qs.get('labels') || '';
+let DATA = null;
+let FILTER = null;            // check name shown in the findings browser
+let SHOW_N = {};              // items shown per group (pagination)
+
+document.getElementById('hdr-sub').textContent = `${PROJECT} · dataset “${DATASET}”`;
+document.title = `Data quality — ${DATASET}`;
+
+// Plain-language names + what each check does (also the appendix wording).
+const CHECKS = {
+  identity:   {name: 'Row sum broken',       kind: 'exact',
+               desc: 'A total column differs from the sum of its part columns in the same row (declared identity; a dash counts as 0).'},
+  totals:     {name: 'Printed total broken', kind: 'exact',
+               desc: 'A printed total row (“Összesen”) differs from the sum of the records above it. The covered records are found from the numbers themselves (the run of rows whose sums match most variables).'},
+  totals_unanchored: {name: 'Total not checkable', kind: 'exact',
+               desc: 'A printed total row whose covered records could not be identified (fewer than 3 or under half of the variables match any run of rows).'},
+  structure:  {name: 'Layout mismatch',      kind: 'structure',
+               desc: 'A page or cell disagrees with the dataset declaration (missing/extra columns, rows that do not join).'},
+  parse:      {name: 'Unreadable value',     kind: 'structure',
+               desc: 'The cell text is not a valid number for its variable.'},
+  range:      {name: 'Out of range',         kind: 'structure',
+               desc: 'Below the declared minimum or above the declared maximum.'},
+  outlier:    {name: 'Unusual value',        kind: 'statistical',
+               desc: 'Beyond 3× the interquartile range (Tukey fence) or robust z (MAD, Iglewicz–Hoaglin) above 3.5; log scale for non-negative variables; mostly-zero variables tested on non-zero values.'},
+  digits:     {name: 'Too many digits',      kind: 'statistical',
+               desc: 'At least 2 more integer digits than the variable’s median — glued cells or a column shift.'},
+  trailing1:  {name: 'Many trailing 1s',     kind: 'statistical',
+               desc: 'A page column where values ending in 1 are over-represented (binomial test vs 1/9 among last digits 1–9, Bonferroni over all page columns, share ≥ 2× expected) — a column rule read as a digit.'},
+  trailing1_cell: {name: 'Trailing-1 candidate', kind: 'statistical',
+               desc: 'In such a column: ends in 1 and becomes typical once the 1 is dropped.'},
+  unresolved: {name: 'Unresolved name',      kind: 'other', desc: 'Entity cell not resolved to the authority.'},
+  key:        {name: 'Empty key',            kind: 'other', desc: 'Record key cell is empty.'},
+  duplicate_key: {name: 'Duplicate key',     kind: 'other', desc: 'The same key appears in more than one record.'},
+};
+const cname = c => (CHECKS[c] || {}).name || c;
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmt(x) {
+  if (x == null) return '—';
+  if (typeof x === 'number') return Number.isInteger(x) ? x.toLocaleString('en-US') : x.toLocaleString('en-US', {maximumFractionDigits: 2});
+  return esc(x);
+}
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+function editorUrl(stem, idx) {
+  return `/static/index.html?folder=${encodeURIComponent(FOLDER)}&labels=${encodeURIComponent(LABELS)}` +
+         `&stem=${encodeURIComponent(stem)}` + (idx != null ? `&idx=${idx}` : '');
+}
+function cropUrl(it) {
+  const band = (it.y0 != null && it.y1 != null) ? `&y0=${it.y0}&y1=${it.y1}` : '';
+  return `/api/cell?folder=${encodeURIComponent(FOLDER)}&stem=${encodeURIComponent(it.stem)}&idx=${it.idx}${band}`;
+}
+
+// ── run ───────────────────────────────────────────────────────────────────
+async function runChecks() {
+  const btn = document.getElementById('run-btn');
+  const st = document.getElementById('status');
+  btn.disabled = true;
+  st.textContent = 'Running checks… (a few seconds per thousand records)';
+  try {
+    const r = await fetch(`/api/dataset/${encodeURIComponent(DATASET)}/diagnose?folder=${encodeURIComponent(FOLDER)}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    DATA = d;
+    st.textContent = '';
+    render();
+  } catch (e) {
+    st.textContent = 'Error: ' + (e.message || e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── render ────────────────────────────────────────────────────────────────
+function render() {
+  const d = DATA, q = d.quality || {};
+  const counts = d.counts || {};
+  const sumKind = kind => Object.entries(counts)
+    .filter(([c]) => (CHECKS[c] || {}).kind === kind).reduce((s, [, n]) => s + n, 0);
+  const KIND_ORDER = {exact: 0, structure: 1, statistical: 2, other: 3};
+  const adj = (q.adjudication || []).slice().sort((a, b) =>
+    (KIND_ORDER[(CHECKS[a.check] || {}).kind] ?? 9) - (KIND_ORDER[(CHECKS[b.check] || {}).kind] ?? 9)
+    || b.flagged - a.flagged);
+  const corrected = adj.reduce((s, r) => s + r.corrected, 0);
+  const runs = q.runs || [];
+  let html = '';
+
+  // summary tiles
+  html += `<div class="card"><h2>Summary</h2>
+    <div class="lead">${fmt(d.records)} records from ${fmt(d.pages)} pages. Exact checks prove an error
+    somewhere (the arithmetic does not add up); statistical checks only point at values worth
+    comparing with the scan. Nothing is changed automatically.</div>
+    <div class="tiles">
+      <div class="tile"><div class="num err">${fmt(sumKind('exact'))}</div><div class="lbl">exact-check failures (sums / printed totals)</div></div>
+      <div class="tile"><div class="num warn">${fmt(sumKind('structure'))}</div><div class="lbl">layout / unreadable / out of range</div></div>
+      <div class="tile"><div class="num mild">${fmt(sumKind('statistical'))}</div><div class="lbl">statistical flags to check</div></div>
+      <div class="tile"><div class="num ok">${fmt(corrected)}</div><div class="lbl">corrected since tracking began</div></div>
+      <div class="tile"><div class="num dim">${fmt(q.confirmed_n || 0)}</div><div class="lbl">confirmed genuine</div></div>
+    </div>
+    ${runs.length > 1 ? `<div style="margin-top:12px;">${trendSvg(runs)}</div>` : ''}
+  </div>`;
+
+  // adjudication
+  html += `<div class="card"><h2>Adjudication — for the appendix</h2>
+    <div class="lead">Per check: how many values were ever flagged, how many were transcription errors
+    since corrected, how many were confirmed as genuine (the value matches the scan), and how many are
+    still open. “Every flagged value was checked against the source scan” is true when the open column is 0.</div>
+    <div class="scroll"><table><tr><th>check</th><th>type</th><th class="num">flagged</th><th class="num">corrected</th>
+    <th class="num">confirmed</th><th class="num">open</th><th>method</th></tr>
+    ${adj.map(r => `<tr><td>${esc(cname(r.check))}</td><td class="dim">${esc((CHECKS[r.check] || {}).kind || '')}</td>
+      <td class="num">${fmt(r.flagged)}</td><td class="num ok">${fmt(r.corrected)}</td>
+      <td class="num dim">${fmt(r.confirmed)}</td><td class="num ${r.open ? 'warn' : 'ok'}">${fmt(r.open)}</td>
+      <td class="dim" style="font-size:0.74rem;max-width:520px;">${esc((CHECKS[r.check] || {}).desc || '')}</td></tr>`).join('')}
+    </table></div></div>`;
+
+  // exact checks
+  const ids = q.identities || [], tot = q.totals || {};
+  if (ids.length || tot.anchored || tot.unanchored) {
+    html += `<div class="card"><h2>Exact checks</h2>
+      <div class="lead">Arithmetic the book itself guarantees. A failure means a transcription error
+      (or, rarely, a printing error in the source — mark those “book is wrong”).</div><div class="cols2"><div>
+      ${ids.length ? `<table><tr><th>row identity</th><th class="num">hold</th><th class="num">broken</th><th class="num">not testable</th></tr>
+      ${ids.map(s => `<tr class="clk" onclick="setFilter('identity')"><td>${esc(s.identity)}</td>
+        <td class="num ok">${fmt(s.ok)}</td><td class="num ${s.mismatch ? 'err' : 'ok'}">${fmt(s.mismatch)}</td>
+        <td class="num dim">${fmt(s.untestable)}</td></tr>`).join('')}</table>` : '<span class="dim">No row identities declared.</span>'}
+      </div><div>
+      ${(tot.anchored || tot.unanchored) ? `<table>
+        <tr><th>printed total rows</th><th class="num"></th></tr>
+        <tr><td>checked (covered records identified)</td><td class="num">${fmt(tot.anchored)}</td></tr>
+        <tr class="clk" onclick="setFilter('totals_unanchored')"><td>could not be checked</td><td class="num dim">${fmt(tot.unanchored)}</td></tr>
+        <tr><td>total cells that add up</td><td class="num ok">${fmt(tot.cells_ok)}</td></tr>
+        <tr class="clk" onclick="setFilter('totals')"><td>total cells that do not</td><td class="num ${tot.cells_bad ? 'err' : 'ok'}">${fmt(tot.cells_bad)}</td></tr>
+      </table>` : '<span class="dim">No printed-total rows declared.</span>'}
+      </div></div></div>`;
+  }
+
+  // variables
+  const vstats = q.variables || {};
+  const vnames = Object.keys(vstats);
+  if (vnames.length) {
+    html += `<div class="card"><h2>Variables</h2>
+      <div class="lead">Distribution of each numeric variable (log scale unless it has negatives). Red ticks =
+      listed outliers. “Mild” = beyond 1.5× IQR only — counted, not listed (heavy tails are normal here).
+      Click a row for the histogram with fences and the 10 largest / smallest values.</div>
+      <div class="scroll"><table><tr><th>variable</th><th class="num">n</th><th class="num">zeros</th><th>distribution</th>
+      <th class="num">extreme</th><th class="num">mild</th><th class="num">MAD</th><th class="num">digits</th>
+      <th class="num">max ÷ 2nd</th></tr>
+      ${vnames.map(vn => { const v = vstats[vn], t = v.tests || {};
+        return `<tr class="clk" onclick="toggleVar('${esc(vn)}')"><td><b>${esc(vn)}</b><div class="dim" style="font-size:0.72rem;">${esc(v.label || '')}</div></td>
+        <td class="num">${fmt(v.n)}</td><td class="num dim">${v.zero_share != null ? Math.round(v.zero_share * 100) + '%' : ''}</td>
+        <td>${histSvg(v, 180, 30, false)}</td>
+        <td class="num ${t.iqr_extreme ? 'ext' : 'dim'}">${fmt(t.iqr_extreme)}</td>
+        <td class="num dim">${fmt(t.iqr_mild)}</td>
+        <td class="num ${t.mad ? 'mild' : 'dim'}">${fmt(t.mad)}</td>
+        <td class="num ${t.digits ? 'mild' : 'dim'}">${fmt(t.digits)}</td>
+        <td class="num ${v.top_gap > 5 ? 'warn' : 'dim'}">${v.top_gap != null ? fmt(v.top_gap) + '×' : ''}</td></tr>
+        <tr id="vp-${esc(vn)}" style="display:none;"><td colspan="9">${varPanel(vn, v)}</td></tr>`; }).join('')}
+      </table></div></div>`;
+  }
+
+  // trailing-1 heat
+  const heat = q.trailing_heat || {};
+  if (Object.keys(heat).length) {
+    html += `<div class="card"><h2>Trailing “1” by page column</h2>
+      <div class="lead">Share of values ending in 1 (among those ending 1–9; expected ≈ 11%) in each
+      variable’s column on each page. One square per page; amber = high share, red = statistically
+      flagged. A column rule read as a “1” lights up a whole page column.</div>
+      <div class="scroll"><table><tr><th>variable</th><th class="num">overall</th><th class="num">flagged pages</th><th>pages</th></tr>
+      ${Object.entries(heat).map(([vn, m]) => {
+        const stems = Object.keys(m).sort(natCmp);
+        let k = 0, n = 0, fl = 0;
+        stems.forEach(s => { k += m[s].k; n += m[s].n; if (m[s].flagged) fl++; });
+        const cells = stems.map(s => { const h = m[s];
+          const col = h.flagged ? '#f87171' : h.n >= 8 && h.share > 0.25 ? '#fbbf24' : h.n >= 8 && h.share > 0.18 ? '#a37a1b' : '#24365e';
+          return `<span title="${esc(s)}: ${h.k}/${h.n} end in 1" style="background:${col};cursor:pointer;" onclick="window.open('${editorUrl(s, null)}','_blank')"></span>`; }).join('');
+        return `<tr><td>${esc(vn)}</td><td class="num ${n && k / n > 0.15 ? 'warn' : 'dim'}">${n ? Math.round(100 * k / n) + '%' : '—'}</td>
+          <td class="num ${fl ? 'err' : 'dim'}">${fl}</td><td><div class="strip">${cells}</div></td></tr>`; }).join('')}
+      </table></div></div>`;
+  }
+
+  // findings browser
+  html += `<div class="card" id="findings"><h2>Findings</h2>
+    <div class="lead">Every open flag, worst first. “Open” shows the cell on the scan in the editor.
+    “✓ fix” writes the arithmetic-proven value into the Human layer — look at the scan first.
+    “✓ genuine” stops flagging a value that is correct as printed (until it is edited).</div>
+    <div class="chips" id="chips"></div><div id="flist"></div></div>`;
+
+  document.getElementById('main').innerHTML = html;
+  renderChips();
+  renderFindings();
+}
+
+function natCmp(a, b) { return a.localeCompare(b, undefined, {numeric: true}); }
+
+// ── variable panel + histograms ───────────────────────────────────────────
+function toggleVar(vn) {
+  const row = document.getElementById('vp-' + vn);
+  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+function varPanel(vn, v) {
+  const list = (arr) => (arr || []).map(r => `<tr>
+      <td class="num">${fmt(r.value)}</td><td>${esc(r.key || '')}</td>
+      <td>${r.idx != null ? `<img class="crop" loading="lazy" src="${cropUrl(r)}">` : ''}</td>
+      <td><a href="${editorUrl(r.stem, r.idx)}" target="_blank">open</a></td></tr>`).join('');
+  return `<div class="panel">
+    ${v.skipped ? `<div class="dim">Statistics skipped: ${esc(v.skipped)}</div>` : ''}
+    <div style="margin-bottom:8px;">${histSvg(v, 760, 150, true)}</div>
+    <div class="dim" style="font-size:0.74rem;margin-bottom:8px;">scale: ${esc(v.scale)}${v.zero_inflated ? ' · mostly zeros: tested on non-zero values' : ''}
+      · median digits: ${v.median_digits ?? '—'} · dashed lines = 1.5× IQR (mild), solid = 3× IQR (extreme)</div>
+    <div class="cols2"><div><b>10 largest</b><table>${list(v.top)}</table></div>
+    <div><b>10 smallest</b><table>${list(v.bottom)}</table></div></div></div>`;
+}
+
+function histSvg(v, W, H, full) {
+  const h = v.hist || {};
+  const counts = h.counts || [], edges = h.edges || [];
+  if (!counts.length) return '<span class="dim">—</span>';
+  const lo = edges[0], hi = edges[edges.length - 1];
+  const span = (hi - lo) || 1;
+  const pad = full ? 26 : 0, top = full ? 6 : 1;
+  const iw = W - (full ? 10 : 0), ih = H - pad - top;
+  const max = Math.max(...counts);
+  const x = t => (t - lo) / span * iw;
+  const bw = iw / counts.length;
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;max-width:100%;">`;
+  counts.forEach((c, i) => {
+    const bh = max ? Math.max(c ? 1 : 0, (full ? Math.sqrt(c / max) : c / max) * ih) : 0;
+    s += `<rect x="${(i * bw).toFixed(1)}" y="${(top + ih - bh).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${bh.toFixed(1)}" fill="#3b82f6" opacity="0.75"><title>${c}</title></rect>`;
+  });
+  if (full && v.fences) {
+    const line = (t, dash) => {
+      if (t < lo || t > hi) return '';
+      return `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${top + ih}" stroke="#fb923c" stroke-width="1" ${dash ? 'stroke-dasharray="3,3"' : ''}/>`;
+    };
+    s += line(v.fences.mild[0], true) + line(v.fences.mild[1], true) +
+         line(v.fences.extreme[0], false) + line(v.fences.extreme[1], false);
+  }
+  (v.flagged_t || []).forEach(t => {
+    s += `<line x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${top + ih - (full ? 14 : 8)}" y2="${top + ih}" stroke="#f87171" stroke-width="1.5"/>`;
+  });
+  if (full) {
+    // axis labels in original units (log1p scale → powers of ten)
+    const ticks = [];
+    if (v.scale === 'log') {
+      for (let p = 0; p <= 9; p++) {
+        const val = Math.pow(10, p), t = Math.log1p(val);
+        if (t >= lo && t <= hi) ticks.push([t, val >= 1e6 ? (val / 1e6) + 'M' : val >= 1e3 ? (val / 1e3) + 'k' : String(val)]);
+      }
+      if (lo <= 0.001) ticks.unshift([0, '0']);
+    } else {
+      for (let i = 0; i <= 4; i++) { const t = lo + span * i / 4; ticks.push([t, fmt(Math.round(t))]); }
+    }
+    ticks.forEach(([t, lbl]) => {
+      s += `<line x1="${x(t)}" x2="${x(t)}" y1="${top + ih}" y2="${top + ih + 4}" stroke="#667"/>` +
+           `<text x="${x(t)}" y="${top + ih + 16}" fill="#8a94a6" font-size="10" text-anchor="middle">${lbl}</text>`;
+    });
+  }
+  return s + '</svg>';
+}
+
+function trendSvg(runs) {
+  const W = 420, H = 60, n = runs.length;
+  const ys = runs.map(r => r.open || 0), max = Math.max(...ys, 1);
+  const pts = ys.map((y, i) => `${(i / (n - 1) * (W - 10) + 5).toFixed(1)},${(H - 14 - y / max * (H - 24) + 4).toFixed(1)}`).join(' ');
+  return `<div class="dim" style="font-size:0.74rem;">open flags over the last ${n} runs (${esc(runs[0].ts.slice(0, 10))} → ${esc(runs[n - 1].ts.slice(0, 10))}):
+    ${fmt(ys[0])} → <b style="color:#e0e0e0;">${fmt(ys[n - 1])}</b></div>
+    <svg width="${W}" height="${H}" style="display:block;max-width:100%;"><polyline points="${pts}" fill="none" stroke="#22c55e" stroke-width="2"/>
+    ${ys.map((y, i) => `<circle cx="${(i / (n - 1) * (W - 10) + 5).toFixed(1)}" cy="${(H - 14 - y / max * (H - 24) + 4).toFixed(1)}" r="2.5" fill="#22c55e"><title>${esc(runs[i].ts)}: ${y} open</title></circle>`).join('')}</svg>`;
+}
+
+// ── findings browser ──────────────────────────────────────────────────────
+function setFilter(chk) {
+  FILTER = chk;
+  renderChips(); renderFindings();
+  document.getElementById('findings')?.scrollIntoView({behavior: 'smooth'});
+}
+
+function renderChips() {
+  const el = document.getElementById('chips');
+  if (!el) return;
+  const byCheck = {};
+  (DATA.groups || []).forEach(g => { byCheck[g.check] = (byCheck[g.check] || 0) + g.count; });
+  const order = Object.keys(byCheck);
+  el.innerHTML = `<span class="chip ${FILTER == null ? 'on' : ''}" onclick="setFilter(null)">all (${fmt(DATA.findings_total)})</span>` +
+    order.map(c => `<span class="chip ${FILTER === c ? 'on' : ''}" onclick="setFilter('${c}')">${esc(cname(c))} (${fmt(byCheck[c])})</span>`).join('');
+}
+
+function renderFindings() {
+  const el = document.getElementById('flist');
+  if (!el) return;
+  const groups = (DATA.groups || []).filter(g => FILTER == null || g.check === FILTER);
+  if (!groups.length) { el.innerHTML = '<div class="empty">No open findings. 🎉</div>'; return; }
+  let html = '';
+  groups.forEach(g => {
+    const gi = DATA.groups.indexOf(g);
+    const shown = SHOW_N[gi] || 25;
+    html += `<div style="margin:12px 0 4px;"><b>${esc(cname(g.check))}</b>
+      <span class="dim">${esc(g.title)}</span> <span class="warn">× ${fmt(g.count)}</span></div>
+      <div class="scroll"><table><tr><th>where</th><th></th><th>value</th><th>problem</th><th></th></tr>`;
+    g.items.slice(0, shown).forEach((it, ii) => {
+      const sevCls = it.severity === 'error' ? 'err' : it.severity === 'extreme' ? 'ext' : it.severity === 'info' ? 'dim' : 'mild';
+      let act = it.stem ? `<a class="btn small" href="${editorUrl(it.stem, it.idx)}" target="_blank">open</a> ` : '';
+      if (it.fix) act += `<button class="btn small" style="color:#86efac;" title="Write ${esc(it.fix.value)} into Human${it.fix.who && it.fix.who !== 'the total itself' ? ' of ' + esc(it.fix.who) : ''}" onclick="applyFix(${gi},${ii},this)">✓ fix → ${esc(it.fix.value)}</button> `;
+      if (it.confirmable) act += `<button class="btn small" onclick="confirmFlag(${gi},${ii},this)">✓ ${it.check === 'identity' || it.check === 'totals' ? 'book is wrong' : 'genuine'}</button>`;
+      html += `<tr><td style="white-space:nowrap;">${esc(it.key || '')}<div class="dim" style="font-size:0.7rem;">${esc((it.stem || '').slice(-22))}${it.row_n != null ? ' · row ' + it.row_n : ''}</div></td>
+        <td>${it.idx != null ? `<img class="crop" loading="lazy" src="${cropUrl(it)}">` : ''}</td>
+        <td class="num" style="white-space:nowrap;">${esc(it.human || it.llm || it.ocr || it.value_text || '')}</td>
+        <td class="${sevCls}" style="font-size:0.78rem;" title="${esc(it.method ? 'method: ' + it.method + ' ' + JSON.stringify(it.params || {}) : '')}">${esc(it.detail || '')}</td>
+        <td style="white-space:nowrap;">${act}</td></tr>`;
+    });
+    html += '</table></div>';
+    if (g.items.length > shown)
+      html += `<button class="btn small" style="margin-top:4px;" onclick="SHOW_N[${gi}]=${shown + 100};renderFindings()">show more (${fmt(g.items.length - shown)} left)</button>`;
+    else if (g.count > g.items.length)
+      html += `<div class="dim" style="font-size:0.74rem;">${fmt(g.count - g.items.length)} more not shown (report cap) — fix these and re-run.</div>`;
+  });
+  el.innerHTML = html;
+}
+
+async function applyFix(gi, ii, btn) {
+  const it = DATA.groups[gi].items[ii], f = it.fix;
+  const params = new URLSearchParams({folder: FOLDER, stem: f.stem, idx: f.idx});
+  try {
+    const r = (f.row_i != null)
+      ? await fetch(`/api/page/shape/row-field?${params}`, {method: 'PATCH',
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({row_i: f.row_i, human: String(f.value)})})
+      : await fetch(`/api/page/shape?${params}`, {method: 'PATCH',
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify({human_corrected_text: String(f.value)})});
+    if (!r.ok) throw new Error(r.status);
+  } catch (e) { toast('Save failed — the fix was NOT stored'); return; }
+  btn.parentElement.innerHTML = '<span class="ok">fixed ✓ — re-run to re-check</span>';
+}
+
+async function confirmFlag(gi, ii, btn) {
+  const it = DATA.groups[gi].items[ii];
+  try {
+    const r = await fetch(`/api/dataset/${encodeURIComponent(DATASET)}/confirm?folder=${encodeURIComponent(FOLDER)}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({flag_id: it.flag_id, value_text: it.value_text || ''})});
+    if (!r.ok) { const m = await r.json().catch(() => ({})); throw new Error(m.detail || r.status); }
+  } catch (e) { toast('Confirm failed: ' + (e.message || e)); return; }
+  btn.parentElement.innerHTML = '<span class="dim">confirmed ✓</span>';
+}
+
+// ── appendix export ───────────────────────────────────────────────────────
+function exportAppendix() {
+  if (!DATA) { toast('Run the checks first'); return; }
+  const q = DATA.quality || {}, p = q.params || {};
+  const rows = [['check', 'type', 'method', 'parameters', 'flagged', 'corrected', 'confirmed_genuine', 'open']];
+  const params = {
+    outlier: `IQR mild ${p.iqr_mild}x / extreme ${p.iqr_extreme}x; MAD z>${p.mad_z}; log1p scale for non-negative variables; zero share>${p.zero_share} → non-zero values`,
+    digits: `>= median digits + ${p.digit_excess}`,
+    trailing1: `binomial vs 1/9, values with >= ${p.trailing_min_digits} digits, >= ${p.trailing_min_n} per page column, Bonferroni alpha ${p.trailing_alpha}, share >= ${p.trailing_min_ratio}x expected`,
+    totals: `best-suffix anchoring, >= max(3, ${p.totals_min_match} of variables) must match; tolerance ${p.tol}`,
+    identity: `tolerance ${p.tol}; dash = 0`,
+  };
+  (q.adjudication || []).forEach(r => rows.push([cname(r.check), (CHECKS[r.check] || {}).kind || '',
+    (CHECKS[r.check] || {}).desc || '', params[r.check] || '', r.flagged, r.corrected, r.confirmed, r.open]));
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], {type: 'text/csv'}));
+  a.download = `${DATASET}_cleaning_appendix.csv`;
+  a.click();
+}
+
+if (DATASET && FOLDER) runChecks();
+</script>
+</body>
+</html>

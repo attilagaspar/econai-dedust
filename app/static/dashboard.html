@@ -1096,7 +1096,20 @@ function renderDetail() {
         <button class="btn btn-primary" onclick="openDataLab()">🧪 Open Data Lab</button>
       </div>
     </div>
+
+    <!-- Data quality (dataset diagnostics + evaluation dashboard) -->
+    <div class="card" id="dq-card" style="display:none;">
+      <h3>📈 Data quality</h3>
+      <p style="font-size:0.82rem;color:#888;margin-bottom:10px;">
+        Checks every declared dataset of this project: printed totals and row sums
+        (exact), unusual values (statistics on a log scale), glued cells, and column
+        rules read as a trailing "1". Every flag links to the scan; confirmed and
+        corrected flags are tallied for the paper appendix.
+      </p>
+      <div id="dq-list" style="font-size:0.82rem;color:#aaa;"></div>
+    </div>
   `;
+  loadDataQualityCard();
 
   // Restore persisted training solver fields (they reset to defaults on render)
   _restoreTrainParams();
@@ -1304,6 +1317,31 @@ function openEditor() {
   const ann = activeProj.annotations_path.replaceAll('\\', '/');
   const labels = (activeProj.config.labels || []).join(',');
   window.location.href = `/static/index.html?folder=${encodeURIComponent(ann)}&labels=${encodeURIComponent(labels)}`;
+}
+
+async function loadDataQualityCard() {
+  const card = document.getElementById('dq-card');
+  if (!card || !activeProj) return;
+  const folder = activeProj.annotations_path.replaceAll('\\', '/');
+  try {
+    const d = await (await fetch(`/api/datasets?folder=${encodeURIComponent(folder)}`)).json();
+    const ds = d.datasets || [];
+    if (!ds.length) return;                     // no declarations → no card
+    card.style.display = '';
+    document.getElementById('dq-list').innerHTML = ds.map(x => x.error
+      ? `<div style="color:#e94560;">${x.name}: ⚠ ${x.error}</div>`
+      : `<div class="btn-row" style="align-items:center;gap:10px;margin-bottom:6px;">
+           <button class="btn btn-primary" onclick="openDataQuality('${x.name}')">📈 ${x.name}</button>
+           <span style="color:#667;">${x.variables} variables</span></div>`).join('');
+  } catch (e) { /* card stays hidden */ }
+}
+
+function openDataQuality(name) {
+  const folder = activeProj.annotations_path.replaceAll('\\', '/');
+  const labels = (activeProj.config.labels || []).join(',');
+  window.open(`/static/quality.html?folder=${encodeURIComponent(folder)}` +
+              `&dataset=${encodeURIComponent(name)}&project=${encodeURIComponent(activeProj.name)}` +
+              `&labels=${encodeURIComponent(labels)}`, '_blank');
 }
 
 function openDataLab() {

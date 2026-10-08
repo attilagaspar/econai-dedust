@@ -266,10 +266,13 @@ a free data point); 5–8 as the sources arrive.*
 
 ---
 
-## P11. Data-evaluation dashboard (added 2026-10-01)
+## P11. Data-evaluation dashboard (added 2026-10-01) — **BUILT 2026-10-07**
 
-*Decided 2026-10-07: built in ONE push together with dataset-layer Phase 2
-(the diagnostics). See 10_dataset_layer.md, Phasing item 2.*
+*Built in ONE push together with dataset-layer Phase 2 (the diagnostics):
+`app/static/quality.html`, opened from the project dashboard's 📈 Data
+quality card. Items 1, 3, 4, 5 built as specified; item 2 (trend) is the run
+history sparkline + per-check adjudication counts. Details and the
+calibration decisions: 10_dataset_layer.md, "Phase 2 as built".*
 
 One place that answers "how clean is my processed data?" without opening a
 single page. Aggregates what the dataset layer already (or soon) produces:

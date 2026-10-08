@@ -2,8 +2,8 @@
 
 *Plan drafted 2026-07-24 in the debug session, from Attila's request. Status:
 Phase 1 (declaration + builder + structure/parse checks + findings report)
-shipped 2026-09. Phase 2 specified in detail 2026-10-07 — see "Phase 2
-specification" below.*
+shipped 2026-09. Phase 2 (diagnostics + the P11 evaluation dashboard)
+BUILT 2026-10-07 — see "Phase 2 specification" and "Phase 2 as built" below.*
 
 ## Motivation
 
@@ -292,6 +292,80 @@ in the findings list.
   explain to a referee, and a flag that says "anomalous in 12 dimensions"
   is much slower to review against a crop than "this ratio jumped 40×".
   Revisit only if HB demonstrably misses error classes.
+
+## Phase 2 as built (2026-10-07)
+
+**Code**: `app/diagnostics.py` (pure checks; no scipy — binomial tail and the
+Student-t quantile for ESD are implemented in-module), wired in
+`_ds_run_diagnostics` in server.py; `POST /api/dataset/<name>/diagnose`
+returns the report groups plus a `quality` payload; `POST
+/api/dataset/<name>/confirm` records "genuine" / "book is wrong". UI:
+`app/static/quality.html` (opened from the dashboard's 📈 Data quality card;
+summary tiles, run trend, adjudication table + CSV appendix export, exact-
+check tables, per-variable histograms with fences and top/bottom 10 with
+crops, trailing-1 page strips, findings browser with open / ✓ fix /
+✓ genuine), and the editor report (`dataset_report.js`) gained the same
+badges and buttons. The editor accepts `?stem=&idx=` deep links. Tests:
+tests/test_diagnostics.py.
+
+**Declaration additions** (all optional):
+
+```jsonc
+"identities": [ {"total": "n_total", "parts": ["n_1_5", "n_5_50", …],
+                 "label": "number of holdings = sum of the size classes"} ],
+"totals":     { "row_pattern": "osszesen" },   // rows must ALSO match exclude_keys
+"diagnostics": { "report_mild": false, "trailing_min_digits": 2, … },  // DEFAULTS overrides
+// per variable:
+{ "name": "serial", …, "stats": false }          // no distribution tests
+{ "name": "x", …, "scale": "raw", "esd": true }
+```
+
+**Side files** next to the declaration: `<name>.confirmed.json`
+(confirmations, keyed by check|variable|stem|idx|row_i, valid only while the
+cell text is unchanged) and `<name>.diag_history.json` (run history + the
+flagged/corrected/confirmed/open bookkeeping; only full-dataset runs update
+it). Both travel with `push-project` / `pull-project` (datasets/ is pushed).
+
+**Design decisions taken during the build** (calibrated on foldbirtok1935,
+3,413 + 3,464 records):
+
+- **Exact checks name their culprit.** For a broken identity or printed
+  total, every cell is tested for "one OCR slip away" (one substitution,
+  insertion or deletion) from the value that would repair the arithmetic;
+  when exactly one cell qualifies, the finding carries a ✓ fix. Ambiguous
+  cases (e.g. 45 vs 41+5: three cells are each one digit off) get no
+  culprit — never a guess. When the fix is "drop a trailing 1", the finding
+  says "a column rule read as a trailing '1'" — the arithmetic-proven form
+  of check F.
+- **Printed totals use best-suffix anchoring, not header rows.** District
+  header rows are often stored as flat separator cells and vanish from the
+  record sequence, so header-based segmentation matched only 52 of 130
+  total rows. Instead, for each total row the run of K records above it
+  whose sums agree with the most variables is chosen; a total anchors only
+  when ≥3 and ≥50% of its variables match exactly (a chance majority over
+  10+ variables is practically impossible). Result: 108/130 anchored, and
+  the disagreements dropped from 474 cells to 93 real ones.
+- **The image-based "rule inside the box edge" probe was built, measured
+  and removed**: it fired on ~40% of ALL cells, ends-in-1 or not — no
+  evidence. Cell-level trailing-1 candidates are now listed only inside a
+  page column that shows a statistically significant excess.
+- **Last digits of ≥2-digit values are uniform** in this book (shares of
+  1–9: 0.104–0.119), so the trailing-1 test includes 2-digit values (where
+  "21 → 2" lives); default `trailing_min_digits` = 2. foldbirtok_main
+  shows no page-column excess (overall 11.3% ending in 1) — the test is
+  quiet when there is nothing, which is the point.
+- **Mild-only IQR hits are counted, not listed** (`report_mild` to list
+  them): heavy tails put ~2% of every variable past 1.5× IQR even on the
+  log scale; listing them buried the real errors (1,329 → ~820 listed).
+- **Dashes count as 0 in identities** (the books print "-" for zero); in
+  these books zeros are almost always dashes, so `zero_share` is ~0% and
+  the zero-inflation fallback rarely triggers here — it exists for sources
+  that print 0.
+- **First findings on real data**: decimal-comma misreads (`1,871` parsed
+  as 1.871 instead of 1871 — caught by identities as "factor 1000" with the
+  fix), district subtotal rows abbreviated "… j." entering as records
+  (exclude pattern `\sj\.?\s*$` added), and the `serial2 = serial` identity
+  as a direct detector of misaligned page pairs (47 / 64 mismatches).
 
 ## Phasing (each phase ships value alone)
 
