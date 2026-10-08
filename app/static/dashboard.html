@@ -777,14 +777,17 @@ async function selectProject(name) {
   renderGpuProfileDropdown();
   const prof = activeProj.config.server_profile;
   if (prof && gpuProfiles[prof]) _fillSrvFields(gpuProfiles[prof]);
-  // Populate "infer from" source dropdown with all OTHER projects
+  // Populate source dropdown: the project itself first (self-fine-tune:
+  // continue training the own model — runInferFrom still rejects it), then
+  // all other projects.
   const sel = document.getElementById('infer-from-src');
   if (sel) {
     const prev = sel.value;
     sel.innerHTML = '<option value="">— select source project —</option>' +
+      `<option value="${name}">${name} (this project's own model)</option>` +
       projects.filter(p => p.name !== name)
               .map(p => `<option value="${p.name}">${p.name}</option>`).join('');
-    if (prev && prev !== name) sel.value = prev;
+    if (prev) sel.value = prev;
   }
 }
 
