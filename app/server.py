@@ -9897,6 +9897,245 @@ def api_dataset_confirm(name: str, folder: str = Query(...),
     return {"ok": True, "confirmed": len(conf)}
 
 
+# ── Declaration editing (the editor's 📋 Dataset window) ─────────────────────
+
+_DS_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
+
+
+def _ds_check_name(name: str):
+    if not _DS_NAME_RE.match(name or ""):
+        raise HTTPException(status_code=400,
+                            detail="Dataset name: letters, digits, _ and - only")
+
+
+def _ds_decl_from_body(raw: dict) -> "DatasetDecl":
+    """Parse a declaration posted by the editor → (decl, problems). Pydantic
+    errors become a readable 400; semantic problems are returned, not raised
+    (the Test button shows them next to the build results)."""
+    try:
+        return DatasetDecl(**raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid declaration: {e}")
+
+
+class DatasetDeclBody(BaseModel):
+    declaration: dict
+
+
+@app.get("/api/dataset/{name}/declaration")
+def api_dataset_decl_get(name: str, folder: str = Query(...)):
+    _ds_check_name(name)
+    f = _datasets_dir(folder) / f"{name}.dataset.json"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail=f"No declaration '{name}'")
+    return {"name": name, "declaration": json.loads(f.read_text(encoding="utf-8"))}
+
+
+@app.put("/api/dataset/{name}/declaration")
+def api_dataset_decl_put(name: str, folder: str = Query(...),
+                         body: DatasetDeclBody = ...):
+    """Save a declaration (create or replace). Refuses invalid ones; the
+    previous version is kept as <name>.dataset.json.prev (one generation —
+    an accidental save is one rename away from undone)."""
+    _ds_check_name(name)
+    raw = dict(body.declaration)
+    raw["name"] = name
+    decl = _ds_decl_from_body(raw)
+    probs = _ds_decl_problems(decl)
+    if probs:
+        raise HTTPException(status_code=400, detail="; ".join(probs))
+    ddir = _datasets_dir(folder)
+    ddir.mkdir(parents=True, exist_ok=True)
+    f = ddir / f"{name}.dataset.json"
+    with _SHAPE_MERGE_LOCK:
+        if f.exists():
+            (ddir / f"{name}.dataset.json.prev").write_bytes(f.read_bytes())
+        f.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"ok": True, "name": name, "file": f.name}
+
+
+@app.delete("/api/dataset/{name}/declaration")
+def api_dataset_decl_delete(name: str, folder: str = Query(...)):
+    """Soft delete: renamed to <name>.dataset.json.deleted-<timestamp> (no
+    longer listed; the review history / confirmations stay untouched)."""
+    _ds_check_name(name)
+    ddir = _datasets_dir(folder)
+    f = ddir / f"{name}.dataset.json"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail=f"No declaration '{name}'")
+    dst = ddir / f"{name}.dataset.json.deleted-{time.strftime('%Y%m%d_%H%M%S')}"
+    f.rename(dst)
+    return {"ok": True, "moved_to": dst.name}
+
+
+class DatasetPageMapBody(BaseModel):
+    pattern: str = "1"
+    pages:   Optional[str] = None
+
+
+@app.post("/api/dataset/page-map")
+def api_dataset_page_map(folder: str = Query(...), body: DatasetPageMapBody = ...):
+    """Which page plays which slot under a pattern — in the builder's own page
+    order, so the editor's preview can never disagree with the build."""
+    d = _resolve_folder(folder)
+    stems = [p.stem for p in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+    bits = [1 if p.strip() == "1" else 0
+            for p in (body.pattern or "").split(",") if p.strip() != ""] or [1]
+    ranges = _parse_col_ranges(body.pages) if body.pages else None
+    slots = []
+    for i, s in enumerate(stems):
+        pos = i % len(bits)
+        in_range = ranges is None or any(lo <= i + 1 <= (hi if hi is not None else i + 1)
+                                         for lo, hi in ranges)
+        slot = sum(bits[:pos + 1]) if bits[pos] and in_range else None
+        slots.append(slot)
+    return {"stems": stems, "slots": slots, "n_slots": sum(bits)}
+
+
+@app.post("/api/dataset/preview")
+def api_dataset_preview(folder: str = Query(...), body: DatasetDeclBody = ...):
+    """The window's Test button: build the declared dataset WITHOUT saving and
+    report what it would produce — records, structure problems, per-variable
+    parse results with samples, identity hold rates, printed-total anchoring."""
+    from app import diagnostics as dg
+    raw = dict(body.declaration)
+    raw.setdefault("name", "preview")
+    decl = _ds_decl_from_body(raw)
+    probs = _ds_decl_problems(decl)
+    out = {"problems": probs}
+    if probs:
+        return out
+    d = _resolve_folder(folder)
+    rows, findings, stats = _ds_build(d, decl, keep_excluded=True)
+    records = [r for r in rows if not r.get("excluded")]
+    for r in rows:
+        t = r["key"].get("text") or ""
+        r["key"]["fold"] = (_unidecode(t) if _unidecode is not None else t).lower()
+    out.update(stats)
+    out["structure_n"] = len(findings)
+    out["structure_sample"] = [{"stem": f["stem"], "detail": f["detail"]} for f in findings[:12]]
+    out["excluded_sample"] = sorted({(r["key"].get("text") or "").strip()
+                                     for r in rows if r.get("excluded")})[:25]
+    var_out = []
+    for v in decl.variables:
+        c = {"ok": 0, "missing": 0, "error": 0, "absent": 0}
+        samples, errors = [], []
+        for rec in records:
+            val = rec["values"][v.name]
+            c[val["status"]] = c.get(val["status"], 0) + 1
+            if val["status"] == "ok" and len(samples) < 4:
+                samples.append(val["text"])
+            elif val["status"] == "error" and len(errors) < 3:
+                errors.append(val["text"])
+        var_out.append({"name": v.name, **c, "samples": samples, "errors": errors})
+    out["variables"] = var_out
+    P = dg.params(decl.diagnostics)
+    _, out["identities"] = dg.check_identities(
+        records, [i.model_dump() for i in decl.identities], P)
+    _, out["totals"] = dg.check_totals(
+        rows, decl.totals.model_dump() if decl.totals else None, decl.variables, P)
+    return out
+
+
+@app.post("/api/dataset/suggest-identities")
+def api_dataset_suggest_identities(folder: str = Query(...),
+                                   body: DatasetDeclBody = ...):
+    """Find the sums the book guarantees, from the data: for every numeric
+    variable T, every run of consecutive variables OF THE SAME TYPE as T
+    (declaration order, T excluded — so an int row number sitting between
+    two pages' area columns does not break the area run) is tested as
+    T = sum(run) over the records where all are readable (a dash counts as
+    0). Proposed when it holds in ≥ 80% of at least max(20, 2% of records)
+    testable rows — the remaining mismatches are then mostly transcription
+    errors, which is what the check is for. ≥ 95% is reported as "strong",
+    80–95% as "likely" (true identities in badly transcribed columns land
+    there — foldbirtok area_total: 82%). Runs of length 1 are equalities
+    (e.g. a row number printed on both pages of a spread)."""
+    import numpy as np
+    raw = dict(body.declaration)
+    raw.setdefault("name", "preview")
+    decl = _ds_decl_from_body(raw)
+    probs = _ds_decl_problems(decl)
+    if probs:
+        raise HTTPException(status_code=400, detail="; ".join(probs))
+    d = _resolve_folder(folder)
+    records, _, _ = _ds_build(d, decl)
+    nv = [v for v in decl.variables if v.dtype in ("int", "number")]
+    if len(nv) < 2 or not records:
+        return {"suggestions": [], "records": len(records)}
+    R, V = len(records), len(nv)
+    vals = np.zeros((R, V))
+    bad = np.zeros((R, V), dtype=np.int32)       # unreadable / structurally absent
+    ok = np.zeros((R, V), dtype=bool)            # a real printed number (for T)
+    for i, rec in enumerate(records):
+        for j, v in enumerate(nv):
+            x = rec["values"][v.name]
+            if x["status"] == "ok" and isinstance(x["value"], (int, float)):
+                vals[i, j] = x["value"]
+                ok[i, j] = True
+            elif x["status"] != "missing":
+                bad[i, j] = 1
+    min_test = max(20, int(0.02 * R))
+    existing = {(i.total, tuple(i.parts)) for i in decl.identities}
+    best: dict = {}
+    for dtype in ("int", "number"):
+        g = [j for j, v in enumerate(nv) if v.dtype == dtype]
+        G = len(g)
+        if G < 2:
+            continue
+        gv, gb, gok = vals[:, g], bad[:, g], ok[:, g]
+        P = np.concatenate([np.zeros((R, 1)), np.cumsum(gv, axis=1)], axis=1)
+        Q = np.concatenate([np.zeros((R, 1), dtype=np.int32), np.cumsum(gb, axis=1)], axis=1)
+        for t in range(G):
+            for a in range(G):
+                for b in range(a, min(G, a + 12)):
+                    if a <= t <= b:
+                        continue
+                    s = P[:, b + 1] - P[:, a]
+                    testable = gok[:, t] & ((Q[:, b + 1] - Q[:, a]) == 0)
+                    n = int(testable.sum())
+                    if n < min_test:
+                        continue
+                    # a run that is all zeros matches a zero total trivially
+                    if int((testable & (gv[:, t] != 0)).sum()) < min_test // 2:
+                        continue
+                    h = int((np.abs(s[testable] - gv[testable, t]) <= 0.51).sum())
+                    rate = h / n
+                    if rate < 0.8:
+                        continue
+                    tname = nv[g[t]].name
+                    best.setdefault(tname, []).append(
+                        {"total": tname, "parts": [nv[g[k]].name for k in range(a, b + 1)],
+                         "hold": h, "testable": n, "rate": round(rate, 4)})
+    # per total: the best run, plus a second one over DISJOINT columns (books
+    # often print the same total broken down two ways — by size class and by
+    # cultivation branch); an equality is listed in one direction only
+    chosen = []
+    seen_pairs = set()
+    for tname, cands in best.items():
+        cands.sort(key=lambda c: (c["rate"], c["testable"], len(c["parts"])), reverse=True)
+        picked = []
+        for c in cands:
+            if picked and set(c["parts"]) & set(picked[0]["parts"]):
+                continue
+            if len(c["parts"]) == 1:
+                pair = frozenset((tname, c["parts"][0]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+            picked.append(c)
+            if len(picked) == 2:
+                break
+        chosen += picked
+    out = []
+    for c in sorted(chosen, key=lambda c: (-c["testable"], -c["rate"])):
+        c["already_declared"] = (c["total"], tuple(c["parts"])) in existing
+        c["kind"] = "equality" if len(c["parts"]) == 1 else "sum"
+        c["strength"] = "strong" if c["rate"] >= 0.95 else "likely"
+        out.append(c)
+    return {"suggestions": out, "records": R}
+
+
 # ---------------------------------------------------------------------------
 # Root — redirect to dashboard
 # ---------------------------------------------------------------------------
