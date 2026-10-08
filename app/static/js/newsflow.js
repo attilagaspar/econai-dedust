@@ -525,6 +525,37 @@ function _nfUpdateGridBtns() {
   if (sp) sp.classList.toggle('active', flowSplitMode);
 }
 
+// Outer-edge targets. 'left' → every element anchored in the first column
+// (its x1 is the grid's left edge, wide breakers included); 'right' → every
+// element whose span ENDS in the last column (its x2 is the right edge).
+function _nfOuterVTargets(side) {
+  const items = _nfFlowItems();
+  const colsK = [...new Set(items.filter(x => (x.s.flow_span || 1) === 1)
+                                 .map(x => x.s.flow_column || 0))].sort((a, b) => a - b);
+  if (!colsK.length) return [];
+  if (side === 'left') {
+    const c0 = colsK[0];
+    return items.filter(x => (x.s.flow_column || 0) === c0);
+  }
+  const cN = colsK[colsK.length - 1];
+  return items.filter(x => ((x.s.flow_column || 0) + (x.s.flow_span || 1) - 1) === cN);
+}
+
+// Per-band top/bottom targets: the first (or last) element of every column of
+// that band — dragging the outer horizontal aligns them to one latitude.
+function _nfOuterHTargets(band, which) {
+  const groups = {};
+  _nfFlowItems().forEach(x => {
+    if ((x.s.flow_band || 0) !== band) return;
+    const c = x.s.flow_column || 0;
+    (groups[c] ??= []).push(x);
+  });
+  return Object.values(groups).map(list => {
+    list.sort((a, b) => _nfRect(a.s).y1 - _nfRect(b.s).y1);
+    return which === 'top' ? list[0] : list[list.length - 1];
+  });
+}
+
 // generic screen→image drag helper for grid lines
 let _nfDragging = false;
 function _nfDragStart(e, onMove, onDone) {
@@ -652,6 +683,68 @@ function _newsflowDrawGrid() {
       });
     });
   }
+
+  // outer vertical edges (drag = move that edge on every touching element)
+  if (ckeys.length) {
+    const outerSpec = [
+      { side: 'left',  x: cols[ckeys[0]].x1 },
+      { side: 'right', x: cols[ckeys[ckeys.length - 1]].x2 },
+    ];
+    const oy1 = Math.min(...ckeys.map(k => cols[k].y1));
+    const oy2 = Math.max(...ckeys.map(k => cols[k].y2));
+    outerSpec.forEach(spec => {
+      line(spec.x, oy1, spec.x, oy2, '#38bdf8', null, 'col-resize', hit => {
+        hit.addEventListener('mousedown', e => {
+          if (e.button !== 0) return;
+          pushUndo();
+          const targets = _nfOuterVTargets(spec.side);
+          const orig = new Map();
+          targets.forEach(z => orig.set(z.i, _nfRect(z.s)));
+          const lo = spec.side === 'left' ? 0
+                   : Math.max(...targets.map(z => orig.get(z.i).x1 + 15));
+          const hi = spec.side === 'left'
+                   ? Math.min(...targets.map(z => orig.get(z.i).x2 - 15))
+                   : (pageData.imageWidth || 1e9);
+          _nfDragStart(e, (dx) => {
+            const v = Math.max(lo, Math.min(hi, spec.x + dx));
+            targets.forEach(z => {
+              const r = orig.get(z.i);
+              _nfSetRect(z.s, spec.side === 'left' ? { ...r, x1: v } : { ...r, x2: v });
+            });
+          }, async () => { await replaceAllShapes(); });
+        });
+      });
+    });
+  }
+
+  // per-band outer horizontals (drag = align every column's first/last
+  // element of the band to one latitude)
+  bkeys.forEach(bk => {
+    const B = bands[bk];
+    [{ which: 'top', y: B.y1 }, { which: 'bottom', y: B.y2 }].forEach(spec => {
+      line(B.x1, spec.y, B.x2, spec.y, '#22c55e', '4,4', 'row-resize', hit => {
+        hit.addEventListener('mousedown', e => {
+          if (e.button !== 0) return;
+          pushUndo();
+          const targets = _nfOuterHTargets(bk, spec.which);
+          const orig = new Map();
+          targets.forEach(z => orig.set(z.i, _nfRect(z.s)));
+          const lo = spec.which === 'top' ? 0
+                   : Math.max(...targets.map(z => orig.get(z.i).y1 + 10));
+          const hi = spec.which === 'top'
+                   ? Math.min(...targets.map(z => orig.get(z.i).y2 - 10))
+                   : (pageData.imageHeight || 1e9);
+          _nfDragStart(e, (dx, dy) => {
+            const v = Math.max(lo, Math.min(hi, spec.y + dy));
+            targets.forEach(z => {
+              const r = orig.get(z.i);
+              _nfSetRect(z.s, spec.which === 'top' ? { ...r, y1: v } : { ...r, y2: v });
+            });
+          }, async () => { await replaceAllShapes(); });
+        });
+      });
+    });
+  });
 
   // per-column element boundaries (drag = resize both; Alt+click = merge)
   _nfGridBoundaries().forEach(b => {
