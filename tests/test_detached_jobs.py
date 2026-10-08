@@ -53,3 +53,63 @@ def test_still_running_requires_pid_file():
     cmd = _job_still_running_cmd(CN, PID)
     assert f"[ -f {PID} ]" in cmd
     assert "|| echo DONE" in cmd
+
+
+# ── force-upload: root-owned remote leftovers ────────────────────────────────
+# In-container jobs write as root (cocosplit's train/test.json before the
+# frozen-split era); the SSH user can't overwrite those, but the parent dir
+# is ours — so uploads must fall back to delete + retry, and failures must
+# name the destination.
+
+import pytest
+from app.server import _sftp_put_force, _sftp_write_force
+
+
+class _FakeSFTP:
+    """put/open raise PermissionError for paths in `locked` until removed."""
+    def __init__(self, locked=()):
+        self.locked = set(locked)
+        self.written, self.removed = [], []
+
+    def put(self, local, dest):
+        if dest in self.locked:
+            raise PermissionError(13, "Permission denied")
+        self.written.append(dest)
+
+    def remove(self, dest):
+        self.removed.append(dest)
+        self.locked.discard(dest)
+
+    def open(self, dest, mode):
+        if dest in self.locked:
+            raise PermissionError(13, "Permission denied")
+        sftp = self
+
+        class _FH:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def write(self, content): sftp.written.append(dest)
+        return _FH()
+
+
+def test_put_force_retries_after_remove():
+    sftp = _FakeSFTP(locked={"/srv/train.json"})
+    _sftp_put_force(sftp, "local.json", "/srv/train.json")
+    assert sftp.removed == ["/srv/train.json"]
+    assert sftp.written == ["/srv/train.json"]
+
+
+def test_put_force_error_names_destination():
+    class _Stubborn(_FakeSFTP):
+        def remove(self, dest):
+            raise PermissionError(13, "Permission denied")
+    with pytest.raises(RuntimeError, match="/srv/train.json"):
+        _sftp_put_force(_Stubborn(locked={"/srv/train.json"}),
+                        "local.json", "/srv/train.json")
+
+
+def test_write_force_retries_after_remove():
+    sftp = _FakeSFTP(locked={"/srv/x.sh"})
+    _sftp_write_force(sftp, b"#!/bin/bash\n", "/srv/x.sh")
+    assert sftp.removed == ["/srv/x.sh"]
+    assert sftp.written == ["/srv/x.sh"]

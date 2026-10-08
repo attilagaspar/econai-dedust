@@ -6741,6 +6741,37 @@ async def _sse_stream(gen):
                                       "X-Accel-Buffering": "no"})
 
 
+def _sftp_put_force(sftp, local: str, dest: str):
+    """sftp.put that survives a root-owned remote leftover: jobs running inside
+    the training container write as root (e.g. cocosplit's train/test.json
+    before the frozen-split era), and the SSH user can't OVERWRITE those — but
+    the parent dir is ours, so delete + re-upload works. Failures name the
+    destination; a bare 'PermissionError: [Errno 13]' in an SSE stream is
+    undebuggable."""
+    try:
+        sftp.put(local, dest)
+    except OSError:
+        try:
+            sftp.remove(dest)
+            sftp.put(local, dest)
+        except Exception as e:
+            raise RuntimeError(f"Upload failed for {dest}: {e}") from e
+
+
+def _sftp_write_force(sftp, content: bytes, dest: str):
+    """Same as _sftp_put_force for content written via sftp.open."""
+    try:
+        with sftp.open(dest, "wb") as fh:
+            fh.write(content)
+    except OSError:
+        try:
+            sftp.remove(dest)
+            with sftp.open(dest, "wb") as fh:
+                fh.write(content)
+        except Exception as e:
+            raise RuntimeError(f"Upload failed for {dest}: {e}") from e
+
+
 def _push_training_data_gen(name: str, srv: dict, passphrase: str,
                             skip_images: bool = False):
     """Generator: push images + COCO JSON + config + scripts, yielding progress lines."""
@@ -6774,13 +6805,13 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
             yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
             for i, img in enumerate(images, 1):
                 dest = f"{remote}/{name}/images/{img.name}"
-                sftp.put(str(img), dest)
+                _sftp_put_force(sftp, str(img), dest)
                 if i % 5 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name} → {dest}"
 
         dest = f"{remote}/{name}/annotations.json"
         yield f"[push] {inter/'annotations.json'} → {dest}"
-        sftp.put(str(inter / "annotations.json"), dest)
+        _sftp_put_force(sftp, str(inter / "annotations.json"), dest)
 
         # Frozen-test-set mode: the split was computed locally — upload it
         # (train.sh then skips cocosplit, so these files are authoritative).
@@ -6788,22 +6819,21 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
             if (inter / split).exists():
                 dest = f"{remote}/{name}/{split}"
                 yield f"[push] {inter/split} → {dest}  (frozen split)"
-                sftp.put(str(inter / split), dest)
+                _sftp_put_force(sftp, str(inter / split), dest)
 
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
         dest = f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
         yield f"[push] {cfg_local} → {dest}"
-        sftp.put(str(cfg_local), dest)
+        _sftp_put_force(sftp, str(cfg_local), dest)
 
         dest = f"{remote}/layout-model-training/tools/infer_layout.py"
         yield f"[push] infer_layout.py → {dest}"
-        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+        _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
         def sftp_put_lf(local: Path, remote_dest: str):
             """Upload a text file with LF line endings (strip Windows CRLF)."""
             content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            with sftp.open(remote_dest, "wb") as fh:
-                fh.write(content)
+            _sftp_write_force(sftp, content, remote_dest)
 
         dest_train = f"{remote}/layout-model-training/scripts/{name}.sh"
         dest_infer = f"{remote}/layout-model-training/scripts/{name}_infer.sh"
@@ -7128,23 +7158,22 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
             yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
             for i, img in enumerate(images, 1):
                 dest = f"{remote}/{name}/images/{img.name}"
-                sftp.put(str(img), dest)
+                _sftp_put_force(sftp, str(img), dest)
                 if i % 10 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name}"
 
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
         dest = f"{predict_root}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
         yield f"[push] config YAML → {dest}"
-        sftp.put(str(cfg_local), dest)
+        _sftp_put_force(sftp, str(cfg_local), dest)
 
         dest = f"{predict_root}/layout-model-training/tools/infer_layout.py"
         yield f"[push] infer_layout.py → {dest}"
-        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+        _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
         def sftp_put_lf(local: Path, remote_dest: str):
             content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            with sftp.open(remote_dest, "wb") as fh:
-                fh.write(content)
+            _sftp_write_force(sftp, content, remote_dest)
 
         def sftp_put_infer_sh(local: Path, remote_dest: str):
             """Upload infer.sh, patching all /workspace/ paths to include ws_prefix.
@@ -7155,8 +7184,7 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
             if ws_prefix:
                 content = content.replace(b"/workspace/",
                                           f"/workspace/{ws_prefix}/".encode())
-            with sftp.open(remote_dest, "wb") as fh:
-                fh.write(content)
+            _sftp_write_force(sftp, content, remote_dest)
 
         dest_infer = f"{predict_root}/layout-model-training/scripts/{name}_infer.sh"
         yield f"[push] infer.sh → {dest_infer}" + (f" (ws_prefix='{ws_prefix}')" if ws_prefix else "")
@@ -7340,14 +7368,14 @@ def _push_infer_from_gen(new_name: str, source_name: str,
             total = len(images)
             yield f"[infer-from] Uploading {total} image(s) → {remote}/{new_name}/images/"
             for i, img in enumerate(images, 1):
-                sftp.put(str(img), f"{remote}/{new_name}/images/{img.name}")
+                _sftp_put_force(sftp, str(img), f"{remote}/{new_name}/images/{img.name}")
                 if i % 10 == 0 or i == total:
                     yield f"[infer-from]   {i}/{total}  {img.name}"
 
         # Upload the inference tool
         dest = f"{predict_root}/layout-model-training/tools/infer_layout.py"
         yield f"[infer-from] infer_layout.py → {dest}"
-        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+        _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
         # Build an infer script: source model weights/config, new project images/output
         pfx = (ws_prefix + "/") if ws_prefix else ""
@@ -7373,8 +7401,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
 
         script_dest = f"{predict_root}/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
         yield f"[infer-from] script → {script_dest}"
-        with sftp.open(script_dest, "wb") as fh:
-            fh.write(script)
+        _sftp_write_force(sftp, script, script_dest)
 
         yield "[infer-from] All files uploaded successfully."
     finally:
@@ -7600,8 +7627,9 @@ echo "=== Fine-tune complete ==="
                 try:
                     dest = f"{remote}/layout-model-training/scripts/{name}_finetune_from_{source}.sh"
                     yield f"[ft] finetune script → {dest}"
-                    with sftp2.open(dest, "wb") as fh:
-                        fh.write(ft_script.replace("\r\n", "\n").encode())
+                    _sftp_write_force(sftp2,
+                                      ft_script.replace("\r\n", "\n").encode(),
+                                      dest)
                 finally:
                     sftp2.close()
                     c2.close()
