@@ -193,6 +193,29 @@ def test_parse_d2_metrics_takes_last_eval():
     assert training_meta.parse_d2_metrics("no eval here") is None
 
 
+def test_parse_d2_metrics_skips_nan():
+    # Detectron2 reports NaN for empty AP buckets (APs with no small boxes);
+    # json.dumps writes it, so it must be filtered or the ledger poisons the
+    # strict-JSON API response.
+    text = json.dumps({"iteration": 2000, "bbox/AP": 41.1,
+                       "bbox/APs": float("nan"), "bbox/APl": 41.2})
+    ap = training_meta.parse_d2_metrics(text)
+    assert ap["AP"] == 41.1 and ap["APl"] == 41.2
+    assert "APs" not in ap
+
+
+def test_load_ledger_sanitizes_nan(tmp_path):
+    # A ledger written before the NaN filter existed: load must return
+    # strict-JSON-safe rows (NaN → None), not 500 the training-log endpoint.
+    training_meta.ledger_path(tmp_path).write_text(
+        json.dumps([{"id": "x", "ap": {"AP": 41.1, "APs": float("nan")}}]),
+        encoding="utf-8")
+    rows = training_meta.load_ledger(tmp_path)
+    assert rows[0]["ap"]["APs"] is None
+    assert rows[0]["ap"]["AP"] == 41.1
+    json.dumps(rows, allow_nan=False)   # must not raise
+
+
 # ── corrections-per-page scorer ──────────────────────────────────────────────
 
 def test_eval_diff_added_deleted_moved(tmp_path):

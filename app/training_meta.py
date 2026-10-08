@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from pathlib import Path
 
@@ -145,13 +146,27 @@ def ledger_path(pdir: Path) -> Path:
     return pdir / LEDGER_FILE
 
 
+def _finite(obj):
+    """Replace non-finite floats (NaN/inf) with None, recursively. Detectron2
+    reports NaN for empty AP buckets (e.g. APs with no small boxes); Python's
+    json module writes and reads it, but strict JSON (FastAPI responses)
+    refuses it — so the ledger must never carry one."""
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: _finite(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_finite(v) for v in obj]
+    return obj
+
+
 def load_ledger(pdir: Path) -> list[dict]:
     p = ledger_path(pdir)
     if not p.exists():
         return []
     try:
         rows = json.loads(p.read_text(encoding="utf-8"))
-        return rows if isinstance(rows, list) else []
+        return _finite(rows) if isinstance(rows, list) else []
     except Exception:
         return []
 
@@ -263,7 +278,8 @@ def parse_d2_metrics(text: str) -> dict | None:
         return None
     out = {}
     for k, v in best.items():
-        if k.startswith("bbox/") and isinstance(v, (int, float)):
+        if (k.startswith("bbox/") and isinstance(v, (int, float))
+                and math.isfinite(v)):
             out[k[len("bbox/"):]] = round(float(v), 2)
     out["iteration"] = best.get("iteration")
     return out or None
