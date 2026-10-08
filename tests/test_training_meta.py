@@ -288,6 +288,87 @@ def test_training_log_endpoint(client, api_proj):
     assert r.json()["rows"][0]["mode"] == "train"
 
 
+# ── reconcile-on-read: stale "running" rows get closed ───────────────────────
+
+class _FakeSSHClient:
+    """Canned replies by command substring; records the commands it saw."""
+    def __init__(self, replies, seen):
+        self.replies, self.seen = replies, seen
+
+    def exec_command(self, cmd):
+        import io
+        self.seen.append(cmd)
+        for sub, reply in self.replies:
+            if sub in cmd:
+                return None, io.BytesIO(reply.encode()), None
+        return None, io.BytesIO(b""), None
+
+    def close(self):
+        pass
+
+
+def _stale_running_row(pdir, mode="train", **extra):
+    rid = training_meta.ledger_append(pdir, {"mode": mode, **extra})
+    training_meta.ledger_update(pdir, rid, started="2026-01-01T00:00:00")
+    return rid
+
+
+@pytest.fixture()
+def fake_ssh(monkeypatch):
+    """Patch ssh_ops._client and the server cfg; test sets .replies."""
+    from app import server, ssh_ops
+    seen, state = [], {"replies": []}
+    monkeypatch.setattr(ssh_ops, "_client",
+                        lambda *a, **k: _FakeSSHClient(state["replies"], seen))
+    monkeypatch.setattr(server, "_server_cfg",
+                        lambda name: {"host": "h", "user": "u", "key_path": "k",
+                                      "remote_path": "/workspace"})
+    state["seen"] = seen
+    return state
+
+
+def test_reconcile_closes_finished_run(api_proj, fake_ssh):
+    from app.server import _reconcile_running_ledger_rows
+    pdir = PROJECTS_ROOT / api_proj
+    _stale_running_row(pdir)
+    metrics = json.dumps({"iteration": 2000, "bbox/AP": 55.5,
+                          "bbox/APs": float("nan")})
+    fake_ssh["replies"] = [("echo RUNNING || echo STOPPED", "STOPPED"),
+                           ("stat -c %Y", "1767225600"),   # 2026 — after started
+                           ("tail -c 200000", metrics)]
+    assert _reconcile_running_ledger_rows(api_proj, pdir) is True
+    row = training_meta.load_ledger(pdir)[-1]
+    assert row["status"] == "finished"
+    assert row["ap"]["AP"] == 55.5 and "APs" not in row["ap"]
+
+
+def test_reconcile_marks_interrupted_when_metrics_predate_run(api_proj, fake_ssh):
+    from app.server import _reconcile_running_ledger_rows
+    pdir = PROJECTS_ROOT / api_proj
+    _stale_running_row(pdir, mode="finetune", source="other")
+    fake_ssh["replies"] = [("echo RUNNING || echo STOPPED", "STOPPED"),
+                           ("stat -c %Y", "100")]          # 1970 — stale metrics
+    assert _reconcile_running_ledger_rows(api_proj, pdir) is True
+    row = training_meta.load_ledger(pdir)[-1]
+    assert row["status"] == "interrupted"
+    assert "ap" not in row
+    # the probe targeted the fine-tune pid + script
+    assert any("_ft.pid" in c and "_finetune_from_other.sh" in c
+               for c in fake_ssh["seen"])
+
+
+def test_reconcile_leaves_live_and_fresh_rows(api_proj, fake_ssh):
+    from app.server import _reconcile_running_ledger_rows
+    pdir = PROJECTS_ROOT / api_proj
+    _stale_running_row(pdir)                                # stale but ALIVE
+    training_meta.ledger_append(pdir, {"mode": "train"})    # fresh — age-guarded
+    fake_ssh["replies"] = [("echo RUNNING || echo STOPPED", "RUNNING")]
+    assert _reconcile_running_ledger_rows(api_proj, pdir) is False
+    assert all(r["status"] == "running" for r in training_meta.load_ledger(pdir))
+    # the fresh row must not even be probed (exactly one probe sent)
+    assert len(fake_ssh["seen"]) == 1
+
+
 def test_test_eval_endpoint_requires_frozen_set(client, api_proj):
     r = client.post(f"/api/project/{api_proj}/test-eval", json={})
     assert r.status_code == 400

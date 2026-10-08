@@ -1285,6 +1285,8 @@ async function loadTrainingLog() {
       const cpp   = r.test_eval ? r.test_eval.corrections_per_page : '—';
       const stat  = r.status === 'running'
         ? '<span style="color:#f0c040;">running</span>'
+        : r.status === 'interrupted'
+        ? '<span style="color:#e94560;" title="the job is gone and no eval scores postdate the launch — it crashed or was killed">interrupted</span>'
         : '<span style="color:#22c55e;">done</span>';
       const unfiltered = r.status_filter === false
         ? ' <span style="color:#e94560;" title="trained on ALL pages incl. uncorrected predictions">⚠unfiltered</span>' : '';

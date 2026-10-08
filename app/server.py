@@ -6541,10 +6541,95 @@ def api_test_set_unfreeze(name: str):
             "removed": training_meta.unfreeze_test_set(project_dir(name))}
 
 
+RECONCILE_MIN_AGE_S = 15 * 60   # a younger "running" row may still be pushing
+                                # data / launching — don't race the launch
+
+
+def _reconcile_running_ledger_rows(name: str, pdir: Path) -> bool:
+    """P10.3 gap-closer: the ledger's completion update rides on the SSE
+    stream, so a detached training that outlives the browser connection leaves
+    a forever-"running" row. On listing, probe each stale running row's pid on
+    the GPU server (same pid-file + cmdline check the re-attach uses): still
+    alive → leave it; gone → close the row, attaching the final eval scores
+    from metrics.json when they postdate the row's start ("finished"),
+    otherwise marking it "interrupted". Best-effort: SSH trouble leaves rows
+    untouched. Returns True if any row changed."""
+    from app import ssh_ops, training_meta
+    rows = training_meta.load_ledger(pdir)
+    now = time.time()
+
+    def _epoch(ts: str) -> float:
+        try:
+            return time.mktime(time.strptime(ts or "", "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            return 0.0
+
+    stale = [r for r in rows if r.get("status") == "running"
+             and now - _epoch(r.get("started")) > RECONCILE_MIN_AGE_S]
+    if not stale:
+        return False
+
+    srv = _server_cfg(name)
+    passphrase = srv.get("passphrase")
+    remote = srv["remote_path"].rstrip("/")
+
+    def _quick(cmd: str) -> str:
+        c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+        _, out, _ = c.exec_command(cmd)
+        result = out.read().decode(errors="replace").strip()
+        c.close()
+        return result
+
+    changed = False
+    for r in stale:
+        if r.get("mode") == "finetune":
+            pid_path    = f"/workspace/layout-model-training/logs/{name}_ft.pid"
+            script_path = (f"/workspace/layout-model-training/scripts/"
+                           f"{name}_finetune_from_{r.get('source', '')}.sh")
+        else:
+            pid_path    = f"/workspace/layout-model-training/logs/{name}_train.pid"
+            script_path = f"/workspace/layout-model-training/scripts/{name}.sh"
+        try:
+            status = _quick(_job_running_cmd(_train_container(srv),
+                                             pid_path, script_path))
+        except Exception:
+            return changed          # server unreachable — leave the rest alone
+        if "RUNNING" in status:
+            continue
+        # Job is gone: close the row. Scores only count when metrics.json was
+        # written AFTER this row started — an older file belongs to a previous
+        # run and must not dress up a crashed launch as a finished one.
+        fields = {"finished": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        ap = None
+        try:
+            metrics_path = (f"{remote}/layout-model-training/outputs/{name}/"
+                            f"fast_rcnn_R_50_FPN_3x/metrics.json")
+            mt = _quick(f"stat -c %Y {metrics_path} 2>/dev/null || true")
+            if mt.isdigit() and int(mt) > _epoch(r.get("started")):
+                from app.training_meta import parse_d2_metrics
+                text = _quick(f"tail -c 200000 {metrics_path} 2>/dev/null || true")
+                ap = parse_d2_metrics(text)
+                fields["finished"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%S", time.localtime(int(mt)))
+        except Exception:
+            ap = None
+        fields["status"] = "finished" if ap else "interrupted"
+        if ap:
+            fields["ap"] = ap
+        training_meta.ledger_update(pdir, r["id"], **fields)
+        changed = True
+    return changed
+
+
 @app.get("/api/project/{name}/training-log")
 def api_training_log(name: str):
     from app import training_meta
-    rows = training_meta.load_ledger(project_dir(name))
+    pdir = project_dir(name)
+    try:
+        _reconcile_running_ledger_rows(name, pdir)
+    except Exception:
+        pass                        # reconcile never breaks the listing
+    rows = training_meta.load_ledger(pdir)
     return {"rows": list(reversed(rows))}
 
 
