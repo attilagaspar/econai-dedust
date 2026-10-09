@@ -383,6 +383,53 @@ def check_totals(rows, totals_spec, variables, p):
     return findings, st
 
 
+# ── A3: declared ratio rules (operands joinable across datasets) ─────────────
+
+def check_ratios(records, ratios, lookup, p):
+    """ratios: [{"num", "den", "min", "max", "min_den", "label"}]. num/den
+    are variable names, or references into another dataset ("dataset:var")
+    or project ("project/dataset:var") — those are resolved by `lookup(rec,
+    spec) → (value-dict | None, anchor_is_local)`, joining on the resolved
+    entity key id (the server supplies it; this module stays IO-free). A
+    record where either side is missing, unparsed or unjoined is untestable —
+    those states have their own findings already. The finding anchors at
+    whichever operand's cell is in the current project so the crop and the
+    jump work. Returns (findings, stats_by_ratio)."""
+    findings, stats = [], []
+    for rt in ratios or []:
+        lbl = rt.get("label") or f"{rt['num']} / {rt['den']}"
+        lo, hi = rt.get("min"), rt.get("max")
+        min_den = rt.get("min_den") or 0
+        st = {"ratio": lbl, "ok": 0, "violation": 0, "untestable": 0}
+        for rec in records:
+            nvd, nloc = lookup(rec, rt["num"])
+            dvd, dloc = lookup(rec, rt["den"])
+            if (not nvd or nvd.get("status") != "ok"
+                    or not dvd or dvd.get("status") != "ok"
+                    or dvd["value"] <= 0 or dvd["value"] < min_den):
+                st["untestable"] += 1
+                continue
+            r = nvd["value"] / dvd["value"]
+            if (hi is not None and r > hi) or (lo is not None and r < lo):
+                st["violation"] += 1
+                anchor = nvd if nloc else (dvd if dloc else nvd)
+                bounds = f"[{_num_str(lo) if lo is not None else '…'}, " \
+                         f"{_num_str(hi) if hi is not None else '…'}]"
+                findings.append({
+                    "check": "ratio", "variable": rt["num"], "severity": "extreme",
+                    "ref": anchor, "rec": rec,
+                    "detail": f"{rt['num']} = {_num_str(nvd['value'])} over "
+                              f"{rt['den']} = {_num_str(dvd['value'])} → "
+                              f"{r:.3g}, outside {bounds}",
+                    "group_title": f"Ratio outside bounds: {lbl}",
+                    "method": "ratio",
+                    "params": {"min": lo, "max": hi, "min_den": min_den}})
+            else:
+                st["ok"] += 1
+        stats.append(st)
+    return findings, stats
+
+
 # ── B–E, G: per-variable distribution checks ─────────────────────────────────
 
 def _scale_of(var, values):

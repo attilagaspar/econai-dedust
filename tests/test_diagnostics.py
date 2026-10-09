@@ -295,3 +295,53 @@ def test_diagnose_endpoint_phase2_confirm_and_history(client, ds_proj):
     assert "identity" not in {g["check"] for g in d2["groups"]}
     assert d2["quality"]["confirmed_n"] >= 1
     assert len(d2["quality"]["runs"]) == 2
+
+
+# ── A3: ratio rules ──────────────────────────────────────────────────────────
+
+def _local_lookup(rec, spec):
+    assert ":" not in spec, "unit tests use local operands"
+    return rec["values"].get(spec), True
+
+
+def test_ratio_bounds_and_untestable():
+    ratios = [{"num": "a", "den": "b", "max": 2.0, "min": 0.5,
+               "min_den": 5, "label": "a per b"}]
+    records = [
+        rec("ok",       a=val(10), b=val(10)),            # 1.0 in bounds
+        rec("high",     a=val(100), b=val(10)),           # 10 > max
+        rec("low",      a=val(1), b=val(10)),             # 0.1 < min
+        rec("tiny_den", a=val(10), b=val(2)),             # den < min_den
+        rec("missing",  a=val(None, status="missing"), b=val(10)),
+        rec("zero_den", a=val(10), b=val(0)),
+    ]
+    findings, stats = dg.check_ratios(records, ratios, _local_lookup, P)
+    assert [f["rec"]["key"]["text"] for f in findings] == ["high", "low"]
+    assert all(f["check"] == "ratio" and f["severity"] == "extreme"
+               for f in findings)
+    assert "10" in findings[0]["detail"] and "a per b" in findings[0]["group_title"]
+    st = stats[0]
+    assert (st["ok"], st["violation"], st["untestable"]) == (1, 2, 3)
+
+
+def test_ratio_anchor_prefers_local_side():
+    # numerator remote (not local), denominator local → anchor at denominator
+    def lookup(r, spec):
+        if spec == "remote_num":
+            return val(100, stem="OTHER"), False
+        return r["values"].get(spec), True
+    records = [rec("k", b=val(10))]
+    findings, _ = dg.check_ratios(
+        records, [{"num": "remote_num", "den": "b", "max": 2}], lookup, P)
+    assert findings and findings[0]["ref"]["stem"] == "p1"   # the local cell
+
+
+def test_ratio_unjoined_remote_is_untestable():
+    def lookup(r, spec):
+        if ":" in spec:
+            return None, False                    # no row with this key there
+        return r["values"].get(spec), True
+    records = [rec("k", b=val(10))]
+    findings, stats = dg.check_ratios(
+        records, [{"num": "other:x", "den": "b", "max": 1}], lookup, P)
+    assert not findings and stats[0]["untestable"] == 1

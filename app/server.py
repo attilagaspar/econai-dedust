@@ -9163,6 +9163,21 @@ class DatasetTotals(BaseModel):
     min_match:   Optional[float] = None
 
 
+class DatasetRatio(BaseModel):
+    """num/den must fall in [min, max] per record. An operand is a variable
+    name, or a reference into another dataset ("dataset:var") or project
+    ("project/dataset:var") — resolved by joining on the entity key id, which
+    is what makes tractors-vs-acreage checks across books possible. Records
+    where either side is missing/unparsed/unjoined are untestable (those
+    states have their own findings)."""
+    num:     str
+    den:     str
+    min:     Optional[float] = None
+    max:     Optional[float] = None
+    min_den: float = 0.0               # skip tiny denominators (ratio explodes)
+    label:   Optional[str] = None
+
+
 class DatasetDecl(BaseModel):
     name:      str
     version:   int = 1
@@ -9172,6 +9187,7 @@ class DatasetDecl(BaseModel):
     parse:     DatasetParseConv = DatasetParseConv()
     identities:  List[DatasetIdentity] = []
     totals:      Optional[DatasetTotals] = None
+    ratios:      List[DatasetRatio] = []
     diagnostics: dict = {}             # overrides of diagnostics.DEFAULTS
 
 
@@ -9217,6 +9233,13 @@ def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
             re.compile(decl.totals.row_pattern, re.IGNORECASE)
         except re.error as e:
             probs.append(f"totals.row_pattern: invalid regex ({e})")
+    for rt in decl.ratios:
+        lbl = rt.label or f"{rt.num} / {rt.den}"
+        if rt.min is None and rt.max is None:
+            probs.append(f"ratio '{lbl}': needs min and/or max")
+        for spec in (rt.num, rt.den):
+            if ":" not in spec and spec not in var_names:
+                probs.append(f"ratio '{lbl}': unknown variable '{spec}'")
     for v in decl.variables:
         if v.scale not in (None, "log", "raw"):
             probs.append(f"variable '{v.name}': scale must be 'log' or 'raw'")
@@ -9765,13 +9788,13 @@ _DS_MAX_ITEMS = 6000                   # payload cap, like the duplicate report
 
 # report order: exact errors first, then statistics, then bookkeeping
 _DS_CHECK_ORDER = {"structure": 0, "parse": 1, "range": 2, "identity": 3,
-                   "totals": 4, "trailing1_cell": 5, "outlier": 6, "digits": 7,
-                   "trailing1": 8, "unresolved": 9, "key": 10,
-                   "duplicate_key": 11, "totals_unanchored": 12}
+                   "totals": 4, "ratio": 5, "trailing1_cell": 6, "outlier": 7,
+                   "digits": 8, "trailing1": 9, "unresolved": 10, "key": 11,
+                   "duplicate_key": 12, "totals_unanchored": 13}
 # checks a reviewer may mark "confirmed genuine" (statistical / arithmetic
 # flags — a parse error or a structure mismatch is never "genuine")
 _DS_CONFIRMABLE = {"outlier", "digits", "trailing1", "trailing1_cell",
-                   "identity", "totals", "totals_unanchored", "range"}
+                   "identity", "totals", "totals_unanchored", "range", "ratio"}
 
 
 def _ds_side_path(folder: str, name: str, kind: str) -> Path:
@@ -9795,6 +9818,49 @@ def _ds_side_save(folder: str, name: str, kind: str, data: dict):
     p = _ds_side_path(folder, name, kind)
     p.parent.mkdir(parents=True, exist_ok=True)
     _write_json(p, data)
+
+
+def _ds_ratio_lookup(d: Path):
+    """Operand resolver for diagnostics.check_ratios. A plain variable name
+    reads the record itself; "dataset:var" / "project/dataset:var" builds
+    that dataset once (full scope — its pages don't correspond to this run's
+    page range) and joins on the resolved entity key id. → (value-dict |
+    None, anchor_is_local): a cross-PROJECT operand's cell can't be cropped
+    or jumped to from here, so the finding anchors at the local side."""
+    cache: dict = {}
+
+    def lookup(rec, spec):
+        left, sep, var = spec.rpartition(":")
+        if not sep:
+            return (rec["values"] or {}).get(spec), True
+        proj, _slash, dsname = left.rpartition("/")
+        ck = (proj or None, dsname)
+        if ck not in cache:
+            base = d if not proj else d.parent.parent / proj / "annotations"
+            if not base.exists():
+                raise HTTPException(status_code=400,
+                                    detail=f"ratio '{spec}': annotations folder for "
+                                           f"project '{proj}' not found ({base})")
+            decl2 = _ds_load_decl(str(base), dsname)
+            rows2, _f2, _s2 = _ds_build(base, decl2)
+            idx = {}
+            for r2 in rows2:
+                kid = r2["key"].get("id")
+                if kid and kid not in idx:    # dups are that dataset's findings
+                    idx[kid] = r2
+            cache[ck] = (idx, {v.name for v in decl2.variables})
+        idx, names2 = cache[ck]
+        if var not in names2:
+            raise HTTPException(status_code=400,
+                                detail=f"ratio '{spec}': dataset '{dsname}' has no "
+                                       f"variable '{var}'")
+        kid = rec["key"].get("id")
+        other = idx.get(kid) if kid else None
+        if other is None:
+            return None, not proj
+        return other["values"].get(var), not proj
+
+    return lookup
 
 
 def _ds_run_diagnostics(folder: str, name: str, pages: Optional[str] = None,
@@ -9888,6 +9954,11 @@ def _ds_run_diagnostics(folder: str, name: str, pages: Optional[str] = None,
         f_tot, tot_stats = dg.check_totals(
             rows, decl.totals.model_dump() if decl.totals else None, decl.variables, P)
         raw += f_tot
+        f_rat, rat_stats = dg.check_ratios(
+            records, [r.model_dump() for r in decl.ratios],
+            _ds_ratio_lookup(d), P)
+        raw += f_rat
+        quality["ratios"] = rat_stats
         f_dist, var_stats = dg.check_distributions(records, decl.variables, P)
         raw += f_dist
         f_t1, heat = dg.check_trailing_one(records, decl.variables, var_stats, P)

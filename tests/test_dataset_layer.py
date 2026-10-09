@@ -439,3 +439,119 @@ def test_keyed_join_mismatches_are_loud(client, keyed_folder):
     b = client.get("/api/dataset/smoke_keyed/build",
                    params={"folder": str(keyed_folder)}).json()
     assert all(rec["key"]["text"] != "Dupla" for rec in b["records"])
+
+
+# ── Ratio rules (declaration "ratios": joined across datasets by entity id) ──
+
+def _ratio_project(root, proj_name, ds_name, varname, rows, ratios=None):
+    """Single-slot project: key col 2 (authority-resolved), one numeric
+    variable in col 3. rows = [(key, value)]."""
+    ann = root / proj_name / "annotations"
+    ann.mkdir(parents=True)
+    dsd = root / proj_name / "datasets"
+    dsd.mkdir()
+    decl = {"name": ds_name,
+            "scope": {"labels": ["cell"], "pattern": "1", "tables": [0]},
+            "record": {"unit": "internal_row",
+                       "key": {"slot": 1, "column": 2, "dtype": "entity"}},
+            "variables": [
+                {"name": "settlement", "slot": 1, "column": 2, "dtype": "entity"},
+                {"name": varname, "slot": 1, "column": 3, "dtype": "number"}]}
+    if ratios is not None:
+        decl["ratios"] = ratios
+    (dsd / f"{ds_name}.dataset.json").write_text(
+        json.dumps(decl, ensure_ascii=False), encoding="utf-8")
+    shapes = [
+        _cell(1, 2, rows=[{"human": k, "auth": _auth("ID_" + k, k)}
+                          for k, _v in rows]),
+        _cell(1, 3, rows=[{"human": str(v)} for _k, v in rows]),
+    ]
+    (ann / "p1.json").write_text(json.dumps(
+        {"shapes": shapes, "flags": {}, "imagePath": "p1.jpg",
+         "imageWidth": 900, "imageHeight": 500}), encoding="utf-8")
+    Image.new("RGB", (900, 500), "white").save(ann / "p1.jpg")
+    return ann
+
+
+def _ratio_items(d):
+    return [it for g in d["groups"] if g["check"] == "ratio" for it in g["items"]]
+
+
+def test_ratio_cross_dataset_same_project(client, tmp_path):
+    # denominator dataset: acreage; numerator dataset declares the rule.
+    # Alfa 5/1000 ok · Beta 400/10 violates · Gamma joins nowhere → untestable
+    _ratio_project(tmp_path, "proj", "land", "area_total",
+                   [("Alfa", 1000), ("Beta", 10)])
+    ann = tmp_path / "proj" / "annotations"
+    dsd = tmp_path / "proj" / "datasets"
+    mach = {"name": "mach",
+            "scope": {"labels": ["mcell"], "pattern": "1", "tables": [0]},
+            "record": {"unit": "internal_row",
+                       "key": {"slot": 1, "column": 2, "dtype": "entity"}},
+            "variables": [
+                {"name": "settlement", "slot": 1, "column": 2, "dtype": "entity"},
+                {"name": "n_tractors", "slot": 1, "column": 3, "dtype": "int"}],
+            "ratios": [{"num": "n_tractors", "den": "land:area_total",
+                        "max": 0.1, "min_den": 5,
+                        "label": "tractors per hold"}]}
+    (dsd / "mach.dataset.json").write_text(json.dumps(mach), encoding="utf-8")
+    shapes = [
+        _cell(1, 2, label="mcell",
+              rows=[{"human": "Alfa", "auth": _auth("ID_Alfa", "Alfa")},
+                    {"human": "Beta", "auth": _auth("ID_Beta", "Beta")},
+                    {"human": "Gamma", "auth": _auth("ID_Gamma", "Gamma")}]),
+        _cell(1, 3, label="mcell",
+              rows=[{"human": "5"}, {"human": "400"}, {"human": "1"}]),
+    ]
+    (ann / "p2.json").write_text(json.dumps(
+        {"shapes": shapes, "flags": {}, "imagePath": "p2.jpg",
+         "imageWidth": 900, "imageHeight": 500}), encoding="utf-8")
+    Image.new("RGB", (900, 500), "white").save(ann / "p2.jpg")
+
+    d = client.post("/api/dataset/mach/diagnose",
+                    params={"folder": str(ann)},
+                    json={"record_history": False}).json()
+    ra = _ratio_items(d)
+    assert len(ra) == 1, d["groups"]
+    assert "400" in ra[0]["detail"] and "40" in ra[0]["detail"]
+    assert ra[0]["key"] == "Beta"
+    assert ra[0]["stem"] == "p2" and ra[0]["idx"] is not None   # local anchor
+    assert ra[0]["confirmable"] is True
+    st = d["quality"]["ratios"][0]
+    assert (st["ok"], st["violation"], st["untestable"]) == (1, 1, 1)
+
+
+def test_ratio_cross_project_anchors_locally(client, tmp_path):
+    _ratio_project(tmp_path, "proj_land", "land", "area_total",
+                   [("Alfa", 10)])
+    ann = _ratio_project(tmp_path, "proj_mach", "mach", "n_tractors",
+                         [("Alfa", 40)],
+                         ratios=[{"num": "n_tractors",
+                                  "den": "proj_land/land:area_total",
+                                  "max": 0.1}])
+    d = client.post("/api/dataset/mach/diagnose",
+                    params={"folder": str(ann)},
+                    json={"record_history": False}).json()
+    ra = _ratio_items(d)
+    assert len(ra) == 1
+    # the finding anchors at the numerator cell in THIS project
+    assert ra[0]["stem"] == "p1" and ra[0]["idx"] is not None
+
+
+def test_ratio_validation(client, tmp_path):
+    ann = _ratio_project(tmp_path, "proj", "bad", "x", [("Alfa", 1)],
+                         ratios=[{"num": "x", "den": "nope"},
+                                 {"num": "missing_ds:y", "den": "x", "max": 1}])
+    r = client.post("/api/dataset/bad/diagnose", params={"folder": str(ann)},
+                    json={"record_history": False})
+    assert r.status_code == 400
+    assert "min and/or max" in r.json()["detail"]
+    assert "'nope'" in r.json()["detail"]
+    # fix the local problems; the dangling dataset ref fails at run time
+    dsd = tmp_path / "proj" / "datasets"
+    decl = json.loads((dsd / "bad.dataset.json").read_text(encoding="utf-8"))
+    decl["ratios"] = [{"num": "missing_ds:y", "den": "x", "max": 1}]
+    (dsd / "bad.dataset.json").write_text(json.dumps(decl), encoding="utf-8")
+    r = client.post("/api/dataset/bad/diagnose", params={"folder": str(ann)},
+                    json={"record_history": False})
+    assert r.status_code == 404 or r.status_code == 400

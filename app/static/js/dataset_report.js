@@ -33,6 +33,8 @@ const _DSR_CHECKS = {
                   hint: 'a printed total row ≠ the sum of the records above it — exact'},
   totals_unanchored: {label: 'total ?', color: '#8a94a6',
                   hint: 'could not tell which records this printed total covers'},
+  ratio:         {label: 'ratio',       color: '#2dd4bf',
+                  hint: 'a declared ratio rule is violated — operands may come from another dataset, joined by entity id; check against the scan'},
   outlier:       {label: 'outlier',     color: '#38bdf8',
                   hint: 'statistically unusual for this variable (IQR / MAD, log scale) — check against the scan'},
   digits:        {label: 'digits',      color: '#38bdf8',
