@@ -26,24 +26,13 @@ const _DSR_CHECKS = {
                   hint: 'record key problems'},
   duplicate_key: {label: 'dup key',     color: '#f472b6',
                   hint: 'the same key appears in several records'},
-  // Phase 2 (app/diagnostics.py)
-  identity:      {label: 'identity',    color: '#f87171',
-                  hint: 'a total column ≠ the sum of its parts in this row — exact'},
-  totals:        {label: 'total row',   color: '#f87171',
-                  hint: 'a printed total row ≠ the sum of the records above it — exact'},
-  totals_unanchored: {label: 'total ?', color: '#8a94a6',
-                  hint: 'could not tell which records this printed total covers'},
-  outlier:       {label: 'outlier',     color: '#38bdf8',
-                  hint: 'statistically unusual for this variable (IQR / MAD, log scale) — check against the scan'},
-  digits:        {label: 'digits',      color: '#38bdf8',
-                  hint: 'far more digits than this variable usually has — glued cells or a column shift?'},
-  trailing1:     {label: 'trailing 1',  color: '#fbbf24',
-                  hint: 'this page column has too many values ending in 1 — a column rule read as a digit?'},
-  trailing1_cell:{label: 'trailing 1',  color: '#fbbf24',
-                  hint: 'in a suspicious column, and typical once the trailing 1 is dropped'},
+  identity:      {label: 'identity',    color: '#2dd4bf',
+                  hint: 'a printed total disagrees with the sum of its parts'},
+  ratio:         {label: 'ratio',       color: '#60a5fa',
+                  hint: 'a declared ratio rule is violated (operands may come from another dataset, joined by entity id)'},
+  distribution:  {label: 'outlier',     color: '#e879f9',
+                  hint: 'robust univariate outlier (log-scale z / top-gap) — verify against the scan, true heavy tails exist'},
 };
-
-const _DSR_SEV = {error: '#f87171', extreme: '#fb923c', mild: '#93c5fd', info: '#8a94a6'};
 
 // Populate the dataset dropdown when the batch op is selected.
 async function _batchDatasetInit() {
@@ -165,28 +154,11 @@ function _dsrRenderBody() {
       (g.items.length < g.count ? `<span style="color:#f87171;">(showing ${g.items.length})</span>` : '') +
       `</div>`;
     html += '<table class="rs-table" style="width:100%;"><tr><th style="white-space:nowrap;">where</th><th></th>' +
-            '<th>PDF</th><th>OCR</th><th>LLM</th><th>Human</th><th>problem</th><th></th></tr>';
+            '<th>PDF</th><th>OCR</th><th>LLM</th><th>Human</th><th>problem</th></tr>';
     g.items.forEach((it, ii) => {
       const pg  = stemToPage[it.stem] ? `p${stemToPage[it.stem]}` : it.stem;
       const loc = (it.idx == null) ? `${pg} (page)` :
-        `${pg}` + (it.row_n != null ? ` · row ${it.row_n}` : '') +
-        (it.key ? ` · ${it.key}` : '');
-      const sev = it.severity ? `<span style="color:${_DSR_SEV[it.severity] || '#8a94a6'};font-size:9px;` +
-        `text-transform:uppercase;margin-right:4px;">${_escHtml(it.severity)}</span>` : '';
-      const methodTip = it.method ? `method: ${it.method} ${JSON.stringify(it.params || {})}` : '';
-      let actions = '';
-      if (it.fix) {
-        const who = it.fix.who && it.fix.who !== 'the total itself' ? ` (${it.fix.who})` : '';
-        actions += `<button class="nav-btn" style="font-size:10px;padding:1px 6px;color:#86efac;" ` +
-          `title="Write ${_escHtml(it.fix.value)} into Human of ${_escHtml(it.fix.variable || 'the cell')}${_escHtml(who)} — the arithmetic proves it; check the scan first" ` +
-          `onclick="_dsrApplyFix(${gi},${ii})">✓ fix → ${_escHtml(it.fix.value)}</button>`;
-      }
-      if (it.confirmable) {
-        const lbl = (it.check === 'identity' || it.check === 'totals') ? 'book is wrong' : 'genuine';
-        actions += `<button class="nav-btn" style="font-size:10px;padding:1px 6px;" ` +
-          `title="The value matches the scan — stop flagging it (holds until the value is edited)" ` +
-          `onclick="_dsrConfirm(${gi},${ii})">✓ ${lbl}</button>`;
-      }
+        `${pg}` + (it.row_n != null ? ` · row ${it.row_n}` : '');
       const band = (it.y0 != null && it.y1 != null) ? `&y0=${it.y0}&y1=${it.y1}` : '';
       const img = (it.idx == null) ? '' :
         `<img src="${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(it.stem)}&idx=${it.idx}${band}" ` +
@@ -201,8 +173,7 @@ function _dsrRenderBody() {
         `<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(it.ocr || '')}">${_escHtml(it.ocr || '')}</td>` +
         `<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(it.llm || '')}">${_escHtml(it.llm || '')}</td>` +
         `<td>${humanCell}</td>` +
-        `<td style="max-width:340px;color:#fca5a5;" title="${_escHtml(methodTip || it.detail || '')}">${sev}${_escHtml(it.detail || '')}</td>` +
-        `<td style="white-space:nowrap;" id="dsr-act-${gi}-${ii}">${actions}</td>` +
+        `<td style="max-width:260px;color:#fca5a5;" title="${_escHtml(it.detail || '')}">${_escHtml(it.detail || '')}</td>` +
         `</tr>`;
     });
     html += '</table>';
@@ -221,52 +192,6 @@ async function _dsrSyncEditor(stem) {
   if (pages[pageIdx]?.stem === stem) {
     await reloadPageData(); drawOverlay(); updatePanel();
   }
-}
-
-// Write a value into a cell's Human layer (row unit or flat cell).
-async function _dsrWriteHuman(stem, idx, row_i, value) {
-  const params = new URLSearchParams({folder, stem, idx});
-  return _serializeWrite(async () => {
-    try {
-      const r = (row_i != null)
-        ? await fetch(`${API}/api/page/shape/row-field?${params}`, {
-            method: 'PATCH', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({row_i, human: value})})
-        : await fetch(`${API}/api/page/shape?${params}`, {
-            method: 'PATCH', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({human_corrected_text: value})});
-      return r.ok;
-    } catch (e) { return false; }
-  });
-}
-
-// Accept the arithmetic-proven correction (it.fix may point at a DIFFERENT
-// cell than the flagged one — e.g. the record that breaks a printed total).
-async function _dsrApplyFix(gi, ii) {
-  const it = _dsrGroups[gi]?.items[ii];
-  if (!it?.fix) return;
-  const f = it.fix;
-  const ok = await _dsrWriteHuman(f.stem, f.idx, f.row_i, String(f.value));
-  if (!ok) { showToast('Save failed — the fix was NOT stored'); return; }
-  if (f.stem === it.stem && f.idx === it.idx && f.row_i === it.row_i) it.human = String(f.value);
-  const cell = document.getElementById(`dsr-act-${gi}-${ii}`);
-  if (cell) cell.innerHTML = '<span style="color:#86efac;">fixed ✓</span>';
-  showToast(`Human ← ${f.value} (${f.variable || ''}) — re-run the report to re-check`);
-  await _dsrSyncEditor(f.stem);
-}
-
-async function _dsrConfirm(gi, ii) {
-  const it = _dsrGroups[gi]?.items[ii];
-  if (!it) return;
-  try {
-    const r = await fetch(`${API}/api/dataset/${encodeURIComponent(_dsrMeta.dataset)}/confirm?folder=${encodeURIComponent(folder)}`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({flag_id: it.flag_id, value_text: it.value_text || ''})});
-    if (!r.ok) { const m = await r.json().catch(() => ({})); showToast('Confirm failed: ' + (m.detail || r.status)); return; }
-  } catch (e) { showToast('Confirm failed: ' + (e?.message || e)); return; }
-  const cell = document.getElementById(`dsr-act-${gi}-${ii}`);
-  if (cell) cell.innerHTML = '<span style="color:#8a94a6;">confirmed ✓</span>';
-  showToast('Confirmed — will not be flagged again unless the value changes');
 }
 
 async function _dsrHumanEdit(gi, ii, value) {
