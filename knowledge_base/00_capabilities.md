@@ -311,6 +311,9 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 - **Phase H grouping** (Compass records): region layer foundation exists
   (H1); the grouping sweep, group browser and records export do not.
 - **Phase B multi-user** (verified_by, page locks).
-- **1933/1935 temporal place authority** (helysegnevtar_1933 feeds it).
+- **Temporal authority layer** — general infrastructure (slices for
+  attribute change + succession edges for entity transformations, e.g.
+  future firm mergers/renames); first instance is the 1933/1935 place
+  overlay (helysegnevtar_1933 feeds it).
 - Full roadmap: [07_improvement_roadmap.md](07_improvement_roadmap.md);
   honest weaknesses: [06_critique.md](06_critique.md).

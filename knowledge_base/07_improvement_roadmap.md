@@ -326,10 +326,18 @@ never hand-edited:
 3. **Cross-project tidy export**: pick N datasets + an authority → one wide
    or long table keyed by authority ID (the "merge on telep_id in Stata"
    step, done where the provenance lives).
-4. **Temporal identity is a prerequisite, not a nice-to-have**: linking an
-   1895 machinery row to a 1930 census record requires the authority system's
-   planned temporal layer (same settlement across renames/merges). Until it
-   exists, the index links within one authority vintage and says so.
+4. **Temporal identity is a prerequisite, not a nice-to-have — and it is
+   general authority infrastructure, not a Techxtremism feature** (Attila,
+   2026-10-09): every cross-time link the research program needs runs through
+   it — settlements across renames/merges (1895 machinery row ↔ 1930 census
+   record), and later **firm transformations** (mergers, splits, renames,
+   legal-form changes, successions). Design it once, generically. Two
+   mechanisms, both on stable IDs: *slices* (the existing per-source-year
+   attribute layers — enough when the entity persists and only its
+   attributes/parents change) and *succession edges* (entity→entity links
+   typed merger/split/rename/successor — needed when the entity itself
+   transforms; rare for settlements, the NORM for firms). Until built, the
+   index links within one authority vintage and says so.
 
 5. **First consumers: linked diagnostics** *(added 2026-10-07)*. Once the
    index exists, two checks from the RA's proposal become possible:

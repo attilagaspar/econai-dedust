@@ -155,3 +155,7 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   CLAUDE.md, along with this file's maintenance rule.*
 - Oct 9: capabilities reference (00) + this version history (12) added;
   documentation upkeep becomes part of every commit.
+- Oct 9: docs — temporal authority reframed as general infrastructure
+  (slices for attribute change + succession edges for entity
+  transformations; firms are the motivating future case), per Attila; not
+  a Techxtremism-specific unblocker.
