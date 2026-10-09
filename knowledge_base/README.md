@@ -5,6 +5,7 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 
 | File | Contents |
 |---|---|
+| [00_capabilities.md](00_capabilities.md) | **What Dedust can do** — the complete, kept-current feature inventory |
 | [01_project_overview.md](01_project_overview.md) | What the project is, who uses it, research context |
 | [02_architecture.md](02_architecture.md) | Code layout, backend/frontend, how things talk to each other |
 | [03_data_model.md](03_data_model.md) | The on-disk JSON data model: shapes, layers, row_struct, lattice, authority, structured, clips |
@@ -16,8 +17,16 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 | [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md) | Phase H plan: region detection (firm_header/text_block/table/figure), per-decade models via fine-tune chaining, structure inside tables, cross-page record grouping (group_id sweep), records export |
 | [10_dataset_layer.md](10_dataset_layer.md) | Dataset declarations, join, and diagnostics: page-level column sequences, separator bands, record exclusion, batch diagnose report |
 | [11_learning_diagnostics.md](11_learning_diagnostics.md) | Plain-language explainer: frozen test sets, corrections-per-page, learning curves, error audits, transfer checks — how to know whether more annotation still helps (build items: roadmap P10) |
+| [12_version_history.md](12_version_history.md) | **Version history** — every commit gets a line; new months get a theme heading |
 
 Conventions for AI assistants:
+- **Documentation upkeep is part of every commit** (rule set 2026-10-09):
+  append one line to [12_version_history.md](12_version_history.md), and when
+  the commit changes what Dedust can do, update
+  [00_capabilities.md](00_capabilities.md) — in the same commit.
+- **Start every session with `git pull` and read the status lines** of the
+  relevant plan docs before proposing or building anything — a stale session
+  once rebuilt an already-shipped phase and briefly clobbered master.
 - The editor is `app/static/index.html` (HTML skeleton) + `app/static/js/*.js` — nine ordered classic scripts sharing one global scope (load order in index.html is load-bearing; no load-time calls into later files). Styles in `app/static/css/editor.css`. The backend is `app/server.py` (~5.4k lines). Grep across `js/` before you assume something doesn't exist — most features do exist but are hard to find.
 - Static files are served with `Cache-Control: no-cache`, so a plain reload picks up edits — no hard-reload ritual needed.
 - Page data lives in LabelMe-style JSONs next to the page image; the server rewrites the whole file on every save. Client-side writes are serialized through `_serializeWrite` — never bypass it.
