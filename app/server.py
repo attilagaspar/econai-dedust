@@ -1402,6 +1402,32 @@ def get_cell(
     return StreamingResponse(buf, media_type="image/jpeg")
 
 
+def _tess_group_lines(tess: dict) -> tuple:
+    """Group confident Tesseract words by (block, paragraph, line), sorted by
+    visual top coordinate (block_num order ≠ top-to-bottom order). Returns
+    (ocr_text, mean_conf). Shared by the single-cell endpoint and batch OCR."""
+    from collections import defaultdict
+    line_words: dict = defaultdict(list)
+    line_top:   dict = defaultdict(lambda: float("inf"))
+    conf_values: list = []
+    for txt, conf, blk, par, ln, top in zip(
+        tess["text"], tess["conf"],
+        tess["block_num"], tess["par_num"], tess["line_num"],
+        tess["top"],
+    ):
+        c = int(conf)
+        if txt.strip() and c > 0:
+            key = (blk, par, ln)
+            line_words[key].append(txt)
+            line_top[key] = min(line_top[key], int(top))
+            conf_values.append(c)
+    sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
+    lines = [" ".join(line_words[k]) for k in sorted_keys]
+    ocr_text  = "\n".join(lines).strip()
+    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+    return ocr_text, mean_conf
+
+
 @app.post("/api/page/shape/ocr")
 def api_ocr_cell(
     folder: str = Query(...),
@@ -1450,30 +1476,7 @@ def api_ocr_cell(
         output_type=pytesseract.Output.DICT,
     )
 
-    # Group confident words by (block, paragraph, line) to preserve layout.
-    # Also track the minimum top-coordinate of each line so we can sort by
-    # actual pixel position (Tesseract block_num order ≠ visual top-to-bottom order).
-    from collections import defaultdict
-    line_words: dict = defaultdict(list)
-    line_top:   dict = defaultdict(lambda: float("inf"))
-    conf_values: list = []
-    for txt, conf, blk, par, ln, top in zip(
-        tess["text"], tess["conf"],
-        tess["block_num"], tess["par_num"], tess["line_num"],
-        tess["top"],
-    ):
-        c = int(conf)
-        if txt.strip() and c > 0:
-            key = (blk, par, ln)
-            line_words[key].append(txt)
-            line_top[key] = min(line_top[key], int(top))
-            conf_values.append(c)
-
-    # Sort lines by their top pixel coordinate (visual reading order)
-    sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
-    lines = [" ".join(line_words[k]) for k in sorted_keys]
-    ocr_text  = "\n".join(lines).strip()
-    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+    ocr_text, mean_conf = _tess_group_lines(tess)
 
     shapes[idx]["tesseract_output"] = {
         "ocr_text":  ocr_text,
@@ -2447,8 +2450,11 @@ def _llm_complete_raw(client, model, messages, max_out, temperature=0, response_
     model = _bare_model(model)
     rf = {"response_format": response_format} if response_format else {}
     if _is_reasoning_model(model):
+        # Same reasoning-headroom logic as _llm_batch_line: JSON answers need
+        # budget beyond the hidden reasoning tokens or they truncate.
+        _floor = 8000 if response_format else 2000
         kwargs = dict(model=model, messages=messages,
-                      max_completion_tokens=max(max_out, 2000), **rf)
+                      max_completion_tokens=max(max_out, _floor), **rf)
         try:
             return client.chat.completions.create(reasoning_effort="low", **kwargs)
         except Exception:
@@ -2577,7 +2583,13 @@ def _llm_batch_line(custom_id: str, model: str, messages, max_out: int,
     if response_format:
         body["response_format"] = response_format
     if _is_reasoning_model(model):
-        body["max_completion_tokens"] = max(max_out, 2000)
+        # Reasoning models spend completion budget on HIDDEN reasoning before
+        # writing the answer (observed: ~1500 reasoning tokens of a 2048 cap,
+        # leaving ~500 for the JSON → finish_reason=length, unparseable).
+        # Structured JSON answers can be thousands of tokens, so give them
+        # real headroom; the cap costs nothing unless used.
+        floor = 8000 if response_format else 2000
+        body["max_completion_tokens"] = max(max_out, floor)
         body["reasoning_effort"] = "low"
     else:
         body["max_tokens"] = max_out
@@ -3134,6 +3146,291 @@ def api_batch_snapshot_restore(folder: str = Query(...)):
 
 
 # ---------------------------------------------------------------------------
+# Background batch OCR — a server-side job over many pages, so a 1000-page run
+# survives closing the browser and skips the per-cell HTTP + per-cell JSON-
+# rewrite overhead of the old client-driven loop: per page the image/shadow is
+# loaded ONCE, all selected cells are OCRed, and the JSON is written ONCE.
+# Same job pattern as the inbox import (in-memory registry + polling + stop
+# flag); the job dies with the server process (restart = re-run; with
+# overwrite=False finished cells are skipped, so re-runs are cheap).
+# ---------------------------------------------------------------------------
+
+_OCR_JOBS: dict = {}          # resolved folder path (str) -> job status dict
+_OCR_JOBS_LOCK = threading.Lock()
+
+
+class OcrBatchBody(BaseModel):
+    stems:       List[str]
+    labels:      List[str]
+    engine:      str = "tesseract"     # tesseract | easyocr
+    scope:       str = "whole"         # whole | rows-keep | rows-detect
+    cell_height: int = 26
+    overwrite:   bool = False
+    col_filter:  Optional[str] = None  # super_column ranges, e.g. "3, 2-4, 7-"
+    lang:        str = "hun"           # tesseract language
+    langs:       str = "en,hu"         # easyocr languages
+
+
+def _parse_col_ranges_srv(raw):
+    ranges = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            try:
+                ranges.append((int(lo), int(hi) if hi.strip() else 10 ** 9))
+            except ValueError:
+                return None
+        else:
+            try:
+                v = int(part)
+                ranges.append((v, v))
+            except ValueError:
+                return None
+    return ranges or None
+
+
+def _ocr_shape_whole(engine, crop, lang, langs):
+    """OCR one whole-cell crop. Mirrors the single-cell endpoints exactly."""
+    if engine == "tesseract":
+        import pytesseract, shutil
+        if not shutil.which("tesseract"):
+            pytesseract.pytesseract.tesseract_cmd = \
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        tess = pytesseract.image_to_data(
+            crop.convert("L"), lang=lang, config="--psm 4",
+            output_type=pytesseract.Output.DICT)
+        text, conf = _tess_group_lines(tess)
+        return text, conf, {"lang": lang}
+    import numpy as np
+    reader = _get_easyocr_reader([l.strip() for l in langs.split(",") if l.strip()])
+    results = reader.readtext(np.array(crop.convert("RGB")),
+                              allowlist="0123456789-", min_size=6,
+                              text_threshold=0.5, low_text=0.3)
+    results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+    lines = [t for _, t, _ in results]
+    confs = [c for _, _, c in results]
+    text = "\n".join(lines).strip()
+    conf = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+    return text, conf, {"engine": "easyocr", "langs": langs}
+
+
+def _ocr_shape_rows(engine, shape, crop, crop_top, cell_height, rows_source,
+                    lang, langs):
+    """Row-by-row OCR of one crop. Mirrors the linebyline endpoints (digit
+    whitelist, per-engine upscaling); writes rows via _apply_layer_rows and
+    returns (combined_text, mean_conf, extra_fields)."""
+    from PIL import Image as PILImage, ImageOps
+    rows = _rows_for_source(shape, crop, crop_top, cell_height, rows_source)
+    line_texts, conf_values = [], []
+    if engine == "tesseract":
+        import pytesseract, shutil
+        if not shutil.which("tesseract"):
+            pytesseract.pytesseract.tesseract_cmd = \
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        for i, (top, bottom) in enumerate(rows):
+            row_pad = max(4, cell_height // 6)
+            rt = max(0, top - row_pad)
+            rb = min(crop.height, bottom + row_pad)
+            row_img = crop.crop((0, rt, crop.width, rb))
+            if row_img.height < 48:
+                scale = 48 / row_img.height
+                row_img = row_img.resize(
+                    (int(row_img.width * scale), 48), PILImage.LANCZOS)
+            grey = ImageOps.autocontrast(row_img.convert("L"))
+            try:
+                tess = pytesseract.image_to_data(
+                    grey, lang=lang,
+                    config="--psm 7 -c tessedit_char_whitelist=0123456789-",
+                    output_type=pytesseract.Output.DICT)
+                words = [(t, int(c)) for t, c in zip(tess["text"], tess["conf"])
+                         if t.strip() and int(c) > 0]
+                text = " ".join(t for t, _ in words).strip() or "-"
+                conf = round(sum(c for _, c in words) / len(words), 1) if words else 0.0
+            except Exception:
+                text, conf = "-", 0.0
+            line_texts.append(text); conf_values.append(conf)
+        extra = {"lang": lang, "mode": "linebyline"}
+    else:
+        import numpy as np
+        reader = _get_easyocr_reader([l.strip() for l in langs.split(",") if l.strip()])
+        crop_bin = crop.convert("L")
+        for i, (top, bottom) in enumerate(rows):
+            row_pad = max(4, cell_height // 6)
+            prev_bottom = rows[i - 1][1] if i > 0 else 0
+            next_top    = rows[i + 1][0] if i < len(rows) - 1 else crop_bin.height
+            rt = max(0, max(top - row_pad, (prev_bottom + top) // 2))
+            rb = min(crop_bin.height, min(bottom + row_pad, (bottom + next_top) // 2))
+            row_img = crop_bin.crop((0, rt, crop_bin.width, rb))
+            target_h = 128
+            row_img = row_img.resize(
+                (int(row_img.width * (target_h / row_img.height)), target_h),
+                PILImage.LANCZOS).convert("RGB")
+            try:
+                results = reader.readtext(np.array(row_img),
+                                          allowlist="0123456789-", min_size=4,
+                                          text_threshold=0.4, low_text=0.3)
+                results.sort(key=lambda r: min(pt[1] for pt in r[0]))
+                texts = [t for _, t, _ in results]
+                confs = [c for _, _, c in results]
+                text = " ".join(texts).strip() or "-"
+                conf = round(sum(confs) / len(confs) * 100, 1) if confs else 0.0
+            except Exception:
+                text, conf = "-", 0.0
+            line_texts.append(text); conf_values.append(conf)
+        extra = {"engine": "easyocr", "mode": "linebyline"}
+    combined  = "\n".join(line_texts)
+    mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
+    _apply_layer_rows(shape, [(t + crop_top, b + crop_top) for t, b in rows],
+                      "ocr", line_texts, "linebyline")
+    return combined, mean_conf, extra
+
+
+def _run_ocr_batch_job(folder: str, d: Path, body: OcrBatchBody, job: dict):
+    from PIL import Image as PILImage
+    label_set = set(body.labels)
+    ranges = _parse_col_ranges_srv(body.col_filter) if body.col_filter else None
+    col_ok = (lambda c: c is not None and any(lo <= c <= hi for lo, hi in ranges)) \
+             if ranges else (lambda c: True)
+    rows_source = "detect" if body.scope == "rows-detect" else "existing"
+    has_ocr = lambda sh: bool((sh.get("tesseract_output") or {}).get("ocr_text")
+                              or (sh.get("easyocr_output") or {}).get("ocr_text"))
+    try:
+        for stem in body.stems:
+            if job["stop"]:
+                job["state"] = "stopped"
+                break
+            job["current"] = stem
+            jf = d / f"{stem}.json"
+            img_path = _find_image(d, stem)
+            if not jf.exists() or img_path is None:
+                job["stems_done"] += 1
+                continue
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+            except Exception as exc:
+                job["errors"].append(f"{stem}: JSON unreadable ({exc})")
+                job["stems_done"] += 1
+                continue
+            shapes = data.get("shapes", [])
+            todo = [i for i, sh in enumerate(shapes)
+                    if sh.get("label") in label_set
+                    and len(sh.get("points") or []) >= 2
+                    and col_ok(sh.get("super_column"))
+                    and (body.overwrite or not has_ocr(sh))]
+            if not todo:
+                job["stems_done"] += 1
+                continue
+            shadow = _get_shadow_page(folder, stem, img_path)
+            sw, sh_ = shadow.size
+            touched = []
+            for i in todo:
+                if job["stop"]:
+                    break
+                sh = shapes[i]
+                pts = sh["points"]
+                xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+                pad = 4
+                crop = shadow.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
+                                    min(sw, int(x2) + pad), min(sh_, int(y2) + pad)))
+                try:
+                    if body.scope == "whole":
+                        text, conf, extra = _ocr_shape_whole(
+                            body.engine, crop, body.lang, body.langs)
+                        sh["tesseract_output"] = {"ocr_text": text,
+                                                  "mean_conf": conf, **extra}
+                        _distribute_flat_to_rows(sh, "ocr", text)
+                    else:
+                        crop_top = max(0, int(y1) - pad)
+                        text, conf, extra = _ocr_shape_rows(
+                            body.engine, sh, crop, crop_top, body.cell_height,
+                            rows_source, body.lang, body.langs)
+                        sh["tesseract_output"] = {"ocr_text": text,
+                                                  "mean_conf": conf, **extra}
+                    touched.append(i)
+                    job["cells_done"] += 1
+                except Exception as exc:
+                    job["cells_err"] += 1
+                    if len(job["errors"]) < 50:
+                        job["errors"].append(f"{stem}[{i}]: {exc}")
+            if touched:
+                # Re-read under the lock and graft only the OCRed shapes onto
+                # the fresh document, so edits made in the editor on OTHER
+                # shapes while this page was being OCRed are not clobbered.
+                with _SHAPE_MERGE_LOCK:
+                    try:
+                        fresh = json.loads(jf.read_text(encoding="utf-8"))
+                        if len(fresh.get("shapes", [])) == len(shapes):
+                            for i in touched:
+                                fresh["shapes"][i] = shapes[i]
+                            _write_json(jf, fresh)
+                        else:               # page restructured meanwhile — ours wins
+                            _write_json(jf, data)
+                    except Exception:
+                        _write_json(jf, data)
+            job["stems_done"] += 1
+        if job["state"] == "running":
+            job["state"] = "done"
+    except Exception as exc:
+        job["state"] = "error"
+        job["errors"].append(f"job crashed: {exc}")
+    finally:
+        job["finished"] = time.time()
+        job["current"] = ""
+
+
+@app.post("/api/batch/ocr/start")
+def api_batch_ocr_start(folder: str = Query(...), body: OcrBatchBody = ...):
+    """Start a background batch-OCR job over the given stems. One job per
+    folder; poll /api/batch/ocr/status, stop via /api/batch/ocr/stop. The job
+    runs in the server process (survives browser close, dies with the server)."""
+    if body.engine not in ("tesseract", "easyocr"):
+        raise HTTPException(status_code=400, detail=f"Unknown engine {body.engine!r}")
+    if body.scope not in ("whole", "rows-keep", "rows-detect"):
+        raise HTTPException(status_code=400, detail=f"Unsupported scope {body.scope!r}")
+    if not body.stems or not body.labels:
+        raise HTTPException(status_code=400, detail="stems and labels required")
+    d = _resolve_folder(folder)
+    key = str(d)
+    with _OCR_JOBS_LOCK:
+        j = _OCR_JOBS.get(key)
+        if j and j["state"] == "running":
+            raise HTTPException(status_code=409,
+                                detail="A batch OCR job is already running for this folder")
+        job = {"state": "running", "stop": False, "current": "",
+               "stems_total": len(body.stems), "stems_done": 0,
+               "cells_done": 0, "cells_err": 0, "errors": [],
+               "engine": body.engine, "scope": body.scope,
+               "started": time.time(), "finished": None}
+        _OCR_JOBS[key] = job
+    threading.Thread(target=_run_ocr_batch_job, args=(folder, d, body, job),
+                     daemon=True).start()
+    return {"ok": True, "stems": len(body.stems)}
+
+
+@app.get("/api/batch/ocr/status")
+def api_batch_ocr_status(folder: str = Query(...)):
+    d = _resolve_folder(folder)
+    with _OCR_JOBS_LOCK:
+        j = _OCR_JOBS.get(str(d))
+        return {"job": dict(j) if j else None}
+
+
+@app.post("/api/batch/ocr/stop")
+def api_batch_ocr_stop(folder: str = Query(...)):
+    d = _resolve_folder(folder)
+    with _OCR_JOBS_LOCK:
+        j = _OCR_JOBS.get(str(d))
+        if not j or j["state"] != "running":
+            return {"ok": False, "detail": "No running job"}
+        j["stop"] = True
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Structural-blank detection — a FREE, local ink scan (no API). Lattice grids
 # generate cells that are blank BY DESIGN (e.g. a district-header row over
 # settlement columns). OCR yields dashes/noise on them and LLM hallucinates +
@@ -3466,13 +3763,18 @@ def api_rows_build(folder: str = Query(...), body: RowsBuildBody = ...):
 # ---------------------------------------------------------------------------
 # P3 — page status scoreboard. Status lives in the page's flags.status
 # (predicted | corrected | verified | problem | skip); set via PATCH
-# /api/page/flags. "skip" = clutter: excluded from inference and the review
-# queue, and shown as its own bar (not counted as work).
+# /api/page/flags. "skip" = this page receives no annotations (clutter, or
+# deliberately left unannotated): excluded from inference (apply-predictions
+# never populates it) and the review queue, and shown as its own bar (not
+# counted as work).
 # ---------------------------------------------------------------------------
 
 class BulkStatusBody(BaseModel):
     stems:  List[str]
     status: str
+    exclude_current: List[str] = []   # leave pages whose CURRENT status is in
+                                      # this list unchanged (e.g. ["skip"] for
+                                      # "bulk-verify everything I didn't skip")
 
 
 _PAGE_STATUSES = ("predicted", "corrected", "verified", "problem", "skip")
@@ -3486,17 +3788,65 @@ def api_bulk_set_status(folder: str = Query(...), body: BulkStatusBody = ...):
         raise HTTPException(status_code=400,
                             detail=f"Unknown status {body.status!r}; allowed: {_PAGE_STATUSES}")
     d = _resolve_folder(folder)
-    changed = 0
+    excl = set(body.exclude_current or [])
+    changed = excluded = 0
     for stem in body.stems:
         jf = d / f"{stem}.json"
         if not jf.exists():
             continue
         with _SHAPE_MERGE_LOCK:
             data = json.loads(jf.read_text(encoding="utf-8"))
+            cur = (data.get("flags") or {}).get("status") or "predicted"
+            if cur in excl:
+                excluded += 1
+                continue
             data.setdefault("flags", {})["status"] = body.status
             _write_json(jf, data)
+        if cur != body.status:
+            from app import training_meta
+            training_meta.record_correction(d.parent, stem, cur, body.status)
         changed += 1
-    return {"ok": True, "changed": changed, "status": body.status}
+    return {"ok": True, "changed": changed, "excluded": excluded,
+            "status": body.status}
+
+
+class DeletePagesBody(BaseModel):
+    stems: List[str]
+
+
+@app.post("/api/pages/delete")
+def api_delete_pages(folder: str = Query(...), body: DeletePagesBody = ...):
+    """Soft-delete pages: move each page's files (annotation JSON + image, any
+    extension, plus its predictions/<stem>.json if present) into
+    <project>/_trash_pages/ next to the annotation folder. Recoverable by
+    moving the files back; mirrors the project-level soft delete."""
+    import shutil
+    d = _resolve_folder(folder)
+    if not body.stems:
+        raise HTTPException(status_code=400, detail="No stems given")
+    trash = d.parent / "_trash_pages"
+    trash.mkdir(exist_ok=True)
+    moved, missing = 0, 0
+    for stem in body.stems:
+        with _SHAPE_MERGE_LOCK:
+            found = [p for p in d.iterdir() if p.is_file() and p.stem == stem]
+            if not found:
+                missing += 1
+                continue
+            for p in found:
+                dst = trash / p.name
+                if dst.exists():
+                    dst.unlink()
+                shutil.move(str(p), str(dst))
+            pred = d.parent / "predictions" / f"{stem}.json"
+            if pred.exists():
+                (trash / "predictions").mkdir(exist_ok=True)
+                dstp = trash / "predictions" / pred.name
+                if dstp.exists():
+                    dstp.unlink()
+                shutil.move(str(pred), str(dstp))
+            moved += 1
+    return {"ok": True, "deleted": moved, "not_found": missing, "trash": str(trash)}
 
 
 @app.get("/api/project/status")
@@ -3586,7 +3936,7 @@ def api_review_queue(folder: str = Query(...), body: ReviewQueueBody = ...):
         except Exception:
             continue
         _pstatus = (data.get("flags") or {}).get("status")
-        if _pstatus == "skip":                       # clutter is never reviewed
+        if _pstatus == "skip":                       # skip pages are never reviewed
             continue
         if body.exclude_verified and _pstatus == "verified":
             continue
@@ -4274,6 +4624,71 @@ def api_delete_project(name: str):
     except OSError as e:
         raise HTTPException(status_code=409,
             detail=f"Delete failed — is the folder open in another program? {e}")
+
+
+# ── Trash management (P9.6) — restore / purge without SSH ────────────────────
+
+class TrashProjectBody(BaseModel):
+    entry: str                       # folder name under projects/_trash
+
+class TrashPagesBody(BaseModel):
+    project: str
+    stems:   Optional[List[str]] = None   # None in purge = empty whole trash
+
+
+@app.get("/api/trash")
+def api_trash_list():
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    return trash.list_trash(PROJECTS_ROOT)
+
+
+@app.post("/api/trash/restore-project")
+def api_trash_restore_project(body: TrashProjectBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    try:
+        name = trash.restore_project(PROJECTS_ROOT, body.entry)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"ok": True, "restored": name}
+
+
+@app.post("/api/trash/restore-pages")
+def api_trash_restore_pages(body: TrashPagesBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    if not body.stems:
+        raise HTTPException(status_code=400, detail="No stems given")
+    try:
+        result = trash.restore_pages(PROJECTS_ROOT, body.project, body.stems)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, **result}
+
+
+@app.post("/api/trash/purge-project")
+def api_trash_purge_project(body: TrashProjectBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    try:
+        freed = trash.purge_project(PROJECTS_ROOT, body.entry)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "bytes": freed}
+
+
+@app.post("/api/trash/purge-pages")
+def api_trash_purge_pages(body: TrashPagesBody):
+    from app import trash
+    from app.pipeline import PROJECTS_ROOT
+    try:
+        result = trash.purge_pages(PROJECTS_ROOT, body.project, body.stems)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, **result}
 
 
 class CloneProject(BaseModel):
@@ -5299,9 +5714,16 @@ def api_page_flags(folder: str = Query(...), stem: str = Query(...),
         raise HTTPException(status_code=404, detail=f"JSON not found: {jf}")
     data = json.loads(jf.read_text(encoding="utf-8"))
     flags = data.get("flags") or {}
+    old_status = flags.get("status") or "predicted"
     flags.update(body.flags or {})
     data["flags"] = flags
     _write_json(jf, data)
+    # correction telemetry (P10.6): predicted → corrected/verified gets diffed
+    # against the stored prediction — the free, continuous learning curve
+    if "status" in (body.flags or {}) and flags.get("status") != old_status:
+        from app import training_meta
+        training_meta.record_correction(d.parent, stem,
+                                        old_status, flags["status"])
     return {"ok": True, "flags": flags}
 
 
@@ -6041,13 +6463,25 @@ class PrepareRequest(BaseModel):
     base_lr:       Optional[float] = None
     ims_per_batch: Optional[int]   = None
     num_workers:   Optional[int]   = None
+    # P10.2 export hygiene — defaults are the safe choices
+    status_filter:          bool = True   # only corrected+verified pages train
+    include_empty_verified: bool = True   # verified-empty page = negative example
+    train_fraction:         float = 1.0   # P10.5: nested subset for learning curves
+
+
+def _frozen_test_stems(pdir) -> list:
+    """Frozen test-set stems for the training export, [] when none frozen."""
+    from app import training_meta
+    ts = training_meta.load_test_set(pdir)
+    return list(ts.get("stems", [])) if ts else []
 
 
 @app.post("/api/project/{name}/prepare")
 def api_prepare(name: str, body: Optional[PrepareRequest] = None):
     """Convert annotated LabelMe JSONs → COCO JSON + generate training scripts.
     Optional solver params (max_iter / base_lr / ims_per_batch / num_workers) are
-    hand-edited in the dashboard and baked into the generated train.sh."""
+    hand-edited in the dashboard and baked into the generated train.sh.
+    Status filter + frozen test set are applied here (P10.1/P10.2)."""
     from app.coco_convert import prepare_training_data
     body = body or PrepareRequest()
     try:
@@ -6063,12 +6497,186 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             base_lr         = body.base_lr       or 0.00125,
             ims_per_batch   = body.ims_per_batch or 2,
             num_workers     = 2 if body.num_workers is None else body.num_workers,
+            status_filter          = body.status_filter,
+            include_empty_verified = body.include_empty_verified,
+            test_stems             = _frozen_test_stems(pdir),
+            train_fraction         = body.train_fraction,
         )
         return {"ok": True, **result}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Frozen test set + training ledger (P10.1–P10.4) ─────────────────────────
+
+class FreezeRequest(BaseModel):
+    n:     int = 0
+    stems: Optional[list] = None
+    force: bool = False
+
+
+@app.get("/api/project/{name}/test-set")
+def api_test_set_get(name: str):
+    from app import training_meta
+    return training_meta.test_set_status(project_dir(name))
+
+
+@app.post("/api/project/{name}/test-set")
+def api_test_set_freeze(name: str, body: FreezeRequest):
+    from app import training_meta
+    try:
+        ts = training_meta.freeze_test_set(project_dir(name), n=body.n,
+                                           stems=body.stems, force=body.force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "n": len(ts["stems"]), "stems": ts["stems"]}
+
+
+@app.delete("/api/project/{name}/test-set")
+def api_test_set_unfreeze(name: str):
+    from app import training_meta
+    return {"ok": True,
+            "removed": training_meta.unfreeze_test_set(project_dir(name))}
+
+
+RECONCILE_MIN_AGE_S = 15 * 60   # a younger "running" row may still be pushing
+                                # data / launching — don't race the launch
+
+
+def _reconcile_running_ledger_rows(name: str, pdir: Path) -> bool:
+    """P10.3 gap-closer: the ledger's completion update rides on the SSE
+    stream, so a detached training that outlives the browser connection leaves
+    a forever-"running" row. On listing, probe each stale running row's pid on
+    the GPU server (same pid-file + cmdline check the re-attach uses): still
+    alive → leave it; gone → close the row, attaching the final eval scores
+    from metrics.json when they postdate the row's start ("finished"),
+    otherwise marking it "interrupted". Best-effort: SSH trouble leaves rows
+    untouched. Returns True if any row changed."""
+    from app import ssh_ops, training_meta
+    rows = training_meta.load_ledger(pdir)
+    now = time.time()
+
+    def _epoch(ts: str) -> float:
+        try:
+            return time.mktime(time.strptime(ts or "", "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            return 0.0
+
+    stale = [r for r in rows if r.get("status") == "running"
+             and now - _epoch(r.get("started")) > RECONCILE_MIN_AGE_S]
+    if not stale:
+        return False
+
+    srv = _server_cfg(name)
+    passphrase = srv.get("passphrase")
+    remote = srv["remote_path"].rstrip("/")
+
+    def _quick(cmd: str) -> str:
+        c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+        _, out, _ = c.exec_command(cmd)
+        result = out.read().decode(errors="replace").strip()
+        c.close()
+        return result
+
+    changed = False
+    for r in stale:
+        if r.get("mode") == "finetune":
+            pid_path    = f"/workspace/layout-model-training/logs/{name}_ft.pid"
+            script_path = (f"/workspace/layout-model-training/scripts/"
+                           f"{name}_finetune_from_{r.get('source', '')}.sh")
+        else:
+            pid_path    = f"/workspace/layout-model-training/logs/{name}_train.pid"
+            script_path = f"/workspace/layout-model-training/scripts/{name}.sh"
+        try:
+            status = _quick(_job_running_cmd(_train_container(srv),
+                                             pid_path, script_path))
+        except Exception:
+            return changed          # server unreachable — leave the rest alone
+        if "RUNNING" in status:
+            continue
+        # Job is gone: close the row. Scores only count when metrics.json was
+        # written AFTER this row started — an older file belongs to a previous
+        # run and must not dress up a crashed launch as a finished one.
+        fields = {"finished": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        ap = None
+        try:
+            metrics_path = (f"{remote}/layout-model-training/outputs/{name}/"
+                            f"fast_rcnn_R_50_FPN_3x/metrics.json")
+            mt = _quick(f"stat -c %Y {metrics_path} 2>/dev/null || true")
+            if mt.isdigit() and int(mt) > _epoch(r.get("started")):
+                from app.training_meta import parse_d2_metrics
+                text = _quick(f"tail -c 200000 {metrics_path} 2>/dev/null || true")
+                ap = parse_d2_metrics(text)
+                fields["finished"] = time.strftime(
+                    "%Y-%m-%dT%H:%M:%S", time.localtime(int(mt)))
+        except Exception:
+            ap = None
+        fields["status"] = "finished" if ap else "interrupted"
+        if ap:
+            fields["ap"] = ap
+        training_meta.ledger_update(pdir, r["id"], **fields)
+        changed = True
+    return changed
+
+
+@app.get("/api/project/{name}/training-log")
+def api_training_log(name: str):
+    from app import training_meta
+    pdir = project_dir(name)
+    try:
+        _reconcile_running_ledger_rows(name, pdir)
+    except Exception:
+        pass                        # reconcile never breaks the listing
+    rows = training_meta.load_ledger(pdir)
+    return {"rows": list(reversed(rows))}
+
+
+@app.get("/api/project/{name}/corrections-log")
+def api_corrections_log(name: str, window: int = 20):
+    """Correction telemetry (P10.6): logged predicted→corrected page diffs and
+    the rolling corrections-per-page average — the free learning curve."""
+    from app import training_meta
+    return training_meta.corrections_summary(project_dir(name), window=window)
+
+
+class TestEvalRequest(BaseModel):
+    iou_match: float = 0.5
+    iou_tight: float = 0.9
+    record:    bool  = True    # attach the result to the latest ledger row
+
+
+@app.post("/api/project/{name}/test-eval")
+def api_test_eval(name: str, body: TestEvalRequest = TestEvalRequest()):
+    """Score pulled predictions against the frozen test set's verified
+    annotations: added / deleted / moved per label and page — the
+    corrections-per-page number for the learning curve (P10.4)."""
+    from app import training_meta, eval_diff
+    pdir = project_dir(name)
+    ts = training_meta.load_test_set(pdir)
+    if not ts:
+        raise HTTPException(status_code=400,
+                            detail="No frozen test set — freeze one first.")
+    pred_dir = pdir / "predictions"
+    if not pred_dir.exists():
+        raise HTTPException(status_code=400,
+                            detail="No predictions pulled yet — run inference "
+                                   "and 'Pull predictions' first.")
+    result = eval_diff.evaluate_test_set(pdir / "annotations", pred_dir,
+                                         ts.get("stems", []),
+                                         iou_match=body.iou_match,
+                                         iou_tight=body.iou_tight)
+    if body.record:
+        rows = training_meta.load_ledger(pdir)
+        if rows:
+            compact = {k: result[k] for k in
+                       ("n_pages", "totals", "corrections_total",
+                        "corrections_per_page", "per_label",
+                        "n_missing_predictions")}
+            training_meta.ledger_update(pdir, rows[-1]["id"],
+                                        test_eval=compact)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -6133,6 +6741,37 @@ async def _sse_stream(gen):
                                       "X-Accel-Buffering": "no"})
 
 
+def _sftp_put_force(sftp, local: str, dest: str):
+    """sftp.put that survives a root-owned remote leftover: jobs running inside
+    the training container write as root (e.g. cocosplit's train/test.json
+    before the frozen-split era), and the SSH user can't OVERWRITE those — but
+    the parent dir is ours, so delete + re-upload works. Failures name the
+    destination; a bare 'PermissionError: [Errno 13]' in an SSE stream is
+    undebuggable."""
+    try:
+        sftp.put(local, dest)
+    except OSError:
+        try:
+            sftp.remove(dest)
+            sftp.put(local, dest)
+        except Exception as e:
+            raise RuntimeError(f"Upload failed for {dest}: {e}") from e
+
+
+def _sftp_write_force(sftp, content: bytes, dest: str):
+    """Same as _sftp_put_force for content written via sftp.open."""
+    try:
+        with sftp.open(dest, "wb") as fh:
+            fh.write(content)
+    except OSError:
+        try:
+            sftp.remove(dest)
+            with sftp.open(dest, "wb") as fh:
+                fh.write(content)
+        except Exception as e:
+            raise RuntimeError(f"Upload failed for {dest}: {e}") from e
+
+
 def _push_training_data_gen(name: str, srv: dict, passphrase: str,
                             skip_images: bool = False):
     """Generator: push images + COCO JSON + config + scripts, yielding progress lines."""
@@ -6166,28 +6805,35 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
             yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
             for i, img in enumerate(images, 1):
                 dest = f"{remote}/{name}/images/{img.name}"
-                sftp.put(str(img), dest)
+                _sftp_put_force(sftp, str(img), dest)
                 if i % 5 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name} → {dest}"
 
         dest = f"{remote}/{name}/annotations.json"
         yield f"[push] {inter/'annotations.json'} → {dest}"
-        sftp.put(str(inter / "annotations.json"), dest)
+        _sftp_put_force(sftp, str(inter / "annotations.json"), dest)
+
+        # Frozen-test-set mode: the split was computed locally — upload it
+        # (train.sh then skips cocosplit, so these files are authoritative).
+        for split in ("train.json", "test.json"):
+            if (inter / split).exists():
+                dest = f"{remote}/{name}/{split}"
+                yield f"[push] {inter/split} → {dest}  (frozen split)"
+                _sftp_put_force(sftp, str(inter / split), dest)
 
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
         dest = f"{remote}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
         yield f"[push] {cfg_local} → {dest}"
-        sftp.put(str(cfg_local), dest)
+        _sftp_put_force(sftp, str(cfg_local), dest)
 
         dest = f"{remote}/layout-model-training/tools/infer_layout.py"
         yield f"[push] infer_layout.py → {dest}"
-        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+        _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
         def sftp_put_lf(local: Path, remote_dest: str):
             """Upload a text file with LF line endings (strip Windows CRLF)."""
             content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            with sftp.open(remote_dest, "wb") as fh:
-                fh.write(content)
+            _sftp_write_force(sftp, content, remote_dest)
 
         dest_train = f"{remote}/layout-model-training/scripts/{name}.sh"
         dest_infer = f"{remote}/layout-model-training/scripts/{name}_infer.sh"
@@ -6299,6 +6945,48 @@ def _gpu_busy_warning(_quick, tag: str):
                f"`docker ps` on the server, stop the culprit, retry.")
 
 
+def _ledger_row_from_summary(inter: Path, mode: str, **extra) -> dict:
+    """Build a training-ledger row from the prepare step's train_summary.json
+    (counts + export hygiene facts), plus mode-specific extras."""
+    summary = {}
+    try:
+        summary = json.loads((inter / "train_summary.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    keys = ("max_iter", "base_lr", "ims_per_batch", "n_train_pages",
+            "n_test_pages", "n_negatives", "n_excluded_status",
+            "n_annotations", "status_filter", "include_empty_verified",
+            "server_side_split", "status_counts", "train_fraction",
+            "n_train_pool")
+    row = {"mode": mode, **{k: summary[k] for k in keys if k in summary}}
+    row.update(extra)
+    return row
+
+
+def _ledger_finish(_quick, pdir: Path, ledger_id: str, remote: str,
+                   name: str, tag: str):
+    """Mark the ledger row finished + pull detectron2's final eval scores
+    (bbox AP) from the remote metrics.json. Generator: yields log lines."""
+    from app import training_meta
+    import time as _time
+    fields = {"status": "finished",
+              "finished": _time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:
+        metrics_path = (f"{remote}/layout-model-training/outputs/{name}/"
+                        f"fast_rcnn_R_50_FPN_3x/metrics.json")
+        text = _quick(f"tail -c 200000 {metrics_path} 2>/dev/null || true")
+        ap = training_meta.parse_d2_metrics(text)
+        if ap:
+            fields["ap"] = ap
+            yield (f"[{tag}] Eval on test set: AP={ap.get('AP')}  "
+                   f"AP50={ap.get('AP50')}  (ledger updated)")
+        else:
+            yield f"[{tag}] No eval scores found in metrics.json (ledger row closed without AP)."
+    except Exception as e:
+        yield f"[{tag}] Could not fetch eval metrics: {e}"
+    training_meta.ledger_update(pdir, ledger_id, **fields)
+
+
 @app.post("/api/project/{name}/train")
 async def api_train(name: str, body: TrainRequest = TrainRequest()):
     """Push data to server then run training inside Docker. Streams log via SSE.
@@ -6332,6 +7020,9 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             return result
 
         def full_gen():
+            from app import training_meta
+            ledger_id = None
+
             # ── Check if training is already running ──────────────────────────
             already_running = False
             try:
@@ -6343,6 +7034,10 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
 
             if already_running:
                 yield "[train] Training already running — re-attaching to log..."
+                rows = training_meta.load_ledger(pdir)
+                ledger_id = next((r["id"] for r in reversed(rows)
+                                  if r.get("status") == "running"
+                                  and r.get("mode") == "train"), None)
             else:
                 # ── Validate + push data ──────────────────────────────────────
                 if not (inter / "annotations.json").exists():
@@ -6359,6 +7054,9 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
                 yield f"[train] {launch_result.strip()}"
                 yield from _job_instant_death_check(_quick, launch_result,
                                                     _train_container(srv), log_path, "train")
+                if re.search(r"LAUNCHED:\d+", launch_result or ""):
+                    ledger_id = training_meta.ledger_append(
+                        pdir, _ledger_row_from_summary(inter, mode="train"))
 
             # ── Stream log, stop when process exits ───────────────────────────
             yield "[train] Streaming log — closing browser won't stop training..."
@@ -6371,14 +7069,21 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
             # disconnect closes this generator before reaching here, so a detached
             # job is never killed). Verify the PID is gone, then stop the
             # container to free the GPU / host resources.
+            finished = True
             if not body.keep_container:
                 still = _quick(_job_still_running_cmd(_train_container(srv), pid_path))
                 if "RUNNING" in still:
                     yield "[train] Stream ended but training still running — container left up."
+                    finished = False
                 else:
                     yield f"[train] Training finished — stopping container '{_train_container(srv)}'..."
                     _quick(f"docker stop {_train_container(srv)}")
                     yield f"[train] Container '{_train_container(srv)}' stopped."
+
+            if finished and ledger_id:
+                yield from _ledger_finish(_quick, pdir, ledger_id,
+                                          srv["remote_path"].rstrip("/"),
+                                          name, "train")
 
         return await _sse_stream(full_gen())
 
@@ -6453,23 +7158,22 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
             yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
             for i, img in enumerate(images, 1):
                 dest = f"{remote}/{name}/images/{img.name}"
-                sftp.put(str(img), dest)
+                _sftp_put_force(sftp, str(img), dest)
                 if i % 10 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name}"
 
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
         dest = f"{predict_root}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
         yield f"[push] config YAML → {dest}"
-        sftp.put(str(cfg_local), dest)
+        _sftp_put_force(sftp, str(cfg_local), dest)
 
         dest = f"{predict_root}/layout-model-training/tools/infer_layout.py"
         yield f"[push] infer_layout.py → {dest}"
-        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+        _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
         def sftp_put_lf(local: Path, remote_dest: str):
             content = local.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            with sftp.open(remote_dest, "wb") as fh:
-                fh.write(content)
+            _sftp_write_force(sftp, content, remote_dest)
 
         def sftp_put_infer_sh(local: Path, remote_dest: str):
             """Upload infer.sh, patching all /workspace/ paths to include ws_prefix.
@@ -6480,8 +7184,7 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
             if ws_prefix:
                 content = content.replace(b"/workspace/",
                                           f"/workspace/{ws_prefix}/".encode())
-            with sftp.open(remote_dest, "wb") as fh:
-                fh.write(content)
+            _sftp_write_force(sftp, content, remote_dest)
 
         dest_infer = f"{predict_root}/layout-model-training/scripts/{name}_infer.sh"
         yield f"[push] infer.sh → {dest_infer}" + (f" (ws_prefix='{ws_prefix}')" if ws_prefix else "")
@@ -6665,14 +7368,14 @@ def _push_infer_from_gen(new_name: str, source_name: str,
             total = len(images)
             yield f"[infer-from] Uploading {total} image(s) → {remote}/{new_name}/images/"
             for i, img in enumerate(images, 1):
-                sftp.put(str(img), f"{remote}/{new_name}/images/{img.name}")
+                _sftp_put_force(sftp, str(img), f"{remote}/{new_name}/images/{img.name}")
                 if i % 10 == 0 or i == total:
                     yield f"[infer-from]   {i}/{total}  {img.name}"
 
         # Upload the inference tool
         dest = f"{predict_root}/layout-model-training/tools/infer_layout.py"
         yield f"[infer-from] infer_layout.py → {dest}"
-        sftp.put(str(Path(__file__).parent / "infer_layout.py"), dest)
+        _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
         # Build an infer script: source model weights/config, new project images/output
         pfx = (ws_prefix + "/") if ws_prefix else ""
@@ -6698,8 +7401,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
 
         script_dest = f"{predict_root}/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
         yield f"[infer-from] script → {script_dest}"
-        with sftp.open(script_dest, "wb") as fh:
-            fh.write(script)
+        _sftp_write_force(sftp, script, script_dest)
 
         yield "[infer-from] All files uploaded successfully."
     finally:
@@ -6773,6 +7475,8 @@ class FinetuneFromRequest(BaseModel):
     base_lr:           float = 0.00025    # gentle: don't wreck what the model knows
     skip_image_upload: bool = False
     keep_container:    bool = False
+    status_filter:          bool = True   # P10.2: only corrected+verified train
+    include_empty_verified: bool = True
 
 
 @app.post("/api/project/{name}/finetune-from/{source}")
@@ -6812,33 +7516,43 @@ async def api_finetune_from(name: str, source: str,
         # Regenerate COCO + config locally from the CURRENT (corrected)
         # annotations. Standard solver params here so the normal train.sh that
         # gets pushed alongside is not silently rewritten with fine-tune values.
-        prepare_training_data(
+        from app.coco_convert import make_split_block
+        prep = prepare_training_data(
             project_name     = name,
             ann_dir          = pdir / "annotations",
             labels           = cfg["labels"],
             intermediate_dir = inter,
             base_yaml_path   = BASE_YAML,
+            status_filter          = body.status_filter,
+            include_empty_verified = body.include_empty_verified,
+            test_stems             = _frozen_test_stems(pdir),
         )
 
         # The fine-tune script: identical to train.sh except MODEL.WEIGHTS
         # points at the source model and the solver is short + gentle.
+        out_dir = (f"/workspace/layout-model-training/outputs/{name}/"
+                   f"fast_rcnn_R_50_FPN_3x")
         src_weights = (f"/workspace/layout-model-training/outputs/{source}/"
                        f"fast_rcnn_R_50_FPN_3x/model_final.pth")
+        # Self-fine-tune (source == target): the checkpoint cleanup below would
+        # delete the very weights we warm-start from — copy them aside first.
+        bootstrap_block = ""
+        if source == name:
+            bootstrap_block = f"""
+echo "=== Self-fine-tune: copying current weights aside ==="
+cp {src_weights} {out_dir}/bootstrap_weights.pth
+"""
+            src_weights = f"{out_dir}/bootstrap_weights.pth"
+        split_block = make_split_block(name, prep.get("server_side_split"))
+        extra_opts = (" \\\n    DATALOADER.FILTER_EMPTY_ANNOTATIONS False"
+                      if prep.get("n_negatives") else "")
         ft_script = f"""#!/bin/bash
 set -e
 echo "=== Dedust: fine-tune {name} from {source} model ==="
-echo "Running cocosplit..."
-cd /workspace/layout-model-training
-python3 utils/cocosplit.py \\
-    --annotation-path /workspace/{name}/annotations.json \\
-    --train            /workspace/{name}/train.json \\
-    --test             /workspace/{name}/test.json \\
-    --split-ratio      0.8 \\
-    --having-annotations
-
+{split_block}
+{bootstrap_block}
 echo "=== Cleaning previous checkpoints of {name} ==="
-rm -f /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/*.pth
-rm -f /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/last_checkpoint
+rm -f {out_dir}/model_*.pth {out_dir}/last_checkpoint
 
 echo "=== Starting fine-tune (warm start from {source}) ==="
 cd /workspace/layout-model-training/tools
@@ -6849,12 +7563,12 @@ python3 train_net.py \\
     --json_annotation_val   /workspace/{name}/test.json \\
     --image_path_val        /workspace/{name}/images \\
     --config-file           /workspace/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml \\
-    OUTPUT_DIR  /workspace/layout-model-training/outputs/{name}/fast_rcnn_R_50_FPN_3x/ \\
+    OUTPUT_DIR  {out_dir}/ \\
     MODEL.WEIGHTS {src_weights} \\
     SOLVER.IMS_PER_BATCH 2 \\
     SOLVER.BASE_LR {base_lr} \\
     SOLVER.MAX_ITER {max_iter} \\
-    DATALOADER.NUM_WORKERS 2
+    DATALOADER.NUM_WORKERS 2{extra_opts}
 echo "=== Fine-tune complete ==="
 """
 
@@ -6870,6 +7584,9 @@ echo "=== Fine-tune complete ==="
             return result
 
         def full_gen():
+            from app import training_meta
+            ledger_id = None
+
             # ── Re-attach if a fine-tune is already running ────────────────────
             already_running = False
             try:
@@ -6881,6 +7598,10 @@ echo "=== Fine-tune complete ==="
 
             if already_running:
                 yield "[ft] Fine-tune already running — re-attaching to log..."
+                rows = training_meta.load_ledger(pdir)
+                ledger_id = next((r["id"] for r in reversed(rows)
+                                  if r.get("status") == "running"
+                                  and r.get("mode") == "finetune"), None)
             else:
                 yield f"[ft] source model : {source}"
                 yield f"[ft] target project: {name}"
@@ -6906,8 +7627,9 @@ echo "=== Fine-tune complete ==="
                 try:
                     dest = f"{remote}/layout-model-training/scripts/{name}_finetune_from_{source}.sh"
                     yield f"[ft] finetune script → {dest}"
-                    with sftp2.open(dest, "wb") as fh:
-                        fh.write(ft_script.replace("\r\n", "\n").encode())
+                    _sftp_write_force(sftp2,
+                                      ft_script.replace("\r\n", "\n").encode(),
+                                      dest)
                 finally:
                     sftp2.close()
                     c2.close()
@@ -6921,6 +7643,11 @@ echo "=== Fine-tune complete ==="
                 yield f"[ft] {launch_result.strip()}"
                 yield from _job_instant_death_check(_quick, launch_result,
                                                     _train_container(srv), log_path, "ft")
+                if re.search(r"LAUNCHED:\d+", launch_result or ""):
+                    ledger_id = training_meta.ledger_append(
+                        pdir, _ledger_row_from_summary(
+                            inter, mode="finetune", source=source,
+                            max_iter=max_iter, base_lr=base_lr))
 
             # ── Stream log until the process exits ─────────────────────────────
             yield "[ft] Streaming log — closing browser won't stop the fine-tune..."
@@ -6929,16 +7656,22 @@ echo "=== Fine-tune complete ==="
             yield from ssh_ops.stream_command(
                 srv["host"], srv["user"], srv["key_path"], tail_cmd, passphrase)
 
+            finished = True
             if not body.keep_container:
                 still = _quick(_job_still_running_cmd(_train_container(srv), pid_path))
                 if "RUNNING" in still:
                     yield "[ft] Stream ended but fine-tune still running — container left up."
+                    finished = False
                 else:
                     yield f"[ft] Finished — stopping container '{_train_container(srv)}'..."
                     _quick(f"docker stop {_train_container(srv)}")
                     yield f"[ft] Container '{_train_container(srv)}' stopped."
                     yield (f"[ft] Done. '{name}' now has its own fine-tuned model — "
                            f"'Run inference' on this project will use it.")
+
+            if finished and ledger_id:
+                yield from _ledger_finish(_quick, pdir, ledger_id, remote,
+                                          name, "ft")
 
         return await _sse_stream(full_gen())
 
@@ -6986,7 +7719,8 @@ def api_apply_predictions(name: str):
         if not ann_file.exists():
             continue
         ann = _json.loads(ann_file.read_text(encoding="utf-8"))
-        if (ann.get("flags") or {}).get("status") == "skip":   # clutter — never populate
+        # status "skip" = the page receives no annotations — never populate
+        if (ann.get("flags") or {}).get("status") == "skip":
             skipped_clutter += 1
             continue
         if ann.get("shapes"):  # already has hand annotations — skip
@@ -7009,6 +7743,9 @@ class PerspectiveRequest(BaseModel):
     stem:   str
     points: list = []  # [[x,y]×4] for manual; empty [] triggers auto-detection
     save:   bool = False
+    margin: float = 0  # px: push each corner outward so exact corner clicks
+                       # don't shave content off; may reach outside the image
+                       # (those pixels come out black)
 
 
 def _auto_detect_page_quad(img_np):
@@ -7107,12 +7844,15 @@ def _auto_detect_page_quad(img_np):
 @app.post("/api/page/perspective")
 def api_perspective(body: PerspectiveRequest):
     """
-    Perspective (trapezoid→rectangle) correction.
+    Perspective (trapezoid→rectangle) correction. The four points — in ANY
+    order — become the corners of the corrected image (output = exactly the
+    quad; no canvas expansion).
 
     points=[]   → auto-detect page corners, return preview + detected_points.
-    points=[×4] → use the supplied corners (manual or re-submit of detected).
-    save=False  → base64 JPEG preview only.
-    save=True   → overwrite image, clear shapes, update JSON dimensions.
+    points=[×4] → use the supplied corners (manual tokens or adjusted detect).
+    save=False  → downscaled base64 JPEG preview + output dimensions.
+    save=True   → overwrite the image file, remap all shape points through the
+                  same homography, update JSON dimensions.
     """
     import base64, io, math
     import cv2
@@ -7151,45 +7891,53 @@ def api_perspective(body: PerspectiveRequest):
     else:
         detected_points = [[float(v) for v in p] for p in body.points]
 
-    # Sort into TL, TR, BR, BL regardless of supplied order
+    # Sort into TL, TR, BR, BL regardless of supplied order. The sum/diff
+    # method is robust to mild rotation (a y-sort mis-pairs corners when two
+    # corners on the same side land at nearly equal heights).
     pts = [tuple(p) for p in detected_points]
-    by_y   = sorted(pts, key=lambda p: p[1])
-    top    = sorted(by_y[:2], key=lambda p: p[0])
-    bottom = sorted(by_y[2:], key=lambda p: p[0])
-    tl, tr = top[0],    top[1]
-    bl, br = bottom[0], bottom[1]
+    tl = min(pts, key=lambda p: p[0] + p[1])
+    br = max(pts, key=lambda p: p[0] + p[1])
+    tr = max(pts, key=lambda p: p[0] - p[1])
+    bl = min(pts, key=lambda p: p[0] - p[1])
+    if len({tl, tr, br, bl}) != 4:
+        raise HTTPException(status_code=400,
+                            detail="Corner ordering failed — the four points "
+                                   "do not form a usable quadrilateral")
 
-    w_top  = math.dist(tl, tr);  w_bot  = math.dist(bl, br)
+    # Optional safety margin: push each corner radially away from the quad's
+    # centroid, so clicking the exact table corners keeps a little surrounding
+    # area instead of shaving the corners off.
+    if body.margin and body.margin > 0:
+        m  = float(body.margin)
+        cx = sum(p[0] for p in (tl, tr, br, bl)) / 4.0
+        cy = sum(p[1] for p in (tl, tr, br, bl)) / 4.0
+
+        def _push(p):
+            dx, dy = p[0] - cx, p[1] - cy
+            dist = math.hypot(dx, dy) or 1.0
+            return (p[0] + m * dx / dist, p[1] + m * dy / dist)
+
+        tl, tr, br, bl = _push(tl), _push(tr), _push(br), _push(bl)
+
+    w_top  = math.dist(tl, tr);  w_bot   = math.dist(bl, br)
     h_left = math.dist(tl, bl);  h_right = math.dist(tr, br)
-    dst_w  = int(max(w_top, w_bot))
-    dst_h  = int(max(h_left, h_right))
+    dst_w  = int(round(max(w_top, w_bot)))
+    dst_h  = int(round(max(h_left, h_right)))
 
     if dst_w < 2 or dst_h < 2:
         raise HTTPException(status_code=400, detail="Degenerate quadrilateral")
 
-    # ── Build homography and warp the full image ───────────────────────────────
+    # ── Warp: the four points BECOME the image corners ─────────────────────────
+    # (The old version expanded the canvas to contain the whole warped image,
+    # so the result was the corrected quad floating in stretched margins —
+    # never what the user asked for. The output is exactly the quad.)
     src_arr = np.float32([tl, tr, br, bl])
     dst_arr = np.float32([(0, 0), (dst_w, 0), (dst_w, dst_h), (0, dst_h)])
     H_mat   = cv2.getPerspectiveTransform(src_arr, dst_arr)
-
-    # Project all four image corners through H to find the full output canvas.
-    img_corners = np.float32(
-        [[0, 0], [W_img, 0], [W_img, H_img], [0, H_img]]
-    ).reshape(-1, 1, 2)
-    wc = cv2.perspectiveTransform(img_corners, H_mat).reshape(-1, 2)
-
-    min_x, min_y = float(wc[:, 0].min()), float(wc[:, 1].min())
-    max_x, max_y = float(wc[:, 0].max()), float(wc[:, 1].max())
-
-    # Translate so all pixels land in non-negative coordinates.
-    T = np.array([[1, 0, -min_x], [0, 1, -min_y], [0, 0, 1]],
-                 dtype=np.float64)
-    H_eff = (T @ H_mat.astype(np.float64)).astype(np.float32)
-    out_w  = int(round(max_x - min_x))
-    out_h  = int(round(max_y - min_y))
+    out_w, out_h = dst_w, dst_h
 
     try:
-        out_np = cv2.warpPerspective(img_np, H_eff, (out_w, out_h),
+        out_np = cv2.warpPerspective(img_np, H_mat, (out_w, out_h),
                                      flags=cv2.INTER_CUBIC)
         out = Image.fromarray(out_np)
     except Exception:
@@ -7208,14 +7956,35 @@ def api_perspective(body: PerspectiveRequest):
             img_path.suffix.lstrip(".").lower(), "JPEG")
         save_kw = {"quality": 92} if fmt == "JPEG" else {}
         out.save(str(img_path), format=fmt, **save_kw)
-        data["shapes"]      = []
+        # Transform existing shapes through the same homography instead of
+        # clearing them (each point is mapped exactly; rectangles stay
+        # axis-aligned only approximately — re-run lattice if precision
+        # matters). Shapes fully outside the kept quad land off-canvas.
+        moved = 0
+        for sh in data.get("shapes", []):
+            pts_arr = sh.get("points") or []
+            if not pts_arr:
+                continue
+            src = np.float32(pts_arr).reshape(-1, 1, 2)
+            warped = cv2.perspectiveTransform(src, H_mat).reshape(-1, 2)
+            sh["points"] = [[round(float(x), 1), round(float(y), 1)]
+                            for x, y in warped]
+            moved += 1
         data["imageWidth"]  = out_w
         data["imageHeight"] = out_h
         _write_json(jf, data)
-        return {"ok": True, "width": out_w, "height": out_h}
+        return {"ok": True, "width": out_w, "height": out_h,
+                "shapes_transformed": moved}
     else:
+        # Preview at reduced size — the modal only needs a visual check.
+        prev = out
+        long_side = max(out_w, out_h)
+        if long_side > 1400:
+            scale = 1400 / long_side
+            prev = out.resize((max(1, int(out_w * scale)),
+                               max(1, int(out_h * scale))))
         buf = io.BytesIO()
-        out.save(buf, format="JPEG", quality=88)
+        prev.save(buf, format="JPEG", quality=88)
         buf.seek(0)
         b64 = base64.b64encode(buf.read()).decode()
         return {"ok": True, "preview": b64,
@@ -8146,6 +8915,95 @@ def _shape_topleft(sh: dict):
     return (min(ys), min(xs))
 
 
+class NewsflowMdRequest(BaseModel):
+    stems: List[str] = []      # ordered pages to export
+    roles: dict = {}           # label -> text|title|breaker|furniture|ignore
+                               # (the client's saved newsflow role mapping)
+
+
+@app.post("/api/export/newsflow-md")
+def api_export_newsflow_md(folder: str = Query(...), body: NewsflowMdRequest = ...):
+    """Export the reconstructed newspaper flow of the selected pages as ONE
+    Markdown file. Elements are taken in flow_order (stamped by the 📰 Flow
+    reconstruction): titles become headings (level from the column span the
+    label encodes: 3sav '#', 2sav '##', otherwise '###'), text elements become
+    paragraphs (best layer: human > llm > ocr > pdf), other breakers become
+    *[label]* placeholders. Pages appear in the given order behind
+    '<!-- ===== page <stem> ===== -->' markers; every article change emits an
+    '<!-- article <stem>:<n> -->' comment (article 0 = carryover text before
+    the page's first title) so downstream mining can segment."""
+    d = _resolve_folder(folder)
+    roles = body.roles or {}
+
+    def role_of(label: str) -> str:
+        if label in roles:
+            return roles[label]
+        low = (label or "").lower()
+        if "szoveg" in low or "text" in low or "cikk" in low:
+            return "text"
+        if low.startswith("cim") or "title" in low:
+            return "title"
+        return "breaker"
+
+    def heading(label: str) -> str:
+        low = (label or "").lower()
+        if "3sav" in low:
+            return "#"
+        if "2sav" in low:
+            return "##"
+        return "###"
+
+    out: list = []
+    pages_done = pages_missing = articles = 0
+    for stem in body.stems:
+        jf = d / f"{stem}.json"
+        if not jf.exists():
+            continue
+        try:
+            shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
+        except Exception:
+            continue
+        out.append(f"\n<!-- ===== page {stem} ===== -->\n")
+        flow = [s for s in shapes if s.get("flow_order") is not None]
+        if not flow:
+            out.append("\n<!-- no flow reconstruction on this page -->\n")
+            pages_missing += 1
+            continue
+        pages_done += 1
+        flow.sort(key=lambda s: s["flow_order"])
+        last_gid = object()
+        for s in flow:
+            gid = s.get("group_id") or 0
+            if gid != last_gid:
+                out.append(f"\n<!-- article {stem}:{gid}"
+                           + (" carryover" if gid == 0 else "") + " -->\n")
+                if gid != 0:
+                    articles += 1
+                last_gid = gid
+            label = s.get("label") or ""
+            role = role_of(label)
+            txt = _best_shape_text(s)
+            if role == "title":
+                out.append(f"\n{heading(label)} {txt or '(üres cím)'}\n")
+            elif role == "text":
+                out.append(f"\n{txt}\n" if txt else "\n<!-- empty text element -->\n")
+            elif role in ("breaker",):
+                out.append(f"\n*[{label}]*" + (f" {txt}" if txt else "") + "\n")
+            # furniture / ignore never carry flow_order, but be safe: skip
+    from fastapi.responses import Response
+    md = "".join(out).lstrip("\n")
+    return Response(
+        content=md.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="newsflow_export.md"',
+            "X-EconAI-Pages": str(pages_done),
+            "X-EconAI-Missing": str(pages_missing),
+            "X-EconAI-Articles": str(articles),
+        },
+    )
+
+
 @app.post("/api/export/json")
 def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
     """Export structured (JSON) records across the selected pages.
@@ -8154,9 +9012,13 @@ def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
     it has one), ignore (skip), or propagate (a non-structured title annotation
     whose text is carried into every later record under a key named after the
     label, until the next annotation of that label resets it). Records are taken
-    in reading order (top→bottom, then left→right) within each page, pages in the
-    given order. Returns one JSON file (mode=single) or a zip of one file per
-    record (mode=per_annotation)."""
+    in READING order within each page: flow_order when the page carries a
+    newsflow reconstruction (columns are read column-by-column, so a propagated
+    title never leaks across columns), else top→bottom by position. Pages in
+    the given order; the carry persists across pages (a street section
+    continuing on the next page keeps its street until the next title).
+    Returns one JSON file (mode=single) or a zip of one file per record
+    (mode=per_annotation)."""
     import io as _io
     d = _resolve_folder(folder)
     modes = body.label_modes or {}
@@ -8173,7 +9035,16 @@ def api_export_json(folder: str = Query(...), body: JsonExportRequest = ...):
             shapes = json.loads(jf.read_text(encoding="utf-8")).get("shapes", [])
         except Exception:
             continue
-        order = sorted(range(len(shapes)), key=lambda i: _shape_topleft(shapes[i]))
+        if any(s.get("flow_order") is not None for s in shapes):
+            # newsflow page: the stamped reading order IS the truth — a raw
+            # top-to-bottom sort would zig-zag between columns and assign
+            # propagated titles to the wrong column's records
+            order = sorted(range(len(shapes)), key=lambda i:
+                           (0, shapes[i]["flow_order"])
+                           if shapes[i].get("flow_order") is not None
+                           else (1,) + _shape_topleft(shapes[i]))
+        else:
+            order = sorted(range(len(shapes)), key=lambda i: _shape_topleft(shapes[i]))
         for i in order:
             sh = shapes[i]
             mode = modes.get(sh.get("label", ""))
@@ -8271,46 +9142,25 @@ class DatasetVariable(BaseModel):
     min:    Optional[float] = None     # hard bounds → diagnostics rung 3
     max:    Optional[float] = None
     parse:  Optional[DatasetParseConv] = None   # per-variable override
-    dist:   Optional[dict] = None      # distribution overrides, e.g.
-                                       # {"z_log": 8, "top_gap": null} (null disables)
+    # Phase 2 diagnostics (app/diagnostics.py)
+    stats:  bool = True                # False = no distribution / trailing-1 tests
+                                       # (serial numbers, codes)
+    scale:  Optional[str] = None       # "log" | "raw"; default log when all ≥ 0
+    esd:    bool = False               # run Generalized ESD on this variable
 
 
 class DatasetIdentity(BaseModel):
-    """Printed-total identity within one record: target ≈ Σ sum_of.
-    Missing summands count as 0 (the dash means zero in these books);
-    the record is skipped when the target or a summand failed to parse."""
-    target:  str
-    sum_of:  List[str]
-    tol_rel: float = 0.02              # |diff| allowed: max(tol_abs, tol_rel·scale)
-    tol_abs: float = 2.0
+    total: str                         # variable that must equal …
+    parts: List[str]                   # … the sum of these (dash = 0)
+    label: Optional[str] = None
 
 
-class DatasetRatio(BaseModel):
-    """num/den must fall in [min, max]. Either side may live in another
-    dataset ("dataset:variable") or project ("project/dataset:variable"),
-    joined on the resolved entity key id. Records where either side is
-    missing/unparsed/unjoined are skipped — those problems have their own
-    findings already."""
-    name:    str
-    num:     str
-    den:     str
-    min:     Optional[float] = None
-    max:     Optional[float] = None
-    min_den: float = 0.0               # skip tiny denominators (ratio explodes)
-
-
-class DatasetDistribution(BaseModel):
-    """Robust univariate outlier flags per numeric variable. Flag, never
-    auto-fix: agrarian data has true heavy tails (Budapest exists)."""
-    z_log:   Optional[float] = 6.0     # |z| of log(value), median/MAD; null = off
-    top_gap: Optional[float] = 50.0    # max / second-max ratio; null = off
-    min_n:   int = 30                  # minimum parsed values for the z test
-
-
-class DatasetChecks(BaseModel):
-    identities:   List[DatasetIdentity] = []
-    ratios:       List[DatasetRatio] = []
-    distribution: DatasetDistribution = DatasetDistribution()
+class DatasetTotals(BaseModel):
+    # key text of a printed total row ("Összesen"); matched against the raw
+    # text and its accent-stripped lowercase form. Such rows must ALSO match
+    # record.exclude_keys (they are not records).
+    row_pattern: str
+    min_match:   Optional[float] = None
 
 
 class DatasetDecl(BaseModel):
@@ -8320,7 +9170,9 @@ class DatasetDecl(BaseModel):
     record:    DatasetRecordSpec
     variables: List[DatasetVariable]
     parse:     DatasetParseConv = DatasetParseConv()
-    checks:    DatasetChecks = DatasetChecks()
+    identities:  List[DatasetIdentity] = []
+    totals:      Optional[DatasetTotals] = None
+    diagnostics: dict = {}             # overrides of diagnostics.DEFAULTS
 
 
 def _datasets_dir(folder: str) -> Path:
@@ -8355,6 +9207,24 @@ def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
             int(sl), int(c)
         except (TypeError, ValueError):
             probs.append(f"record.key.columns: '{sl}': '{c}' is not slot: column")
+    var_names = {v.name for v in decl.variables}
+    for ident in decl.identities:
+        for vn in [ident.total] + list(ident.parts):
+            if vn not in var_names:
+                probs.append(f"identity '{ident.label or ident.total}': unknown variable '{vn}'")
+    if decl.totals:
+        try:
+            re.compile(decl.totals.row_pattern, re.IGNORECASE)
+        except re.error as e:
+            probs.append(f"totals.row_pattern: invalid regex ({e})")
+    for v in decl.variables:
+        if v.scale not in (None, "log", "raw"):
+            probs.append(f"variable '{v.name}': scale must be 'log' or 'raw'")
+        conv = v.parse or decl.parse
+        if conv.decimal and conv.decimal in (conv.thousands or []):
+            probs.append(f"variable '{v.name}': '{conv.decimal}' is both the decimal "
+                         f"mark and a thousands separator")
+            break
     seen = set()
     for v in decl.variables:
         if v.name in seen:
@@ -8366,17 +9236,6 @@ def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
             probs.append(f"variable '{v.name}': slot {v.slot} outside 1..{n_slots}")
     if n_slots and not (1 <= decl.record.key.slot <= n_slots):
         probs.append(f"record.key: slot {decl.record.key.slot} outside 1..{n_slots}")
-    names = {v.name for v in decl.variables}
-    for idn in decl.checks.identities:
-        for nm in [idn.target] + idn.sum_of:
-            if nm not in names:
-                probs.append(f"checks.identities '{idn.target}': unknown variable '{nm}'")
-    for rt in decl.checks.ratios:
-        if rt.min is None and rt.max is None:
-            probs.append(f"checks.ratios '{rt.name}': needs min and/or max")
-        for spec in (rt.num, rt.den):
-            if ":" not in spec and spec not in names:
-                probs.append(f"checks.ratios '{rt.name}': unknown variable '{spec}'")
     return probs
 
 
@@ -8517,12 +9376,18 @@ def _ds_page_struct(data: dict, decl: DatasetDecl):
 
 # ── The builder ─────────────────────────────────────────────────────────────
 
-def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
+def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
+              keep_excluded: bool = False):
     """Assemble records from the page JSONs per the declaration.
 
     Returns (records, findings, stats). Each record's values carry full
     provenance + the four layer texts (the diagnose report needs them);
     the build endpoint strips the layers before responding.
+
+    keep_excluded: rows matching record.exclude_keys (printed totals, header
+    lines) are returned too, in reading order, marked rec["excluded"] = True
+    — the printed-totals check needs them. Callers must filter them out of
+    anything that treats records as data.
 
     findings: flat list of {check, variable?, stem, idx?, row_i?, row_n?,
     y0?, y1?, layers?, detail} — the structure rung is emitted here, the
@@ -8776,9 +9641,11 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
 
             for u_i, ku in enumerate(key_seq):
                 layer, ktext = _ds_best(ku["layers"])
-                if _key_excluded(ktext):
+                is_excluded = _key_excluded(ktext)
+                if is_excluded:
                     n_excluded[0] += 1    # printed total/header row — not a record
-                    continue
+                    if not keep_excluded:
+                        continue
                 rec = {"cycle": cycle, "table": tb,
                        "lattice_row": ku.get("lattice_row"), "unit_i": u_i,
                        "key": {"text": ktext, "layer": layer,
@@ -8790,6 +9657,8 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                "y0": ku["y0"], "y1": ku["y1"],
                                "layers": ku["layers"]},
                        "values": {}}
+                if is_excluded:
+                    rec["excluded"] = True
                 kfold = _auth_fold(ktext) if ktext.strip() else ""
                 for sl, vs in vars_by_slot.items():
                     pm = slots.get(sl)
@@ -8847,22 +9716,11 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None):
                                      "detail": f"keyed join: slot-{sl} row '{entry['text']}' "
                                                f"matches no row on the key page"})
 
-    stats = {"pages": n_pages_used, "cycles": len(cycles), "records": len(records),
+    stats = {"pages": n_pages_used, "cycles": len(cycles),
+             "records": sum(1 for r in records if not r.get("excluded")),
              "slots": n_slots, "separator_cells": n_separators[0],
              "excluded_records": n_excluded[0]}
     return records, findings, stats
-
-
-def _ds_ref_parse(spec: str):
-    """Ratio operand: 'var' | 'dataset:var' | 'project/dataset:var'
-    → (project|None, dataset|None, variable)."""
-    left, sep, var = spec.rpartition(":")
-    if not sep:
-        return None, None, spec
-    if "/" in left:
-        proj, ds = left.split("/", 1)
-        return proj, ds, var
-    return None, left, var
 
 
 def _ds_prov(v: dict) -> dict:
@@ -8897,240 +9755,204 @@ def api_dataset_build(name: str, folder: str = Query(...),
 
 
 class DatasetDiagnoseBody(BaseModel):
-    pages: Optional[str] = None        # extra 1-indexed page-range restriction
+    pages:          Optional[str] = None   # extra 1-indexed page-range restriction
+    phase2:         bool = True            # totals / identities / statistics
+    record_history: bool = True            # update the adjudication history
+                                           # (ignored for page-restricted runs)
 
 
-_DS_MAX_ITEMS = 3000                   # payload cap, like the duplicate report
+_DS_MAX_ITEMS = 6000                   # payload cap, like the duplicate report
+
+# report order: exact errors first, then statistics, then bookkeeping
+_DS_CHECK_ORDER = {"structure": 0, "parse": 1, "range": 2, "identity": 3,
+                   "totals": 4, "trailing1_cell": 5, "outlier": 6, "digits": 7,
+                   "trailing1": 8, "unresolved": 9, "key": 10,
+                   "duplicate_key": 11, "totals_unanchored": 12}
+# checks a reviewer may mark "confirmed genuine" (statistical / arithmetic
+# flags — a parse error or a structure mismatch is never "genuine")
+_DS_CONFIRMABLE = {"outlier", "digits", "trailing1", "trailing1_cell",
+                   "identity", "totals", "totals_unanchored", "range"}
 
 
-@app.post("/api/dataset/{name}/diagnose")
-def api_dataset_diagnose(name: str, folder: str = Query(...),
-                         body: DatasetDiagnoseBody = ...):
-    """Run the check ladder over the declared dataset, cheap to expensive:
-    1. structure — pages/cells that disagree with the declaration
-    2. parse     — values that fail their dtype
-    3. hard constraints — min/max violations, unresolved entity cells,
-                          duplicate/missing keys
-    4. identity  — printed-total identities within a record (target ≈ Σ bins)
-    5. ratio     — declared ratio rules, operands joinable from another
-                   dataset/project by the resolved entity key id
-    6. distribution — robust univariate outliers (log-scale median/MAD z,
-                   top-gap); flag, never auto-fix
-    Findings are grouped check → variable in the duplicate-report item shape,
-    so the client renders them in the existing report chassis."""
+def _ds_side_path(folder: str, name: str, kind: str) -> Path:
+    """Per-dataset side files next to the declaration:
+    <name>.confirmed.json (genuine-value confirmations) and
+    <name>.diag_history.json (adjudication across runs)."""
+    return _datasets_dir(folder) / f"{name}.{kind}.json"
+
+
+def _ds_side_load(folder: str, name: str, kind: str) -> dict:
+    p = _ds_side_path(folder, name, kind)
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _ds_side_save(folder: str, name: str, kind: str, data: dict):
+    p = _ds_side_path(folder, name, kind)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(p, data)
+
+
+def _ds_run_diagnostics(folder: str, name: str, pages: Optional[str] = None,
+                        phase2: bool = True, record_history: bool = True) -> dict:
+    """The whole check ladder (Phase 1 + Phase 2) for one dataset.
+    Returns the report payload: groups (report chassis items), counts, the
+    per-variable quality stats, the trailing-1 heat map, identity/total
+    stats, the adjudication table and the run history."""
+    from app import diagnostics as dg
     d = _resolve_folder(folder)
     decl = _ds_load_decl(folder, name)
-    records, findings, stats = _ds_build(d, decl, extra_pages=body.pages)
+    rows, findings, stats = _ds_build(d, decl, extra_pages=pages, keep_excluded=True)
+    records = [r for r in rows if not r.get("excluded")]
+    for r in rows:                     # accent-folded key for pattern tests
+        t = r["key"].get("text") or ""
+        r["key"]["fold"] = (_unidecode(t) if _unidecode is not None else t).lower()
     key = decl.record.key
+    P = dg.params(decl.diagnostics)
 
-    def item_from_value(v, extra=None):
-        it = {"stem": v.get("stem"), "idx": v.get("idx"), "row_i": v.get("row_i"),
-              "row_n": v.get("row_n"), "y0": v.get("y0"), "y1": v.get("y1")}
-        L = v.get("layers") or {}
-        it.update({"pdf": (L.get("pdf") or "")[:300], "ocr": (L.get("ocr") or "")[:300],
-                   "llm": (L.get("llm") or "")[:300], "human": L.get("human") or ""})
-        if extra:
-            it.update(extra)
-        return it
+    raw: List[dict] = []               # uniform finding dicts (see diagnostics.py)
 
-    groups: dict = {}                  # (check, variable or "") → group
-    # a declared variable sitting on the key position reports unresolved
-    # entities under its own name — don't double-report at the key level
+    # 1 — structure (from the builder)
+    for f in findings:
+        raw.append({"check": "structure", "variable": f.get("variable"),
+                    "severity": "error",
+                    "ref": {"stem": f["stem"], "idx": f.get("idx"),
+                            "row_i": f.get("row_i"), "row_n": f.get("row_n")},
+                    "detail": f["detail"],
+                    "group_title": "Pages / cells that disagree with the declaration"})
+
+    # 2 & 3 — per-value checks over the assembled records
     key_has_var = any(v.slot == key.slot and v.column == key.column
                       and v.dtype == "entity" for v in decl.variables)
 
     def _num(x):
         return int(x) if isinstance(x, float) and x == int(x) else x
 
-    def add(check, variable, title, item):
-        g = groups.setdefault((check, variable or ""), {
-            "check": check, "variable": variable, "title": title, "items": []})
-        g["items"].append(item)
-
-    # 1 — structure (from the builder)
-    for f in findings:
-        add("structure", f.get("variable"),
-            "Pages / cells that disagree with the declaration",
-            {"stem": f["stem"], "idx": f.get("idx"), "row_i": f.get("row_i"),
-             "row_n": f.get("row_n"), "y0": None, "y1": None,
-             "pdf": "", "ocr": "", "llm": "", "human": "",
-             "detail": f["detail"]})
-
-    # 2 & 3 — per-value checks over the assembled records
     key_seen: dict = {}
     for rec in records:
         k = rec["key"]
         ktext = (k.get("text") or "").strip()
         conv = decl.parse
         if not ktext and not k.get("blank"):
-            add("key", None, "Records with an empty key cell",
-                item_from_value(k, {"detail": "key text is empty"}))
+            raw.append({"check": "key", "severity": "error", "ref": k,
+                        "detail": "key text is empty",
+                        "group_title": "Records with an empty key cell"})
         elif ktext and ktext not in conv.missing:
             ident = k.get("id") or ("~" + _auth_fold(ktext))
             key_seen.setdefault(ident, []).append(rec)
             if key.dtype == "entity" and not k.get("id") and not key_has_var:
-                add("unresolved", None, "Key cells with no resolved entity",
-                    item_from_value(k, {"detail": f"'{ktext}' unresolved"}))
+                raw.append({"check": "unresolved", "severity": "mild", "ref": k,
+                            "detail": f"'{ktext}' unresolved",
+                            "group_title": "Key cells with no resolved entity"})
         for var in decl.variables:
             v = rec["values"][var.name]
             if v["status"] == "error":
-                add("parse", var.name,
-                    f"{var.name}: values that fail dtype {var.dtype}",
-                    item_from_value(v, {"detail": f"'{v['text']}' is not a {var.dtype}"}))
+                raw.append({"check": "parse", "variable": var.name, "severity": "error",
+                            "ref": v, "detail": f"'{v['text']}' is not a {var.dtype}",
+                            "group_title": f"{var.name}: values that fail dtype {var.dtype}"})
             elif v["status"] == "ok":
                 if var.dtype in ("number", "int"):
                     if var.min is not None and v["value"] < var.min:
-                        add("range", var.name, f"{var.name}: below min {_num(var.min)}",
-                            item_from_value(v, {"detail": f"{_num(v['value'])} < {_num(var.min)}"}))
+                        raw.append({"check": "range", "variable": var.name,
+                                    "severity": "error", "ref": v,
+                                    "detail": f"{_num(v['value'])} < {_num(var.min)}",
+                                    "group_title": f"{var.name}: below min {_num(var.min)}"})
                     elif var.max is not None and v["value"] > var.max:
-                        add("range", var.name, f"{var.name}: above max {_num(var.max)}",
-                            item_from_value(v, {"detail": f"{_num(v['value'])} > {_num(var.max)}"}))
+                        raw.append({"check": "range", "variable": var.name,
+                                    "severity": "error", "ref": v,
+                                    "detail": f"{_num(v['value'])} > {_num(var.max)}",
+                                    "group_title": f"{var.name}: above max {_num(var.max)}"})
                 elif var.dtype == "entity" and not (v.get("authority") or {}).get("id"):
-                    add("unresolved", var.name,
-                        f"{var.name}: cells with no resolved entity",
-                        item_from_value(v, {"detail": f"'{v['text']}' unresolved"}))
-
+                    raw.append({"check": "unresolved", "variable": var.name,
+                                "severity": "mild", "ref": v,
+                                "detail": f"'{v['text']}' unresolved",
+                                "group_title": f"{var.name}: cells with no resolved entity"})
     for ident, recs in key_seen.items():
         if len(recs) > 1:
             for rec in recs:
-                add("duplicate_key", None,
-                    "The same key appears in more than one record",
-                    item_from_value(rec["key"],
-                                    {"detail": f"'{rec['key'].get('name') or rec['key'].get('text')}' "
-                                               f"× {len(recs)}"}))
+                raw.append({"check": "duplicate_key", "severity": "mild",
+                            "ref": rec["key"],
+                            "detail": f"'{rec['key'].get('name') or rec['key'].get('text')}' "
+                                      f"× {len(recs)}",
+                            "group_title": "The same key appears in more than one record"})
 
-    # 4 — printed-total identities within one record (target ≈ Σ bins).
-    # Missing summands count as 0 (the dash means zero in these books); a
-    # record with an unparsed/unjoined operand is skipped — those already
-    # have parse/structure findings.
-    for idn in decl.checks.identities:
-        for rec in records:
-            tv = rec["values"][idn.target]
-            if tv["status"] != "ok":
-                continue
-            total, s, bad = tv["value"], 0.0, False
-            for nm in idn.sum_of:
-                sv = rec["values"][nm]
-                if sv["status"] == "ok":
-                    s += sv["value"]
-                elif sv["status"] != "missing":
-                    bad = True
-                    break
-            if bad:
-                continue
-            tol = max(idn.tol_abs, idn.tol_rel * max(abs(total), abs(s)))
-            if abs(total - s) > tol:
-                add("identity", idn.target,
-                    f"{idn.target} should equal the sum of its {len(idn.sum_of)} parts",
-                    item_from_value(tv, {"detail": f"{_num(total)} ≠ Σ {_num(round(s, 2))} "
-                                                   f"(diff {_num(round(total - s, 2))}, "
-                                                   f"key {rec['key'].get('name') or rec['key'].get('text')})"}))
+    # Phase 2 — arithmetic + statistics
+    quality: dict = {"params": P}
+    if phase2:
+        f_id, id_stats = dg.check_identities(records, [i.model_dump() for i in decl.identities], P)
+        raw += f_id
+        f_tot, tot_stats = dg.check_totals(
+            rows, decl.totals.model_dump() if decl.totals else None, decl.variables, P)
+        raw += f_tot
+        f_dist, var_stats = dg.check_distributions(records, decl.variables, P)
+        raw += f_dist
+        f_t1, heat = dg.check_trailing_one(records, decl.variables, var_stats, P)
+        raw += f_t1
+        quality.update({"identities": id_stats, "totals": tot_stats,
+                        "variables": var_stats, "trailing_heat": heat})
 
-    # 5 — declared ratio rules; an operand may live in another dataset
-    # ("dataset:var") or project ("project/dataset:var"), joined on the
-    # resolved entity key id. The finding anchors at whichever operand's
-    # cell is in THIS project so the crop and the jump work.
-    _ref_cache: dict = {}
+    # confirmations ("genuine") + adjudication history
+    confirmed = _ds_side_load(folder, name, "confirmed")
+    confirmable = [f for f in raw if f["check"] in _DS_CONFIRMABLE]
+    others = [f for f in raw if f["check"] not in _DS_CONFIRMABLE]
+    open_c, conf = dg.apply_confirmations(confirmable, confirmed)
+    open_all = others + open_c
+    counts: dict = {}
+    for f in open_all:
+        counts[f["check"]] = counts.get(f["check"], 0) + 1
+    history = _ds_side_load(folder, name, "diag_history")
+    full_run = not pages
+    if record_history and full_run:
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        history = dg.update_history(history, open_all, conf, ts,
+                                    {"records": len(records), "open": len(open_all),
+                                     "confirmed": len(conf), "counts": counts,
+                                     "phase2": phase2})
+        _ds_side_save(folder, name, "diag_history", history)
+    quality["adjudication"] = dg.adjudication(history, open_all, conf)
+    quality["runs"] = (history.get("runs") or [])[-20:]
+    quality["confirmed_n"] = len(conf)
 
-    def _ref_index(proj, dsname):
-        ck = (proj, dsname)
-        if ck not in _ref_cache:
-            base = d if proj is None else d.parent.parent / proj / "annotations"
-            if not base.exists():
-                raise HTTPException(status_code=400,
-                                    detail=f"checks.ratios: annotations folder for project "
-                                           f"'{proj}' not found ({base})")
-            decl2 = _ds_load_decl(str(base), dsname)
-            recs2, _f2, _s2 = _ds_build(base, decl2)
-            idx = {}
-            for r2 in recs2:
-                kid = r2["key"].get("id")
-                if kid and kid not in idx:          # dups are that dataset's findings
-                    idx[kid] = r2
-            _ref_cache[ck] = (idx, {v.name for v in decl2.variables})
-        return _ref_cache[ck]
+    # → report chassis items, grouped check → variable
+    def to_item(f):
+        r = f.get("ref") or {}
+        L = r.get("layers") or {}
+        it = {"stem": r.get("stem"), "idx": r.get("idx"), "row_i": r.get("row_i"),
+              "row_n": r.get("row_n"), "y0": r.get("y0"), "y1": r.get("y1"),
+              "pdf": (L.get("pdf") or "")[:300], "ocr": (L.get("ocr") or "")[:300],
+              "llm": (L.get("llm") or "")[:300], "human": L.get("human") or "",
+              "detail": f.get("detail"), "check": f["check"],
+              "severity": f.get("severity"), "method": f.get("method"),
+              "params": f.get("params"), "flag_id": dg.flag_id(f),
+              "value_text": dg.value_text_of(f),
+              "confirmable": f["check"] in _DS_CONFIRMABLE,
+              "key": ((f.get("rec") or {}).get("key") or {}).get("text")}
+        fix = f.get("culprit")
+        if not fix and f.get("suggest"):
+            fix = {"stem": r.get("stem"), "idx": r.get("idx"), "row_i": r.get("row_i"),
+                   "value": f["suggest"]["value"], "variable": f.get("variable")}
+        if fix and fix.get("idx") is not None:
+            it["fix"] = {k: fix.get(k) for k in ("stem", "idx", "row_i", "value",
+                                                 "variable", "who")}
+        return it
 
-    for rt in decl.checks.ratios:
-        sides = [_ds_ref_parse(rt.num), _ds_ref_parse(rt.den)]
-        for proj, dsname, varname in sides:
-            if dsname is not None:
-                _idx, names2 = _ref_index(proj, dsname)
-                if varname not in names2:
-                    raise HTTPException(status_code=400,
-                                        detail=f"checks.ratios '{rt.name}': dataset "
-                                               f"'{dsname}' has no variable '{varname}'")
-
-        def _side(rec, proj, dsname, varname):
-            """→ (value | None, anchor value-dict, anchor is in this project)"""
-            if dsname is None:
-                vd = rec["values"].get(varname)
-                return ((vd["value"], vd, True) if vd and vd["status"] == "ok"
-                        else (None, None, True))
-            kid = rec["key"].get("id")
-            if not kid:
-                return None, None, False
-            other = _ref_index(proj, dsname)[0].get(kid)
-            if other is None:
-                return None, None, False
-            vd = other["values"].get(varname)
-            return ((vd["value"], vd, proj is None) if vd and vd["status"] == "ok"
-                    else (None, None, False))
-
-        for rec in records:
-            nval, nanchor, nlocal = _side(rec, *sides[0])
-            dval, danchor, dlocal = _side(rec, *sides[1])
-            if nval is None or dval is None or dval <= 0 or dval < rt.min_den:
-                continue
-            r = nval / dval
-            if (rt.max is not None and r > rt.max) or (rt.min is not None and r < rt.min):
-                anchor = nanchor if nlocal else (danchor if dlocal else nanchor)
-                lo = rt.min if rt.min is not None else "…"
-                hi = rt.max if rt.max is not None else "…"
-                add("ratio", rt.name,
-                    f"{rt.name}: {rt.num} / {rt.den} outside [{lo}, {hi}]",
-                    item_from_value(anchor,
-                                    {"detail": f"{_num(nval)} / {_num(dval)} = {r:.3g} "
-                                               f"(key {rec['key'].get('name') or rec['key'].get('text')})"}))
-
-    # 6 — robust univariate outliers per numeric variable (flag, never fix:
-    # agrarian data has true heavy tails). Defaults from checks.distribution,
-    # overridable per variable via its "dist" object (null disables a test).
-    import math as _math
-    import statistics as _stats
-    for var in decl.variables:
-        if var.dtype not in ("number", "int"):
-            continue
-        eff = {**decl.checks.distribution.model_dump(), **(var.dist or {})}
-        vals = [rec["values"][var.name] for rec in records
-                if rec["values"][var.name]["status"] == "ok"]
-        if eff.get("top_gap") and len(vals) >= 10:
-            sv = sorted(vals, key=lambda t: t["value"])
-            mx, second = sv[-1], sv[-2]
-            if second["value"] > 0 and mx["value"] / second["value"] >= eff["top_gap"]:
-                add("distribution", var.name, f"{var.name}: suspicious maximum",
-                    item_from_value(mx, {"detail": f"max {_num(mx['value'])} is "
-                                                   f"{round(mx['value'] / second['value']):,}× the "
-                                                   f"second-largest ({_num(second['value'])})"}))
-        pos = [vd for vd in vals if vd["value"] > 0]
-        if eff.get("z_log") and len(pos) >= (eff.get("min_n") or 30):
-            logs = [_math.log(vd["value"]) for vd in pos]
-            med = _stats.median(logs)
-            mad = _stats.median([abs(x - med) for x in logs])
-            if mad > 1e-9:
-                sd = 1.4826 * mad
-                for vd in pos:
-                    z = (_math.log(vd["value"]) - med) / sd
-                    if abs(z) >= eff["z_log"]:
-                        add("distribution", var.name, f"{var.name}: log-scale outliers",
-                            item_from_value(vd, {"detail": f"z={z:+.1f} on log scale "
-                                                           f"(value {_num(vd['value'])}, typical "
-                                                           f"{_num(round(_math.exp(med)))})"}))
-
-    order = {"structure": 0, "parse": 1, "range": 2, "unresolved": 3,
-             "key": 4, "duplicate_key": 5, "identity": 6, "ratio": 7,
-             "distribution": 8}
-    out = sorted(groups.values(),
-                 key=lambda g: (order.get(g["check"], 9), g["variable"] or ""))
+    groups: dict = {}
+    for f in open_all:
+        g = groups.setdefault((f["check"], f.get("variable") or ""), {
+            "check": f["check"], "variable": f.get("variable"),
+            "title": f.get("group_title") or f["check"], "items": [], "_raw": []})
+        g["_raw"].append(f)
+    sev_rank = {"error": 0, "extreme": 1, "mild": 2, "info": 3}
+    out = []
+    for g in sorted(groups.values(),
+                    key=lambda g: (_DS_CHECK_ORDER.get(g["check"], 99), g["variable"] or "")):
+        fs = sorted(g.pop("_raw"), key=lambda f: sev_rank.get(f.get("severity"), 9))
+        g["items"] = [to_item(f) for f in fs]
+        out.append(g)
     total = sum(len(g["items"]) for g in out)
     truncated = False
     kept, n_items = [], 0
@@ -9142,7 +9964,307 @@ def api_dataset_diagnose(name: str, folder: str = Query(...),
         n_items += len(g["items"])
         kept.append(g)
     return {"dataset": name, **stats, "findings_total": total,
-            "truncated": truncated, "groups": kept}
+            "truncated": truncated, "groups": kept, "counts": counts,
+            "full_run": full_run, "quality": quality,
+            "variables_meta": [{"name": v.name, "label": v.label, "dtype": v.dtype,
+                                "stats": v.stats} for v in decl.variables]}
+
+
+@app.post("/api/dataset/{name}/diagnose")
+def api_dataset_diagnose(name: str, folder: str = Query(...),
+                         body: DatasetDiagnoseBody = ...):
+    """Run the check ladder over the declared dataset (knowledge_base/
+    10_dataset_layer.md):
+    Phase 1 — structure, parse, range, unresolved entities, keys;
+    Phase 2 — row identities, printed total rows, IQR/MAD outliers (log
+    scale), digit length, trailing-'1' column-rule artifacts, optional
+    Generalized ESD.
+    Findings are grouped check → variable in the duplicate-report item shape
+    (the editor's report chassis); `quality` feeds the data-quality page."""
+    return _ds_run_diagnostics(folder, name, pages=body.pages, phase2=body.phase2,
+                               record_history=body.record_history)
+
+
+class DatasetConfirmBody(BaseModel):
+    flag_id:    str
+    value_text: str = ""
+    note:       Optional[str] = None
+    undo:       bool = False
+
+
+@app.post("/api/dataset/{name}/confirm")
+def api_dataset_confirm(name: str, folder: str = Query(...),
+                        body: DatasetConfirmBody = ...):
+    """Mark a flag 'confirmed genuine' (the value matches the scan — Budapest
+    is big; the book's own arithmetic is wrong), or undo that. The
+    confirmation holds only while the cell text stays `value_text`."""
+    _ds_load_decl(folder, name)                      # 404 for unknown datasets
+    check = body.flag_id.split("|", 1)[0]
+    if check not in _DS_CONFIRMABLE:
+        raise HTTPException(status_code=400,
+                            detail=f"'{check}' findings cannot be confirmed as genuine — fix them")
+    with _SHAPE_MERGE_LOCK:
+        conf = _ds_side_load(folder, name, "confirmed")
+        if body.undo:
+            conf.pop(body.flag_id, None)
+        else:
+            conf[body.flag_id] = {"value_text": body.value_text,
+                                  "note": body.note,
+                                  "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        _ds_side_save(folder, name, "confirmed", conf)
+    return {"ok": True, "confirmed": len(conf)}
+
+
+# ── Declaration editing (the editor's 📋 Dataset window) ─────────────────────
+
+_DS_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
+
+
+def _ds_check_name(name: str):
+    if not _DS_NAME_RE.match(name or ""):
+        raise HTTPException(status_code=400,
+                            detail="Dataset name: letters, digits, _ and - only")
+
+
+def _ds_decl_from_body(raw: dict) -> "DatasetDecl":
+    """Parse a declaration posted by the editor → (decl, problems). Pydantic
+    errors become a readable 400; semantic problems are returned, not raised
+    (the Test button shows them next to the build results)."""
+    try:
+        return DatasetDecl(**raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid declaration: {e}")
+
+
+class DatasetDeclBody(BaseModel):
+    declaration: dict
+
+
+@app.get("/api/dataset/{name}/declaration")
+def api_dataset_decl_get(name: str, folder: str = Query(...)):
+    _ds_check_name(name)
+    f = _datasets_dir(folder) / f"{name}.dataset.json"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail=f"No declaration '{name}'")
+    return {"name": name, "declaration": json.loads(f.read_text(encoding="utf-8"))}
+
+
+@app.put("/api/dataset/{name}/declaration")
+def api_dataset_decl_put(name: str, folder: str = Query(...),
+                         body: DatasetDeclBody = ...):
+    """Save a declaration (create or replace). Refuses invalid ones; the
+    previous version is kept as <name>.dataset.json.prev (one generation —
+    an accidental save is one rename away from undone)."""
+    _ds_check_name(name)
+    raw = dict(body.declaration)
+    raw["name"] = name
+    decl = _ds_decl_from_body(raw)
+    probs = _ds_decl_problems(decl)
+    if probs:
+        raise HTTPException(status_code=400, detail="; ".join(probs))
+    ddir = _datasets_dir(folder)
+    ddir.mkdir(parents=True, exist_ok=True)
+    f = ddir / f"{name}.dataset.json"
+    with _SHAPE_MERGE_LOCK:
+        if f.exists():
+            (ddir / f"{name}.dataset.json.prev").write_bytes(f.read_bytes())
+        f.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"ok": True, "name": name, "file": f.name}
+
+
+@app.delete("/api/dataset/{name}/declaration")
+def api_dataset_decl_delete(name: str, folder: str = Query(...)):
+    """Soft delete: renamed to <name>.dataset.json.deleted-<timestamp> (no
+    longer listed; the review history / confirmations stay untouched)."""
+    _ds_check_name(name)
+    ddir = _datasets_dir(folder)
+    f = ddir / f"{name}.dataset.json"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail=f"No declaration '{name}'")
+    dst = ddir / f"{name}.dataset.json.deleted-{time.strftime('%Y%m%d_%H%M%S')}"
+    f.rename(dst)
+    return {"ok": True, "moved_to": dst.name}
+
+
+class DatasetPageMapBody(BaseModel):
+    pattern: str = "1"
+    pages:   Optional[str] = None
+
+
+@app.post("/api/dataset/page-map")
+def api_dataset_page_map(folder: str = Query(...), body: DatasetPageMapBody = ...):
+    """Which page plays which slot under a pattern — in the builder's own page
+    order, so the editor's preview can never disagree with the build."""
+    d = _resolve_folder(folder)
+    stems = [p.stem for p in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem))]
+    bits = [1 if p.strip() == "1" else 0
+            for p in (body.pattern or "").split(",") if p.strip() != ""] or [1]
+    ranges = _parse_col_ranges(body.pages) if body.pages else None
+    slots = []
+    for i, s in enumerate(stems):
+        pos = i % len(bits)
+        in_range = ranges is None or any(lo <= i + 1 <= (hi if hi is not None else i + 1)
+                                         for lo, hi in ranges)
+        slot = sum(bits[:pos + 1]) if bits[pos] and in_range else None
+        slots.append(slot)
+    return {"stems": stems, "slots": slots, "n_slots": sum(bits)}
+
+
+@app.post("/api/dataset/preview")
+def api_dataset_preview(folder: str = Query(...), body: DatasetDeclBody = ...):
+    """The window's Test button: build the declared dataset WITHOUT saving and
+    report what it would produce — records, structure problems, per-variable
+    parse results with samples, identity hold rates, printed-total anchoring."""
+    from app import diagnostics as dg
+    raw = dict(body.declaration)
+    raw.setdefault("name", "preview")
+    decl = _ds_decl_from_body(raw)
+    probs = _ds_decl_problems(decl)
+    out = {"problems": probs}
+    if probs:
+        return out
+    d = _resolve_folder(folder)
+    rows, findings, stats = _ds_build(d, decl, keep_excluded=True)
+    records = [r for r in rows if not r.get("excluded")]
+    for r in rows:
+        t = r["key"].get("text") or ""
+        r["key"]["fold"] = (_unidecode(t) if _unidecode is not None else t).lower()
+    out.update(stats)
+    out["structure_n"] = len(findings)
+    out["structure_sample"] = [{"stem": f["stem"], "detail": f["detail"]} for f in findings[:12]]
+    out["excluded_sample"] = sorted({(r["key"].get("text") or "").strip()
+                                     for r in rows if r.get("excluded")})[:25]
+    var_out = []
+    for v in decl.variables:
+        c = {"ok": 0, "missing": 0, "error": 0, "absent": 0}
+        samples, errors = [], []
+        for rec in records:
+            val = rec["values"][v.name]
+            c[val["status"]] = c.get(val["status"], 0) + 1
+            if val["status"] == "ok" and len(samples) < 4:
+                samples.append(val["text"])
+            elif val["status"] == "error" and len(errors) < 3:
+                errors.append(val["text"])
+        var_out.append({"name": v.name, **c, "samples": samples, "errors": errors})
+    out["variables"] = var_out
+    P = dg.params(decl.diagnostics)
+    _, out["identities"] = dg.check_identities(
+        records, [i.model_dump() for i in decl.identities], P)
+    _, out["totals"] = dg.check_totals(
+        rows, decl.totals.model_dump() if decl.totals else None, decl.variables, P)
+    return out
+
+
+@app.post("/api/dataset/suggest-identities")
+def api_dataset_suggest_identities(folder: str = Query(...),
+                                   body: DatasetDeclBody = ...):
+    """Find the sums the book guarantees, from the data: for every numeric
+    variable T, every run of consecutive variables OF THE SAME TYPE as T
+    (declaration order, T excluded — so an int row number sitting between
+    two pages' area columns does not break the area run) is tested as
+    T = sum(run) over the records where all are readable (a dash counts as
+    0). Proposed when it holds in ≥ 80% of at least max(20, 2% of records)
+    testable rows — the remaining mismatches are then mostly transcription
+    errors, which is what the check is for. ≥ 95% is reported as "strong",
+    80–95% as "likely" (true identities in badly transcribed columns land
+    there — foldbirtok area_total: 82%). Runs of length 1 are equalities
+    (e.g. a row number printed on both pages of a spread)."""
+    import numpy as np
+    raw = dict(body.declaration)
+    raw.setdefault("name", "preview")
+    decl = _ds_decl_from_body(raw)
+    probs = _ds_decl_problems(decl)
+    if probs:
+        raise HTTPException(status_code=400, detail="; ".join(probs))
+    d = _resolve_folder(folder)
+    records, _, _ = _ds_build(d, decl)
+    nv = [v for v in decl.variables if v.dtype in ("int", "number")]
+    if len(nv) < 2 or not records:
+        return {"suggestions": [], "records": len(records)}
+    R, V = len(records), len(nv)
+    vals = np.zeros((R, V))
+    bad = np.zeros((R, V), dtype=np.int32)       # unreadable / structurally absent
+    ok = np.zeros((R, V), dtype=bool)            # a real printed number (for T)
+    for i, rec in enumerate(records):
+        for j, v in enumerate(nv):
+            x = rec["values"][v.name]
+            if x["status"] == "ok" and isinstance(x["value"], (int, float)):
+                vals[i, j] = x["value"]
+                ok[i, j] = True
+            elif x["status"] != "missing":
+                bad[i, j] = 1
+    min_test = max(20, int(0.02 * R))
+    existing = {(i.total, tuple(i.parts)) for i in decl.identities}
+    best: dict = {}
+    for dtype in ("int", "number"):
+        g = [j for j, v in enumerate(nv) if v.dtype == dtype]
+        G = len(g)
+        if G < 2:
+            continue
+        gv, gb, gok = vals[:, g], bad[:, g], ok[:, g]
+        P = np.concatenate([np.zeros((R, 1)), np.cumsum(gv, axis=1)], axis=1)
+        Q = np.concatenate([np.zeros((R, 1), dtype=np.int32), np.cumsum(gb, axis=1)], axis=1)
+
+        def _hold(t, a, b):
+            s = P[:, b + 1] - P[:, a]
+            testable = gok[:, t] & ((Q[:, b + 1] - Q[:, a]) == 0)
+            n = int(testable.sum())
+            h = int((np.abs(s[testable] - gv[testable, t]) <= 0.51).sum()) if n else 0
+            return h, n, testable
+
+        for t in range(G):
+            for a in range(G):
+                for b in range(a, min(G, a + 12)):
+                    if a <= t <= b:
+                        continue
+                    h, n, testable = _hold(t, a, b)
+                    if n < min_test:
+                        continue
+                    # a run that is all zeros matches a zero total trivially
+                    if int((testable & (gv[:, t] != 0)).sum()) < min_test // 2:
+                        continue
+                    rate = h / n
+                    if rate < 0.8:
+                        continue
+                    # an end column that is (almost) always a dash adds nothing:
+                    # if the run without it holds about as often, it is not part
+                    # of the sum (foldbirtok: area_cult_total = n_above3000 +
+                    # area_total was the equality area_cult_total = area_total
+                    # plus a column that is '-' in 90% of rows)
+                    if b > a and (_hold(t, a + 1, b)[0] >= 0.98 * h
+                                  or _hold(t, a, b - 1)[0] >= 0.98 * h):
+                        continue
+                    tname = nv[g[t]].name
+                    best.setdefault(tname, []).append(
+                        {"total": tname, "parts": [nv[g[k]].name for k in range(a, b + 1)],
+                         "hold": h, "testable": n, "rate": round(rate, 4)})
+    # per total: the best run, plus a second one over DISJOINT columns (books
+    # often print the same total broken down two ways — by size class and by
+    # cultivation branch); an equality is listed in one direction only
+    chosen = []
+    seen_pairs = set()
+    for tname, cands in best.items():
+        cands.sort(key=lambda c: (c["rate"], c["testable"], len(c["parts"])), reverse=True)
+        picked = []
+        for c in cands:
+            if picked and set(c["parts"]) & set(picked[0]["parts"]):
+                continue
+            if len(c["parts"]) == 1:
+                pair = frozenset((tname, c["parts"][0]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+            picked.append(c)
+            if len(picked) == 2:
+                break
+        chosen += picked
+    out = []
+    for c in sorted(chosen, key=lambda c: (-c["testable"], -c["rate"])):
+        c["already_declared"] = (c["total"], tuple(c["parts"])) in existing
+        c["kind"] = "equality" if len(c["parts"]) == 1 else "sum"
+        c["strength"] = "strong" if c["rate"] >= 0.95 else "likely"
+        out.append(c)
+    return {"suggestions": out, "records": R}
 
 
 # ---------------------------------------------------------------------------
