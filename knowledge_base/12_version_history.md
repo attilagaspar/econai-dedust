@@ -159,3 +159,7 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   (slices for attribute change + succession edges for entity
   transformations; firms are the motivating future case), per Attila; not
   a Techxtremism-specific unblocker.
+- Oct 9: design principle made explicit (Attila): **Dedust is software, not
+  a per-project tool** — the engine stays generic, projects are instances
+  via data/config files; no feature is designed around one research project.
+  Stated in 01_project_overview, README conventions, CLAUDE.md.

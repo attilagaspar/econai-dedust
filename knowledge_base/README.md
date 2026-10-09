@@ -20,6 +20,10 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 | [12_version_history.md](12_version_history.md) | **Version history** — every commit gets a line; new months get a theme heading |
 
 Conventions for AI assistants:
+- **Dedust is software, not a per-project tool**: never design or frame a
+  feature around one research project. The engine stays generic; projects are
+  instances via data/config files (declarations, authorities, schemas,
+  labels). See the design principle in 01_project_overview.md.
 - **Documentation upkeep is part of every commit** (rule set 2026-10-09):
   append one line to [12_version_history.md](12_version_history.md), and when
   the commit changes what Dedust can do, update

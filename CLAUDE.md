@@ -20,3 +20,7 @@ before working. `knowledge_base/00_capabilities.md` says what exists;
    `_smoke_`-prefixed fixture projects (delete them afterwards).
 5. `projects/` holds live production data with hand corrections — never run
    destructive scripts against it.
+6. **Dedust is software, not a per-project tool**: never design or frame a
+   feature around one research project. The engine stays generic; projects
+   are instances via data/config files (dataset declarations, authority
+   files, schemas, label sets).

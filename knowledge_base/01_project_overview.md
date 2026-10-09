@@ -16,6 +16,16 @@ The datasets feed identified empirical-economics projects:
 
 A core design idea: resolve strings to **canonical entity IDs at annotation time** (places, industries; later firms) so heterogeneous sources join on stable IDs instead of ad-hoc fuzzy matching in Stata afterwards.
 
+**Design principle — Dedust is software, not a per-project tool** (Attila,
+2026-10-09): no feature is designed around, or justified by, an individual
+research project. There is no such thing as a "Techxtremism unblocker". The
+engine stays generic; projects supply *instances* through data and config
+files — a dataset declaration, an authority file, a schema, a label set.
+The established pattern (authority mechanism vs `places_hu`; dataset engine
+vs `foldbirtok_main`; temporal identity vs the 1933 place overlay) is the
+template for every future capability. Research projects explain *why* a
+capability is worth building, never *what shape* it takes.
+
 ## The two document types
 
 - **Type A — tables**: layout model detects cells; a "lattice" (superstructure) groups them into a printed grid; each cell may carry an *internal row structure* (one line per settlement etc.) with per-row OCR/LLM/Human readings.
