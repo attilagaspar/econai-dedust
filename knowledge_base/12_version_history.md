@@ -163,3 +163,13 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   a per-project tool** — the engine stays generic, projects are instances
   via data/config files; no feature is designed around one research project.
   Stated in 01_project_overview, README conventions, CLAUDE.md.
+- **Oct 18 — detection scope (nested detection, §H8)**: `app/scope.py`
+  + `prepare_training_data(scope=)` crop export (per-parent crops under
+  `intermediate/crops/`, translated + clipped children, childless parents
+  as negatives, split inheritance), `infer_layout.py --parents` crop
+  inference with page-coordinate mapping (pure geometry shared by export
+  and inference; module now imports without detectron2),
+  `POST …/apply-predictions-merge`, `detection_scope` in project config +
+  dashboard selector and ⤵ Merge button, scope on every train / infer /
+  infer-from / fine-tune request and ledger row. 20 tests, no GPU; design
+  in 09 §H8. Config PATCH now uses the atomic writer.

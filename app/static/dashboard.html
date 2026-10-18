@@ -789,6 +789,73 @@ async function selectProject(name) {
               .map(p => `<option value="${p.name}">${p.name}</option>`).join('');
     if (prev) sel.value = prev;
   }
+  renderDetectionScope();
+}
+
+// ── Detection scope (§H8 nested detection) ──────────────────────────────────
+// "page" or "within:<label>" — a property of the project's model, persisted
+// in config.detection_scope; every train / infer / infer-from / fine-tune
+// request carries the selector's current value.
+function currentScope() {
+  return document.getElementById('det-scope')?.value || 'page';
+}
+
+function renderDetectionScope() {
+  const sel = document.getElementById('det-scope');
+  if (!sel || !activeProj) return;
+  const labels = activeProj.config?.labels || [];
+  const cur = activeProj.config?.detection_scope || 'page';
+  sel.innerHTML = '<option value="page">whole page</option>' +
+    labels.map(l => `<option value="within:${l}">within: ${l}</option>`).join('');
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : 'page';
+  _reflectScope();
+}
+
+function _reflectScope() {
+  const scope = currentScope();
+  const nested = scope.startsWith('within:');
+  const btn = document.getElementById('btn-merge-apply');
+  if (btn) btn.style.display = nested ? '' : 'none';
+  const hint = document.getElementById('det-scope-hint');
+  if (hint) hint.textContent = nested
+    ? `model sees crops of each "${scope.slice(7)}" shape; classes = the other labels; apply with ⤵ Merge`
+    : '';
+}
+
+async function onDetectionScopeChange() {
+  if (!activeProj) return;
+  const scope = currentScope();
+  _reflectScope();
+  const res = await fetch(`/api/project/${activeProj.name}/config`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ detection_scope: scope }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    activeProj.config = data.config || activeProj.config;
+    showToast(scope === 'page' ? 'Detection scope: whole page' : `Detection scope: ${scope}`);
+  } else {
+    showToast('Error: ' + errMsg(data), 4000, 'red');
+    renderDetectionScope();
+  }
+}
+
+async function mergePredictions() {
+  if (!activeProj) return;
+  const scope = currentScope();
+  if (!scope.startsWith('within:')) { alert('Merge-apply needs a nested detection scope.'); return; }
+  if (!confirm(`Merge predicted children into pages that already have "${scope.slice(7)}" shapes?\n` +
+               'Earlier PREDICTED children inside those parents are replaced; hand-drawn boxes are never touched.')) return;
+  showToast('Merging predictions…', 0);
+  const res  = await fetch(`/api/project/${activeProj.name}/apply-predictions-merge`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scope }),
+  });
+  const data = await res.json().catch(() => ({}));
+  clearToast();
+  if (res.ok) showToast(`✓ Merged into ${data.applied} page(s): +${data.inserted} / −${data.removed} boxes · ` +
+                        `${data.skipped_unchanged} unchanged · ${data.skipped_no_parents} without parents skipped.`, 6000);
+  else showToast('Error: ' + errMsg(data), 4000, 'red');
 }
 
 function renderDetail() {
@@ -974,6 +1041,17 @@ function renderDetail() {
         </label>
         <button class="btn btn-secondary" onclick="pullPredictions()">⬇ Pull predictions</button>
         <button class="btn btn-secondary" onclick="applyPredictions()">📋 Apply to empty pages</button>
+        <button class="btn btn-secondary" id="btn-merge-apply" onclick="mergePredictions()" style="display:none;"
+                title="Nested scope: insert the predicted children into pages that already have the parent shapes. Earlier predicted children (boxes with a score) inside the parents are replaced; hand-drawn boxes are never touched.">⤵ Merge into parents</button>
+      </div>
+      <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;"
+           title="Detection scope (nested detection). 'whole page' = the model sees entire pages. 'within: X' = the model is trained on crops of every X shape and run on crops of the current X shapes (e.g. parts within firm areas, cells within table regions). The scope is a property of the model: train and infer with the same one. Saved in the project config.">
+        <span style="font-size:0.8rem;color:#aaa;">Detection scope:</span>
+        <select id="det-scope" onchange="onDetectionScopeChange()"
+                style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;">
+          <option value="page">whole page</option>
+        </select>
+        <span id="det-scope-hint" style="font-size:0.75rem;color:#667;"></span>
       </div>
       <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;">
         <span style="font-size:0.8rem;color:#aaa;">Bootstrap from model:</span>
@@ -1279,6 +1357,8 @@ async function loadTrainingLog() {
       let mode  = r.mode === 'finetune' ? `⚡ ft ← ${r.source || '?'}` : '🚀 train';
       if (r.train_fraction && r.train_fraction < 1)
         mode += ` <span style="color:#7dd3fc;" title="learning-curve run: trained on a nested subset">${Math.round(r.train_fraction * 100)}%</span>`;
+      if (r.scope && r.scope !== 'page')
+        mode += ` <span style="color:#c084fc;" title="nested detection scope: trained on ${r.n_parents ?? '?'} crops of ${r.scope.slice(7)} shapes">⊂${r.scope.slice(7)}</span>`;
       const pages = r.n_train_pages != null
         ? `${r.n_train_pages}${r.n_negatives ? `+${r.n_negatives}⊘` : ''}` : '—';
       const ap    = r.ap ? `${r.ap.AP ?? '—'}` : '—';
@@ -1606,6 +1686,7 @@ async function prepareTrainingData() {
     status_filter:          document.getElementById('tp-status-filter')?.checked ?? true,
     include_empty_verified: document.getElementById('tp-include-empty')?.checked ?? true,
     train_fraction:         parseFloat(document.getElementById('tp-train-fraction')?.value) || 1.0,
+    scope:                  currentScope(),
   };
   try {
     const res  = await fetch(`/api/project/${activeProj.name}/prepare`, {
@@ -1622,7 +1703,10 @@ async function prepareTrainingData() {
       if (data.n_skip)            hygiene.push(`${data.n_skip} skip page(s) excluded`);
       if ((data.missing_test_stems || []).length)
         hygiene.push(`<span style="color:#e94560;">⚠ frozen test page(s) missing: ${data.missing_test_stems.join(', ')}</span>`);
-      el.innerHTML = `✓ ${data.n_annotated} annotated pages · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
+      if (data.scope && data.scope !== 'page')
+        hygiene.push(`<span style="color:#7dd3fc;">scope ${data.scope}: ${data.n_parents} crop(s) from ${data.n_scope_pages} page(s)` +
+                     (data.n_crop_negatives ? `, ${data.n_crop_negatives} childless parent(s) as negatives` : '') + '</span>');
+      el.innerHTML = `✓ ${data.n_annotated} annotated ${data.scope && data.scope !== 'page' ? 'crops' : 'pages'} · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
         ${hygiene.join(' · ')}<br>
         Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch} · NUM_WORKERS=${data.num_workers}</code><br>
         COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
@@ -1747,7 +1831,8 @@ async function runInfer() {
   fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload }),
+    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload,
+                              scope: currentScope() }),
     signal:  ctrl.signal,
   }).then(async res => {
     if (!res.ok) {
@@ -1811,7 +1896,8 @@ async function runFinetuneFrom() {
     body:    JSON.stringify({ passphrase: getPassphrase(), max_iter: maxIter,
                               base_lr: baseLr, skip_image_upload: !reupload,
                               status_filter:          document.getElementById('tp-status-filter')?.checked ?? true,
-                              include_empty_verified: document.getElementById('tp-include-empty')?.checked ?? true }),
+                              include_empty_verified: document.getElementById('tp-include-empty')?.checked ?? true,
+                              scope: currentScope() }),
     signal:  ctrl.signal,
   }).then(async res => {
     if (!res.ok) {
@@ -1868,7 +1954,8 @@ async function runInferFrom() {
   fetch(url, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload, threshold }),
+    body:    JSON.stringify({ passphrase: getPassphrase(), skip_image_upload: !reupload, threshold,
+                              scope: currentScope() }),
     signal:  ctrl.signal,
   }).then(async res => {
     if (!res.ok) {

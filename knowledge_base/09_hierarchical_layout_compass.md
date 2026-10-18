@@ -1,5 +1,11 @@
 # Phase H — hierarchical layout & record grouping (Compass-class sources)
 
+*Status (2026-10-18): H1 data model built (`app/regions.py`, region
+vocabulary, table_region derivation). **H8 detection scope — first slice
+built** (crop export, `--parents` crop inference, merge-apply, dashboard
+selector; see §H8 below). H2–H3 are annotation + GPU work (user). H4 v1
+clip-to-regions, H5 grouping sweep, H6 records export: not built.*
+
 Goal: handle sources where tables are NOT the dominant object — pages that mix
 firm descriptions (paragraphs), balance-sheet tables, and occasional figures.
 Three capabilities, layered: (H-A) detect **regions** (firm_header /
@@ -91,6 +97,8 @@ Corpus facts that shaped this design (user, 2026-07-15):
   infer op). v2 = **crop** (only if v1 accuracy disappoints): run the cell
   model on table-region crops, map coordinates back — better signal-to-noise
   for small tables, ~1 session in `infer_layout.py`.
+  → **Built generically as the detection scope, §H8** (a model trained
+  and run `within:table_region` is exactly v2).
 - **Step 3 — prose**: `text_block` regions are ordinary shapes → the existing
   whole-cell LLM transcription, rules, review queue all apply UNCHANGED. This
   is where the architecture pays for itself: firm descriptions need zero new
@@ -154,6 +162,163 @@ even after fine-tuning, the sweep design must add a repair-first UI pass,
 so we'd learn that as early as possible). P4 is independently useful even if
 grouping never ships (better cell precision on mixed pages). P5–P6 deliver
 the actual research artifact.
+
+## H8. Detection scope — nested detection within parent shapes
+
+**Status: first slice built 2026-10-18** (crop export, crop inference with
+coordinate mapping, merge-apply, dashboard selector, ledger field, unit
+tests without GPU). Not yet exercised on a real GPU run.
+
+### Why
+
+A single flat page-level detector has to learn every object scale at once
+(firm headers, paragraphs, whole balance sheets, individual cells) and the
+page-to-page variability of their arrangement. Hierarchical sources are
+better served by a cascade: one model finds the large **parent** shapes,
+another model is trained and run **only on crops of those parents**, where
+the children are large relative to the input and the context is uniform.
+This is a general mechanism of the engine — any label can be a parent —
+and two instances motivate it today:
+
+- `firm_area → parts` (firm name line, address block, capital line,
+  balance-sheet table …) in company directories;
+- `table_region → cells` in any tabular source (the H4 "crop variant").
+
+### The scope concept
+
+A **detection scope** is a per-project string, `detection_scope` in
+`config.json`:
+
+| value | meaning |
+|---|---|
+| `page` (default, or absent) | today's behaviour — whole-page training and inference |
+| `within:<parent_label>` | the model is trained on crops of every `<parent_label>` shape and run on crops of the current `<parent_label>` shapes |
+
+The scope is a property of the **model**: a model trained `within:X` only
+makes sense when run `within:X`. That is why it lives in project config
+(the project's own model) and travels in every request body
+(`scope`) for cross-project operations (infer-from, fine-tune-from), where
+the request value wins and the config value is the default. The training
+ledger records `scope` on every row.
+
+**Class set.** A scoped model's classes are the project's labels **minus
+the parent label** (`scope.scope_labels(labels, scope)`): the parent is the
+input, never a prediction. NUM_CLASSES in the patched yaml, the COCO
+categories and `--labels` on the inference command all use this reduced
+list, so the three stay consistent by construction.
+
+### Parent–child containment: geometric, computed on the fly
+
+There is **no stored parent field** on shapes. A shape is a child of a
+parent when its **centre lies inside the parent box**; if several parents
+contain the centre, the smallest wins. The relation is recomputed from
+geometry whenever it is needed (export, merge-apply), so moving or
+resizing a parent in the editor silently re-assigns its children, nothing
+can go stale, and the data model (03) is untouched. The parent label itself
+is never a child label.
+
+### Crop export (training) — `coco_convert.prepare_training_data(scope=…)`
+
+Page selection, status filtering, the frozen test set and the train
+fraction all happen **at page level exactly as before**. Then, when the
+scope is `within:X`, each selected page is expanded into one **crop page
+per parent shape** (`app/scope.py::export_crops`):
+
+- crop rectangle = parent box + a small margin (default 12 px), clamped to
+  the image; written as `intermediate/crops/<stem>__crop<k>.jpg` (k =
+  parent index in top-to-bottom, left-to-right order; the directory is
+  cleared of stale crops first);
+- children (centre inside the parent) are **translated** into crop
+  coordinates and **clipped** to the crop; degenerate results are dropped;
+- a parent with **no children is a negative example** (a crop with zero
+  annotations; `DATALOADER.FILTER_EMPTY_ANNOTATIONS False` is set, as for
+  verified-empty pages);
+- crops **inherit their page's split**: all crops of a frozen test page
+  go to `test.json`, the rest to `train.json`. With no frozen test set the
+  legacy cocosplit re-roll runs over crops, so crops of one page may land
+  on both sides — freeze a test set before scoped training.
+
+`pages_to_coco` is unchanged: a crop page is just a page dict with its own
+`imagePath`, `imageWidth/Height` and translated shapes. The generated
+`train.sh` / fine-tune script point `--image_path_*` at
+`/workspace/<project>/crops`, and the push step uploads
+`intermediate/crops/*.jpg` **instead of** the page images.
+`train_summary.json` records `scope`, `n_parents`, `n_crop_negatives`.
+
+### Crop inference — `infer_layout.py --parents`
+
+The inference tool (runs inside the GPU container) gains an optional
+`--parents <dir> --parent-label X --margin M` mode. For each page image it
+reads `<dir>/<stem>.json` — a slim per-page file holding only the parent
+shapes, exported from the current annotations at push time
+(`intermediate/parents/`, uploaded to `/workspace/<project>/parents/`; no
+text layers leave the machine) — crops each parent with the same
+`crop_rect` geometry used at training time, predicts on the crop, and
+**maps boxes back to page coordinates** (`map_boxes_to_page`: add the crop
+offset, clip to the parent box, drop degenerate boxes). One LabelMe per
+page is written to `predictions/`, holding only predicted children, each
+with its `score`. Pages without parents get an empty prediction file. The
+geometry functions are pure (no detectron2 import at module level) and are
+unit-tested on the laptop.
+
+Both the infer and infer-from push steps regenerate the inference script
+from (labels, scope, threshold) at run time, so the script always matches
+the current scope; the yaml and weights are the model's own.
+
+### Merge-apply — `POST /api/project/{name}/apply-predictions-merge`
+
+The existing *apply* fills only empty pages. For a scoped model the pages
+already carry the parents, so a **merge** is needed
+(`app/scope.py::merge_children`). Per page with a prediction file:
+
+1. skip `skip` (clutter) pages and pages with **no parent shapes**;
+2. **remove** earlier *predicted* children: shapes with a `score`, a child
+   label, and centre inside a parent — the scoped model owns parent
+   interiors, and only what a model wrote;
+3. **never touch** shapes without a score (human work), parents, or scored
+   shapes outside every parent (another model's output);
+4. **insert** the new predicted children (page coordinates, with score);
+5. write only when something changed; report `applied`,
+   `skipped_unchanged`, `skipped_no_parents`, `skipped_clutter`,
+   `inserted`, `removed`.
+
+Re-running merge-apply is idempotent. Human corrections survive any number
+of re-runs because only scored shapes are replaced.
+
+### UI
+
+Dashboard, *Train & Infer* card: a **Detection scope** selector
+(`whole page` | `within: <label>` for every project label) bound to
+`config.detection_scope` (PATCH on change). Its value rides along in the
+prepare/train, infer, infer-from and fine-tune-from requests, and a
+**⤵ Merge into parents** button (shown only when a scope is set) calls
+merge-apply. The training-ledger table shows a `⊂label` badge on scoped
+rows.
+
+### Workflow instance (Compass)
+
+1. Project labels: `firm_area`, `firm_name`, `address`, `capital`,
+   `balance_table`, …; annotate ~60 pages fully.
+2. Scope `page`: train the *parent* model — or keep a separate
+   regions project (H3) and infer-from it, then apply to empty pages.
+3. Switch scope to `within:firm_area`, Train (crops are exported
+   automatically), Run inference, Pull, **Merge into parents**.
+4. Correct in the editor; fine-tune-from (scope rides along) feeds
+   corrections back. For cells inside tables, repeat with
+   `within:balance_table` — same mechanism, different instance.
+
+### Open items / next slices
+
+- Scopes with **several parent labels** (`within:a|b`) — trivial
+  extension of `parse_scope`; not needed yet.
+- A parent-level **upscale** option (resize small crops to a fixed short
+  side before prediction) for very small parents — detectron2's resize
+  does most of this already; measure first.
+- Containment by **area fraction** as an alternative to the centre rule
+  for children that straddle two parents (rare in practice).
+- A real GPU round trip (train `within:` on a smoke project) has not been
+  run yet; the push paths are covered by code review and the pure
+  functions by tests.
 
 ## Risks / open items
 

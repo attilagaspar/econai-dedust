@@ -11,7 +11,8 @@ app/
   coco_convert.py            LabelMe → COCO; generates train.sh (Detectron2 solver params)
   pipeline.py                pipeline stage machine (largely vestigial — see critique)
   page_import.py             PDF/image import, page splitting
-  infer_layout.py            runs ON the GPU server inside Docker
+  infer_layout.py            runs ON the GPU server inside Docker (+ pure crop geometry, --parents mode)
+  scope.py                   detection scope: crop export, parents export, merge-apply (§H8)
   docker_config.py           container-name config
   static/
     dashboard.html (~1.9k)   project dashboard: import, GPU config, train/infer, params

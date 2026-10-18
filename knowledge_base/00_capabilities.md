@@ -3,7 +3,8 @@
 *The complete feature inventory, kept current: **every commit that adds,
 changes or removes a capability must update this file** (and append to
 [12_version_history.md](12_version_history.md)) in the same commit.
-Last full audit: 2026-10-09, at commit `dfa77e6`.*
+Last full audit: 2026-10-09, at commit `dfa77e6`; capability list
+current as of 2026-10-18.*
 
 Dedust (repo `econai-dedust`) is a browser-based, human-in-the-loop pipeline
 for digitizing historical economic documents — Hungarian statistical
@@ -275,6 +276,23 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   page), nested train-fraction subsets for learning curves, correction
   telemetry (predicted→corrected diffs logged on status change), transfer
   check (score any model on any project's frozen set).
+- **Detection scope — nested detection** (§H8 of
+  [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)):
+  per-project `detection_scope` = `page` (default) or `within:<label>`.
+  Under a within-scope the model's classes are the labels minus the parent,
+  Prepare expands every selected page into one crop per parent shape
+  (`intermediate/crops/`; children translated + clipped, childless parents
+  = negatives, crops inherit the page's train/test side), train / fine-tune
+  read crops, inference runs `infer_layout.py --parents` on crops of the
+  current parent shapes (exported as slim `intermediate/parents/` files)
+  and maps boxes back to page coordinates, and **⤵ Merge into parents**
+  (`apply-predictions-merge`) replaces earlier *predicted* children inside
+  the parents while never touching unscored (human) shapes. Parent–child
+  containment is geometric (centre inside the parent), computed on the fly,
+  no stored field. Dashboard selector on the Train & Infer card; the scope
+  rides in train / infer / infer-from / fine-tune requests and the ledger.
+  Any label can be a parent (firm areas → parts, table regions → cells).
+  Not yet exercised on a real GPU run.
 - **GPU server profiles** (`app/gpu_servers.json`, per instance): named
   backends with optional stored passphrase; per-project `server_profile`;
   password-auth SSH supported; `gpu_scaffold/` bootstraps any fresh GPU
@@ -308,8 +326,9 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 - **Tidy dataset export** (Phase 3) — next on the dataset layer.
 - **P12 entity index** — cross-project linkage browser on authority IDs;
   Hidiroglou–Berthelot year-to-year checks ride on it.
-- **Phase H grouping** (Compass records): region layer foundation exists
-  (H1); the grouping sweep, group browser and records export do not.
+- **Phase H grouping** (Compass records): region layer foundation (H1)
+  and the nested detection scope (H8) exist; the clip-to-regions post
+  filter, grouping sweep, group browser and records export do not.
 - **Phase B multi-user** (verified_by, page locks).
 - **Temporal authority layer** — general infrastructure (slices for
   attribute change + succession edges for entity transformations, e.g.

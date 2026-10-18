@@ -113,7 +113,9 @@ def prepare_training_data(project_name: str, ann_dir: Path,
                           status_filter: bool = True,
                           include_empty_verified: bool = True,
                           test_stems: list[str] | None = None,
-                          train_fraction: float = 1.0) -> dict:
+                          train_fraction: float = 1.0,
+                          scope: str = "page",
+                          crop_margin: float = 12.0) -> dict:
     """
     1. Convert LabelMe JSONs → COCO annotations.json (status-filtered).
     2. When a frozen test set is given: write train.json/test.json here
@@ -121,7 +123,19 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     3. Copy + patch the base yaml config (NUM_CLASSES).
     4. Generate the training .sh script (with hand-editable solver params).
     Returns paths dict + export counts.
+
+    scope — "page" (default) or "within:<parent_label>" (nested detection,
+    plan doc §H8): page selection happens exactly as above, then every
+    selected page is expanded into one crop per parent shape under
+    intermediate/crops/ (children translated + clipped, childless parents
+    = negatives, crops inherit the page's train/test side); the model's
+    classes are the labels minus the parent label; train.sh reads images
+    from /workspace/<project>/crops.
     """
+    from app import scope as _scope
+    scope = _scope.normalize_scope(scope)
+    parent_label = _scope.parent_label_of(scope)
+    model_labels = _scope.scope_labels(labels, scope)
     # Guard against junk values from the UI
     max_iter      = max(1, int(max_iter or 2000))
     ims_per_batch = max(1, int(ims_per_batch or 2))
@@ -190,7 +204,23 @@ def prepare_training_data(project_name: str, ann_dir: Path,
 
     server_side_split = bool(test_set)
 
+    # ── 1b. nested scope: expand pages into per-parent crops ─────────────────
+    n_parents = n_crop_negatives = 0
+    n_scope_pages = len(train_pages) + len(test_pages)
+    if parent_label is not None:
+        crops_dir = intermediate_dir / "crops"
+        _scope.clear_crops(crops_dir)
+        tr = _scope.export_crops(train_pages, parent_label, model_labels,
+                                 ann_dir, crops_dir, crop_margin)
+        te = _scope.export_crops(test_pages, parent_label, model_labels,
+                                 ann_dir, crops_dir, crop_margin)
+        train_pages, test_pages = tr["pages"], te["pages"]
+        n_parents = tr["n_parents"] + te["n_parents"]
+        n_crop_negatives = tr["n_negatives"]          # test negatives don't train
+        n_negatives += n_crop_negatives
+
     # ── 2. COCO JSON(s) ──────────────────────────────────────────────────────
+    labels = model_labels
     coco = pages_to_coco(train_pages + test_pages, labels)
     n_annotated = sum(1 for im in coco["images"]
                       if any(a["image_id"] == im["id"]
@@ -228,6 +258,7 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     # ── 4. Training shell script ─────────────────────────────────────────────
     remote_ws = "/workspace"
     split_block = make_split_block(project_name, server_side_split)
+    img_subdir = images_subdir(scope)
     extra_opts = ""
     if n_negatives:
         # otherwise detectron2 silently drops the negative examples
@@ -245,9 +276,9 @@ cd {remote_ws}/layout-model-training/tools
 python3 train_net.py \\
     --dataset_name          {project_name}-layout \\
     --json_annotation_train {remote_ws}/{project_name}/train.json \\
-    --image_path_train      {remote_ws}/{project_name}/images \\
+    --image_path_train      {remote_ws}/{project_name}/{img_subdir} \\
     --json_annotation_val   {remote_ws}/{project_name}/test.json \\
-    --image_path_val        {remote_ws}/{project_name}/images \\
+    --image_path_val        {remote_ws}/{project_name}/{img_subdir} \\
     --resume \\
     --config-file           {remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml \\
     OUTPUT_DIR  {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/ \\
@@ -261,18 +292,8 @@ echo "=== Training complete ==="
     sh_path.write_text(sh, encoding="utf-8")
 
     # ── 5. Inference shell script ────────────────────────────────────────────
-    infer_sh = f"""#!/bin/bash
-set -e
-echo "=== EconAI: {project_name} inference ==="
-python3 {remote_ws}/layout-model-training/tools/infer_layout.py \\
-    --config  {remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml \\
-    --weights {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/model_final.pth \\
-    --images  {remote_ws}/{project_name}/images \\
-    --output  {remote_ws}/{project_name}/predictions \\
-    --labels  {" ".join(labels)} \\
-    --threshold 0.5
-echo "=== Inference complete ==="
-"""
+    infer_sh = make_infer_script(project_name, labels, scope=scope,
+                                 crop_margin=crop_margin)
     infer_sh_path = intermediate_dir / "infer.sh"
     infer_sh_path.write_text(infer_sh, encoding="utf-8")
 
@@ -302,6 +323,13 @@ echo "=== Inference complete ==="
         "n_skip":                 counts.get("skip", 0),
         "status_counts":          counts,
         "missing_test_stems":     missing_test,
+        # nested detection scope (§H8)
+        "scope":                  scope,
+        "model_labels":           list(labels),
+        "crop_margin":            crop_margin,
+        "n_scope_pages":          n_scope_pages,   # pages before crop expansion
+        "n_parents":              n_parents,       # = number of crops exported
+        "n_crop_negatives":       n_crop_negatives,
     }
     (intermediate_dir / "train_summary.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -324,6 +352,58 @@ python3 utils/cocosplit.py \\
     --test             {remote_ws}/{project_name}/test.json \\
     --split-ratio      0.8 \\
     --having-annotations"""
+
+
+def images_subdir(scope: str = "page") -> str:
+    """Where the training images live under /workspace/<project>/: page
+    images for page scope, the exported crops for a nested scope."""
+    from app import scope as _scope
+    return "crops" if _scope.is_nested(scope) else "images"
+
+
+def make_infer_script(project_name: str, labels: list[str],
+                      scope: str = "page", threshold: float = 0.5,
+                      crop_margin: float = 12.0,
+                      config_path: str | None = None,
+                      weights_path: str | None = None,
+                      images_path: str | None = None,
+                      output_path: str | None = None,
+                      tool_path: str | None = None,
+                      parents_path: str | None = None,
+                      title: str | None = None) -> str:
+    """The inference shell script. Defaults describe the project's own model
+    under /workspace; infer-from passes explicit source-model paths. Under a
+    nested scope the tool runs in --parents mode on the uploaded per-page
+    parent files (plan doc §H8)."""
+    from app import scope as _scope
+    remote_ws = "/workspace"
+    scope = _scope.normalize_scope(scope)
+    parent = _scope.parent_label_of(scope)
+    labels = _scope.scope_labels(labels, scope)
+    config_path  = config_path  or f"{remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml"
+    weights_path = weights_path or f"{remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/model_final.pth"
+    images_path  = images_path  or f"{remote_ws}/{project_name}/images"
+    output_path  = output_path  or f"{remote_ws}/{project_name}/predictions"
+    tool_path    = tool_path    or f"{remote_ws}/layout-model-training/tools/infer_layout.py"
+    parents_path = parents_path or f"{remote_ws}/{project_name}/parents"
+    title = title or f"EconAI: {project_name} inference"
+    nested_opts = ""
+    if parent is not None:
+        nested_opts = (f" \\\n    --parents {parents_path}"
+                       f" \\\n    --parent-label {parent}"
+                       f" \\\n    --margin {crop_margin}")
+    return f"""#!/bin/bash
+set -e
+echo "=== {title} ==="
+python3 {tool_path} \\
+    --config  {config_path} \\
+    --weights {weights_path} \\
+    --images  {images_path} \\
+    --output  {output_path} \\
+    --labels  {" ".join(labels)} \\
+    --threshold {threshold}{nested_opts}
+echo "=== Inference complete ==="
+"""
 
 
 def _page_sort_key(name: str) -> tuple:

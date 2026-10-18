@@ -4555,6 +4555,8 @@ class ConfigUpdate(BaseModel):
     llm:    Optional[dict] = None
     labels: Optional[list] = None
     server_profile: Optional[str] = None   # "" clears (back to inline/custom)
+    # §H8: "page" | "within:<label>"; "" or "page" clears (whole-page default)
+    detection_scope: Optional[str] = None
 
 
 @app.patch("/api/project/{name}/config")
@@ -4567,15 +4569,19 @@ def api_update_config(name: str, body: ConfigUpdate):
                 cfg.pop("server_profile", None)
             else:
                 cfg["server_profile"] = body.server_profile
+        if body.detection_scope is not None:
+            s = _resolve_scope(cfg, body.detection_scope)
+            if s == "page":
+                cfg.pop("detection_scope", None)
+            else:
+                cfg["detection_scope"] = s
         if body.server is not None:
             cfg["server"] = {**cfg.get("server", {}), **body.server}
         if body.llm is not None:
             cfg["llm"] = {**cfg.get("llm", {}), **body.llm}
         if body.labels is not None:
             cfg["labels"] = body.labels
-        (pdir / "config.json").write_text(
-            json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _write_json(pdir / "config.json", cfg)   # atomic + Dropbox/AV retry
         return {"ok": True, "config": cfg}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -6467,6 +6473,29 @@ class PrepareRequest(BaseModel):
     status_filter:          bool = True   # only corrected+verified pages train
     include_empty_verified: bool = True   # verified-empty page = negative example
     train_fraction:         float = 1.0   # P10.5: nested subset for learning curves
+    # §H8 nested detection scope: None → the project's config detection_scope
+    scope:                  Optional[str] = None
+    crop_margin:            Optional[float] = None
+
+
+def _resolve_scope(cfg: dict, requested: Optional[str] = None) -> str:
+    """The detection scope for an operation: the request's value when given,
+    else the project's config `detection_scope`, else "page". Validates the
+    string and that a within-scope's parent label exists in the project's
+    label set (400 otherwise)."""
+    from app import scope as _scope
+    raw = requested if requested is not None else cfg.get("detection_scope")
+    try:
+        s = _scope.normalize_scope(raw)
+        parent = _scope.parent_label_of(s)
+        if parent is not None:
+            if parent not in (cfg.get("labels") or []):
+                raise ValueError(f"scope parent label '{parent}' is not one of "
+                                 f"the project's labels {cfg.get('labels')}")
+            _scope.scope_labels(cfg.get("labels") or [], s)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return s
 
 
 def _frozen_test_stems(pdir) -> list:
@@ -6487,6 +6516,7 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
     try:
         cfg  = load_config(name)
         pdir = project_dir(name)
+        scope = _resolve_scope(cfg, body.scope)
         result = prepare_training_data(
             project_name    = name,
             ann_dir         = pdir / "annotations",
@@ -6501,8 +6531,12 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             include_empty_verified = body.include_empty_verified,
             test_stems             = _frozen_test_stems(pdir),
             train_fraction         = body.train_fraction,
+            scope                  = scope,
+            crop_margin            = body.crop_margin if body.crop_margin is not None else 12.0,
         )
         return {"ok": True, **result}
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -6691,6 +6725,7 @@ class InferRequest(BaseModel):
     passphrase:          Optional[str] = None
     skip_image_upload:   bool = False
     keep_container:      bool = False
+    scope:               Optional[str] = None   # §H8; None → config detection_scope
 
 
 _SSE_DONE = object()
@@ -6780,13 +6815,27 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
     inter  = pdir / "intermediate"
     remote = srv["remote_path"].rstrip("/")
 
+    # §H8: a nested-scope export trains on crops, not page images. The scope
+    # comes from what Prepare actually produced (train_summary.json), so the
+    # upload always matches the COCO files being pushed.
+    from app import scope as _scope
+    from app.coco_convert import images_subdir
+    try:
+        _summary = json.loads((inter / "train_summary.json").read_text(encoding="utf-8"))
+    except Exception:
+        _summary = {}
+    scope = _scope.normalize_scope(_summary.get("scope"))
+    img_subdir = images_subdir(scope)
+
     yield f"[push] remote_path = {remote}"
+    if _scope.is_nested(scope):
+        yield f"[push] detection scope = {scope} → uploading crops instead of page images"
     yield f"[push] Connecting to {srv['host']} as {srv['user']}..."
     c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
     sftp = c.open_sftp()
     try:
         dirs = [
-            f"{remote}/{name}/images",
+            f"{remote}/{name}/{img_subdir}",
             f"{remote}/layout-model-training/configs/{name}",
             f"{remote}/layout-model-training/tools",
             f"{remote}/layout-model-training/scripts",
@@ -6796,15 +6845,16 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
             ssh_ops._sftp_mkdir_p(sftp, d)
 
         IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
-        images = [p for p in (pdir / "annotations").iterdir()
-                  if p.suffix.lower() in IMAGE_EXTS]
+        src_dir = (inter / "crops") if _scope.is_nested(scope) else (pdir / "annotations")
+        images = [p for p in src_dir.iterdir()
+                  if p.suffix.lower() in IMAGE_EXTS] if src_dir.exists() else []
         total = len(images)
         if skip_images:
-            yield f"[push] Skipping image upload ({total} images assumed already on server)."
+            yield f"[push] Skipping image upload ({total} {img_subdir} assumed already on server)."
         else:
-            yield f"[push] Uploading {total} image(s) → {remote}/{name}/images/"
+            yield f"[push] Uploading {total} image(s) → {remote}/{name}/{img_subdir}/"
             for i, img in enumerate(images, 1):
-                dest = f"{remote}/{name}/images/{img.name}"
+                dest = f"{remote}/{name}/{img_subdir}/{img.name}"
                 _sftp_put_force(sftp, str(img), dest)
                 if i % 5 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name} → {dest}"
@@ -6957,7 +7007,9 @@ def _ledger_row_from_summary(inter: Path, mode: str, **extra) -> dict:
             "n_test_pages", "n_negatives", "n_excluded_status",
             "n_annotations", "status_filter", "include_empty_verified",
             "server_side_split", "status_counts", "train_fraction",
-            "n_train_pool")
+            "n_train_pool",
+            # §H8 nested detection scope
+            "scope", "n_parents", "n_crop_negatives", "n_scope_pages")
     row = {"mode": mode, **{k: summary[k] for k in keys if k in summary}}
     row.update(extra)
     return row
@@ -7093,20 +7145,39 @@ async def api_train(name: str, body: TrainRequest = TrainRequest()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: bool = False):
+def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: bool = False,
+                         scope: str = "page"):
     """Generator: push images + scripts + config for inference (no annotations.json needed).
 
     Uses predict_remote_path (if set) as the Docker-container root for placing
     the infer script — necessary when the predict container mounts a parent
     directory compared to the training container.
     skip_images=True skips the (slow) image upload and only pushes config/scripts.
+    scope (§H8): infer.sh is regenerated from the current labels + scope; a
+    nested scope also exports the current parent shapes to intermediate/parents/
+    and uploads them so infer_layout.py can run in --parents mode.
     """
     from app import ssh_ops
+    from app import scope as _scope
+    from app.coco_convert import make_infer_script
     import posixpath as pp
     pdir         = project_dir(name)
     inter        = pdir / "intermediate"
     remote       = srv["remote_path"].rstrip("/")        # where data lives on host
     predict_root = srv.get("predict_remote_path", remote).rstrip("/")  # predict container ws root on host
+    cfg          = load_config(name)
+    scope        = _scope.normalize_scope(scope)
+    parent_label = _scope.parent_label_of(scope)
+
+    # infer.sh always reflects the CURRENT scope (the yaml + weights are the
+    # model's own, prepared under the same scope).
+    inter.mkdir(parents=True, exist_ok=True)
+    (inter / "infer.sh").write_text(
+        make_infer_script(name, cfg["labels"], scope=scope), encoding="utf-8")
+    if parent_label is not None:
+        pstats = _scope.export_parents(pdir / "annotations", inter / "parents", parent_label)
+        yield (f"[push] detection scope = {scope}: {pstats['n_parents']} parent shape(s) "
+               f"on {pstats['n_pages']} page(s) exported for crop inference")
 
     yield f"[push] remote_path (data)    = {remote}"
     yield f"[push] predict_remote_path   = {predict_root}"
@@ -7162,6 +7233,17 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
                 if i % 10 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name}"
 
+        if parent_label is not None:
+            pdir_remote = f"{remote}/{name}/parents"
+            ssh_ops._sftp_mkdir_p(sftp, pdir_remote)
+            # stale parent files would resurrect deleted parents on the server
+            _, _ls, _ = c.exec_command(f"rm -f {pdir_remote}/*.json")
+            _ls.read()
+            pfiles = sorted((inter / "parents").glob("*.json"))
+            yield f"[push] Uploading {len(pfiles)} parent file(s) → {pdir_remote}/"
+            for pf in pfiles:
+                _sftp_put_force(sftp, str(pf), f"{pdir_remote}/{pf.name}")
+
         cfg_local = inter / "configs" / name / "fast_rcnn_R_50_FPN_3x.yaml"
         dest = f"{predict_root}/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml"
         yield f"[push] config YAML → {dest}"
@@ -7205,6 +7287,10 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
     """Run inference on the server. Streams log via SSE."""
     from app import ssh_ops
     try:
+        try:
+            scope    = _resolve_scope(load_config(name), body.scope)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         srv          = _server_cfg(name)
         passphrase   = body.passphrase or srv.get("passphrase")
         remote       = srv["remote_path"].rstrip("/")
@@ -7235,7 +7321,8 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
 
         def full_gen():
             yield from _push_infer_data_gen(name, srv, passphrase,
-                                            skip_images=body.skip_image_upload)
+                                            skip_images=body.skip_image_upload,
+                                            scope=scope)
             script_path = _detect_script_path()
             _cn = _predict_container(srv)
             # Verify the script is actually visible inside the container before
@@ -7271,19 +7358,26 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
 def _push_infer_from_gen(new_name: str, source_name: str,
                          srv: dict, passphrase: str,
                          skip_images: bool = False,
-                         threshold: float = 0.3):
+                         threshold: float = 0.3,
+                         scope: str = "page"):
     """Generator: run inference on new_name's images using source_name's trained model.
 
     Identical to _push_infer_data_gen except the --weights and --config paths
     point at the source project, while --images and --output point at the new project.
     The source project's config YAML is expected to already be on the server
     (from a previous prepare+push cycle on that project).
+    scope (§H8): the SOURCE model's scope; a nested scope exports the target
+    project's current parent shapes and runs the tool in --parents mode.
     """
     from app import ssh_ops
+    from app import scope as _scope
+    from app.coco_convert import make_infer_script
     import posixpath as pp
 
     new_cfg  = load_config(new_name)
     src_cfg  = load_config(source_name)
+    scope        = _scope.normalize_scope(scope)
+    parent_label = _scope.parent_label_of(scope)
 
     # Label compatibility check
     new_labels = new_cfg.get("labels", [])
@@ -7309,6 +7403,11 @@ def _push_infer_from_gen(new_name: str, source_name: str,
     yield f"[infer-from] target project: {new_name}"
     yield f"[infer-from] remote_path   : {remote}"
     yield f"[infer-from] ws_prefix     : '{ws_prefix}'"
+    if parent_label is not None:
+        pstats = _scope.export_parents(pdir / "annotations",
+                                       pdir / "intermediate" / "parents", parent_label)
+        yield (f"[infer-from] detection scope: {scope} — {pstats['n_parents']} parent "
+               f"shape(s) on {pstats['n_pages']} page(s) exported for crop inference")
     yield f"[infer-from] Connecting to {srv['host']} as {srv['user']}..."
 
     c    = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
@@ -7377,26 +7476,28 @@ def _push_infer_from_gen(new_name: str, source_name: str,
         yield f"[infer-from] infer_layout.py → {dest}"
         _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"), dest)
 
+        # Nested scope: the target project's current parent shapes
+        if parent_label is not None:
+            pdir_remote = f"{remote}/{new_name}/parents"
+            ssh_ops._sftp_mkdir_p(sftp, pdir_remote)
+            _, _ls, _ = c.exec_command(f"rm -f {pdir_remote}/*.json")
+            _ls.read()
+            pfiles = sorted((pdir / "intermediate" / "parents").glob("*.json"))
+            yield f"[infer-from] Uploading {len(pfiles)} parent file(s) → {pdir_remote}/"
+            for pf in pfiles:
+                _sftp_put_force(sftp, str(pf), f"{pdir_remote}/{pf.name}")
+
         # Build an infer script: source model weights/config, new project images/output
         pfx = (ws_prefix + "/") if ws_prefix else ""
-        config_path  = f"/workspace/{pfx}layout-model-training/configs/{source_name}/fast_rcnn_R_50_FPN_3x.yaml"
-        weights_path = f"/workspace/{pfx}layout-model-training/outputs/{source_name}/fast_rcnn_R_50_FPN_3x/model_final.pth"
-        images_path  = f"/workspace/{pfx}{new_name}/images"
-        output_path  = f"/workspace/{pfx}{new_name}/predictions"
-        labels_str   = " ".join(src_labels)
-
-        tool_path = f"/workspace/{pfx}layout-model-training/tools/infer_layout.py"
-        script = (
-            f"#!/bin/bash\nset -e\n"
-            f"echo '=== EconAI: {new_name} inference from {source_name} model ==='\n"
-            f"python3 {tool_path} \\\n"
-            f"    --config  {config_path} \\\n"
-            f"    --weights {weights_path} \\\n"
-            f"    --images  {images_path} \\\n"
-            f"    --output  {output_path} \\\n"
-            f"    --labels  {labels_str} \\\n"
-            f"    --threshold {threshold}\n"
-            f"echo '=== Inference complete ==='\n"
+        script = make_infer_script(
+            new_name, src_labels, scope=scope, threshold=threshold,
+            config_path  = f"/workspace/{pfx}layout-model-training/configs/{source_name}/fast_rcnn_R_50_FPN_3x.yaml",
+            weights_path = f"/workspace/{pfx}layout-model-training/outputs/{source_name}/fast_rcnn_R_50_FPN_3x/model_final.pth",
+            images_path  = f"/workspace/{pfx}{new_name}/images",
+            output_path  = f"/workspace/{pfx}{new_name}/predictions",
+            tool_path    = f"/workspace/{pfx}layout-model-training/tools/infer_layout.py",
+            parents_path = f"/workspace/{pfx}{new_name}/parents",
+            title        = f"EconAI: {new_name} inference from {source_name} model",
         ).encode()
 
         script_dest = f"{predict_root}/layout-model-training/scripts/{new_name}_infer_from_{source_name}.sh"
@@ -7422,6 +7523,7 @@ class InferFromRequest(BaseModel):
     skip_image_upload: bool = False
     threshold:         float = 0.1
     keep_container:    bool = False
+    scope:             Optional[str] = None   # §H8; None → source's detection_scope
 
 
 @app.post("/api/project/{name}/infer-from/{source}")
@@ -7429,6 +7531,14 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
     """Run inference on name's images using source project's trained model. Streams log via SSE."""
     from app import ssh_ops
     try:
+        # The scope belongs to the SOURCE model; the parent label must exist
+        # in the target project too (its pages supply the parents).
+        try:
+            cfg, src_cfg = load_config(name), load_config(source)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        scope = _resolve_scope(cfg, body.scope if body.scope is not None
+                               else src_cfg.get("detection_scope"))
         srv = _server_cfg(name)
         passphrase = body.passphrase or srv.get("passphrase")
 
@@ -7436,7 +7546,7 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
             docker_cmd = None
             for line in _push_infer_from_gen(name, source, srv,
                                              passphrase, body.skip_image_upload,
-                                             body.threshold):
+                                             body.threshold, scope=scope):
                 if line.startswith("__docker_cmd__:"):
                     docker_cmd = line[len("__docker_cmd__:"):]
                 else:
@@ -7477,6 +7587,7 @@ class FinetuneFromRequest(BaseModel):
     keep_container:    bool = False
     status_filter:          bool = True   # P10.2: only corrected+verified train
     include_empty_verified: bool = True
+    scope:                  Optional[str] = None   # §H8; None → config detection_scope
 
 
 @app.post("/api/project/{name}/finetune-from/{source}")
@@ -7504,6 +7615,7 @@ async def api_finetune_from(name: str, source: str,
                         f"'{source}' was trained with {src_cfg.get('labels')}. "
                         f"Projects must share the same label set."))
 
+        scope      = _resolve_scope(cfg, body.scope)
         srv        = _server_cfg(name)
         passphrase = body.passphrase or srv.get("passphrase")
         pdir       = project_dir(name)
@@ -7516,7 +7628,7 @@ async def api_finetune_from(name: str, source: str,
         # Regenerate COCO + config locally from the CURRENT (corrected)
         # annotations. Standard solver params here so the normal train.sh that
         # gets pushed alongside is not silently rewritten with fine-tune values.
-        from app.coco_convert import make_split_block
+        from app.coco_convert import make_split_block, images_subdir
         prep = prepare_training_data(
             project_name     = name,
             ann_dir          = pdir / "annotations",
@@ -7526,7 +7638,9 @@ async def api_finetune_from(name: str, source: str,
             status_filter          = body.status_filter,
             include_empty_verified = body.include_empty_verified,
             test_stems             = _frozen_test_stems(pdir),
+            scope                  = scope,
         )
+        img_subdir = images_subdir(scope)
 
         # The fine-tune script: identical to train.sh except MODEL.WEIGHTS
         # points at the source model and the solver is short + gentle.
@@ -7559,9 +7673,9 @@ cd /workspace/layout-model-training/tools
 python3 train_net.py \\
     --dataset_name          {name}-layout \\
     --json_annotation_train /workspace/{name}/train.json \\
-    --image_path_train      /workspace/{name}/images \\
+    --image_path_train      /workspace/{name}/{img_subdir} \\
     --json_annotation_val   /workspace/{name}/test.json \\
-    --image_path_val        /workspace/{name}/images \\
+    --image_path_val        /workspace/{name}/{img_subdir} \\
     --config-file           /workspace/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml \\
     OUTPUT_DIR  {out_dir}/ \\
     MODEL.WEIGHTS {src_weights} \\
@@ -7606,6 +7720,10 @@ echo "=== Fine-tune complete ==="
                 yield f"[ft] source model : {source}"
                 yield f"[ft] target project: {name}"
                 yield f"[ft] MAX_ITER={max_iter}  BASE_LR={base_lr}"
+                if prep.get("n_parents"):
+                    yield (f"[ft] detection scope {scope}: {prep['n_parents']} crop(s) "
+                           f"from {prep.get('n_scope_pages')} page(s), "
+                           f"{prep.get('n_crop_negatives')} childless parent(s) as negatives")
 
                 # Source weights must exist on the server
                 host_weights = (f"{remote}/layout-model-training/outputs/{source}/"
@@ -7732,6 +7850,37 @@ def api_apply_predictions(name: str):
         applied += 1
     return {"applied": applied, "skipped_had_annotations": skipped,
             "skipped_clutter": skipped_clutter}
+
+
+class MergeApplyRequest(BaseModel):
+    scope: Optional[str] = None   # None → config detection_scope (must be nested)
+
+
+@app.post("/api/project/{name}/apply-predictions-merge")
+def api_apply_predictions_merge(name: str, body: MergeApplyRequest = MergeApplyRequest()):
+    """§H8 merge-apply for a nested detection scope: insert the predicted
+    children into pages that already carry the parent shapes, replacing
+    earlier PREDICTED children (shapes with a score) inside the parents and
+    never touching shapes without a score. Pages without parents, skip
+    pages and pages where nothing changes are left untouched."""
+    from app import scope as _scope
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    scope = _resolve_scope(cfg, body.scope)
+    parent = _scope.parent_label_of(scope)
+    if parent is None:
+        raise HTTPException(status_code=400,
+                            detail="Merge-apply needs a nested scope (within:<label>); "
+                                   "use 'Apply to empty pages' for whole-page models.")
+    pdir     = project_dir(name)
+    pred_dir = pdir / "predictions"
+    if not pred_dir.exists():
+        raise HTTPException(status_code=400, detail="No predictions pulled yet")
+    stats = _scope.merge_apply(pdir / "annotations", pred_dir, parent,
+                               _scope.scope_labels(cfg["labels"], scope), _write_json)
+    return {"ok": True, "scope": scope, **stats}
 
 
 # ---------------------------------------------------------------------------
