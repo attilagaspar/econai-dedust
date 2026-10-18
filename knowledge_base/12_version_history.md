@@ -196,3 +196,19 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   on `_smoke_` fixtures (column ordering, cross-page chaining, locked ids,
   idempotence, orphans, forward resweep, rows-PATCH survival); suite 273
   green; verified in a browser on :8001. Live server not restarted.
+- **Oct 18 — crop round trip (crops as pages + write-back, §H8)**:
+  `app/crops.py` (`derive_crops`: every box of a label → image page
+  `<stem>__crop<k>` of a target project with `flags.crop_source`
+  provenance incl. `group_id` / `continuation`; idempotent, provenance
+  refresh, stale detection with policies keep / replace / force, human /
+  reviewed crop pages protected, vanished boxes reported, optional carried
+  children stamped `crop_origin` on the source; `write_back`: shapes
+  translated to page coordinates incl. absolute row bands with all content
+  kept, `crop_origin` stamp + record id, same-origin replacement only,
+  table-id renumbering on collision, stale skipped, multiset change
+  detection, dry run), endpoints `POST …/derive-crops` (creates the target
+  project when missing) and `POST …/write-back`, `/api/records/context`
+  now returns `projects_root`; editor `crops.js` (batch ops ✂ cut / ⤴ write
+  back with dry-run previews and source-page undo snapshots, origin pill
+  with source deep link, ⤴ badge on written-back shapes). 15 tests on
+  `_smoke_` fixtures; docs 00 / 03 / 09. Live server not restarted.

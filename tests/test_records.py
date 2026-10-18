@@ -281,7 +281,7 @@ def test_sweep_endpoint_dry_run_then_write_and_browse(client, rec_project):
     assert "layout_columns" not in r.json()["config"]          # auto = absent
     ctx = client.get("/api/records/context", params={"folder": str(pdir / "annotations")}).json()
     assert ctx == {"project": name, "record_label": "firm", "layout_columns": "auto",
-                   "labels": ["firm", "page_header"]}
+                   "labels": ["firm", "page_header"], "projects_root": str(PROJECTS_ROOT)}
 
     # dry run: nothing written, page-order check reported
     r = client.post(f"/api/project/{name}/sweep-records", json={"dry_run": True})

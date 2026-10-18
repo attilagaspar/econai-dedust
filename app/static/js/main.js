@@ -214,6 +214,7 @@ async function loadPage(idx) {
   const revBtn = document.getElementById('review-btn');
   if (revBtn) revBtn.disabled = false;
   if (typeof _syncStatusChip === 'function') _syncStatusChip();
+  if (typeof updateCropOriginPill === 'function') updateCropOriginPill();   // crop page → source deep link
   if (typeof _ddOnPageChange === 'function') _ddOnPageChange();
 }
 

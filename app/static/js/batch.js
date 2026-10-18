@@ -210,6 +210,10 @@ function onBatchOpChange() {
   const recOpts = document.getElementById('batch-records-opts');
   if (recOpts) recOpts.style.display = isRecords ? 'flex' : 'none';
   if (isRecords) _batchRecordsInit(op);
+  const isCrops = op === 'crops_derive' || op === 'crops_writeback';
+  const cropOpts = document.getElementById('batch-crops-opts');
+  if (cropOpts) cropOpts.style.display = isCrops ? 'flex' : 'none';
+  if (isCrops && typeof _batchCropsInit === 'function') _batchCropsInit(op);
 }
 
 // ── Record chaining (⛓): settings live in the project config ───────────────
@@ -626,6 +630,16 @@ async function runBatch() {
       if (!d) return;
     }
     await openRecordBrowser();
+    return;
+  }
+
+  // Crop round trip: cut boxes into a crop project / write crop pages back.
+  // Server-side, one call each (a dry run first; the page range narrows the
+  // selection). Source-page snapshots are taken inside the helpers.
+  if (op === 'crops_derive' || op === 'crops_writeback') {
+    const dry = !!document.getElementById('batch-crops-dry')?.checked;
+    if (op === 'crops_derive') await runDeriveCrops(sorted, {dryRun: dry});
+    else await runWriteBack(sorted, {dryRun: dry});
     return;
   }
 

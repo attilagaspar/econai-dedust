@@ -32,6 +32,7 @@
     <option value="problem">⚠ problem</option>
     <option value="skip">⊘ skip (no annotations)</option>
   </select>
+  <span id="crop-origin-pill" style="display:none;margin-left:6px;padding:2px 8px;border:1px solid #2a4a8e;border-radius:10px;background:#12224a;color:#cde;font-size:11px;white-space:nowrap;"></span>
   <button id="delete-page-btn" onclick="deleteCurrentPage()" disabled
           title="Delete this page — image + annotations move to the project's _trash_pages folder (recoverable)"
           style="background:#0d1b35;border:1px solid #0f3460;border-radius:3px;color:#ccc;font-size:11px;padding:2px 6px;margin-left:4px;cursor:pointer;">🗑</button>
@@ -904,6 +905,8 @@
         <option value="dataset_diagnose">📊 Dataset diagnostics report</option>
         <option value="records_sweep">⛓ Records: sweep (number records through the volume)</option>
         <option value="records_browse">⛓ Records: browser (chains, orphans, long spans)</option>
+        <option value="crops_derive">✂ Cut boxes of a label into a crop project (crops as pages)</option>
+        <option value="crops_writeback">⤴ Write crop pages back to their source pages</option>
       </select>
     </div>
     <div id="batch-status-opts" style="display:none;">
@@ -945,6 +948,58 @@
         (a record whose first fragment is a continuation) and long spans; ⛓ and ⟳▶ fix them in place. Settings are saved in the
         project config; batch undo restores the ids of the last sweep.</div>
       <div id="batch-rec-info" style="font-size:10px;color:#f87171;"></div>
+    </div>
+    <div id="batch-crops-opts" style="display:none;flex-direction:column;gap:8px;">
+      <div id="batch-crops-derive-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:11px;color:#aaa;">Box label</span>
+          <select id="batch-crops-label" style="flex:1;min-width:120px;"></select>
+          <span style="font-size:11px;color:#aaa;">→ crop project</span>
+          <input id="batch-crops-target" type="text" style="flex:1;min-width:140px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 6px;font-size:11px;" placeholder="created when missing">
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span>source pages:</span>
+          <label class="row" style="margin:0;"><input type="checkbox" data-src-status="corrected" checked style="accent-color:#e94560;width:13px;height:13px;"><span>corrected</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-src-status="verified" checked style="accent-color:#e94560;width:13px;height:13px;"><span>verified</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-src-status="predicted" style="accent-color:#e94560;width:13px;height:13px;"><span>predicted</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-src-status="problem" style="accent-color:#e94560;width:13px;height:13px;"><span>problem</span></label>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span>margin</span><input id="batch-crops-margin" type="number" min="0" max="200" value="12" style="width:52px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;"><span>px</span>
+          <span>existing crops</span>
+          <select id="batch-crops-policy" title="What to do with a crop page whose source box moved or vanished (stale)">
+            <option value="keep">keep (report stale, never overwrite)</option>
+            <option value="replace">replace stale — except pages with human work / reviewed</option>
+            <option value="force">force — replace stale even with human work</option>
+          </select>
+          <label class="row" style="margin:0;" title="Shapes whose centre lies inside the box travel along as initial shapes (all content kept); their source copies are stamped crop_origin so the first write-back replaces them instead of duplicating them">
+            <input type="checkbox" id="batch-crops-children" style="accent-color:#e94560;width:13px;height:13px;"><span>carry child shapes</span></label>
+        </div>
+        <div style="font-size:10px;color:#555;">Every box of the label on the selected pages (page range above) becomes an image page <b>&lt;stem&gt;__crop&lt;k&gt;</b> of the crop project
+          (k = reading order, columns then top-down); the crop page's <b>flags.crop_source</b> records the source page, shape, bbox, record id and continuation mark.
+          Re-running is safe: unchanged boxes leave their crops alone (only the record fields of the provenance are refreshed); a moved or vanished box
+          makes its crop <b>stale</b> — reported, and replaced only under the policy chosen here. Nothing is ever deleted. Annotate and run models in the crop
+          project, then use <b>⤴ Write back</b> there.</div>
+      </div>
+      <div id="batch-crops-wb-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span>crop pages:</span>
+          <label class="row" style="margin:0;"><input type="checkbox" data-wb-status="verified" checked style="accent-color:#e94560;width:13px;height:13px;"><span>verified</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-wb-status="corrected" style="accent-color:#e94560;width:13px;height:13px;"><span>corrected</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-wb-status="predicted" style="accent-color:#e94560;width:13px;height:13px;"><span>predicted</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-wb-status="problem" style="accent-color:#e94560;width:13px;height:13px;"><span>problem</span></label>
+        </div>
+        <div style="font-size:10px;color:#555;">Each selected crop page (page range above) that carries <b>flags.crop_source</b> is written onto its source page: every shape is moved to page
+          coordinates (box and internal row bands) with all its text layers, lattice fields, authority, structured data, blanks and clips intact, stamped
+          <b>crop_origin</b> and given the record id from the provenance. A repeat replaces exactly the shapes written from that crop earlier; the parent box
+          and everything else on the source page stay untouched; lattice table ids are renumbered on collision. Stale provenance (source box moved or
+          vanished) is skipped and reported. A batch-undo snapshot of the affected source pages is taken first.</div>
+      </div>
+      <label class="row" title="Report what would happen without writing anything">
+        <input type="checkbox" id="batch-crops-dry" style="accent-color:#e94560;width:13px;height:13px;">
+        <span>dry run (report only, no writes)</span>
+      </label>
+      <div id="batch-crops-info" style="font-size:10px;color:#f87171;"></div>
     </div>
     <div id="batch-dataset-opts" style="display:none;">
       <label class="row" style="margin-bottom:4px;">Dataset declaration</label>
@@ -1581,6 +1636,7 @@
 <script src="js/dup_report.js"></script>
 <script src="js/dataset_report.js"></script>
 <script src="js/records.js"></script>
+<script src="js/crops.js"></script>
 <script src="js/dataset_decl.js"></script>
 <script src="js/main.js"></script>
 </body>

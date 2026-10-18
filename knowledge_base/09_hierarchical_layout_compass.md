@@ -3,8 +3,10 @@
 *Status (2026-10-18): H1 data model built (`app/regions.py`, region
 vocabulary, table_region derivation). **H8 detection scope — first slice
 built** (crop export, `--parents` crop inference, merge-apply, dashboard
-selector; see §H8 below). **H5 record chaining built 2026-10-18** for one
-parent label (`app/records.py`, see the H5 status line). H2–H3 are
+selector; see §H8 below; **crops-as-pages round trip built 2026-10-18**,
+`app/crops.py`, see "Crops as pages" in §H8). **H5 record chaining built
+2026-10-18** for one parent label (`app/records.py`, see the H5 status
+line). H2–H3 are
 annotation + GPU work (user). H4 v1 clip-to-regions, H6 records export:
 not built.*
 
@@ -395,8 +397,93 @@ badge on scoped rows.
    corrections back. For cells inside tables, repeat with
    `within:balance_table` — same mechanism, different instance.
 
+### Crops as pages — the round trip (built 2026-10-18, `app/crops.py`)
+
+**Status: built** — `POST /api/project/{name}/derive-crops`,
+`POST /api/project/{name}/write-back`, batch ops ✂ / ⤴, origin pill,
+⤴ badge, 15 tests on `_smoke_` fixtures. Not yet exercised on a real
+volume.
+
+The within-scope above keeps everything in page coordinates and asks the
+model to work on crops it never shows the user. For **record-shaped
+sources** — one box per entry, each entry a small document of its own
+(name line, address, capital, a balance sheet …) — the recommended route
+is the other way round: **the parent boxes become the pages of a second
+project.** A crop project is an ordinary project: annotate the crops,
+build lattices, run OCR / LLM / authority, train and run models on them
+with the normal page-level tools (no scope, no special code paths), review
+them page by page; then one operation **writes the finished content back
+onto the original pages at page coordinates.** The page stays the single
+source of truth; the crop is a working surface tied to it by provenance.
+
+*Derive* (`crops.derive_crops`): for every box of the chosen label on the
+selected source pages (statuses, pattern), write
+`<stem>__crop<k>.jpg` (box + margin, clamped) and a LabelMe page whose
+`flags.crop_source` holds `{project, stem, shape_idx, bbox, crop_rect,
+label, margin, source_status, group_id, continuation, ts}`. k is the
+reading-order index (`records.reading_order`: columns then top-down, so
+the crop project's natural page order is *source page order, then k*).
+Idempotent: a box with the same label, bbox and crop rect leaves its crop
+alone and only the provenance's record fields (`group_id`,
+`continuation`, `shape_idx`, `source_status`) are refreshed — so a
+resweep in the source project propagates ids without touching the crops.
+A box that moved, was re-framed (margin change) or vanished makes its
+crop **stale**: reported with a reason; replaced only under policy
+`replace` (and never a crop page with unscored = human shapes or a
+non-predicted status, which are reported as *protected*) or `force`.
+Nothing is ever deleted — orphan crops of vanished boxes are listed for
+the user to delete with the ordinary page-delete op. With *carry child
+shapes*, shapes whose centre lies in the box travel along as initial
+shapes (translated, clipped, every field kept) and their source copies
+are stamped `crop_origin` so the first write-back replaces them instead
+of duplicating them.
+
+*Write back* (`crops.write_back`): per selected crop page (default:
+verified), locate the parent box on the source page by label + bbox (the
+index is only a hint; a miss = stale, skipped and reported), translate
+every shape by the crop offset — the box **and** the absolute
+`row_struct` bands — keep all other content verbatim, stamp
+`crop_origin = {project, stem}`, copy the provenance's `group_id`, clip
+to the page. Shapes of the same origin written earlier are removed and
+the new ones take their place (first write: right after the parent box);
+shapes without an origin or with another origin — the parent box, the
+page's own content, another crop project's output — are never touched.
+Lattice `table` ids that collide with the rest of the page are renumbered
+(non-colliding ids kept, deterministic). Crops of one source page are
+applied together; the page is written through the atomic writer only
+when its shape multiset changed, so repeats are no-ops. The UI takes a
+batch-undo snapshot of the affected source pages first (restore from the
+batch dialog of the *source* project).
+
+*Records across crops.* A fragment of one record is one box, hence one
+crop; the fragments stay linked by the `group_id` / `continuation` the
+provenance carries and the write-back stamps on the page shapes. The crop
+round trip does not depend on the sweep (§H5): without ids the fields are
+simply null and refreshed later.
+
+*Editor.* Batch ops **✂ Cut boxes of a label into a crop project** (label,
+target name, source statuses, margin, stale policy, carry children, dry
+run; the batch page range narrows the pages) and **⤴ Write crop pages
+back to their source pages** (crop statuses, dry run; a preview lists the
+source pages and stale crops). On a crop page the topbar shows an origin
+pill (`⤴ crop of project/stem #idx (label, status) · r<id> · ⛓`) deep-
+linking to the source page with the box selected (`?stem=&idx=`). On a
+source page a written-back shape carries a ⤴ badge whose tooltip names
+the crop.
+
+*When to use which.* Crops as pages: record-shaped sources, anything
+where the per-entry work (lattices, rows, authority, structured
+extraction) is substantial, or where a model should be trained and run
+with the ordinary page tooling. Within-scope (`within:<label>`, above):
+when page-coordinate inference is wanted directly and the children are
+simple boxes — one Train / Infer / Merge cycle, no second project.
+
 ### Open items / next slices
 
+- Crop round trip: a `status` propagation option (crop verified → mark the
+  source page corrected) and a "stale crops" listing in the report
+  chassis; a crop-of-crop (two levels) works by construction but is
+  untested on real data.
 - Scopes with **several parent labels** (`within:a|b`) — trivial
   extension of `parse_scope`; not needed yet.
 - A parent-level **upscale** option (resize small crops to a fixed short

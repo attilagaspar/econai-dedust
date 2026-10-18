@@ -80,6 +80,42 @@ one LabelMe-style JSON per page as the single source of truth.
   pages, keeps `group_locked` ids and continues from them; idempotent
   given the same marks. Derived registry `intermediate/records.json`
   (never the source of truth).
+- **Crop round trip — crops as pages** (`app/crops.py`, §H8 "crops as
+  pages" of [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)):
+  batch op **✂ Cut boxes of a label into a crop project**
+  (`POST /api/project/{name}/derive-crops`): every box of a chosen label
+  on the selected pages (statuses, default corrected + verified; the batch
+  page range) becomes an image page `<stem>__crop<k>` of another project
+  (created when missing, label set copied or given; k = reading order,
+  columns then top-down; page order of the crop project = source order
+  then k), with provenance in the crop page's `flags.crop_source`
+  (source project, stem, shape index, bbox, crop rect, label, margin,
+  source status, **record id `group_id` and `continuation` mark**, ts).
+  Idempotent: an unchanged box leaves its crop alone (only the record
+  fields / index of the provenance are refreshed), a moved, re-framed or
+  vanished box makes the crop **stale** — reported, replaced only under
+  policy `replace` (never a crop page with human shapes or a non-predicted
+  status) or `force`; nothing is ever deleted. Optional *carry child
+  shapes* (centre inside the box, translated + clipped, all content kept;
+  the source copies are stamped `crop_origin` so the first write-back
+  replaces rather than duplicates them). Dry run. In the crop project the
+  ordinary tools apply (annotate, OCR, LLM, lattice, authority, models);
+  the topbar shows an **origin pill** (deep link to the source page with
+  the box selected, record id, ⛓). Batch op **⤴ Write crop pages back to
+  their source pages** (`POST /api/project/{name}/write-back`, crop pages
+  by status, default verified; dry run): every shape is translated to page
+  coordinates (box + absolute `row_struct` bands) with all its content
+  intact (text layers, lattice fields, authority, structured, blank,
+  clips …), stamped **`crop_origin = {project, stem}`** and given the
+  provenance's record id; a repeat replaces exactly the shapes written
+  from that crop earlier (same origin), the parent box and every other
+  shape on the page (no origin, or another origin) stay untouched;
+  lattice `table` ids are renumbered on collision; stale provenance
+  (source box moved / vanished) is skipped and reported; a page is written
+  only when its shape multiset changes (atomic writer; batch-undo snapshot
+  of the affected source pages taken by the UI). Written-back shapes carry
+  a ⤴ badge with a tooltip naming the crop. The page stays the source of
+  truth; the crop is a working surface tied to it by provenance.
 
 ## 3. Lattice (printed-grid superstructure) — `lattice.js`
 
@@ -324,7 +360,13 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   The full cascade needs **no cloned label sets**: a one-label parent
   project is inferred-from onto the richer target (label subset rule), its
   boxes merged onto populated pages by label set, then the `within:` model
-  merged inside those parents. Not yet exercised on a real GPU run.
+  merged inside those parents. Not yet exercised on a real GPU run. For
+  record-shaped sources the **crop round trip** (§2: crops as pages +
+  write-back) is the recommended route — the crop project is an ordinary
+  project, so any model is trained and run on crops the normal way and
+  the results land on the source pages at page coordinates; within-scope
+  training is the alternative when page-coordinate inference is wanted
+  directly.
 - **GPU server profiles** (`app/gpu_servers.json`, per instance): named
   backends with optional stored passphrase; per-project `server_profile`;
   password-auth SSH supported; `gpu_scaffold/` bootstraps any fresh GPU
@@ -359,9 +401,10 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 - **P12 entity index** — cross-project linkage browser on authority IDs;
   Hidiroglou–Berthelot year-to-year checks ride on it.
 - **Phase H grouping** (Compass records): region layer foundation (H1),
-  the nested detection scope (H8) and the record-chaining sweep + browser
-  (H5, one parent label) exist; the clip-to-regions post filter and the
-  records export (H6) do not.
+  the nested detection scope (H8) with the crop round trip (crops as
+  pages + write-back) and the record-chaining sweep + browser (H5, one
+  parent label) exist; the clip-to-regions post filter and the records
+  export (H6) do not.
 - **Phase B multi-user** (verified_by, page locks).
 - **Temporal authority layer** — general infrastructure (slices for
   attribute change + succession edges for entity transformations, e.g.

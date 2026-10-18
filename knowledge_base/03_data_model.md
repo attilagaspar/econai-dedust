@@ -22,9 +22,22 @@ Everything lives in one LabelMe-style JSON per page (`projects/<p>/annotations/<
   "continuation": true,              // record chaining: continues the previous box of
                                      //   the record label in reading order (§H5)
   "group_id": 17,                    // record id, numbered through the volume by the sweep
-  "group_locked": true               // hand-assigned record id — the sweep keeps it
+  "group_locked": true,              // hand-assigned record id — the sweep keeps it
+  "crop_origin": {"project": "x_crops", "stem": "p12__crop3"}
+                                     // written back from that crop page (crop round
+                                     //   trip); a repeat write-back of the same crop
+                                     //   replaces exactly the shapes with this origin
 }
 ```
+
+Crop round trip (`app/crops.py`): a crop page (an image page of another
+project cut from one box of this page) carries the provenance in its page
+flags: `flags.crop_source = {project, stem, shape_idx, bbox, crop_rect,
+label, margin, source_status, group_id, continuation, ts[, refreshed]}`.
+The box is identified by label + bbox (the index is a hint that may
+shift); a moved or vanished box makes the provenance stale. `crop_origin`
+on a source-page shape is the inverse pointer; both fields live on the
+shape / page, so the rows PATCH whitelist does not touch them.
 
 Record chaining (`app/records.py`): a project's `config.record_label` names
 the label records are built from; `layout_columns` (`auto` | 1 | 2) steers the

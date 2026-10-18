@@ -1143,6 +1143,13 @@ function drawOverlay() {
       svgOverlay.appendChild(t);
     }
 
+    // Crop round trip: ⤴ at the top-right of a shape written back from a crop
+    // page (tooltip names the crop; a repeat write-back replaces the shape).
+    if (shape.crop_origin && typeof cropOriginBadge === 'function') {
+      const badge = cropOriginBadge(shape, tl, br);
+      if (badge) svgOverlay.appendChild(badge);
+    }
+
     // Newsflow badge: reading order + article group, top-left of the element
     if (shape.flow_order != null) {
       const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');

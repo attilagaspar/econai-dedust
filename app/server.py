@@ -8032,7 +8032,7 @@ def api_records_context(folder: str = Query(...)):
     cfgp = d.parent / "config.json"
     if not cfgp.exists():
         return {"project": None, "record_label": None, "layout_columns": "auto",
-                "labels": []}
+                "labels": [], "projects_root": str(PROJECTS_ROOT)}
     try:
         cfg = json.loads(cfgp.read_text(encoding="utf-8"))
     except Exception:
@@ -8040,7 +8040,8 @@ def api_records_context(folder: str = Query(...)):
     return {"project": d.parent.name,
             "record_label": _records.record_label_for(cfg),
             "layout_columns": _records.layout_columns_for(cfg),
-            "labels": cfg.get("labels") or []}
+            "labels": cfg.get("labels") or [],
+            "projects_root": str(PROJECTS_ROOT)}
 
 
 class SweepRecordsRequest(BaseModel):
@@ -8143,6 +8144,120 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
             "n_unswept": len(coll["unswept"]), "unswept": coll["unswept"],
             "page_order": _records.page_order_check([s for s, _ in pages]),
             "records": items}
+
+
+# ---------------------------------------------------------------------------
+# Routes — crop round trip: crops as pages + write-back (app/crops.py,
+# §H8 "crops as pages" in knowledge_base/09_hierarchical_layout_compass.md)
+# ---------------------------------------------------------------------------
+
+_PROJECT_NAME_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._\- ]*$")
+
+
+class DeriveCropsRequest(BaseModel):
+    label:          str                          # the parent label whose boxes become pages
+    target:         str                          # crop project (created when missing)
+    target_labels:  Optional[list[str]] = None   # label set for a NEW target (default: source labels)
+    statuses:       Optional[list[str]] = None   # source pages to cut (default corrected + verified)
+    pattern:        Optional[str] = None         # regex on the source stem
+    margin:         float = 12.0                 # px around the box
+    policy:         str = "keep"                 # keep | replace | force (stale crops)
+    with_children:  bool = False                 # carry shapes inside the box as initial shapes
+    layout_columns: Optional[str] = None         # k order: auto | 1 | 2 (default: source config)
+    dry_run:        bool = False
+
+
+@app.post("/api/project/{name}/derive-crops")
+def api_derive_crops(name: str, body: DeriveCropsRequest):
+    """Cut every `label` box of the selected pages of project `name` into
+    image pages of the target project (`<stem>__crop<k>`, k = reading-order
+    index), each with `flags.crop_source` provenance (source project, stem,
+    shape index, bbox, crop rect, label, margin, source status, record id,
+    continuation). Idempotent: unchanged boxes leave their crops alone
+    (record fields in the provenance refreshed), moved / vanished boxes are
+    reported as stale and replaced only under `policy` replace (never a crop
+    page with human shapes or a non-predicted status) or force. Nothing is
+    ever deleted. The target is created when missing (same type as the
+    source; `target_labels` or the source's labels)."""
+    from app import crops as _crops
+    from app import records as _records
+    from app.pipeline import create_project
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    label = (body.label or "").strip()
+    if label not in (cfg.get("labels") or []):
+        raise HTTPException(status_code=400,
+                            detail=f"label {label!r} is not a label of project '{name}' "
+                                   f"(labels: {cfg.get('labels')})")
+    target = (body.target or "").strip()
+    if not _PROJECT_NAME_RX.match(target) or target == "_trash" or target == name:
+        raise HTTPException(status_code=400, detail=f"Invalid target project name {target!r}")
+    if body.policy not in _crops.POLICIES:
+        raise HTTPException(status_code=400,
+                            detail=f"policy must be one of {list(_crops.POLICIES)}")
+    if body.pattern:
+        try:
+            re.compile(body.pattern)
+        except re.error as e:
+            raise HTTPException(status_code=400, detail=f"Bad page pattern: {e}")
+    try:
+        layout = (_records.normalize_layout(body.layout_columns)
+                  if body.layout_columns is not None else _records.layout_columns_for(cfg))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    tdir = project_dir(target)
+    created = False
+    if not tdir.exists():
+        if not body.dry_run:
+            labels = [l for l in (body.target_labels or cfg.get("labels") or []) if l]
+            try:
+                create_project(target, cfg.get("type") or "A", labels)
+            except (FileExistsError, ValueError) as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        created = True
+    stats = _crops.derive_crops(
+        project_dir(name) / "annotations", name, tdir / "annotations", target, label,
+        _write_json, statuses=body.statuses, pattern=body.pattern, margin=body.margin,
+        policy=body.policy, with_children=body.with_children, layout=layout,
+        dry_run=body.dry_run)
+    stats["target_created"] = created
+    stats["target_folder"] = str(tdir / "annotations")
+    return {"ok": True, **stats}
+
+
+class WriteBackRequest(BaseModel):
+    statuses: Optional[list[str]] = None   # crop pages to write back (default: verified)
+    pattern:  Optional[str] = None         # regex on the crop stem
+    dry_run:  bool = False
+
+
+@app.post("/api/project/{name}/write-back")
+def api_write_back(name: str, body: WriteBackRequest = WriteBackRequest()):
+    """Write the content of project `name`'s crop pages (those carrying
+    `flags.crop_source`) back onto their source pages: every shape is
+    translated to page coordinates (box + internal row bands) with all its
+    content intact, stamped `crop_origin = {project, stem}` and given the
+    provenance's record id; shapes of the same origin written earlier are
+    replaced, everything else on the page (the parent box included) is left
+    alone; lattice table ids are renumbered on collision. Stale provenance
+    (source box moved / vanished) is skipped and reported. A source page is
+    written only when its shapes actually change; `dry_run` only reports."""
+    from app import crops as _crops
+    try:
+        load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if body.pattern:
+        try:
+            re.compile(body.pattern)
+        except re.error as e:
+            raise HTTPException(status_code=400, detail=f"Bad page pattern: {e}")
+    stats = _crops.write_back(project_dir(name) / "annotations", name, PROJECTS_ROOT,
+                              _write_json, statuses=body.statuses, pattern=body.pattern,
+                              dry_run=body.dry_run)
+    return {"ok": True, **stats}
 
 
 # ---------------------------------------------------------------------------
