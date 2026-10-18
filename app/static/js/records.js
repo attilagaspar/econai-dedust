@@ -15,10 +15,10 @@
 // Reuses: _escHtml, _searchJump, _serializeWrite, showToast, replaceAllShapes,
 // pushUndo, reloadPageData, drawOverlay, updatePanel, _batchTakeSnapshot.
 
-let _recCtx = {project: null, record_label: null, layout_columns: 'auto', labels: []};
+let _recCtx = {project: null, record_label: null, layout_columns: 'auto', record_roles: {}, labels: []};
 
 async function loadRecordsContext() {
-  _recCtx = {project: null, record_label: null, layout_columns: 'auto', labels: []};
+  _recCtx = {project: null, record_label: null, layout_columns: 'auto', record_roles: {}, labels: []};
   if (!folder) return;
   try {
     const r = await fetch(`${API}/api/records/context?folder=${encodeURIComponent(folder)}`);
@@ -310,4 +310,127 @@ async function _recResweepAll() {
   if (!confirm('Renumber every record through the whole volume? Locked ids are kept; everything else is reassigned in reading order. (Batch undo restores the previous ids.)')) return;
   const d = await runRecordSweep({});
   if (d) await openRecordBrowser();
+}
+
+// ── Derive fragments from start / stop / ignore roles (app/fragments.py) ────
+// Roles live in config.record_roles = {label: start|stop|ignore}; the batch
+// op derives the record-label boxes (with ⛓ continuation marks) from the
+// role shapes, so the detector only has to learn the small, consistent
+// objects. Dry run first, then confirm, snapshot, real run (+ optional sweep).
+const RECORD_ROLES = ['', 'start', 'stop', 'ignore'];
+
+function _batchFragRenderRoles(labels) {
+  const cont = document.getElementById('batch-frag-roles');
+  if (!cont) return;
+  const roles = _recCtx.record_roles || {};
+  const others = (labels || []).filter(l => l !== _recCtx.record_label);
+  if (!others.length) { cont.innerHTML = '<div style="color:#667;font-size:10px;">No other labels.</div>'; return; }
+  const title = {'': 'no role', start: 'start — a record begins here (a name line, an entry heading)',
+                 stop: 'stop — ends the open record, starts none (a section heading, an advertisement block)',
+                 ignore: 'ignore — skipped, and masked out of the ink before the trims'};
+  cont.innerHTML = others.map(l =>
+    `<label class="row" style="margin:0;gap:8px;"><span style="flex:1;min-width:0;font-size:11px;">${_escHtml(l)}</span>` +
+    `<select data-frag-label="${_escHtml(l)}" onchange="_batchFragRoleChange()" style="width:110px;">` +
+    RECORD_ROLES.map(r => `<option value="${r}" title="${_escHtml(title[r])}"${(roles[l] || '') === r ? ' selected' : ''}>${r || '— none —'}</option>`).join('') +
+    `</select></label>`).join('');
+}
+
+async function _batchFragRoleChange() {
+  if (!_recCtx.project) return;
+  const roles = {};
+  document.querySelectorAll('#batch-frag-roles select[data-frag-label]').forEach(sel => {
+    if (sel.value) roles[sel.dataset.fragLabel] = sel.value;
+  });
+  try {
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/config`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({record_roles: roles})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast('Config error: ' + (d.detail || r.status), 5000); return; }
+    _recCtx.record_roles = d.config?.record_roles || {};
+    showToast('Record roles: ' + (Object.keys(roles).length
+      ? Object.entries(roles).map(([l, r]) => `${l}=${r}`).join(', ') : 'none'));
+  } catch (e) { showToast('Config error: ' + (e?.message || e), 5000); }
+}
+
+function _fragSummary(d) {
+  return `${d.fragments} fragment(s) (${d.continuations} ⛓) on ${d.pages_selected} selected page(s): ` +
+    `${d.written} ${d.dry_run ? 'would be written' : 'written'}, ${d.replaced} stale derived replaced, ${d.unchanged} unchanged` +
+    (d.protected ? `, ${d.protected} hand / edited box(es) kept` : '') +
+    (d.suppressed ? `, ${d.suppressed} suppressed (overlap a kept box)` : '') +
+    (d.pages_without_image ? `, ${d.pages_without_image} page(s) without image skipped` : '') +
+    ` · ${d.pages_written} page(s) ${d.dry_run ? 'would change' : 'changed'}`;
+}
+
+function _fragPagesHtml(d) {
+  const pg = _recPageNo();
+  const rows = (d.pages || []).filter(p => p.skipped || p.changed || p.protected || p.suppressed).slice(0, 60).map(p =>
+    p.skipped
+      ? `<div style="font-size:10px;color:#fbbf24;">${_escHtml(pg(p.stem))} ${_escHtml(p.stem)}: skipped (${_escHtml(p.skipped)})</div>`
+      : `<div style="font-size:10px;color:#aaa;">${_escHtml(pg(p.stem))} ${_escHtml(p.stem)}: ${p.starts} start / ${p.stops} stop / ${p.ignores} ignore → ` +
+        `${p.fragments} fragment(s)${p.continuations ? ` (${p.continuations} ⛓)` : ''}, ${p.written} new, ${p.replaced} replaced, ${p.unchanged} unchanged` +
+        (p.protected ? `, <span style="color:#fbbf24;">${p.protected} kept</span>` : '') +
+        (p.suppressed ? `, <span style="color:#f87171;">${p.suppressed} suppressed</span>` : '') +
+        (p.open_at_end ? ' · open →' : ' · closed') + '</div>').join('');
+  const empty = d.empty_pages || [];
+  const emptyHtml = empty.length
+    ? `<div style="margin-top:4px;font-size:10px;color:#93c5fd;" title="Pages with no start and no stop: continuation pages of a record running on (one ⛓ fragment per column while a record is open), or pages the detector missed">` +
+      `${empty.length} page(s) with zero starts and zero stops (candidate continuation pages): ` +
+      _escHtml(empty.slice(0, 40).map(pg).join(', ')) + (empty.length > 40 ? ' …' : '') + '</div>'
+    : '';
+  return rows + emptyHtml;
+}
+
+async function runDeriveFragments(sorted, {dryRun = false} = {}) {
+  if (!_recNeedProject()) return null;
+  const roles = _recCtx.record_roles || {};
+  if (!Object.values(roles).includes('start')) { showToast('Give at least one label the start role first'); return null; }
+  const statuses = [...document.querySelectorAll('#batch-frag-opts input[data-frag-status]')]
+    .filter(c => c.checked).map(c => c.getAttribute('data-frag-status'));
+  if (!statuses.length) { showToast('Tick at least one page status'); return null; }
+  const body = {
+    statuses,
+    pattern: typeof _cropsPatternFor === 'function' ? _cropsPatternFor(sorted) : null,
+    margin: parseFloat(document.getElementById('batch-frag-margin')?.value) || 0,
+    threshold: parseInt(document.getElementById('batch-frag-threshold')?.value, 10) || 160,
+    sweep: !!document.getElementById('batch-frag-sweep')?.checked,
+    dry_run: true,
+  };
+  const prog = document.getElementById('batch-progress');
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/derive-fragments`;
+  const roleTxt = Object.entries(roles).map(([l, r]) => `${l}=${r}`).join(', ');
+  let d;
+  try {
+    if (prog) prog.textContent = 'Dry run…';
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    const head = `${dryRun ? 'Dry run' : 'Preview'} (roles: ${roleTxt} → "${d.record_label}", columns ${d.layout_columns}): ${_fragSummary(d)}`;
+    if (prog) prog.innerHTML = _escHtml(head) + _fragPagesHtml(d);
+    if (dryRun) { showToast(head, 8000); return d; }
+    if (!d.pages_written) { showToast('Nothing to do: the derived fragments are up to date', 5000); return d; }
+    const msg = `Derive "${d.record_label}" fragments on ${d.pages_selected} page(s)?\n\n${_fragSummary(d)}` +
+      '\n\nOnly untouched derived boxes are replaced; hand-drawn and edited boxes stay. ' +
+      (body.sweep ? 'The record sweep runs over the whole volume afterwards. ' : '') +
+      'A batch-undo snapshot of the selected pages is taken first.';
+    if (!confirm(msg)) return null;
+    const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
+    await _batchTakeSnapshot(body.sweep ? pages.map(p => p.stem) : stems, 'derive_fragments');
+    if (prog) prog.textContent = 'Deriving fragments…';
+    const r2 = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                 body: JSON.stringify({...body, dry_run: false})});
+    d = await r2.json().catch(() => ({}));
+    if (!r2.ok) throw new Error(d.detail || `HTTP ${r2.status}`);
+    const sw = d.sweep;
+    const done = `✓ ${_fragSummary(d)}` + (sw ? ` · sweep: ${sw.records} record(s) over ${sw.boxes} box(es)` +
+      (sw.orphans?.length ? `, ⚠ ${sw.orphans.length} orphan continuation(s)` : '') + _recOrderNote(sw.page_order) : '');
+    if (prog) prog.innerHTML = _escHtml(done) + _fragPagesHtml(d);
+    showToast(done, 9000);
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    return d;
+  } catch (e) {
+    if (prog) prog.textContent = 'Error: ' + (e?.message || e);
+    showToast('Derive fragments error: ' + (e?.message || e), 7000);
+    return null;
+  }
 }

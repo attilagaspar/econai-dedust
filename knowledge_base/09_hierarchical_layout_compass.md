@@ -6,7 +6,8 @@ built** (crop export, `--parents` crop inference, merge-apply, dashboard
 selector; see §H8 below; **crops-as-pages round trip built 2026-10-18**,
 `app/crops.py`, see "Crops as pages" in §H8). **H5 record chaining built
 2026-10-18** for one parent label (`app/records.py`, see the H5 status
-line). H2–H3 are
+line); **fragment derivation from start / stop / ignore roles built
+2026-10-18** (`app/fragments.py`, see "Starts and stops" in §H5). H2–H3 are
 annotation + GPU work (user). H4 v1 clip-to-regions, H6 records export:
 not built.*
 
@@ -143,11 +144,84 @@ numbered through the volume).** What shipped — label-agnostic,
 - editor: `C` hotkey + inspector button, dashed gold top edge + ⛓ glyph,
   tint by record id (cycling palette, record-label shapes only), `r<id>`
   badge.
-Not built from the original sketch: header-role toggles (there is no
-header class — a record *starts* wherever a box is not a continuation),
-transitive ids on cell shapes inside a record box (containment is
-geometric and can be computed on demand), H6 export. The region-label
-plan below is kept as the design history.
+Not built from the original sketch: transitive ids on cell shapes inside a
+record box (containment is geometric and can be computed on demand), H6
+export. The header-role idea came back in a generic form the same day —
+see "Starts and stops" below. The region-label plan further down is kept
+as the design history.
+
+### Starts and stops — what the detector learns; fragments are derived (built 2026-10-18, `app/fragments.py`)
+
+**Status: built** — config `record_roles`, `POST
+/api/project/{name}/derive-fragments`, batch op ⛓ Records: derive
+fragments, dashboard roles row, 13 tests on `_smoke_` fixtures with
+synthetic page images. Not yet exercised on a real volume.
+
+Design decision (2026-10-18): the detector should NOT learn the big record
+box. A record box is a long, ragged object whose extent depends on the
+next entry, the column end and the page break — exactly what a box
+detector is bad at, and what forces annotating every continuation page.
+Instead the model (or the annotator) marks **small, consistent objects**:
+where a record **starts** (a firm's name line, an entry heading) and what
+**stops** it (a section heading, an advertisement block, a running foot).
+Label roles are project configuration — `record_roles = {label: start |
+stop | ignore}` — with no label names in code (the newspaper flow's
+text / title / breaker / furniture / ignore scheme was the model). The
+engine derives the record-label fragment boxes from the role shapes:
+
+- per page, bands at every wide box (the full-width rule of the reading
+  order; a wide start is a full-width fragment of its own, a wide stop
+  closes the record), columns per band from `records.split_x`
+  (`layout_columns`); starts and stops ordered by y in each column;
+- [column top → first start/stop) is a ⛓ **continuation** fragment while
+  a record is open and there is ink there; [start → next start or stop)
+  and [last start → column bottom] are fragments; a stop ends the current
+  fragment and starts none (what follows a stop until the next start
+  belongs to no record); ignore boxes are skipped and masked out of the
+  ink;
+- every fragment is trimmed to the ink — a cheap row / column projection
+  of the page image (grey < threshold, ignore boxes blanked), bottom and
+  a continuation's top to the last / first inked row, the sides to the
+  column's inked extent, plus a margin — and dropped when empty;
+- the open / closed state is threaded from page to page over every
+  non-skip page in natural order (pages outside the selection still
+  update it from their roles). So a page with **no starts and no stops**
+  yields one continuation fragment per column while a record is open —
+  **a record running over several pages needs no annotation on its
+  continuation pages; they are verified-empty negatives for the detector**
+  — and nothing when the last thing before it was a stop (an
+  advertisement page).
+
+Output shapes carry the record label, `continuation: true` where the
+fragment does not begin with a start, and `derived_from = {kind:
+"record_roles", bbox, continuation, start_label, start_idx, column}`.
+Then the existing machinery runs unchanged: the sweep numbers the
+fragments (optionally chained from the same request), the crop round trip
+cuts them, the write-back returns the content.
+
+**Replacement rule on re-runs** (`fragments.is_replaceable`): a
+record-label shape is replaced only when it still carries the marker,
+its points equal the marker's bbox (not moved), its continuation mark is
+the derived one (not toggled), it is not `group_locked`, and it holds no
+content (no human / LLM / OCR / PDF text, rows, authority, structured,
+clip, blank flag, crop origin). Everything else is **protected**: kept as
+it is, and a new fragment overlapping a protected box by ≥ 50 % of the
+smaller area is suppressed and reported. A new fragment identical to an
+old replaceable one keeps the old shape (its `group_id` survives; a page
+whose fragments are unchanged is not written). Hand-drawn record-label
+boxes therefore always win; the engine never moves a box a person
+touched. There is no human-moved flag in the data model — the marker's
+bbox IS the "where the machine put it" record, which is why moving a
+derived box protects it.
+
+Limits / open items: the ink projection is naive (scan borders, bleed-
+through and dark margins count as ink; the threshold is per request, the
+column's inked x-extent is at least the role shapes' union only through
+the slot clamp — on a dirty scan draw an ignore box over the artefact);
+`carry_open` starts as *open* on the first page (its leading text becomes
+an orphan continuation the browser flags); a wide start's own band is
+single-column; no role for "a start that is also a stop" (a heading that
+both closes and opens is simply a start).
 
 - `POST /api/project/{name}/group-records` (+ batch-op UI): iterate ALL pages
   in order → reading-order the region shapes → sweep with a running `gid`

@@ -1118,7 +1118,10 @@ function drawOverlay() {
 
     // Record chaining: ⛓ continuation = thick dashed top edge + glyph; the
     // record id as a small badge so interleaved chains are visible at a glance.
-    if (_isRec && (shape.continuation || shape.group_id != null)) {
+    // ⚙ = a fragment derived from start / stop roles (app/fragments.py); a
+    // re-run replaces it only while it is untouched.
+    const _derived = shape.derived_from?.kind === 'record_roles';
+    if (_isRec && (shape.continuation || shape.group_id != null || _derived)) {
       if (shape.continuation) {
         const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         ln.setAttribute('x1', tl.x); ln.setAttribute('y1', tl.y + 1.5);
@@ -1138,7 +1141,7 @@ function drawOverlay() {
       t.setAttribute('stroke', '#0d1b35');
       t.setAttribute('stroke-width', '3');
       t.textContent = (shape.continuation ? '⛓ ' : '') + (shape.group_id != null ? `r${shape.group_id}` : '')
-                    + (shape.group_locked ? ' 🔒' : '');
+                    + (shape.group_locked ? ' 🔒' : '') + (_derived ? ' ⚙' : '');
       t.style.pointerEvents = 'none';
       svgOverlay.appendChild(t);
     }

@@ -212,3 +212,23 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   back with dry-run previews and source-page undo snapshots, origin pill
   with source deep link, ⤴ badge on written-back shapes). 15 tests on
   `_smoke_` fixtures; docs 00 / 03 / 09. Live server not restarted.
+- **Oct 18 — derive record fragments from start / stop / ignore roles
+  (§H5/§H8: the detector learns starts and stops, fragments are
+  derived)**: `app/fragments.py` (pure: `normalize_roles`, `InkMap` row /
+  column ink projections with ignore boxes masked out, `derive_page` —
+  bands at wide boxes, columns from the sweep's gutter logic, leading
+  continuation while a record is open, start → next start/stop, last
+  start → column bottom, stop closes, ink trim + margin, empty dropped,
+  `carry_open` threaded page to page; `is_replaceable` replacement rule,
+  `merge_fragments` keeping identical fragments / protecting hand and
+  edited boxes / suppressing overlaps, `derive_project`), config
+  `record_roles` (`PATCH …/config`, validated against the label set, the
+  record label carries no role; `/api/records/context` returns it),
+  `POST /api/project/{name}/derive-fragments` (statuses, pattern, margin,
+  threshold, dry run, chained sweep, per-page counts + `empty_pages`),
+  editor batch op **⛓ Records: derive fragments** (role table that PATCHes
+  the config, statuses, margin, ink threshold, then-sweep, dry-run preview
+  with per-page rows and the zero-starts-zero-stops list, confirm, undo
+  snapshot), ⚙ in the record badge for derived shapes, dashboard roles row.
+  13 tests on `_smoke_` fixtures with synthetic page images; docs 00 / 03 /
+  09. Live server not restarted, not pushed.

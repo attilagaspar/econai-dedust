@@ -23,10 +23,18 @@ Everything lives in one LabelMe-style JSON per page (`projects/<p>/annotations/<
                                      //   the record label in reading order (§H5)
   "group_id": 17,                    // record id, numbered through the volume by the sweep
   "group_locked": true,              // hand-assigned record id — the sweep keeps it
-  "crop_origin": {"project": "x_crops", "stem": "p12__crop3"}
+  "crop_origin": {"project": "x_crops", "stem": "p12__crop3"},
                                      // written back from that crop page (crop round
                                      //   trip); a repeat write-back of the same crop
                                      //   replaces exactly the shapes with this origin
+  "derived_from": {"kind": "record_roles", "bbox": [x1,y1,x2,y2],
+                   "continuation": false, "start_label": "name",
+                   "start_idx": 4, "column": 0}
+                                     // a record-label fragment built from start / stop
+                                     //   roles (app/fragments.py); a re-run replaces it
+                                     //   only while bbox == points, the continuation
+                                     //   mark is unchanged, it is not locked and holds
+                                     //   no content — otherwise it counts as hand work
 }
 ```
 
@@ -41,7 +49,10 @@ shape / page, so the rows PATCH whitelist does not touch them.
 
 Record chaining (`app/records.py`): a project's `config.record_label` names
 the label records are built from; `layout_columns` (`auto` | 1 | 2) steers the
-per-page reading order. The three fields above live on the shape (not on
+per-page reading order; `record_roles` (`{label: start | stop | ignore}`,
+`app/fragments.py`) names the small objects the record-label boxes are
+derived from — a label without a role is neither, the record label itself
+carries none. The three fields above live on the shape (not on
 rows), so the rows PATCH whitelist does not touch them. The derived registry
 `intermediate/records.json` (`{meta, records: {id: {fragments: [{stem, idx,
 bbox}], page_span, first_stem, n_pages, orphan, name}}}`) is rebuilt by every

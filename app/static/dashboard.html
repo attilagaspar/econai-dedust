@@ -808,6 +808,30 @@ function renderRecordSettings() {
   if (hint) hint.textContent = cur
     ? `mark ⛓ continuations in the editor (C), then batch op "⛓ Records: sweep"`
     : 'no record chaining for this project';
+  // roles of the OTHER labels (start / stop / ignore) → fragment derivation
+  const row = document.getElementById('rec-roles-row');
+  const box = document.getElementById('rec-roles');
+  if (row && box) {
+    const roles = activeProj.config?.record_roles || {};
+    const others = labels.filter(l => l !== cur);
+    row.style.display = cur && others.length ? '' : 'none';
+    const sty = 'background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:2px 6px;font-size:0.75rem;';
+    box.innerHTML = others.map(l =>
+      `<span style="font-size:0.75rem;color:#aaa;margin-right:8px;white-space:nowrap;">${l} ` +
+      `<select data-role-label="${l}" onchange="onRecordRolesChange()" style="${sty}">` +
+      ['', 'start', 'stop', 'ignore'].map(r =>
+        `<option value="${r}"${(roles[l] || '') === r ? ' selected' : ''}>${r || '—'}</option>`).join('') +
+      `</select></span>`).join('');
+  }
+}
+
+function onRecordRolesChange() {
+  const roles = {};
+  document.querySelectorAll('#rec-roles select[data-role-label]').forEach(s => {
+    if (s.value) roles[s.dataset.roleLabel] = s.value;
+  });
+  const txt = Object.entries(roles).map(([l, r]) => `${l} = ${r}`).join(', ');
+  _patchRecordSetting({ record_roles: roles }, txt ? `Record roles: ${txt}` : 'Record roles cleared');
 }
 
 async function _patchRecordSetting(body, okMsg) {
@@ -1156,6 +1180,11 @@ function renderDetail() {
           <option value="auto">auto</option><option value="1">1</option><option value="2">2</option>
         </select>
         <span id="rec-hint" style="font-size:0.75rem;color:#667;"></span>
+      </div>
+      <div class="btn-row" id="rec-roles-row" style="margin-top:4px;align-items:center;gap:6px;flex-wrap:wrap;display:none;"
+           title="Fragment derivation. The detector learns small, consistent objects: a START label marks where a record begins (a name line), a STOP label what ends it (a section heading, an advertisement), an IGNORE label is skipped and masked out of the ink. The batch op ⛓ Records: derive fragments builds the record-label boxes (with ⛓ continuation marks) from these; a page with no starts and no stops is a continuation page while a record is open. Saved in the project config.">
+        <span style="font-size:0.8rem;color:#aaa;">Roles:</span>
+        <span id="rec-roles"></span>
       </div>
       <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;">
         <span style="font-size:0.8rem;color:#aaa;">Bootstrap from model:</span>

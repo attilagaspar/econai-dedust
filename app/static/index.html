@@ -903,6 +903,7 @@
         <option value="auth_lookup">🏛 Authority lookup report (by ID / name list)</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
         <option value="dataset_diagnose">📊 Dataset diagnostics report</option>
+        <option value="records_derive">⛓ Records: derive fragments from start / stop roles</option>
         <option value="records_sweep">⛓ Records: sweep (number records through the volume)</option>
         <option value="records_browse">⛓ Records: browser (chains, orphans, long spans)</option>
         <option value="crops_derive">✂ Cut boxes of a label into a crop project (crops as pages)</option>
@@ -936,11 +937,34 @@
           <option value="auto">auto</option><option value="1">1</option><option value="2">2</option>
         </select>
       </div>
-      <label class="row" id="batch-rec-dry-wrap" title="Report what the sweep would change without writing anything">
+      <div id="batch-frag-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="font-size:11px;color:#aaa;">Roles of the other labels <span style="color:#667;">(saved in the project config; a label without a role is neither)</span></div>
+        <div id="batch-frag-roles" style="display:flex;flex-direction:column;gap:3px;"></div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span>pages:</span>
+          <label class="row" style="margin:0;"><input type="checkbox" data-frag-status="predicted" checked style="accent-color:#e94560;width:13px;height:13px;"><span>predicted</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-frag-status="corrected" checked style="accent-color:#e94560;width:13px;height:13px;"><span>corrected</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-frag-status="verified" checked style="accent-color:#e94560;width:13px;height:13px;"><span>verified</span></label>
+          <label class="row" style="margin:0;"><input type="checkbox" data-frag-status="problem" style="accent-color:#e94560;width:13px;height:13px;"><span>problem</span></label>
+          <span>margin</span><input id="batch-frag-margin" type="number" min="0" max="100" value="4" style="width:48px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;"><span>px</span>
+          <span title="Grey level below which a pixel counts as ink (0–255)">ink &lt;</span><input id="batch-frag-threshold" type="number" min="1" max="254" value="160" style="width:52px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+          <label class="row" style="margin:0;" title="Run the record sweep over the whole volume right after the fragments are written (ids into group_id)">
+            <input type="checkbox" id="batch-frag-sweep" checked style="accent-color:#e94560;width:13px;height:13px;"><span>then sweep</span></label>
+        </div>
+        <div style="font-size:10px;color:#555;">The detector learns small, consistent objects — where a record <b>starts</b> (a name line) and what <b>stops</b> it (a section heading,
+          an advertisement); the fragment boxes of the record label are derived from them, per page and column: column top → first start/stop is a
+          ⛓ continuation while a record is open, start → next start or stop, last start → column bottom; a stop closes the record; <b>ignore</b> boxes
+          are skipped and masked out of the ink. Every fragment is trimmed to the ink of the page image (+ margin) and dropped when empty. The open /
+          closed state flows from page to page through every non-skip page, so a page with <b>no starts and no stops</b> yields one continuation per
+          column while a record is open (a record running over several pages needs no marks there) and nothing otherwise. Re-runs replace only
+          untouched derived boxes (marker present, not moved, mark unchanged, no content, not 🔒); hand-drawn and edited boxes are kept and an
+          overlapping new fragment is suppressed. The page range above narrows the pages. Batch undo restores the pages of the last run.</div>
+      </div>
+      <label class="row" id="batch-rec-dry-wrap" title="Report what would change without writing anything">
         <input type="checkbox" id="batch-rec-dry" style="accent-color:#e94560;width:13px;height:13px;">
         <span>dry run (report only, no writes)</span>
       </label>
-      <div style="font-size:10px;color:#555;">A <b>record</b> is one entry of the record label; an entry that runs across a column or
+      <div id="batch-rec-sweep-help" style="font-size:10px;color:#555;">A <b>record</b> is one entry of the record label; an entry that runs across a column or
         page break is several boxes, the later ones marked <b>⛓ continuation</b> (C in the editor). The sweep walks every non-skip page
         in order, reads the boxes column by column (a box wider than 70% of the page resets the column flow), and numbers records
         through the whole volume into <b>group_id</b>; a continuation joins the previous box's record, 🔒 locked ids are kept and

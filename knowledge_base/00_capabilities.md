@@ -80,6 +80,40 @@ one LabelMe-style JSON per page as the single source of truth.
   pages, keeps `group_locked` ids and continues from them; idempotent
   given the same marks. Derived registry `intermediate/records.json`
   (never the source of truth).
+- **Derive record fragments from start / stop / ignore roles**
+  (`app/fragments.py`, batch op **⛓ Records: derive fragments**,
+  `POST /api/project/{name}/derive-fragments`): the detector learns
+  small, consistent objects — where a record *starts* (a name line) and
+  what *stops* it (a section heading, an advertisement) — and the engine
+  builds the record-label boxes from them. Per-project
+  `record_roles = {label: start | stop | ignore}` (dashboard row under
+  "Records from label", batch-panel role table, `PATCH …/config`; the
+  record label itself carries no role). Per page and column (the sweep's
+  geometry: `layout_columns`, gutter, full-width rule — a wide start is a
+  full-width fragment, a wide stop closes the record): [column top →
+  first start/stop) is a ⛓ continuation fragment while a record is open,
+  [start → next start or stop) and [last start → column bottom] are
+  fragments, a stop ends the record and starts none, ignore boxes are
+  skipped and masked out of the ink. Every fragment is trimmed to the
+  page image's ink (cheap row / column projection, grey < threshold,
+  configurable margin) and dropped when empty. The open / closed state
+  flows from page to page through every non-skip page, so a page with no
+  starts and no stops yields one continuation per column while a record
+  is open (a record running over several pages needs no marks on its
+  continuation pages) and nothing otherwise. Output shapes carry
+  `continuation` and a `derived_from = {kind: "record_roles", bbox,
+  continuation, start_label, start_idx, column}` marker (⚙ in the badge).
+  **Replacement rule** on re-runs: a shape is replaced only when it still
+  carries the marker, sits where the derivation put it, keeps the derived
+  continuation mark, is not 🔒 locked and holds no content (no text
+  layers, rows, authority, structured, clip, blank); identical fragments
+  are kept in place (ids survive); hand-drawn and edited boxes are kept
+  and a new fragment overlapping one by ≥ 50 % of the smaller area is
+  suppressed. Page filter (statuses, batch page range as a pattern), dry
+  run with per-page counts and the list of pages with zero starts and
+  zero stops (candidate continuation pages), optional chained sweep,
+  batch-undo snapshot; writes through the atomic writer. The sweep, the
+  crop round trip and the write-back run on the result unchanged.
 - **Crop round trip — crops as pages** (`app/crops.py`, §H8 "crops as
   pages" of [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)):
   batch op **✂ Cut boxes of a label into a crop project**

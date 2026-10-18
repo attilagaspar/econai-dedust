@@ -4583,11 +4583,15 @@ class ConfigUpdate(BaseModel):
     # the column layout for reading order ("auto" | 1 | 2; "auto"/"" clears)
     record_label:   Optional[str] = None
     layout_columns: Optional[str] = None
+    # fragment derivation (app/fragments.py): {label: start | stop | ignore};
+    # the whole mapping is replaced ("" / missing role = no role; {} clears)
+    record_roles:   Optional[dict] = None
 
 
 @app.patch("/api/project/{name}/config")
 def api_update_config(name: str, body: ConfigUpdate):
     from app import records as _records
+    from app import fragments as _fragments
     try:
         cfg  = load_config(name)
         pdir = project_dir(name)
@@ -4601,6 +4605,18 @@ def api_update_config(name: str, body: ConfigUpdate):
                                         detail=f"record_label {lbl!r} is not a label of "
                                                f"project '{name}' (labels: {cfg.get('labels')})")
                 cfg["record_label"] = lbl
+                if (cfg.get("record_roles") or {}).get(lbl):
+                    cfg["record_roles"].pop(lbl, None)   # the output label carries no role
+        if body.record_roles is not None:
+            try:
+                roles = _fragments.normalize_roles(body.record_roles, cfg.get("labels") or [],
+                                                   _records.record_label_for(cfg))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            if roles:
+                cfg["record_roles"] = roles
+            else:
+                cfg.pop("record_roles", None)
         if body.layout_columns is not None:
             try:
                 mode = _records.normalize_layout(body.layout_columns)
@@ -8032,14 +8048,16 @@ def api_records_context(folder: str = Query(...)):
     cfgp = d.parent / "config.json"
     if not cfgp.exists():
         return {"project": None, "record_label": None, "layout_columns": "auto",
-                "labels": [], "projects_root": str(PROJECTS_ROOT)}
+                "record_roles": {}, "labels": [], "projects_root": str(PROJECTS_ROOT)}
     try:
         cfg = json.loads(cfgp.read_text(encoding="utf-8"))
     except Exception:
         cfg = {}
+    from app import fragments as _fragments
     return {"project": d.parent.name,
             "record_label": _records.record_label_for(cfg),
             "layout_columns": _records.layout_columns_for(cfg),
+            "record_roles": _fragments.record_roles_for(cfg),
             "labels": cfg.get("labels") or [],
             "projects_root": str(PROJECTS_ROOT)}
 
@@ -8103,6 +8121,72 @@ def api_sweep_records(name: str, body: SweepRecordsRequest = SweepRecordsRequest
             "pages_changed": len(res["changed"]), "boxes_changed": sum(res["changed"].values()),
             "pages_written": written, "next_id": res["next_id"],
             "orphans": res["orphans"], "page_order": order}
+
+
+class DeriveFragmentsRequest(BaseModel):
+    statuses:       Optional[list[str]] = None   # pages to derive on (default: every non-skip page)
+    pattern:        Optional[str] = None         # regex on the stem
+    margin:         float = 4.0                  # px around the inked extent
+    threshold:      int = 160                    # grey level below which a pixel is ink
+    untrimmed_without_image: bool = False        # pages without an image: derive untrimmed (else skip)
+    sweep:          bool = False                 # then run the record sweep over the volume
+    dry_run:        bool = False
+    record_label:   Optional[str] = None         # default: config.record_label
+    layout_columns: Optional[str] = None         # default: config.layout_columns
+
+
+@app.post("/api/project/{name}/derive-fragments")
+def api_derive_fragments(name: str, body: DeriveFragmentsRequest = DeriveFragmentsRequest()):
+    """Build the record-label fragment boxes from the shapes that carry a
+    role in `config.record_roles` ({label: start | stop | ignore}): per page
+    and column (the sweep's geometry), [column top → first start/stop) is a
+    ⛓ continuation fragment while a record is open, [start → next start or
+    stop) and [last start → column bottom] are fragments, a stop closes the
+    record, ignore boxes are skipped and masked out of the ink; every
+    fragment is trimmed to the ink of the page image (+ margin) and dropped
+    when empty. The open/closed state is carried from page to page over
+    every non-skip page in order, so a page with no starts and no stops
+    yields one continuation fragment per column while a record is open
+    (a record running over several pages) and nothing otherwise.
+
+    Re-runs replace only shapes that carry the `derived_from` marker, still
+    sit where the derivation put them, keep the derived continuation mark,
+    are not locked and hold no content (see fragments.is_replaceable);
+    hand-drawn and edited record-label shapes are kept and a new fragment
+    overlapping one is suppressed. Identical fragments are left in place
+    (ids survive). Writes via the atomic writer; `dry_run` reports per-page
+    counts and the pages with zero starts and zero stops (candidate
+    continuation pages); `sweep` chains into the record sweep afterwards."""
+    from app import fragments as _fragments
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    label, mode = _records_settings(cfg, body.record_label, body.layout_columns)
+    try:
+        roles = _fragments.normalize_roles(cfg.get("record_roles"), cfg.get("labels") or [], label)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Bad record_roles in config: {e}")
+    if not any(r == "start" for r in roles.values()):
+        raise HTTPException(status_code=400,
+                            detail="No label has the start role: set `record_roles` in the "
+                                   "project config (batch op ⛓ Records: derive fragments).")
+    if body.pattern:
+        try:
+            re.compile(body.pattern)
+        except re.error as e:
+            raise HTTPException(status_code=400, detail=f"Bad page pattern: {e}")
+    ann = project_dir(name) / "annotations"
+    pages = _records_pages(ann)
+    st = _fragments.derive_project(pages, ann, roles, label, _write_json,
+                                   statuses=body.statuses, pattern=body.pattern, layout=mode,
+                                   margin=body.margin, threshold=body.threshold,
+                                   dry_run=body.dry_run,
+                                   no_ink_untrimmed=body.untrimmed_without_image)
+    st["layout_columns"] = mode
+    if body.sweep and not body.dry_run:
+        st["sweep"] = api_sweep_records(name, SweepRecordsRequest())
+    return {"ok": True, **st}
 
 
 @app.get("/api/project/{name}/records")

@@ -206,7 +206,7 @@ function onBatchOpChange() {
   const isDataset = op === 'dataset_diagnose';
   document.getElementById('batch-dataset-opts').style.display = isDataset ? '' : 'none';
   if (isDataset) _batchDatasetInit();
-  const isRecords = op === 'records_sweep' || op === 'records_browse';
+  const isRecords = op === 'records_sweep' || op === 'records_browse' || op === 'records_derive';
   const recOpts = document.getElementById('batch-records-opts');
   if (recOpts) recOpts.style.display = isRecords ? 'flex' : 'none';
   if (isRecords) _batchRecordsInit(op);
@@ -220,7 +220,12 @@ function onBatchOpChange() {
 async function _batchRecordsInit(op) {
   const info = document.getElementById('batch-rec-info');
   const dryWrap = document.getElementById('batch-rec-dry-wrap');
-  if (dryWrap) dryWrap.style.display = op === 'records_sweep' ? '' : 'none';
+  const isDerive = op === 'records_derive';
+  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive) ? '' : 'none';
+  const fragOpts = document.getElementById('batch-frag-opts');
+  if (fragOpts) fragOpts.style.display = isDerive ? 'flex' : 'none';
+  const sweepHelp = document.getElementById('batch-rec-sweep-help');
+  if (sweepHelp) sweepHelp.style.display = isDerive ? 'none' : '';
   if (typeof loadRecordsContext === 'function') await loadRecordsContext();
   const sel = document.getElementById('batch-rec-label');
   const cols = document.getElementById('batch-rec-cols');
@@ -236,6 +241,7 @@ async function _batchRecordsInit(op) {
       labels.map(l => `<option value="${_escHtml(l)}"${l === _recCtx.record_label ? ' selected' : ''}>${_escHtml(l)}</option>`).join('');
   }
   if (cols) cols.value = String(_recCtx.layout_columns || 'auto');
+  if (isDerive && typeof _batchFragRenderRoles === 'function') _batchFragRenderRoles(labels);
 }
 
 async function _batchRecordsSetting(key, value) {
@@ -630,6 +636,15 @@ async function runBatch() {
       if (!d) return;
     }
     await openRecordBrowser();
+    return;
+  }
+
+  // Derive record fragments from start / stop / ignore roles (server-side,
+  // dry run first, then confirm; the page range narrows the pages; the
+  // snapshot of the selected pages is taken inside the helper).
+  if (op === 'records_derive') {
+    const dry = !!document.getElementById('batch-rec-dry')?.checked;
+    await runDeriveFragments(sorted, {dryRun: dry});
     return;
   }
 
