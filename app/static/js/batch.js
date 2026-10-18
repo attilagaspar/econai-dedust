@@ -206,6 +206,45 @@ function onBatchOpChange() {
   const isDataset = op === 'dataset_diagnose';
   document.getElementById('batch-dataset-opts').style.display = isDataset ? '' : 'none';
   if (isDataset) _batchDatasetInit();
+  const isRecords = op === 'records_sweep' || op === 'records_browse';
+  const recOpts = document.getElementById('batch-records-opts');
+  if (recOpts) recOpts.style.display = isRecords ? 'flex' : 'none';
+  if (isRecords) _batchRecordsInit(op);
+}
+
+// ── Record chaining (⛓): settings live in the project config ───────────────
+async function _batchRecordsInit(op) {
+  const info = document.getElementById('batch-rec-info');
+  const dryWrap = document.getElementById('batch-rec-dry-wrap');
+  if (dryWrap) dryWrap.style.display = op === 'records_sweep' ? '' : 'none';
+  if (typeof loadRecordsContext === 'function') await loadRecordsContext();
+  const sel = document.getElementById('batch-rec-label');
+  const cols = document.getElementById('batch-rec-cols');
+  if (!_recCtx.project) {
+    if (info) info.textContent = 'This folder is not a project annotations folder — record tools are off.';
+    if (sel) sel.innerHTML = '';
+    return;
+  }
+  if (info) info.textContent = _recCtx.record_label ? '' : 'Pick the record label first (saved in the project config).';
+  const labels = [...new Set([...(_recCtx.labels || []), ...projectLabels])];
+  if (sel) {
+    sel.innerHTML = '<option value="">— none —</option>' +
+      labels.map(l => `<option value="${_escHtml(l)}"${l === _recCtx.record_label ? ' selected' : ''}>${_escHtml(l)}</option>`).join('');
+  }
+  if (cols) cols.value = String(_recCtx.layout_columns || 'auto');
+}
+
+async function _batchRecordsSetting(key, value) {
+  if (!_recCtx.project) return;
+  try {
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/config`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({[key]: value})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { showToast('Config error: ' + (d.detail || r.status), 5000); return; }
+    showToast(key === 'record_label' ? (value ? `Record label: ${value}` : 'Record label cleared') : `Layout columns: ${value}`);
+  } catch (e) { showToast('Config error: ' + (e?.message || e), 5000); return; }
+  await _batchRecordsInit(document.getElementById('batch-op').value);
 }
 
 // OCR target row height matters only when re-detecting rows from the image
@@ -575,6 +614,18 @@ async function runBatch() {
   if (op === 'dataset_diagnose') {
     const name = document.getElementById('batch-dataset-name').value;
     await runDatasetReport(name, rawPages.trim() || null);
+    return;
+  }
+
+  // Record chaining: project-wide sweep (every non-skip page, ignores the
+  // page range — ids are numbered through the volume) / browser.
+  if (op === 'records_sweep' || op === 'records_browse') {
+    if (op === 'records_sweep') {
+      const dry = !!document.getElementById('batch-rec-dry')?.checked;
+      const d = await runRecordSweep({dryRun: dry});
+      if (!d) return;
+    }
+    await openRecordBrowser();
     return;
   }
 

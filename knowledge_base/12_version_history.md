@@ -185,3 +185,14 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   last whole-page infer-from per project and offers **⤵ Merge model labels**
   with the label set in the confirm. 8 tests on `_smoke_` fixtures incl. the
   full parent → merge → within-scope cascade; suite 255 green.
+- **Oct 18 — record chaining (§H5 for one parent label)**: `app/records.py`
+  (reading order with band/column logic, sweep with `continuation` /
+  `group_id` / `group_locked`, forward-resweep seed, registry, page-order
+  check), config `record_label` + `layout_columns`, shape PATCH for the
+  marks, `POST …/sweep-records` (dry run, from_stem) + `GET …/records` +
+  `GET /api/records/context`; editor `records.js` (C hotkey, inspector
+  button, tint + ⛓ glyph + `r<id>` badge in drawOverlay, batch ops
+  ⛓ sweep / browser on the report chassis), dashboard selectors. 18 tests
+  on `_smoke_` fixtures (column ordering, cross-page chaining, locked ids,
+  idempotence, orphans, forward resweep, rows-PATCH survival); suite 273
+  green; verified in a browser on :8001. Live server not restarted.

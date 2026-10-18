@@ -863,6 +863,7 @@ function _shToggle() {
         ${row('P / O', 'Stamp selection 1 / 2 page(s) back')}
         ${row('H', 'Focus the Human correction field')}
         ${row('B', 'Mark / un-mark the cell as a structural blank')}
+        ${row('C', 'Mark / un-mark a record-label box as a ⛓ continuation of the previous box')}
         ${row('V', 'Verify this page & jump to the next unverified page')}
         ${row('S', 'Mark this page ⊘ skip (no annotations)')}
         ${row('⚡', 'Review button: step through only the suspect cells')}

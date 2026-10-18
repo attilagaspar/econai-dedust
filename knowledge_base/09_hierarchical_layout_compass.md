@@ -3,8 +3,10 @@
 *Status (2026-10-18): H1 data model built (`app/regions.py`, region
 vocabulary, table_region derivation). **H8 detection scope — first slice
 built** (crop export, `--parents` crop inference, merge-apply, dashboard
-selector; see §H8 below). H2–H3 are annotation + GPU work (user). H4 v1
-clip-to-regions, H5 grouping sweep, H6 records export: not built.*
+selector; see §H8 below). **H5 record chaining built 2026-10-18** for one
+parent label (`app/records.py`, see the H5 status line). H2–H3 are
+annotation + GPU work (user). H4 v1 clip-to-regions, H6 records export:
+not built.*
 
 Goal: handle sources where tables are NOT the dominant object — pages that mix
 firm descriptions (paragraphs), balance-sheet tables, and occasional figures.
@@ -110,6 +112,40 @@ Corpus facts that shaped this design (user, 2026-07-15):
   the learned-structure upgrade slots in later without touching H4's shape.)
 
 ## H5. Grouping sweep (the record builder)
+
+**Status (2026-10-18): built, as record chaining on ONE parent label
+(decision of the same day, option 1 of three: a record that runs across a
+column or page break is several boxes, one per fragment; a fragment carries
+`continuation: true`; a record is the chain, identified by `group_id`
+numbered through the volume).** What shipped — label-agnostic,
+`app/records.py` + `app/static/js/records.js`:
+- config `record_label` + `layout_columns: auto|1|2` (dashboard selectors,
+  batch panel, `PATCH …/config`); per-shape `continuation`, `group_id`,
+  `group_locked` (`PATCH /api/page/shape`);
+- reading order per page: bands cut at every box wider than 70 % of the
+  page (full-width elements reset the column flow), columns per band from
+  the gutter (`auto`: widest empty x-run in the middle half, ≥ 3 % of the
+  page, boxes on both sides; `2`: gutter else page centre; `1`: y then x);
+- `POST /api/project/{name}/sweep-records` {dry_run, from_stem}: non-skip
+  pages in natural order, running id, continuation joins the previous
+  box's record across pages, locked ids kept and continued from (next new
+  id = max seen + 1, so ids stay unique), idempotent given the same marks;
+  forward resweep seeds from the ids stored on the earlier pages; writes
+  via the atomic writer, rebuilds `intermediate/records.json`, reports the
+  page-order sanity check (`<prefix><number>` stems, one prefix,
+  contiguous);
+- `GET /api/project/{name}/records` lists records from the stored ids
+  with flags *orphan* (first fragment marked continuation) and *long*
+  (span > N pages) plus unswept boxes; the editor's record browser sits on
+  the report chassis with ⛓ toggle / ⟳▶ resweep-forward per fragment;
+- editor: `C` hotkey + inspector button, dashed gold top edge + ⛓ glyph,
+  tint by record id (cycling palette, record-label shapes only), `r<id>`
+  badge.
+Not built from the original sketch: header-role toggles (there is no
+header class — a record *starts* wherever a box is not a continuation),
+transitive ids on cell shapes inside a record box (containment is
+geometric and can be computed on demand), H6 export. The region-label
+plan below is kept as the design history.
 
 - `POST /api/project/{name}/group-records` (+ batch-op UI): iterate ALL pages
   in order → reading-order the region shapes → sweep with a running `gid`

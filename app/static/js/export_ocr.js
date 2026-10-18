@@ -609,6 +609,7 @@ function updatePanel() {
   }
   noSel.style.display='none'; content.style.display='flex';
   if (typeof updateBlankBtn === 'function') updateBlankBtn();
+  if (typeof updateRecordBtn === 'function') updateRecordBtn();
 
   // Multi-selection: show simplified panel (label + delete only)
   if (selSet.size > 1) {

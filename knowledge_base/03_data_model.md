@@ -18,9 +18,21 @@ Everything lives in one LabelMe-style JSON per page (`projects/<p>/annotations/<
   "authority": {...},                // whole-cell entity resolution, see below
   "structured": {...},               // schema-conforming JSON record, see below
   "clip": {"id": 4},                 // cross-page data-unit flag
-  "rule_flags": {...}                // rule-fix bookkeeping (llm_fixed etc.)
+  "rule_flags": {...},               // rule-fix bookkeeping (llm_fixed etc.)
+  "continuation": true,              // record chaining: continues the previous box of
+                                     //   the record label in reading order (§H5)
+  "group_id": 17,                    // record id, numbered through the volume by the sweep
+  "group_locked": true               // hand-assigned record id — the sweep keeps it
 }
 ```
+
+Record chaining (`app/records.py`): a project's `config.record_label` names
+the label records are built from; `layout_columns` (`auto` | 1 | 2) steers the
+per-page reading order. The three fields above live on the shape (not on
+rows), so the rows PATCH whitelist does not touch them. The derived registry
+`intermediate/records.json` (`{meta, records: {id: {fragments: [{stem, idx,
+bbox}], page_span, first_stem, n_pages, orphan, name}}}`) is rebuilt by every
+sweep and is never the source of truth.
 
 Content layer priority everywhere: **Human > LLM > OCR > PDF** ("best text").
 

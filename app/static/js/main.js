@@ -45,6 +45,7 @@ document.addEventListener('keydown', e => {
   if (e.key==='n'||e.key==='N') { goPage(+1); return; }
   if (e.key==='m'||e.key==='M') { goPage(-1); return; }
   if (e.key==='s'||e.key==='S') { if (pages.length) setPageStatus('skip'); return; }
+  if ((e.key==='c'||e.key==='C') && typeof toggleContinuation==='function') { toggleContinuation(); return; }
   if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
   if (e.key==='o'||e.key==='O') { cloneSelectionToPage(-2); return; }
   if (e.key==='ArrowRight') { navigateLattice('right'); return; }
@@ -140,6 +141,7 @@ async function loadFolder() {
     .catch(() => { allJsonStems = []; });
   loadRules();   // row rules → Diagnose dropdown entries
   loadClips();   // document-wide clip index → flag tray
+  if (typeof loadRecordsContext === 'function') loadRecordsContext();   // record label / layout (⛓)
   const sel=document.getElementById('page-select');
   sel.innerHTML=pages.map((p,i)=>`<option value="${i}">${p.stem}</option>`).join('');
   sel.style.display='inline-block';

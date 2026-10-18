@@ -58,6 +58,28 @@ one LabelMe-style JSON per page as the single source of truth.
 - **Diagnostic highlight dropdown**: presence/agreement coloring, rule
   violations, row-count mismatches; amber disagreement borders (OCR≠LLM,
   no human); authority corner dots (green resolved / amber partial).
+- **Record chaining** (⛓, §H5 of
+  [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)
+  applied to one parent label): per-project `record_label` (+
+  `layout_columns: auto|1|2`, dashboard selectors); on a selected box of
+  that label `C` / the inspector button toggles `continuation` ("this box
+  continues the previous one in reading order" — an entry split by a
+  column or page break); continuation = dashed gold top edge + ⛓ glyph;
+  once swept, record-label boxes are tinted by record id (cycling
+  palette) with an `r<id>` badge (🔒 = hand-locked id). Batch ops
+  **⛓ Records: sweep** (`POST /api/project/{name}/sweep-records`, dry run
+  option, forward resweep from a page, batch-undo snapshot) and
+  **⛓ Records: browser** (report chassis: one block per record with name =
+  best text of the first fragment, fragment count, page span, flags
+  *orphan* / *long span* > N pages, unswept boxes; click-to-jump; ⛓ toggle
+  and ⟳▶ resweep-forward per fragment; dry run / resweep all; page-order
+  sanity check in the header). The sweep reads boxes per page column by
+  column (auto = gutter from the box positions; a box wider than 70 % of
+  the page resets the column flow), numbers records through the volume
+  into `group_id`, joins continuations to the previous record across
+  pages, keeps `group_locked` ids and continues from them; idempotent
+  given the same marks. Derived registry `intermediate/records.json`
+  (never the source of truth).
 
 ## 3. Lattice (printed-grid superstructure) — `lattice.js`
 
@@ -336,9 +358,10 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 - **Tidy dataset export** (Phase 3) — next on the dataset layer.
 - **P12 entity index** — cross-project linkage browser on authority IDs;
   Hidiroglou–Berthelot year-to-year checks ride on it.
-- **Phase H grouping** (Compass records): region layer foundation (H1)
-  and the nested detection scope (H8) exist; the clip-to-regions post
-  filter, grouping sweep, group browser and records export do not.
+- **Phase H grouping** (Compass records): region layer foundation (H1),
+  the nested detection scope (H8) and the record-chaining sweep + browser
+  (H5, one parent label) exist; the clip-to-regions post filter and the
+  records export (H6) do not.
 - **Phase B multi-user** (verified_by, page locks).
 - **Temporal authority layer** — general infrastructure (slices for
   attribute change + succession edges for entity transformations, e.g.

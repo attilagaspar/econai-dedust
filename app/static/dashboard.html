@@ -790,6 +790,50 @@ async function selectProject(name) {
     if (prev) sel.value = prev;
   }
   renderDetectionScope();
+  renderRecordSettings();
+}
+
+// ── Record chaining settings (§H5: record_label + layout_columns) ───────────
+function renderRecordSettings() {
+  const sel = document.getElementById('rec-label');
+  const cols = document.getElementById('rec-cols');
+  if (!sel || !cols || !activeProj) return;
+  const labels = activeProj.config?.labels || [];
+  const cur = activeProj.config?.record_label || '';
+  sel.innerHTML = '<option value="">— none —</option>' +
+    labels.map(l => `<option value="${l}">${l}</option>`).join('');
+  sel.value = labels.includes(cur) ? cur : '';
+  cols.value = String(activeProj.config?.layout_columns || 'auto');
+  const hint = document.getElementById('rec-hint');
+  if (hint) hint.textContent = cur
+    ? `mark ⛓ continuations in the editor (C), then batch op "⛓ Records: sweep"`
+    : 'no record chaining for this project';
+}
+
+async function _patchRecordSetting(body, okMsg) {
+  if (!activeProj) return;
+  const res = await fetch(`/api/project/${activeProj.name}/config`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    activeProj.config = data.config || activeProj.config;
+    showToast(okMsg);
+  } else {
+    showToast('Error: ' + errMsg(data), 4000, 'red');
+  }
+  renderRecordSettings();
+}
+
+function onRecordLabelChange() {
+  const v = document.getElementById('rec-label')?.value || '';
+  _patchRecordSetting({ record_label: v }, v ? `Records are built from "${v}"` : 'Record chaining off');
+}
+
+function onLayoutColumnsChange() {
+  const v = document.getElementById('rec-cols')?.value || 'auto';
+  _patchRecordSetting({ layout_columns: v }, `Layout columns: ${v}`);
 }
 
 // ── Detection scope (§H8 nested detection) ──────────────────────────────────
@@ -1098,6 +1142,20 @@ function renderDetail() {
           <option value="page">whole page</option>
         </select>
         <span id="det-scope-hint" style="font-size:0.75rem;color:#667;"></span>
+      </div>
+      <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;"
+           title="Record chaining. Records are built from boxes of ONE label (e.g. the entry box of a directory); an entry that runs across a column or page break is several boxes, the later ones marked ⛓ continuation in the editor (C). The sweep (editor → batch ops → ⛓ Records) numbers records through the whole volume. Columns: how boxes are read on a page — auto finds the gutter from the box positions, 1 / 2 force it. Saved in the project config.">
+        <span style="font-size:0.8rem;color:#aaa;">Records from label:</span>
+        <select id="rec-label" onchange="onRecordLabelChange()"
+                style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;">
+          <option value="">— none —</option>
+        </select>
+        <span style="font-size:0.8rem;color:#aaa;">columns</span>
+        <select id="rec-cols" onchange="onLayoutColumnsChange()"
+                style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;">
+          <option value="auto">auto</option><option value="1">1</option><option value="2">2</option>
+        </select>
+        <span id="rec-hint" style="font-size:0.75rem;color:#667;"></span>
       </div>
       <div class="btn-row" style="margin-top:8px;align-items:center;gap:6px;">
         <span style="font-size:0.8rem;color:#aaa;">Bootstrap from model:</span>

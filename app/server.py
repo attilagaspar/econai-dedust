@@ -486,6 +486,11 @@ class ShapeUpdate(BaseModel):
     human_corrected_text: Optional[str] = None
     points: Optional[list] = None          # [[x1,y1],[x2,y2]] for box edits
     label: Optional[str] = None            # label rename
+    # §H5 record chaining (per-shape, label-agnostic): True sets, False clears
+    continuation:   Optional[bool] = None  # continues the previous box in reading order
+    group_locked:   Optional[bool] = None  # hand-assigned record id, kept by the sweep
+    group_id:       Optional[int]  = None  # record id (with clear_group_id to unset)
+    clear_group_id: Optional[bool] = None
 
 
 @app.patch("/api/page/shape")
@@ -522,8 +527,25 @@ def update_shape(
     if body.label is not None:
         shape["label"] = body.label
 
+    if body.continuation is not None:
+        if body.continuation:
+            shape["continuation"] = True
+        else:
+            shape.pop("continuation", None)
+    if body.group_locked is not None:
+        if body.group_locked:
+            shape["group_locked"] = True
+        else:
+            shape.pop("group_locked", None)
+    if body.clear_group_id:
+        shape["group_id"] = None
+        shape.pop("group_locked", None)
+    elif body.group_id is not None:
+        shape["group_id"] = int(body.group_id)
+
     _write_json(jf, data)
-    return {"ok": True, "idx": idx}
+    return {"ok": True, "idx": idx, "shape": {k: shape.get(k) for k in
+            ("label", "continuation", "group_id", "group_locked")}}
 
 
 # ---------------------------------------------------------------------------
@@ -4557,13 +4579,37 @@ class ConfigUpdate(BaseModel):
     server_profile: Optional[str] = None   # "" clears (back to inline/custom)
     # §H8: "page" | "within:<label>"; "" or "page" clears (whole-page default)
     detection_scope: Optional[str] = None
+    # §H5 record chaining: the label records are built from ("" clears) and
+    # the column layout for reading order ("auto" | 1 | 2; "auto"/"" clears)
+    record_label:   Optional[str] = None
+    layout_columns: Optional[str] = None
 
 
 @app.patch("/api/project/{name}/config")
 def api_update_config(name: str, body: ConfigUpdate):
+    from app import records as _records
     try:
         cfg  = load_config(name)
         pdir = project_dir(name)
+        if body.record_label is not None:
+            lbl = body.record_label.strip()
+            if not lbl:
+                cfg.pop("record_label", None)
+            else:
+                if lbl not in (cfg.get("labels") or []):
+                    raise HTTPException(status_code=400,
+                                        detail=f"record_label {lbl!r} is not a label of "
+                                               f"project '{name}' (labels: {cfg.get('labels')})")
+                cfg["record_label"] = lbl
+        if body.layout_columns is not None:
+            try:
+                mode = _records.normalize_layout(body.layout_columns)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            if mode == "auto":
+                cfg.pop("layout_columns", None)
+            else:
+                cfg["layout_columns"] = mode
         if body.server_profile is not None:
             if body.server_profile == "":
                 cfg.pop("server_profile", None)
@@ -7937,6 +7983,166 @@ def api_apply_predictions_merge(name: str, body: MergeApplyRequest = MergeApplyR
     stats = _scope.merge_apply(pdir / "annotations", pred_dir, parent,
                                _scope.scope_labels(cfg["labels"], scope), _write_json)
     return {"ok": True, "scope": scope, **stats}
+
+
+# ---------------------------------------------------------------------------
+# Routes — record chaining (§H5 applied to one parent label; app/records.py)
+# ---------------------------------------------------------------------------
+
+def _records_pages(ann: Path, include_skip: bool = False) -> list:
+    """[(stem, data)] in natural page order; skip (clutter) pages left out."""
+    out = []
+    for jf in sorted(ann.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not include_skip and (data.get("flags") or {}).get("status") == "skip":
+            continue
+        out.append((jf.stem, data))
+    return out
+
+
+def _records_settings(cfg: dict, record_label=None, layout_columns=None):
+    from app import records as _records
+    label = (record_label or "").strip() or _records.record_label_for(cfg)
+    if not label:
+        raise HTTPException(status_code=400,
+                            detail="No record label: set `record_label` in the project "
+                                   "config (dashboard → Records) or pass it in the request.")
+    if label not in (cfg.get("labels") or []):
+        raise HTTPException(status_code=400,
+                            detail=f"record_label {label!r} is not a project label "
+                                   f"(labels: {cfg.get('labels')})")
+    try:
+        mode = (_records.normalize_layout(layout_columns) if layout_columns is not None
+                else _records.layout_columns_for(cfg))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return label, mode
+
+
+@app.get("/api/records/context")
+def api_records_context(folder: str = Query(...)):
+    """What the editor needs to offer record tools for an annotation folder:
+    the owning project (annotations/ → parent with config.json), its record
+    label and column layout. `project` is None outside a project."""
+    from app import records as _records
+    d = _resolve_folder(folder)
+    cfgp = d.parent / "config.json"
+    if not cfgp.exists():
+        return {"project": None, "record_label": None, "layout_columns": "auto",
+                "labels": []}
+    try:
+        cfg = json.loads(cfgp.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    return {"project": d.parent.name,
+            "record_label": _records.record_label_for(cfg),
+            "layout_columns": _records.layout_columns_for(cfg),
+            "labels": cfg.get("labels") or []}
+
+
+class SweepRecordsRequest(BaseModel):
+    dry_run:        bool = False
+    from_stem:      Optional[str] = None   # forward resweep: pages before it keep their ids
+    record_label:   Optional[str] = None   # default: config.record_label
+    layout_columns: Optional[str] = None   # default: config.layout_columns
+
+
+@app.post("/api/project/{name}/sweep-records")
+def api_sweep_records(name: str, body: SweepRecordsRequest = SweepRecordsRequest()):
+    """Reading-order sweep assigning record ids (`group_id`) to every box of
+    the record label across the volume: pages in natural order (skip pages
+    left out), boxes per page by column then y, a running id; a box starts
+    a new record unless `continuation` is set; `group_locked` ids are kept
+    and continued from. Idempotent given the same inputs. Writes changed
+    pages via the atomic writer and rebuilds intermediate/records.json.
+    `dry_run` reports what would change (plus the page-order check) without
+    writing; `from_stem` resweeps forward from that page, keeping the ids on
+    earlier pages as they are."""
+    from app import records as _records
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    label, mode = _records_settings(cfg, body.record_label, body.layout_columns)
+    pdir = project_dir(name)
+    ann  = pdir / "annotations"
+    pages = _records_pages(ann)
+    all_stems = [s for s, _ in pages]
+    start_id, carry = 1, None
+    if body.from_stem:
+        if body.from_stem not in all_stems:
+            raise HTTPException(status_code=400,
+                                detail=f"from_stem {body.from_stem!r} is not a non-skip "
+                                       f"page of project '{name}'")
+        k = all_stems.index(body.from_stem)
+        start_id, carry = _records.seed_from_pages(pages[:k], label, mode)
+        pages = pages[k:]
+    res = _records.sweep(pages, label, mode, start_id=start_id, carry_id=carry)
+    order = _records.page_order_check(all_stems)
+    written = 0
+    if not body.dry_run:
+        for stem, data in pages:
+            if _records.apply_assignments(data, res["assignments"].get(stem, {})):
+                _write_json(ann / f"{stem}.json", data)
+                written += 1
+        # the derived registry: rebuilt from the (now written) shapes
+        full = _records_pages(ann)
+        coll = _records.collect_records(full, label, mode)
+        reg  = _records.build_registry(coll, label, mode)
+        inter = pdir / "intermediate"
+        inter.mkdir(parents=True, exist_ok=True)
+        _write_json(inter / "records.json", reg)
+    return {"ok": True, "dry_run": body.dry_run, "record_label": label,
+            "layout_columns": mode, "from_stem": body.from_stem,
+            "pages": len(pages), "boxes": res["n_boxes"],
+            "records": len(res["records"]),
+            "pages_changed": len(res["changed"]), "boxes_changed": sum(res["changed"].values()),
+            "pages_written": written, "next_id": res["next_id"],
+            "orphans": res["orphans"], "page_order": order}
+
+
+@app.get("/api/project/{name}/records")
+def api_list_records(name: str, max_pages: int = Query(2, ge=1),
+                     flagged_only: bool = Query(False)):
+    """The record browser's data: records as stored on the shapes
+    (`group_id`), each with its fragments in reading order, first-fragment
+    text as the name, page span, and flags — `orphan` (first fragment is
+    marked continuation) and `long` (spans more than `max_pages` pages).
+    Boxes without an id are returned under `unswept`. Read-only."""
+    from app import records as _records
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    label, mode = _records_settings(cfg)
+    ann = project_dir(name) / "annotations"
+    pages = _records_pages(ann)
+    stem_order = {s: i for i, (s, _) in enumerate(pages)}
+    coll = _records.collect_records(pages, label, mode, stem_order)
+    items = []
+    for gid in sorted(coll["records"]):
+        r = coll["records"][gid]
+        flags = []
+        if r["orphan"]:
+            flags.append("orphan")
+        if r["n_pages"] > max_pages:
+            flags.append("long")
+        if flagged_only and not flags:
+            continue
+        items.append({"id": gid, "name": r["name"], "n_fragments": len(r["fragments"]),
+                      "page_span": r["page_span"], "n_pages": r["n_pages"],
+                      "flags": flags, "fragments": r["fragments"]})
+    n_orphan = sum(1 for r in coll["records"].values() if r["orphan"])
+    n_long = sum(1 for r in coll["records"].values() if r["n_pages"] > max_pages)
+    return {"record_label": label, "layout_columns": mode, "max_pages": max_pages,
+            "pages": len(pages), "boxes": coll["n_boxes"],
+            "n_records": len(coll["records"]), "n_orphans": n_orphan, "n_long": n_long,
+            "n_unswept": len(coll["unswept"]), "unswept": coll["unswept"],
+            "page_order": _records.page_order_check([s for s, _ in pages]),
+            "records": items}
 
 
 # ---------------------------------------------------------------------------

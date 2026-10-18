@@ -1074,7 +1074,10 @@ function drawOverlay() {
     const br=imgToScreen(Math.max(...xs),Math.max(...ys));
     if (!tl||!br) return;
 
-    const fillColor = colorFor(shape.label);
+    // Record chaining: record-label shapes are tinted by their record id
+    // (cycling palette) once the sweep has numbered them.
+    const _isRec = typeof isRecordLabel === 'function' && isRecordLabel(shape.label);
+    const fillColor = (_isRec && shape.group_id != null) ? recordColor(shape.group_id) : colorFor(shape.label);
     const isSel = selSet.has(i);
     statusBorders(shape, isSel).forEach((border, bi) => {
       const ins=border.inset;
@@ -1112,6 +1115,33 @@ function drawOverlay() {
       rect.addEventListener('contextmenu', e => e.preventDefault());
       svgOverlay.appendChild(rect);
     });
+
+    // Record chaining: ⛓ continuation = thick dashed top edge + glyph; the
+    // record id as a small badge so interleaved chains are visible at a glance.
+    if (_isRec && (shape.continuation || shape.group_id != null)) {
+      if (shape.continuation) {
+        const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        ln.setAttribute('x1', tl.x); ln.setAttribute('y1', tl.y + 1.5);
+        ln.setAttribute('x2', br.x); ln.setAttribute('y2', tl.y + 1.5);
+        ln.setAttribute('stroke', '#f0c040'); ln.setAttribute('stroke-width', '3');
+        ln.setAttribute('stroke-dasharray', '6 4');
+        ln.style.pointerEvents = 'none';
+        svgOverlay.appendChild(ln);
+      }
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', tl.x + 4);
+      t.setAttribute('y', tl.y + 14);
+      t.setAttribute('fill', shape.group_id != null ? recordColor(shape.group_id) : '#f0c040');
+      t.setAttribute('font-size', '12');
+      t.setAttribute('font-weight', '700');
+      t.setAttribute('paint-order', 'stroke');
+      t.setAttribute('stroke', '#0d1b35');
+      t.setAttribute('stroke-width', '3');
+      t.textContent = (shape.continuation ? '⛓ ' : '') + (shape.group_id != null ? `r${shape.group_id}` : '')
+                    + (shape.group_locked ? ' 🔒' : '');
+      t.style.pointerEvents = 'none';
+      svgOverlay.appendChild(t);
+    }
 
     // Newsflow badge: reading order + article group, top-left of the element
     if (shape.flow_order != null) {

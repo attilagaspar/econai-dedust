@@ -335,6 +335,8 @@
           <select id="f-label-select" class="field-value" style="display:none;cursor:pointer;background:#0f3460;color:#fff;border:1px solid #e94560;" onchange="changeLabel(this.value)"></select>
         </div>
         <button id="blank-btn" onclick="toggleBlank()" title="Mark this cell (or all selected cells) as a structural blank — no data by design. Batches skip it, export leaves it empty. Shortcut: B" style="background:#1a2740;border:1px solid #3a4a6a;color:#c8d0e0;padding:7px;cursor:pointer;font-size:12px;width:100%;">∅ Mark blank (B)</button>
+        <button id="record-cont-btn" onclick="toggleContinuation()" style="display:none;background:#1a2740;border:1px solid #3a4a6a;color:#c8d0e0;padding:7px;cursor:pointer;font-size:12px;width:100%;"
+                title="Record chaining: this box CONTINUES the previous box of the record label in reading order (an entry that runs across a column or page break). The sweep (batch op ⛓) then gives both fragments one record id. Shortcut: C">⛓ Mark as continuation (C)</button>
         <div class="field-group" id="fg-score" style="display:none">
           <div class="field-label">Score</div>
           <div id="f-score" class="field-value">—</div>
@@ -900,6 +902,8 @@
         <option value="auth_lookup">🏛 Authority lookup report (by ID / name list)</option>
         <option value="json_export">⇩ JSON export (structured records)</option>
         <option value="dataset_diagnose">📊 Dataset diagnostics report</option>
+        <option value="records_sweep">⛓ Records: sweep (number records through the volume)</option>
+        <option value="records_browse">⛓ Records: browser (chains, orphans, long spans)</option>
       </select>
     </div>
     <div id="batch-status-opts" style="display:none;">
@@ -919,6 +923,28 @@
         <span>leave ⊘ skip pages unchanged</span>
       </label>
       <div style="font-size:10px;color:#555;margin-top:3px;">Sets the status on every page in the range below. Does not touch annotations.</div>
+    </div>
+    <div id="batch-records-opts" style="display:none;flex-direction:column;gap:8px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:11px;color:#aaa;">Record label</span>
+        <select id="batch-rec-label" onchange="_batchRecordsSetting('record_label', this.value)" style="flex:1;min-width:120px;"></select>
+        <span style="font-size:11px;color:#aaa;">columns</span>
+        <select id="batch-rec-cols" onchange="_batchRecordsSetting('layout_columns', this.value)" style="width:70px;">
+          <option value="auto">auto</option><option value="1">1</option><option value="2">2</option>
+        </select>
+      </div>
+      <label class="row" id="batch-rec-dry-wrap" title="Report what the sweep would change without writing anything">
+        <input type="checkbox" id="batch-rec-dry" style="accent-color:#e94560;width:13px;height:13px;">
+        <span>dry run (report only, no writes)</span>
+      </label>
+      <div style="font-size:10px;color:#555;">A <b>record</b> is one entry of the record label; an entry that runs across a column or
+        page break is several boxes, the later ones marked <b>⛓ continuation</b> (C in the editor). The sweep walks every non-skip page
+        in order, reads the boxes column by column (a box wider than 70% of the page resets the column flow), and numbers records
+        through the whole volume into <b>group_id</b>; a continuation joins the previous box's record, 🔒 locked ids are kept and
+        continued from. Re-running with the same marks gives the same ids. The browser lists the chains with flags for orphans
+        (a record whose first fragment is a continuation) and long spans; ⛓ and ⟳▶ fix them in place. Settings are saved in the
+        project config; batch undo restores the ids of the last sweep.</div>
+      <div id="batch-rec-info" style="font-size:10px;color:#f87171;"></div>
     </div>
     <div id="batch-dataset-opts" style="display:none;">
       <label class="row" style="margin-bottom:4px;">Dataset declaration</label>
@@ -1554,6 +1580,7 @@
 <script src="js/search.js"></script>
 <script src="js/dup_report.js"></script>
 <script src="js/dataset_report.js"></script>
+<script src="js/records.js"></script>
 <script src="js/dataset_decl.js"></script>
 <script src="js/main.js"></script>
 </body>
