@@ -7355,6 +7355,25 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _require_label_subset(target_name: str, target_labels: list,
+                          source_name: str, source_labels: list) -> None:
+    """400 unless every source label exists in the target palette. The
+    source may predict a subset of the target's labels (a one-label parent
+    detector onto a project that also holds the part labels); the reverse
+    is refused because the model would predict labels the target cannot
+    hold."""
+    from app import scope as _scope
+    missing = _scope.missing_labels(source_labels, target_labels)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Label mismatch: '{source_name}' predicts {missing} "
+                    f"which '{target_name}' does not have (its labels: "
+                    f"{target_labels}). Add the missing label(s) to "
+                    f"'{target_name}' or pick a source whose labels are a "
+                    f"subset of the target's."))
+
+
 def _push_infer_from_gen(new_name: str, source_name: str,
                          srv: dict, passphrase: str,
                          skip_images: bool = False,
@@ -7379,16 +7398,14 @@ def _push_infer_from_gen(new_name: str, source_name: str,
     scope        = _scope.normalize_scope(scope)
     parent_label = _scope.parent_label_of(scope)
 
-    # Label compatibility check
+    # Label compatibility: every label the source model predicts must exist
+    # in the target palette (subset, not identity); the source order defines
+    # the model's class ids and is what the infer script receives.
     new_labels = new_cfg.get("labels", [])
     src_labels = src_cfg.get("labels", [])
-    if set(new_labels) != set(src_labels):
-        raise HTTPException(
-            status_code=400,
-            detail=(f"Label mismatch: '{new_name}' has {new_labels} "
-                    f"but '{source_name}' was trained with {src_labels}. "
-                    f"Projects must share the same label set."),
-        )
+    _require_label_subset(new_name, new_labels, source_name, src_labels)
+    model_labels = _scope.scope_labels(src_labels, scope)
+    untouched    = [l for l in new_labels if l not in model_labels]
 
     pdir         = project_dir(new_name)
     remote       = srv["remote_path"].rstrip("/")
@@ -7403,6 +7420,10 @@ def _push_infer_from_gen(new_name: str, source_name: str,
     yield f"[infer-from] target project: {new_name}"
     yield f"[infer-from] remote_path   : {remote}"
     yield f"[infer-from] ws_prefix     : '{ws_prefix}'"
+    yield f"[infer-from] model predicts labels: {', '.join(model_labels)}"
+    if untouched:
+        yield (f"[infer-from] target labels the model does not predict "
+               f"(left untouched): {', '.join(untouched)}")
     if parent_label is not None:
         pstats = _scope.export_parents(pdir / "annotations",
                                        pdir / "intermediate" / "parents", parent_label)
@@ -7539,6 +7560,10 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
             raise HTTPException(status_code=404, detail=str(e))
         scope = _resolve_scope(cfg, body.scope if body.scope is not None
                                else src_cfg.get("detection_scope"))
+        # Cheap label gate before the GPU-server gate, so a bad pairing is
+        # a plain 400 rather than an error line deep in the SSE stream.
+        _require_label_subset(name, cfg.get("labels", []),
+                              source, src_cfg.get("labels", []))
         srv = _server_cfg(name)
         passphrase = body.passphrase or srv.get("passphrase")
 
@@ -7608,12 +7633,19 @@ async def api_finetune_from(name: str, source: str,
             src_cfg = load_config(source)
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
+        # Deliberately STRICT (unlike infer-from's subset rule): the warm
+        # start copies the source's class head, whose rows are the source's
+        # class ids. A target with more (or fewer) labels has a different
+        # NUM_CLASSES, detectron2 silently drops the mismatched head and
+        # re-initialises it, and the "fine-tune" degrades to a backbone-only
+        # warm start without telling anyone. Same label set keeps the head.
         if set(cfg.get("labels", [])) != set(src_cfg.get("labels", [])):
             raise HTTPException(
                 status_code=400,
                 detail=(f"Label mismatch: '{name}' has {cfg.get('labels')} but "
                         f"'{source}' was trained with {src_cfg.get('labels')}. "
-                        f"Projects must share the same label set."))
+                        f"Fine-tune-from needs the same label set (the class "
+                        f"head is copied); infer-from accepts a subset."))
 
         scope      = _resolve_scope(cfg, body.scope)
         srv        = _server_cfg(name)
@@ -7853,16 +7885,25 @@ def api_apply_predictions(name: str):
 
 
 class MergeApplyRequest(BaseModel):
-    scope: Optional[str] = None   # None → config detection_scope (must be nested)
+    scope:  Optional[str] = None        # None → config detection_scope
+    labels: Optional[list[str]] = None  # page scope: the label set the predictions carry
 
 
 @app.post("/api/project/{name}/apply-predictions-merge")
 def api_apply_predictions_merge(name: str, body: MergeApplyRequest = MergeApplyRequest()):
-    """§H8 merge-apply for a nested detection scope: insert the predicted
-    children into pages that already carry the parent shapes, replacing
-    earlier PREDICTED children (shapes with a score) inside the parents and
-    never touching shapes without a score. Pages without parents, skip
-    pages and pages where nothing changes are left untouched."""
+    """§H8 merge-apply: write predictions onto pages that already have
+    shapes, replacing only earlier PREDICTED shapes (ones with a score) and
+    never touching shapes without a score. Two modes, chosen by the scope:
+
+    * nested (`within:<parent>`): insert the predicted children into pages
+      that carry the parent shapes; earlier predicted children inside the
+      parents are replaced; pages without parents are skipped;
+    * page scope + `labels`: the predictions carry a label set (typically
+      the labels of a source model run via infer-from); earlier predicted
+      shapes of those labels are replaced on every page, other labels are
+      left alone. `labels` is required and must exist in the project.
+
+    Skip pages and pages where nothing changes are never written."""
     from app import scope as _scope
     try:
         cfg = load_config(name)
@@ -7870,12 +7911,27 @@ def api_apply_predictions_merge(name: str, body: MergeApplyRequest = MergeApplyR
         raise HTTPException(status_code=404, detail=str(e))
     scope = _resolve_scope(cfg, body.scope)
     parent = _scope.parent_label_of(scope)
-    if parent is None:
-        raise HTTPException(status_code=400,
-                            detail="Merge-apply needs a nested scope (within:<label>); "
-                                   "use 'Apply to empty pages' for whole-page models.")
     pdir     = project_dir(name)
     pred_dir = pdir / "predictions"
+    if parent is None:
+        labels = [l for l in (body.labels or []) if l]
+        if not labels:
+            raise HTTPException(
+                status_code=400,
+                detail="Page-scope merge-apply needs `labels` (the label set the "
+                       "predictions carry); use 'Apply to empty pages' to fill "
+                       "empty pages with everything, or a within:<label> scope "
+                       "to merge children into parents.")
+        unknown = _scope.missing_labels(labels, cfg.get("labels") or [])
+        if unknown:
+            raise HTTPException(status_code=400,
+                                detail=f"Labels {unknown} are not in project '{name}' "
+                                       f"(its labels: {cfg.get('labels')}).")
+        if not pred_dir.exists():
+            raise HTTPException(status_code=400, detail="No predictions pulled yet")
+        stats = _scope.merge_apply_labels(pdir / "annotations", pred_dir, labels,
+                                          _write_json)
+        return {"ok": True, "scope": scope, "labels": labels, **stats}
     if not pred_dir.exists():
         raise HTTPException(status_code=400, detail="No predictions pulled yet")
     stats = _scope.merge_apply(pdir / "annotations", pred_dir, parent,

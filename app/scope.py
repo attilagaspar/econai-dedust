@@ -74,6 +74,20 @@ def scope_slug(scope) -> str:
     return s.replace(":", "_")
 
 
+# ── label compatibility (cross-project operations) ───────────────────────────
+
+def missing_labels(source_labels, target_labels) -> list:
+    """Source labels absent from the target palette, in source order.
+
+    Cross-project inference needs every label the SOURCE model predicts to
+    exist in the TARGET project (a one-label parent detector onto a project
+    whose labels are that parent plus its parts, for instance). The source's
+    label order defines the model's class ids and travels unchanged; the
+    target may hold any number of further labels."""
+    tset = set(target_labels or [])
+    return [l for l in (source_labels or []) if l not in tset]
+
+
 # ── containment ──────────────────────────────────────────────────────────────
 
 def _center(box):
@@ -328,6 +342,80 @@ def merge_apply(ann_dir: Path, pred_dir: Path, parent_label: str,
         if res["n_parents"] == 0:
             stats["skipped_no_parents"] += 1
             continue
+        if not res["changed"]:
+            stats["skipped_unchanged"] += 1
+            continue
+        ann["shapes"] = res["shapes"]
+        write_json(af, ann)
+        stats["applied"] += 1
+        stats["inserted"] += res["inserted"]
+        stats["removed"] += res["removed"]
+    return stats
+
+
+# ── merge-apply, page scope (by label set) ───────────────────────────────────
+
+def merge_labels(ann_shapes: list, pred_shapes: list, labels) -> dict:
+    """Merge whole-page predictions that carry a LABEL SET into a page that
+    may already hold shapes (the page-scope counterpart of merge_children).
+
+    Removes earlier PREDICTED shapes (carrying a score) whose label is in
+    the set and inserts the predictions whose label is in the set. Shapes
+    without a score (human work) and scored shapes of other labels (another
+    model's output) are never touched. The new shapes take the place of
+    the first removed one (page order stays stable for the editor);
+    `changed` compares the shape multisets, so re-applying the same
+    predictions reports no change. Returns
+    {"shapes", "removed", "inserted", "changed"}."""
+    label_set = set(labels or [])
+    kept, removed, at = [], 0, None
+    for sh in ann_shapes:
+        if sh.get("score") is not None and sh.get("label") in label_set:
+            removed += 1
+            if at is None:
+                at = len(kept)      # new shapes take the removed ones' place
+            continue
+        kept.append(sh)
+    new = []
+    for sh in pred_shapes:
+        if sh.get("label") not in label_set or len(sh.get("points") or []) < 2:
+            continue
+        s = dict(sh)
+        s.setdefault("score", 0.0)   # merge inserts are model output by definition
+        new.append(s)
+    at = len(kept) if at is None else at
+    out = kept[:at] + new + kept[at:]
+    return {"shapes": out, "removed": removed, "inserted": len(new),
+            "changed": _shape_multiset(out) != _shape_multiset(ann_shapes)}
+
+
+def _shape_multiset(shapes) -> list:
+    """Order-insensitive canonical form for change detection."""
+    return sorted(json.dumps(s, sort_keys=True, ensure_ascii=False) for s in shapes)
+
+
+def merge_apply_labels(ann_dir: Path, pred_dir: Path, labels,
+                       write_json) -> dict:
+    """Apply predictions/*.json into annotations/*.json with merge_labels.
+    Skip (clutter) pages are never populated; a page is written only when
+    its shape list actually changes, so the operation is idempotent.
+    write_json(path, obj) is injected (the server's atomic writer)."""
+    stats = {"applied": 0, "skipped_unchanged": 0, "skipped_clutter": 0,
+             "skipped_no_page": 0, "inserted": 0, "removed": 0}
+    for pf in sorted(pred_dir.glob("*.json")):
+        af = ann_dir / pf.name
+        if not af.exists():
+            stats["skipped_no_page"] += 1
+            continue
+        ann = json.loads(af.read_text(encoding="utf-8"))
+        if (ann.get("flags") or {}).get("status") == "skip":
+            stats["skipped_clutter"] += 1
+            continue
+        try:
+            pred = json.loads(pf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        res = merge_labels(ann.get("shapes") or [], pred.get("shapes") or [], labels)
         if not res["changed"]:
             stats["skipped_unchanged"] += 1
             continue

@@ -173,3 +173,15 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   dashboard selector and ⤵ Merge button, scope on every train / infer /
   infer-from / fine-tune request and ledger row. 20 tests, no GPU; design
   in 09 §H8. Config PATCH now uses the atomic writer.
+- **Oct 18 — §H8 second slice: cascade without cloned label sets**:
+  infer-from accepts a source whose labels are a *subset* of the target's
+  (`scope.missing_labels`; source order = class ids; gate runs before the
+  GPU-server gate; SSE log names predicted vs untouched labels),
+  fine-tune-from stays strict (class head is copied — documented),
+  `apply-predictions-merge` gains a page-scope mode keyed by `labels`
+  (`scope.merge_labels` / `merge_apply_labels`: scored shapes of the set
+  replaced in place, other labels + unscored shapes + skip pages untouched,
+  multiset change detection → strictly idempotent), dashboard remembers the
+  last whole-page infer-from per project and offers **⤵ Merge model labels**
+  with the label set in the confirm. 8 tests on `_smoke_` fixtures incl. the
+  full parent → merge → within-scope cascade; suite 255 green.

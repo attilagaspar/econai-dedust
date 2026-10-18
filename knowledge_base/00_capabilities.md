@@ -264,10 +264,17 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   container names (multi-user GPU hosts), self-healing rebuild, root-owned
   leftover files survived via force uploads.
 - **Model reuse**: **infer-from** (cross-project inference, threshold
-  configurable), **fine-tune-from** (warm-start from another project's
-  model — the per-decade chaining strategy), **self-fine-tune**
-  (source = target, bootstrap weights copied aside), apply-to-empty-pages
-  (never touches skip pages).
+  configurable; the source model's labels need only be a **subset** of the
+  target's — a one-label parent detector runs onto a richer project, the
+  SSE log names the labels it predicts and the target labels it leaves
+  alone), **fine-tune-from** (warm-start from another project's model — the
+  per-decade chaining strategy; deliberately requires the *same* label set,
+  because the class head is copied), **self-fine-tune** (source = target,
+  bootstrap weights copied aside), apply-to-empty-pages (never touches skip
+  pages), and **merge-apply by label set** (`apply-predictions-merge` with
+  `labels`: on already-populated pages, earlier *predicted* shapes of those
+  labels are replaced, other labels and unscored shapes untouched,
+  idempotent; dashboard **⤵ Merge model labels** after an infer-from).
 - **Learning diagnostics (P10)**: frozen test set per project (training
   always excludes it), status-filtered training export (only corrected +
   verified; verified-empty pages train as negatives), **training ledger**
@@ -292,7 +299,10 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   no stored field. Dashboard selector on the Train & Infer card; the scope
   rides in train / infer / infer-from / fine-tune requests and the ledger.
   Any label can be a parent (firm areas → parts, table regions → cells).
-  Not yet exercised on a real GPU run.
+  The full cascade needs **no cloned label sets**: a one-label parent
+  project is inferred-from onto the richer target (label subset rule), its
+  boxes merged onto populated pages by label set, then the `within:` model
+  merged inside those parents. Not yet exercised on a real GPU run.
 - **GPU server profiles** (`app/gpu_servers.json`, per instance): named
   backends with optional stored passphrase; per-project `server_profile`;
   password-auth SSH supported; `gpu_scaffold/` bootstraps any fresh GPU

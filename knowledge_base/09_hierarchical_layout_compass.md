@@ -167,7 +167,10 @@ the actual research artifact.
 
 **Status: first slice built 2026-10-18** (crop export, crop inference with
 coordinate mapping, merge-apply, dashboard selector, ledger field, unit
-tests without GPU). Not yet exercised on a real GPU run.
+tests without GPU). **Second slice, same day**: the cascade needs no cloned
+label sets — infer-from accepts a source whose labels are a *subset* of the
+target's, and merge-apply has a page-scope mode keyed by label set (see
+below). Not yet exercised on a real GPU run.
 
 ### Why
 
@@ -265,11 +268,51 @@ Both the infer and infer-from push steps regenerate the inference script
 from (labels, scope, threshold) at run time, so the script always matches
 the current scope; the yaml and weights are the model's own.
 
+### Cross-project labels: the subset rule
+
+The parent detector naturally lives in its own project with a single label
+(`firm_area`, `table_region`, …) while the target project holds that label
+*plus* the part labels. Infer-from therefore checks that **every source
+label exists in the target palette** (`scope.missing_labels`), not that the
+two sets are identical; the source's label order defines the model's class
+ids and is passed unchanged to the inference script. The SSE log names the
+labels the model predicts and the target labels it leaves alone. The gate
+runs before the GPU-server gate, so a bad pairing is a plain 400. The
+reverse (a richer source onto a poorer target) is refused with the missing
+labels named.
+
+**Fine-tune-from stays strict** (same label set): the warm start copies the
+source's class head, whose rows are the source's class ids. With a
+different NUM_CLASSES detectron2 silently drops the mismatched head and
+re-initialises it, so the "fine-tune" would degrade to a backbone-only warm
+start without anyone noticing. (Known soft spot, unchanged: the check is on
+the *set*, so a same-set, different-*order* pairing warm-starts with
+permuted class rows and relearns them — a strict order check is a candidate
+tightening once no live workflow depends on reordering.)
+
 ### Merge-apply — `POST /api/project/{name}/apply-predictions-merge`
 
-The existing *apply* fills only empty pages. For a scoped model the pages
-already carry the parents, so a **merge** is needed
-(`app/scope.py::merge_children`). Per page with a prediction file:
+The existing *apply* fills only empty pages. Once pages carry shapes a
+**merge** is needed. The endpoint has two modes, chosen by the scope; both
+replace only *predicted* shapes (ones carrying a `score`), never touch
+unscored (human) shapes or skip pages, write a page only when something
+changes, and return `applied` / `skipped_unchanged` / `skipped_clutter` /
+`inserted` / `removed` counts.
+
+**Page scope + `labels`** (`app/scope.py::merge_labels`,
+`merge_apply_labels`): the predictions carry a label set — typically the
+labels of a source model run via infer-from (the parent detector's single
+label). Per page with a prediction file: remove earlier predicted shapes
+whose label is in the set, insert the new predictions of those labels (the
+new shapes take the place of the first removed one, so page order stays
+stable for the editor), leave every other label alone. `changed` compares
+shape multisets, so re-running with the same predictions writes nothing —
+idempotent in the strict sense. `labels` is required and must exist in the
+project (400 otherwise); without it the endpoint points at *Apply to empty
+pages* or a `within:` scope.
+
+**Nested scope** (`within:<parent>`, `app/scope.py::merge_children`). Per
+page with a prediction file:
 
 1. skip `skip` (clutter) pages and pages with **no parent shapes**;
 2. **remove** earlier *predicted* children: shapes with a `score`, a child
@@ -282,8 +325,10 @@ already carry the parents, so a **merge** is needed
    `skipped_unchanged`, `skipped_no_parents`, `skipped_clutter`,
    `inserted`, `removed`.
 
-Re-running merge-apply is idempotent. Human corrections survive any number
-of re-runs because only scored shapes are replaced.
+Re-running merge-apply is idempotent in effect (the same children are
+removed and re-inserted; the page is rewritten with identical content).
+Human corrections survive any number of re-runs in both modes because only
+scored shapes are replaced.
 
 ### UI
 
@@ -292,17 +337,24 @@ Dashboard, *Train & Infer* card: a **Detection scope** selector
 `config.detection_scope` (PATCH on change). Its value rides along in the
 prepare/train, infer, infer-from and fine-tune-from requests, and a
 **⤵ Merge into parents** button (shown only when a scope is set) calls
-merge-apply. The training-ledger table shows a `⊂label` badge on scoped
-rows.
+merge-apply. After a whole-page **Infer from** run the dashboard remembers
+the source and its labels for the target project (localStorage) and shows
+**⤵ Merge model labels**; its confirm lists the labels that will be
+written, and *Apply to empty pages* points at it when pages were skipped
+for already having shapes. The training-ledger table shows a `⊂label`
+badge on scoped rows.
 
 ### Workflow instance (Compass)
 
-1. Project labels: `firm_area`, `firm_name`, `address`, `capital`,
+1. Target project labels: `firm_area`, `firm_name`, `address`, `capital`,
    `balance_table`, …; annotate ~60 pages fully.
-2. Scope `page`: train the *parent* model — or keep a separate
-   regions project (H3) and infer-from it, then apply to empty pages.
-3. Switch scope to `within:firm_area`, Train (crops are exported
-   automatically), Run inference, Pull, **Merge into parents**.
+2. Parent model: a separate one-label project (`firm_area`, scope `page`),
+   trained on its own pages. **Infer from** it onto the target (its label
+   is a subset of the target's — no cloned label set needed), Pull, then
+   *Apply to empty pages* for untouched pages and **⤵ Merge model labels**
+   for pages that already carry parts or earlier parents.
+3. Switch the target's scope to `within:firm_area`, Train (crops are
+   exported automatically), Run inference, Pull, **Merge into parents**.
 4. Correct in the editor; fine-tune-from (scope rides along) feeds
    corrections back. For cells inside tables, repeat with
    `within:balance_table` — same mechanism, different instance.
