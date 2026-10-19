@@ -239,3 +239,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   band; `auto` → bands only when the narrow role boxes reveal a gutter;
   `2` unchanged. Regression test; the wide-start test now states both
   behaviours; doc 09 §H5. Pushed and redeployed to Azure.
+- **Oct 19 — record browser: readable crops**: fragment thumbnails 150 px
+  high (were 60) and click-to-enlarge overlay (`_recShowCrop`, Esc/click
+  closes) — a whole firm entry was unjudgeable at thumbnail size.

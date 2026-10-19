@@ -223,6 +223,26 @@ function _recPageNo() {
   return s => (stemToPage[s] ? `p${stemToPage[s]}` : s);
 }
 
+// Full-size view of a fragment crop (the thumbnails are too small to judge
+// a whole firm entry). Click anywhere or press Esc to close.
+function _recShowCrop(src) {
+  const old = document.getElementById('rec-crop-overlay');
+  if (old) old.remove();
+  const ov = document.createElement('div');
+  ov.id = 'rec-crop-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.85);display:flex;' +
+                     'align-items:center;justify-content:center;cursor:zoom-out;overflow:auto;';
+  const img = document.createElement('img');
+  img.src = src;
+  img.style.cssText = 'max-width:96vw;max-height:94vh;object-fit:contain;background:#fff;box-shadow:0 0 24px #000;';
+  ov.appendChild(img);
+  const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  ov.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(ov);
+}
+
 function _recFragRow(f, gid) {
   const pg = _recPageNo();
   const src = `${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(f.stem)}&idx=${f.idx}`;
@@ -230,7 +250,8 @@ function _recFragRow(f, gid) {
   return `<tr>` +
     `<td class="rs-clk" style="white-space:nowrap;color:#93c5fd;" onclick="_recJump('${_escHtml(f.stem)}',${f.idx})" ` +
       `title="Open this fragment in the editor">${_escHtml(pg(f.stem))} · #${f.idx}</td>` +
-    `<td class="rs-img"><img src="${src}" loading="lazy" style="max-height:60px;max-width:220px;object-fit:contain;display:block;"></td>` +
+    `<td class="rs-img"><img src="${src}" loading="lazy" onclick="_recShowCrop(this.src)" title="Click to enlarge" ` +
+      `style="max-height:150px;max-width:400px;object-fit:contain;display:block;cursor:zoom-in;"></td>` +
     `<td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(f.text || '')}">${_escHtml(f.text || '')}</td>` +
     `<td style="white-space:nowrap;">` +
       `<button class="nav-btn" style="${contStyle}" onclick="_recToggleFrag('${_escHtml(f.stem)}',${f.idx},${f.continuation ? 'true' : 'false'})" ` +
