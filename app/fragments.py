@@ -74,6 +74,9 @@ MARKER_KIND = "record_roles"
 MARKER_KEY = "derived_from"
 DEFAULT_MARGIN = 4.0          # px added around the inked extent
 DEFAULT_THRESHOLD = 160       # grey level below which a pixel is ink
+EDGE_FRACTION = 0.02          # scan borders: this much of the page edge is never ink
+FURNITURE_FRACTION = 0.20     # an ignore box this close to the top/bottom edge is a running
+                              # head/foot: its whole line is masked (page numbers in the margin)
 MIN_INK_PIXELS = 2            # a row / column counts as inked from this many ink pixels
 OVERLAP_SUPPRESS = 0.5        # fragment vs protected box: overlap / smaller area
 BBOX_TOL = 0.5
@@ -132,12 +135,25 @@ class InkMap:
         self.h, self.w = self.ink.shape
 
     @classmethod
-    def from_image(cls, path, threshold: int = DEFAULT_THRESHOLD) -> "InkMap":
+    def from_image(cls, path, threshold: int = DEFAULT_THRESHOLD,
+                   edge_fraction: float = EDGE_FRACTION) -> "InkMap":
         import numpy as np
         from PIL import Image
         with Image.open(path) as im:
             g = np.asarray(im.convert("L"))
-        return cls(g < int(threshold))
+        ink = cls(g < int(threshold))
+        ink.clear_edges(edge_fraction)
+        return ink
+
+    def clear_edges(self, fraction: float = EDGE_FRACTION):
+        """Treat a frame of `fraction` × the shorter side around the page as
+        paper: the dark scanner edge of a scan is a solid ink line that would
+        otherwise pin every leading fragment to the very top of the page."""
+        e = int(round(float(fraction) * min(self.w, self.h)))
+        if e <= 0:
+            return
+        self.ink[:e, :] = False;  self.ink[-e:, :] = False
+        self.ink[:, :e] = False;  self.ink[:, -e:] = False
 
     @classmethod
     def blank(cls, w: int, h: int) -> "InkMap":
@@ -301,7 +317,13 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
         page_h = max([b[3] for s in shapes for b in [_bbox(s)] if b] + [1.0])
     if ink is not None:
         for _, b in rs["ignore"]:
-            ink.mask_out(b)
+            cy = (b[1] + b[3]) / 2.0
+            if cy < FURNITURE_FRACTION * page_h or cy > (1.0 - FURNITURE_FRACTION) * page_h:
+                # running head / foot: the page number in the margin sits on
+                # the same line outside the detected box — mask the whole line
+                ink.mask_out([0.0, b[1], page_w, b[3]])
+            else:
+                ink.mask_out(b)
     items = [(i, b, "start") for i, b in rs["start"]] + [(i, b, "stop") for i, b in rs["stop"]]
     open_rec = bool(carry_open)
     frags = []

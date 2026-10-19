@@ -247,3 +247,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   (record head / ⛓ continuation edge colour, jump / toggle / resweep per
   fragment), so a volume's records can be read continuously; list view
   kept.
+- **Oct 19 — fragment ink trim: scan edges + furniture lines** (second
+  real-run bug, compass_1877 p70: the dark scanner edge pinned the leading
+  continuation to the page top and the page number outside the running
+  head's ignore box kept the head inside the crop). `InkMap.from_image`
+  clears a 2 % frame (`clear_edges`); an ignore box in the top/bottom 20 %
+  of the page masks its whole line. Regression test; doc 09.

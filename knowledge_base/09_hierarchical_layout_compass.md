@@ -222,7 +222,7 @@ derived box protects it.
 Limits / open items: the ink projection is naive (scan borders, bleed-
 through and dark margins count as ink; the threshold is per request, the
 column's inked x-extent is at least the role shapes' union only through
-the slot clamp — on a dirty scan draw an ignore box over the artefact);
+the slot clamp — on a dirty scan draw an ignore box over the artefact; a 2 % frame around the page is never ink, so scanner edges don't pin fragments to the page top, and an ignore box in the top/bottom 20 % of the page — a running head or foot — masks its whole line, so the page number in the margin goes with it);
 `carry_open` starts as *open* on the first page (its leading text becomes
 an orphan continuation the browser flags); a wide start's own band is
 single-column; no role for "a start that is also a stop" (a heading that

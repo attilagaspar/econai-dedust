@@ -181,6 +181,28 @@ def test_ignore_boxes_are_masked_out_of_the_ink_trim():
     assert _boxes(res2) == [[100, 100, 900, 700]]
 
 
+def test_scan_edges_and_running_head_line_are_not_ink(tmp_path):
+    # Regression (2026-10-19, compass_1877 p70): a dark scanner edge along
+    # the page top and a page number in the margin, on the running head's
+    # line but outside its ignore box, pinned the leading continuation to
+    # y≈4 and swallowed the head. Edges are cleared and a furniture ignore
+    # box masks its whole line.
+    w, h = 1000, 800
+    im = Image.new("L", (w, h), 255)
+    dr = ImageDraw.Draw(im)
+    dr.rectangle([0, 0, w - 1, 5], fill=0)            # scanner edge
+    dr.rectangle([0, 0, 5, h - 1], fill=0)
+    dr.rectangle([30, 60, 70, 80], fill=0)            # page number in the margin
+    dr.rectangle([200, 60, 800, 80], fill=0)          # running head (the ignore box)
+    for x1, y1, x2, y2 in _text_lines(100, 900, 120, 400):
+        dr.rectangle([x1, y1, x2 - 1, y2 - 1], fill=0)
+    path = tmp_path / "p.jpg"; im.save(path)
+    ink = F.InkMap.from_image(path, 160)
+    doc = _doc([_sh("advert", 200, 60, 800, 80)], w=w, h=h)
+    res = F.derive_page(doc, ROLES, REC, ink=ink, margin=0, carry_open=True, layout=1)
+    assert _boxes(res) == [[100, 120, 900, 408]] and _conts(res) == [True]
+
+
 def test_margin_and_no_ink_map():
     lines = _text_lines(100, 900, 100, 300)
     doc = _doc([_sh("name", 100, 100, 400, 118)])
