@@ -232,3 +232,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   snapshot), ⚙ in the record badge for derived shapes, dashboard roles row.
   13 tests on `_smoke_` fixtures with synthetic page images; docs 00 / 03 /
   09. Live server not restarted, not pushed.
+- **Oct 19 — fragment derivation: no banding in a single column** (bug
+  found by the first real dry run on compass_1877: every full-width firm
+  heading became a band, so one start yielded heading + continuation
+  instead of one fragment). `fragments._bands`: `layout_columns: 1` → one
+  band; `auto` → bands only when the narrow role boxes reveal a gutter;
+  `2` unchanged. Regression test; the wide-start test now states both
+  behaviours; doc 09 §H5. Pushed and redeployed to Azure.

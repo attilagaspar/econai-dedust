@@ -118,13 +118,31 @@ def test_wide_start_is_a_full_width_fragment_and_opens_the_record():
     lines = [(60, 100, 940, 130)] + _text_lines(100, 450, 150, 400) + _text_lines(550, 900, 150, 400)
     doc = _doc([_sh("name", 60, 100, 940, 130)])
     res = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=False)
-    # the wide start, then one continuation per column below it; auto
-    # column detection has no boxes in the band → single column
-    assert _boxes(res)[0] == [60, 100, 940, 130] and _conts(res)[0] is False
+    # auto with no narrow boxes = a single column: the wide start simply
+    # heads one fragment that runs on to the end of the ink below it
+    assert _boxes(res) == [[60, 100, 940, 408]] and _conts(res) == [False]
     assert res["open_at_end"] is True
+    # two columns declared: the wide start is a band of its own, then one
+    # continuation per column below it
     res2 = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=False, layout=2)
     assert _boxes(res2) == [[60, 100, 940, 130], [100, 150, 450, 408], [550, 150, 900, 408]]
     assert _conts(res2) == [False, True, True]
+
+
+def test_single_column_wide_starts_head_their_fragments():
+    # A one-column volume whose starts are full-width display lines (the
+    # 1877 Compass): every start is "wide", yet it must head one fragment
+    # running to the next start — never a heading-only fragment followed by
+    # a continuation. Regression for the 2026-10-19 dry run (1 start → 3
+    # fragments / 2 continuations instead of 2 / 1).
+    lines = (_text_lines(80, 920, 20, 90) + [(60, 100, 940, 130)] + _text_lines(80, 920, 150, 400)
+             + [(60, 420, 940, 450)] + _text_lines(80, 920, 470, 700))
+    doc = _doc([_sh("name", 60, 100, 940, 130), _sh("name", 60, 420, 940, 450)])
+    for layout in (1, "auto"):
+        res = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=True, layout=layout)
+        assert _boxes(res) == [[80, 20, 920, 98], [60, 100, 940, 408], [60, 420, 940, 698]], layout
+        assert _conts(res) == [True, False, False], layout
+        assert res["open_at_end"] is True
 
 
 def test_start_at_column_top_has_no_leading_fragment():

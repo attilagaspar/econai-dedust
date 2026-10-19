@@ -171,8 +171,13 @@ engine derives the record-label fragment boxes from the role shapes:
 
 - per page, bands at every wide box (the full-width rule of the reading
   order; a wide start is a full-width fragment of its own, a wide stop
-  closes the record), columns per band from `records.split_x`
-  (`layout_columns`); starts and stops ordered by y in each column;
+  closes the record) — **only on a two-column page** (`layout_columns: 2`,
+  or `auto` with a gutter among the narrow role boxes): in a single column
+  every display heading is "wide", so there a start simply heads its
+  fragment and nothing is banded (fix 2026-10-19 after the first real dry
+  run split every firm into heading + continuation); columns per band
+  from `records.split_x` (`layout_columns`); starts and stops ordered by y
+  in each column;
 - [column top → first start/stop) is a ⛓ **continuation** fragment while
   a record is open and there is ink there; [start → next start or stop)
   and [last start → column bottom] are fragments; a stop ends the current

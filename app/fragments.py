@@ -32,7 +32,10 @@ nothing (an advertisement page after a stop).
 Columns come from the record sweep's geometry (`records.split_x`,
 `layout_columns`, the full-width rule: a box wider than WIDE_FRACTION of
 the page cuts the page into bands read one after the other; a wide start
-is a full-width fragment of its own, a wide stop closes the record). Every
+is a full-width fragment of its own, a wide stop closes the record. The
+rule only applies to a two-column page — `layout_columns: 2`, or `auto`
+with the narrow role boxes revealing a gutter — because in a single
+column every heading is "wide" and must simply head its fragment). Every
 fragment is trimmed to the ink: the bottom (and a continuation's top) to the
 last / first inked row, the sides to the column's inked x-extent, plus a
 margin; a fragment without ink is dropped. Ink = a cheap projection of the
@@ -211,6 +214,19 @@ def _band_layout(items: list, page_w: float, page_h: float) -> list:
     return [bd for bd in bands if bd["y2"] > bd["y1"] or bd["kind"] == "wide"]
 
 
+def _bands(items: list, page_w: float, page_h: float, mode) -> list:
+    """The bands of a page under `mode`: one band spanning the page for a
+    single column (mode 1, or auto without a gutter among the narrow role
+    boxes), the wide-box bands of `_band_layout` for two columns."""
+    if mode == 1:
+        return [{"kind": "cols", "y1": 0.0, "y2": page_h, "items": list(items)}]
+    if mode == "auto":
+        narrow = [b for _, b, _ in items if (b[2] - b[0]) <= WIDE_FRACTION * page_w]
+        if not narrow or split_x(narrow, page_w, "auto") is None:
+            return [{"kind": "cols", "y1": 0.0, "y2": page_h, "items": list(items)}]
+    return _band_layout(items, page_w, page_h)
+
+
 def _columns(band: dict, page_w: float, mode) -> list:
     """[(x_lo, x_hi, [(idx, bbox, role)])] left to right. The x-slots are
     the page halves at the gutter (or the whole page); the fragments are
@@ -290,7 +306,7 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
     open_rec = bool(carry_open)
     frags = []
     n_cols = 0
-    for band in _band_layout(items, page_w, page_h):
+    for band in _bands(items, page_w, page_h, mode):
         if band["kind"] == "wide":
             idx, b, role = band["items"][0]
             if role == "stop":
