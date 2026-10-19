@@ -242,3 +242,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Oct 19 — record browser: readable crops**: fragment thumbnails 150 px
   high (were 60) and click-to-enlarge overlay (`_recShowCrop`, Esc/click
   closes) — a whole firm entry was unjudgeable at thumbnail size.
+- **Oct 19 — record browser strip view**: 📖 toggle (remembered) renders
+  every fragment as a full-width crop one under the other in record order
+  (record head / ⛓ continuation edge colour, jump / toggle / resweep per
+  fragment), so a volume's records can be read continuously; list view
+  kept.

@@ -73,7 +73,9 @@ one LabelMe-style JSON per page as the single source of truth.
   best text of the first fragment, fragment count, page span, flags
   *orphan* / *long span* > N pages, unswept boxes; click-to-jump; ⛓ toggle
   and ⟳▶ resweep-forward per fragment; dry run / resweep all; page-order
-  sanity check in the header). The sweep reads boxes per page column by
+  sanity check in the header; **📖 strip view** = every fragment as a
+  full-width crop one under the other in record order, for reading a
+  volume continuously; list view with enlargeable thumbnails kept). The sweep reads boxes per page column by
   column (auto = gutter from the box positions; a box wider than 70 % of
   the page resets the column flow), numbers records through the volume
   into `group_id`, joins continuations to the previous record across

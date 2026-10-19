@@ -136,6 +136,15 @@ async function runRecordSweep(opts = {}) {
 let _recData = null;
 let _recMaxPages = 2;
 let _recFlaggedOnly = false;
+// Strip view: every fragment as a full-width crop, one under the other in
+// record order, so a volume reads continuously (the list view's thumbnails
+// cannot show a whole entry). Remembered per browser.
+let _recStrip = (() => { try { return localStorage.getItem('recStripView') === '1'; } catch (e) { return false; } })();
+function _recSetStrip(on) {
+  _recStrip = !!on;
+  try { localStorage.setItem('recStripView', _recStrip ? '1' : '0'); } catch (e) {}
+  _recRenderBody();
+}
 
 async function openRecordBrowser(opts = {}) {
   if (!_recNeedProject()) return;
@@ -207,6 +216,9 @@ function _recOpenModal() {
         `<input type="checkbox" ${_recFlaggedOnly ? 'checked' : ''} onchange="openRecordBrowser({flaggedOnly: this.checked})" style="accent-color:#e94560;">flagged only</label>` +
       '<button class="nav-btn" onclick="runRecordSweep({dryRun:true})" title="Report what a full sweep would change, without writing">🔍 Dry run</button>' +
       '<button class="nav-btn" onclick="_recResweepAll()" title="Renumber every record through the whole volume (locked ids kept)">⟳ Resweep all</button>' +
+      '<button class="nav-btn" id="rec-strip-btn" onclick="_recSetStrip(!_recStrip)" ' +
+        'title="Strip: every fragment as a full-width crop, one under the other in record order. List: compact rows.">' +
+        (_recStrip ? '☰ List view' : '📖 Strip view') + '</button>' +
       '<button class="nav-btn" onclick="openRecordBrowser()" title="Reload the list">↻</button>' +
       '<span style="color:#556;font-size:10px;">clicking a fragment opens it in the editor and minimizes this browser</span>' +
       '<button class="nav-btn" onclick="_recMinimize()" title="Minimize to a pill (bottom right)">▁</button>' +
@@ -241,6 +253,29 @@ function _recShowCrop(src) {
   ov.addEventListener('click', close);
   document.addEventListener('keydown', onKey);
   document.body.appendChild(ov);
+}
+
+// One fragment in the strip view: a thin toolbar (page · #idx → jump,
+// continuation toggle, resweep-from) above the crop at the browser's full
+// width. A continuation is edged yellow, a record head in its record colour.
+function _recFragStrip(f, gid) {
+  const pg = _recPageNo();
+  const src = `${API}/api/cell?folder=${encodeURIComponent(folder)}&stem=${encodeURIComponent(f.stem)}&idx=${f.idx}`;
+  const edge = f.continuation ? '#f0c040' : (gid != null ? recordColor(gid) : '#556');
+  const contStyle = f.continuation ? 'background:#3a2a10;border-color:#f0c040;color:#f0c040;' : '';
+  return `<div style="margin:0 0 6px;border-left:4px solid ${edge};padding-left:8px;">` +
+    `<div style="display:flex;gap:8px;align-items:center;margin:2px 0;">` +
+      `<span class="rs-clk" style="color:#93c5fd;cursor:pointer;white-space:nowrap;" onclick="_recJump('${_escHtml(f.stem)}',${f.idx})" ` +
+        `title="Open this fragment in the editor">${_escHtml(pg(f.stem))} · #${f.idx}</span>` +
+      (f.continuation ? '<span style="color:#f0c040;">⛓ continuation</span>' : '<span style="color:#8a94a6;">record head</span>') +
+      `<span style="flex:1;color:#667;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(f.text || '')}</span>` +
+      `<button class="nav-btn" style="${contStyle}" onclick="_recToggleFrag('${_escHtml(f.stem)}',${f.idx},${f.continuation ? 'true' : 'false'})" ` +
+        `title="${f.continuation ? 'Un-mark: this box STARTS a record' : 'Mark: this box CONTINUES the previous box in reading order'}">⛓${f.continuation ? ' cont.' : ''}</button>` +
+      `<button class="nav-btn" onclick="_recResweepFrom('${_escHtml(f.stem)}')" title="Renumber from this page onward (earlier pages keep their ids)">⟳▶</button>` +
+      (f.locked ? ' <span title="hand-assigned id, kept by the sweep">🔒</span>' : '') +
+    `</div>` +
+    `<img src="${src}" loading="lazy" style="width:100%;display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;">` +
+    `</div>`;
 }
 
 function _recFragRow(f, gid) {
@@ -283,10 +318,16 @@ function _recRenderBody() {
       `<span style="color:#cde;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(r.name || '')}</span>` +
       `<span style="color:#667;">${r.n_fragments} fragment${r.n_fragments === 1 ? '' : 's'} · ${span}</span>` +
       (flags ? `<span>${flags}</span>` : '') + `</div>`;
-    html += '<table class="rs-table" style="width:100%;"><tr><th style="white-space:nowrap;">where</th><th></th><th>text</th><th></th></tr>';
-    r.fragments.forEach(f => { html += _recFragRow(f, r.id); });
-    html += '</table>';
+    if (_recStrip) {
+      r.fragments.forEach(f => { html += _recFragStrip(f, r.id); });
+    } else {
+      html += '<table class="rs-table" style="width:100%;"><tr><th style="white-space:nowrap;">where</th><th></th><th>text</th><th></th></tr>';
+      r.fragments.forEach(f => { html += _recFragRow(f, r.id); });
+      html += '</table>';
+    }
   });
+  const btn = document.getElementById('rec-strip-btn');
+  if (btn) btn.textContent = _recStrip ? '☰ List view' : '📖 Strip view';
   if (d.unswept.length && !_recFlaggedOnly) {
     html += `<div style="margin:14px 0 4px;padding:4px 6px;background:#2a1a3a;border-radius:4px;">` +
       `<b style="color:#a78bfa;font-size:12px;">unswept</b> <span style="color:#667;">${d.unswept.length} box(es) without a record id — run the sweep</span></div>`;
