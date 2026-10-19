@@ -67,7 +67,7 @@ Created by line-by-line / anchored OCR or LLM runs, or ⊞ Convert. One structur
 ```jsonc
 {
   "rows": [
-    { "y0": 0.12, "y1": 0.19,        // band, relative to cell height
+    { "y0": 612.0, "y1": 631.5,      // band, ABSOLUTE page pixels (X implicit: the box)
       "pdf": "...", "ocr": "...", "llm": "...", "human": "...",
       "authority": {...},            // per-row entity resolution
       "llm_fixed": true }            // set when rule-fix wrote the llm value
@@ -108,6 +108,27 @@ Page flags steering resolution:
 ## Page-level flags
 
 `flags` on the page JSON: authority settings (above), plus misc. Rules and clips are stored per project / per page respectively.
+
+## Page provenance and coordinate frame
+
+A page imported from a PDF carries `pdf_source` (path relative to the
+project, normally `sources/<file>.pdf`), `pdf_page` (0-based) and
+`pdf_scale` (PDF points → pixels; the historical default is 2.0, the
+project's `config.render_scale` / `render_longest_px` since Oct 2026). Every
+coordinate in the file is in pixels of the stored image (`imageWidth` ×
+`imageHeight`): shape `points`, `row_struct.rows[].y0/y1` (absolute page Y,
+not cell-relative), the detector's `raw` box and `mask`, `derived_from.bbox`,
+`predictions/<stem>.json`, and the fragment boxes of
+`intermediate/records.json`. `flags.crop_source` is the exception: it is in
+the SOURCE page's frame. Text-layer extraction divides by `pdf_scale`, so
+the three fields must stay consistent with the image.
+
+`POST /api/project/{name}/rerender` (`app/rerender.py`) re-rasterizes the
+page at another scale and multiplies every field above by the exact factor
+(new / old dimensions), rewrites `imageWidth/Height` and `pdf_scale`, and
+leaves a note `rerender = {from_scale, scale, factor, ts, backup}`; pages
+whose dimensions no longer match a render at `pdf_scale` (perspective
+correction) are refused, so that correction is never silently undone.
 
 ## Exports
 

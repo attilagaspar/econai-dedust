@@ -4586,6 +4586,11 @@ class ConfigUpdate(BaseModel):
     # fragment derivation (app/fragments.py): {label: start | stop | ignore};
     # the whole mapping is replaced ("" / missing role = no role; {} clears)
     record_roles:   Optional[dict] = None
+    # PDF import resolution (app/page_import.py): render_scale = number or
+    # "native" ("" / 2.0 clears → default); render_longest_px = int (0 / ""
+    # clears; wins over render_scale when set)
+    render_scale:      Optional[object] = None
+    render_longest_px: Optional[object] = None
 
 
 @app.patch("/api/project/{name}/config")
@@ -4643,6 +4648,23 @@ def api_update_config(name: str, body: ConfigUpdate):
             cfg["llm"] = {**cfg.get("llm", {}), **body.llm}
         if body.labels is not None:
             cfg["labels"] = body.labels
+        if body.render_scale is not None or body.render_longest_px is not None:
+            from app.page_import import normalize_render_settings, DEFAULT_SCALE
+            rs = cfg.get("render_scale") if body.render_scale is None else body.render_scale
+            lp = (cfg.get("render_longest_px") if body.render_longest_px is None
+                  else body.render_longest_px)
+            try:
+                norm = normalize_render_settings(rs, lp)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            cfg.pop("render_scale", None)
+            cfg.pop("render_longest_px", None)
+            if norm["mode"] == "longest":
+                cfg["render_longest_px"] = norm["longest_px"]
+            elif norm["mode"] == "native":
+                cfg["render_scale"] = "native"
+            elif abs(norm["scale"] - DEFAULT_SCALE) > 1e-9:
+                cfg["render_scale"] = norm["scale"]
         _write_json(pdir / "config.json", cfg)   # atomic + Dropbox/AV retry
         return {"ok": True, "config": cfg}
     except FileNotFoundError as e:
@@ -5412,6 +5434,73 @@ async def api_upload_pages(name: str, files: List[UploadFile] = File(...)):
     except Exception as e:
         import traceback
         raise HTTPException(status_code=500, detail=traceback.format_exc())
+
+
+# ---------------------------------------------------------------------------
+# Routes — re-render pages at another scale (app/rerender.py)
+# ---------------------------------------------------------------------------
+
+class RerenderRequest(BaseModel):
+    scale:      Optional[float] = None    # target PDF-points → px scale
+    longest_px: Optional[int]   = None    # or: longest page side in px (wins)
+    mode:       Optional[str]   = None    # or: "native" (embedded scan resolution)
+    dry_run:    bool = True               # plan only (counts, factor, refused pages)
+    backup:     bool = True               # zip old images + JSONs under <project>/backups/
+    stems:      Optional[List[str]] = None   # subset; None = every page
+
+
+@app.post("/api/project/{name}/rerender")
+def api_rerender(name: str, body: RerenderRequest):
+    """Re-rasterize the project's PDF-imported pages at another scale and
+    rescale every coordinate in their JSONs (shapes, row bands, markers,
+    predictions, records registry) by the exact factor; stems unchanged.
+    Target: `scale`, `longest_px` or `mode: native`; none → the project's
+    configured render settings. `dry_run` (default) returns the plan:
+    pages to render with the factor, pages already at the target, and the
+    refused pages (no PDF source, PDF missing, image missing, image altered
+    since import). Otherwise a background job starts (poll
+    GET .../rerender/status); the old files are zipped first unless
+    `backup` is false. A re-run at the same scale is a no-op."""
+    from app import rerender as _rr
+    from app.page_import import render_settings_from_config
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    pdir = project_dir(name)
+    try:
+        if body.scale is None and body.longest_px is None and not body.mode:
+            settings = render_settings_from_config(cfg)
+        else:
+            settings = _rr.target_settings(body.scale, body.longest_px, body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if _rr.active_job(name):
+        raise HTTPException(status_code=409,
+                            detail="A re-render is already running for this project")
+    the_plan = _rr.plan(pdir, settings, stems=body.stems)
+    if body.dry_run:
+        return {"ok": True, "dry_run": True, **the_plan}
+    if not the_plan["pages"]:
+        return {"ok": True, "dry_run": False, "job": None, **the_plan}
+
+    def _on_done():
+        _shadow_page_cache.clear()      # OCR shadow pages are keyed by path, not mtime
+
+    try:
+        job = _rr.start_job(name, pdir, the_plan, backup=body.backup, on_done=_on_done)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    slim = {k: v for k, v in the_plan.items() if k != "pages"}
+    return {"ok": True, "dry_run": False, "job": job, **slim}
+
+
+@app.get("/api/project/{name}/rerender/status")
+def api_rerender_status(name: str):
+    """The last / running re-render job of the project (None when none ran
+    since the server started)."""
+    from app import rerender as _rr
+    return {"job": _rr.job_status(name)}
 
 
 # ---------------------------------------------------------------------------

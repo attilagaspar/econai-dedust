@@ -23,6 +23,24 @@ one LabelMe-style JSON per page as the single source of truth.
 - **Import**: PDF/image upload split into page JPEGs; source filenames
   preserved (`xyz.pdf → xyz_1.jpg…`); **Inbox bulk import** (server-side
   staging folder → project, can copy the label set from an existing project).
+  **Render scale** is a project setting (`config.render_scale`: number,
+  default 2.0 ≈ 144 dpi, or `native` = the resolution of the page's embedded
+  scan; `config.render_longest_px` = longest page side in px, wins when set)
+  honoured by every PDF import path (upload, server path, inbox); each page
+  records its `pdf_scale`.
+- **Re-render pages** (`app/rerender.py`, `POST /api/project/{name}/rerender`,
+  dashboard 🔍 in the Import card): re-rasterize the PDF-imported pages of a
+  project at another scale / longest side / native and multiply every
+  coordinate in their JSONs by the exact per-axis factor — shape points,
+  absolute row bands, `raw` / `mask`, `derived_from.bbox`,
+  `predictions/<stem>.json`, `intermediate/records.json` fragments —
+  dimensions and `pdf_scale` updated, stems unchanged, provenance note
+  `rerender`. Dry run first (counts, factor, sample dims, refused pages);
+  apply runs as a background job (status endpoint, progress), zips the old
+  images + JSONs under `<project>/backups/rerender_<ts>.zip`. Refuses pages
+  without a PDF source (image pages, crop pages), with a missing PDF, and
+  pages whose dimensions no longer match a render at their recorded scale
+  (perspective-corrected). A re-run at the same target is a no-op.
 - **Label palette**: add/rename/delete project labels from dashboard or
   editor.
 - **Scoreboard**: per-project review progress by page status

@@ -253,3 +253,19 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   head's ignore box kept the head inside the crop). `InkMap.from_image`
   clears a 2 % frame (`clear_edges`); an ignore box in the top/bottom 20 %
   of the page masks its whole line. Regression test; doc 09.
+- **Oct 19 — render scale + re-render pages** (`app/rerender.py`): the
+  PDF import scale is a project setting (`config.render_scale`: number or
+  `native` = embedded-scan resolution; `render_longest_px`) used by upload /
+  path / inbox imports (dashboard select in the Import card, config PATCH
+  validation). `POST /api/project/{name}/rerender` re-rasterizes the
+  PDF-imported pages at a new scale and multiplies every coordinate (shape
+  points, absolute row bands, `raw` / `mask`, `derived_from.bbox`,
+  predictions, records registry) by the exact factor; dims + `pdf_scale` +
+  a `rerender` provenance note updated, stems unchanged; dry run (counts,
+  factor, refused pages: no source, PDF missing, image missing, altered
+  since import); apply = background job with status polling and a zip
+  backup under `backups/`; same-scale re-run is a no-op. Dashboard modal
+  🔍 Re-render pages… (dry run → confirm → progress). 10 tests on a
+  `_smoke_` project built from a generated PDF; docs 00 / 03 (the row-band
+  unit in 03 was wrong: bands are absolute page pixels). Live server not
+  restarted, not pushed.

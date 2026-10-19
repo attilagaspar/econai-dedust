@@ -328,6 +328,39 @@ header span { color: #888; font-size: 0.85rem; }
   </div>
 </div>
 
+<!-- Re-render pages modal -->
+<div class="modal-bg" id="rerender-modal">
+  <div class="modal" style="max-width:640px;">
+    <h3>🔍 Re-render pages</h3>
+    <p style="font-size:0.8rem;color:#888;margin:0 0 10px;">
+      Re-rasterizes every page imported from a PDF at the target resolution and
+      multiplies every coordinate in its JSON (boxes, internal row bands, markers,
+      predictions) by the exact factor — annotations stay aligned, page names stay
+      the same. Pages that were perspective-corrected or have no source PDF are
+      left alone and listed. The old images and JSONs are zipped under the
+      project's <code>backups/</code> folder first. Nobody should be editing the
+      project while it runs.
+    </p>
+    <div class="field-row">
+      <label>Target</label>
+      <select id="rr-mode" onchange="rrModeChanged()">
+        <option value="scale">scale</option>
+        <option value="native">native (embedded scan resolution)</option>
+        <option value="longest">longest side in px</option>
+      </select>
+      <input id="rr-value" type="number" step="0.1" min="0.5" value="3" style="width:90px;">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="rrDryRun()">👁 Dry run</button>
+      <button class="btn btn-primary" id="rr-go-btn" onclick="rrApply()" disabled>▶ Re-render</button>
+    </div>
+    <div id="rr-result" style="font-size:0.8rem;margin-top:10px;max-height:300px;overflow:auto;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeRerenderModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ============================================================
 // State
@@ -791,6 +824,7 @@ async function selectProject(name) {
   }
   renderDetectionScope();
   renderRecordSettings();
+  renderRenderScale();
 }
 
 // ── Record chaining settings (§H5: record_label + layout_columns) ───────────
@@ -1053,6 +1087,25 @@ function renderDetail() {
         </div>
       </details>
       <div class="import-results" id="import-results"></div>
+      <!-- Render resolution (project setting) + re-render of existing pages -->
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid #333;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;color:#aaa;"
+               title="Resolution PDFs are rendered at on import (PDF points → pixels). 2.0 (~144 dpi) is the historical default; scanned PDFs usually embed denser images — 'native' renders each page at the resolution of its embedded scan. Saved in the project config; applies to upload, path and inbox imports.">
+          Render scale
+          <select id="render-scale-sel" onchange="saveRenderScale()"
+                  style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+            <option value="2">2.0 (default, ~144 dpi)</option>
+            <option value="3">3.0 (~216 dpi)</option>
+            <option value="4">4.0 (~288 dpi)</option>
+            <option value="native">native (embedded scan)</option>
+            <option value="custom">custom…</option>
+          </select>
+          <input id="render-scale-custom" type="number" min="0.5" max="12" step="0.1" value="2"
+                 onchange="saveRenderScale()" style="display:none;width:64px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
+        </label>
+        <button class="btn btn-secondary" onclick="openRerenderModal()"
+                title="Re-rasterize the pages already imported from PDFs at the configured resolution and rescale every annotation to match (dry run first; old files are zipped under backups/).">🔍 Re-render pages…</button>
+      </div>
     </div>
 
     <!-- Prepare training data -->
@@ -1801,6 +1854,157 @@ async function importFromPath() {
   } else {
     results.innerHTML = `<div class="err">${errMsg(data)}</div>`;
   }
+}
+
+// ============================================================
+// Render scale (project setting) + re-render pages (app/rerender.py)
+// ============================================================
+function renderRenderScale() {
+  const sel = document.getElementById('render-scale-sel');
+  const custom = document.getElementById('render-scale-custom');
+  if (!sel || !activeProj) return;
+  const cfg = activeProj.config || {};
+  if (cfg.render_longest_px) {
+    sel.value = 'custom'; custom.style.display = ''; custom.value = '';
+    custom.placeholder = `${cfg.render_longest_px}px`;
+    return;
+  }
+  const v = cfg.render_scale ?? 2;
+  if (v === 'native') { sel.value = 'native'; custom.style.display = 'none'; return; }
+  const num = Number(v);
+  if ([2, 3, 4].includes(num)) { sel.value = String(num); custom.style.display = 'none'; }
+  else { sel.value = 'custom'; custom.style.display = ''; custom.value = num; }
+}
+
+async function saveRenderScale() {
+  if (!activeProj) return;
+  const sel = document.getElementById('render-scale-sel');
+  const custom = document.getElementById('render-scale-custom');
+  let body;
+  if (sel.value === 'native') { custom.style.display = 'none'; body = { render_scale: 'native', render_longest_px: '' }; }
+  else if (sel.value === 'custom') {
+    custom.style.display = '';
+    if (!custom.value) return;                 // wait for a number
+    body = { render_scale: Number(custom.value), render_longest_px: '' };
+  } else { custom.style.display = 'none'; body = { render_scale: Number(sel.value), render_longest_px: '' }; }
+  const res = await fetch(`/api/project/${activeProj.name}/config`, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+  });
+  const d = await res.json();
+  if (!res.ok) { showToast(errMsg(d), true); return; }
+  activeProj.config = d.config;
+  showToast('Render scale saved — applies to new imports; use Re-render for existing pages.');
+}
+
+let _rrPlan = null, _rrPoll = null;
+function openRerenderModal() {
+  if (!activeProj) return;
+  const cfg = activeProj.config || {};
+  const mode = document.getElementById('rr-mode');
+  const val  = document.getElementById('rr-value');
+  if (cfg.render_longest_px) { mode.value = 'longest'; val.value = cfg.render_longest_px; }
+  else if (cfg.render_scale === 'native') { mode.value = 'native'; }
+  else { mode.value = 'scale'; val.value = Number(cfg.render_scale) > 2 ? cfg.render_scale : 3; }
+  rrModeChanged();
+  _rrPlan = null;
+  document.getElementById('rr-go-btn').disabled = true;
+  document.getElementById('rr-result').innerHTML = '';
+  document.getElementById('rerender-modal').classList.add('open');
+  rrPollStatus(true);
+}
+function closeRerenderModal() {
+  document.getElementById('rerender-modal').classList.remove('open');
+  if (_rrPoll) { clearTimeout(_rrPoll); _rrPoll = null; }
+}
+function rrModeChanged() {
+  const mode = document.getElementById('rr-mode').value;
+  const val  = document.getElementById('rr-value');
+  val.style.display = mode === 'native' ? 'none' : '';
+  if (mode === 'longest') { val.step = 100; val.min = 200; if (Number(val.value) < 200) val.value = 3000; }
+  else if (mode === 'scale') { val.step = 0.1; val.min = 0.5; if (Number(val.value) > 12) val.value = 3; }
+}
+function rrBody(dry) {
+  const mode = document.getElementById('rr-mode').value;
+  const v = Number(document.getElementById('rr-value').value);
+  const b = { dry_run: dry, backup: true };
+  if (mode === 'native') b.mode = 'native';
+  else if (mode === 'longest') b.longest_px = v;
+  else b.scale = v;
+  return b;
+}
+function _rrList(title, items, fmt) {
+  if (!items || !items.length) return '';
+  const shown = items.slice(0, 30).map(fmt).join(', ');
+  return `<div style="margin-top:6px;color:#e0a040;">${title} (${items.length}): <span style="color:#aaa;">${shown}${items.length > 30 ? ' …' : ''}</span></div>`;
+}
+function rrRenderPlan(d) {
+  const c = d.counts || {};
+  const f = d.factor ? (Math.abs(d.factor.min - d.factor.max) < 1e-6
+      ? `×${d.factor.min.toFixed(3)}` : `×${d.factor.min.toFixed(3)}–${d.factor.max.toFixed(3)}`) : '—';
+  const sample = (d.pages || [])[0];
+  let html = `<div><b>Target:</b> ${d.target}</div>
+    <div style="margin-top:4px;"><b>${c.to_render}</b> page(s) to re-render, factor ${f}` +
+    (sample ? ` (e.g. ${sample.stem}: ${sample.old_w}×${sample.old_h} → ${sample.new_w}×${sample.new_h})` : '') +
+    `; <b>${c.up_to_date}</b> already at the target.</div>`;
+  html += _rrList('No PDF source (image pages, crops)', d.no_source, s => s);
+  html += _rrList('Source PDF not found', d.missing_pdf, x => `${x.stem} (${x.pdf})`);
+  html += _rrList('Image file missing', d.no_image, s => s);
+  html += _rrList('Image altered since import (perspective-corrected?) — skipped', d.altered,
+                  x => `${x.stem} (${x.stored.join('×')} vs ${x.expected.join('×')})`);
+  html += _rrList('Errors', d.errors, x => `${x.stem}: ${x.error}`);
+  return html;
+}
+async function rrDryRun() {
+  if (!activeProj) return;
+  const out = document.getElementById('rr-result');
+  out.innerHTML = 'Planning…';
+  const res = await fetch(`/api/project/${activeProj.name}/rerender`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(rrBody(true)),
+  });
+  const d = await res.json();
+  if (!res.ok) { out.innerHTML = `<div class="err">${errMsg(d)}</div>`; return; }
+  _rrPlan = d;
+  out.innerHTML = rrRenderPlan(d);
+  document.getElementById('rr-go-btn').disabled = !(d.counts && d.counts.to_render > 0);
+}
+async function rrApply() {
+  if (!activeProj || !_rrPlan) return;
+  const n = _rrPlan.counts.to_render;
+  if (!confirm(`Re-render ${n} page(s) of "${activeProj.name}" at ${_rrPlan.target}?\n\nThe old images and JSONs are zipped under backups/ first. Make sure nobody is editing this project right now.`)) return;
+  const out = document.getElementById('rr-result');
+  document.getElementById('rr-go-btn').disabled = true;
+  const res = await fetch(`/api/project/${activeProj.name}/rerender`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(rrBody(false)),
+  });
+  const d = await res.json();
+  if (!res.ok) { out.innerHTML = `<div class="err">${errMsg(d)}</div>`; return; }
+  out.innerHTML = 'Started…';
+  rrPollStatus(false);
+}
+async function rrPollStatus(quiet) {
+  if (!activeProj) return;
+  if (_rrPoll) { clearTimeout(_rrPoll); _rrPoll = null; }
+  let d;
+  try { d = await (await fetch(`/api/project/${activeProj.name}/rerender/status`)).json(); }
+  catch (e) { return; }
+  const job = d.job;
+  if (!job) return;
+  const out = document.getElementById('rr-result');
+  if (!job.done) {
+    out.innerHTML = `<div>⏳ ${job.phase}: ${job.page_i}/${job.page_n} ${job.current || ''}</div>`;
+    _rrPoll = setTimeout(() => rrPollStatus(false), 1500);
+    return;
+  }
+  if (quiet) return;                      // an old finished job: nothing to show on open
+  if (job.error) { out.innerHTML = `<div class="err">✗ ${job.error}</div>`; return; }
+  const r = job.result || {};
+  out.innerHTML = `<div class="ok">✓ ${r.rendered.length} page(s) re-rendered at ${job.target}` +
+    (r.predictions_scaled ? `, ${r.predictions_scaled} prediction file(s) scaled` : '') +
+    (r.records_updated ? `, ${r.records_updated} record fragment(s) updated` : '') +
+    (r.backup ? `; backup: <code>${r.backup}</code>` : '; no backup') + `</div>` +
+    _rrList('Failed', r.failed, x => `${x.stem}: ${x.error}`);
+  showToast(`Re-rendered ${r.rendered.length} page(s).`);
+  await selectProject(activeProj.name);
 }
 
 // ============================================================
