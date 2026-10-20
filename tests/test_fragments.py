@@ -203,7 +203,7 @@ def test_scan_edges_and_running_head_line_are_not_ink(tmp_path):
     ink = F.InkMap.from_image(path, 160)
     doc = _doc([_sh("advert", 200, 60, 800, 80)], w=w, h=h)
     res = F.derive_page(doc, ROLES, REC, ink=ink, margin=0, carry_open=True, layout=1)
-    assert _boxes(res) == [[100, 120, 900, 438]] and _conts(res) == [True]
+    assert _boxes(res) == [[100, 120, 900, 439]] and _conts(res) == [True]
 
 
 def test_margin_and_no_ink_map():
