@@ -194,13 +194,16 @@ def test_scan_edges_and_running_head_line_are_not_ink(tmp_path):
     dr.rectangle([0, 0, 5, h - 1], fill=0)
     dr.rectangle([30, 60, 70, 80], fill=0)            # page number in the margin
     dr.rectangle([200, 60, 800, 80], fill=0)          # running head (the ignore box)
+    dr.ellipse([400, 24, 450, 56], fill=0)            # a stain below the edge frame (p38)
     for x1, y1, x2, y2 in _text_lines(100, 900, 120, 400):
         dr.rectangle([x1, y1, x2 - 1, y2 - 1], fill=0)
+    dr.rectangle([100, 420, 190, 438], fill=0)        # a short last line (two words) is text
+    dr.ellipse([600, 520, 640, 560], fill=0)          # a blot further down is not
     path = tmp_path / "p.jpg"; im.save(path)
     ink = F.InkMap.from_image(path, 160)
     doc = _doc([_sh("advert", 200, 60, 800, 80)], w=w, h=h)
     res = F.derive_page(doc, ROLES, REC, ink=ink, margin=0, carry_open=True, layout=1)
-    assert _boxes(res) == [[100, 120, 900, 408]] and _conts(res) == [True]
+    assert _boxes(res) == [[100, 120, 900, 438]] and _conts(res) == [True]
 
 
 def test_margin_and_no_ink_map():

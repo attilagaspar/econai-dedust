@@ -269,3 +269,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   `_smoke_` project built from a generated PDF; docs 00 / 03 (the row-band
   unit in 03 was wrong: bands are absolute page pixels). Live server not
   restarted, not pushed.
+- **Oct 20 — fragment ink trim: text bands, not first ink** (third
+  real-run bug, compass_1877 p38 after the native re-render: a stain just
+  below the edge frame started the leading fragment, so the running head
+  sat inside it). `InkMap.text_bands`: a run of inked rows is text only
+  when its ink spans ≥ 6 % of the slot width; `_trim` uses the first/last
+  band. Regression test extended (stain, short last line kept, blot
+  ignored); doc 09.

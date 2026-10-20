@@ -78,6 +78,8 @@ EDGE_FRACTION = 0.02          # scan borders: this much of the page edge is neve
 FURNITURE_FRACTION = 0.20     # an ignore box this close to the top/bottom edge is a running
                               # head/foot: its whole line is masked (page numbers in the margin)
 MIN_INK_PIXELS = 2            # a row / column counts as inked from this many ink pixels
+TEXT_EXTENT_FRACTION = 0.06   # a run of inked rows is a text band when its ink spans at least
+                              # this much of the slot width (stains, specks, hairs are narrower)
 OVERLAP_SUPPRESS = 0.5        # fragment vs protected box: overlap / smaller area
 BBOX_TOL = 0.5
 CONTENT_KEYS = ("human_output", "human_correction", "openai_output", "ocr_output",
@@ -182,6 +184,35 @@ class InkMap:
             return None
         return y1 + int(rows[0]), y1 + int(rows[-1]) + 1
 
+    def text_bands(self, x1, x2, y1, y2, min_pixels: int = MIN_INK_PIXELS,
+                   extent_frac: float = TEXT_EXTENT_FRACTION) -> list:
+        """[(first_y, last_y + 1)] of the runs of inked rows inside the
+        rectangle that look like printed lines: the run's ink spans at least
+        `extent_frac` of the slot width. A stain, a speck or a hair is
+        narrower and is not a band — so the first/last band is where the
+        text really starts/ends (a lone very short word may be lost at a
+        fragment's edge; draw the box by hand there)."""
+        import numpy as np
+        x1, y1, x2, y2 = self._clamp(x1, y1, x2, y2)
+        if x2 <= x1 or y2 <= y1:
+            return []
+        sub = self.ink[y1:y2, x1:x2]
+        counts = sub.sum(axis=1)
+        inked = counts >= min_pixels
+        width = x2 - x1
+        bands, start = [], None
+        for i in range(len(inked) + 1):
+            on = i < len(inked) and inked[i]
+            if on and start is None:
+                start = i
+            elif not on and start is not None:
+                cols = np.flatnonzero(sub[start:i].any(axis=0))
+                extent = (cols[-1] - cols[0] + 1) if cols.size else 0
+                if extent >= extent_frac * width:
+                    bands.append((y1 + start, y1 + i))
+                start = None
+        return bands
+
     def col_extent(self, x1, x2, y1, y2, min_pixels: int = MIN_INK_PIXELS):
         """(first_x, last_x + 1) of the inked columns inside the rectangle."""
         import numpy as np
@@ -259,18 +290,19 @@ def _columns(band: dict, page_w: float, mode) -> list:
 # ── the derivation ───────────────────────────────────────────────────────────
 
 def _trim(ink, x_lo, x_hi, y1, y2, margin, trim_top: bool, min_pixels: int):
-    """The inked box inside [x_lo, x_hi) × [y1, y2): rows trimmed at the
-    bottom (and at the top when trim_top), x to the inked extent of those
-    rows; `margin` px added, clamped to the slot. None = no ink."""
+    """The inked box inside [x_lo, x_hi) × [y1, y2): rows trimmed to the
+    last text band (and to the first when trim_top; see `InkMap.text_bands`
+    — specks and stains are not text), x to the inked extent of those rows;
+    `margin` px added, clamped to the slot. None = no text."""
     if y2 - y1 <= 0:
         return None
     if ink is None:
         return [x_lo, y1, x_hi, y2]
-    rows = ink.row_extent(x_lo, x_hi, y1, y2, min_pixels)
-    if rows is None:
+    bands = ink.text_bands(x_lo, x_hi, y1, y2, min_pixels)
+    if not bands:
         return None
-    ry1 = rows[0] if trim_top else y1
-    ry2 = rows[1]
+    ry1 = bands[0][0] if trim_top else y1
+    ry2 = bands[-1][1]
     cols = ink.col_extent(x_lo, x_hi, ry1, ry2, min_pixels)
     if cols is None:
         return None
