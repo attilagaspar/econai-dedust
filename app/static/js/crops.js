@@ -124,7 +124,7 @@ async function runDeriveCrops(sorted, {dryRun = false} = {}) {
       (d.target_created ? `\n\nThe project "${target}" will be created (labels copied from this project).` : '') +
       (body.with_children ? '\n\nChild shapes travel along; their source copies are stamped crop_origin so the first write-back replaces them.' : '') +
       '\n\nNothing is deleted; existing crop pages are only replaced under the chosen policy.';
-    if (!confirm(msg)) return null;
+    if (!(await _batchConfirmInline(msg))) return null;
     if (body.with_children) {
       // stamping touches source pages → one batch-undo generation for them
       const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
@@ -175,7 +175,7 @@ async function runWriteBack(sorted, {dryRun = false} = {}) {
     const msg = `Write ${d.crop_pages_selected} crop page(s) back onto ${d.written} source page(s)?\n\n${_writeBackSummary(d)}` +
       '\n\nOnly shapes written from these crops earlier are replaced; the parent boxes and everything else on the source pages stay as they are. ' +
       'A batch-undo snapshot of the affected source pages is taken first (restore from the batch dialog of the SOURCE project).';
-    if (!confirm(msg)) return null;
+    if (!(await _batchConfirmInline(msg))) return null;
     // one undo generation per affected source project
     const byFolder = {};
     (d.pages || []).filter(p => p.changed).forEach(p => (byFolder[p.source_folder] ??= []).push(p.source_stem));

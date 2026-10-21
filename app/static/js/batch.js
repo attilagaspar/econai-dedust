@@ -216,6 +216,40 @@ function onBatchOpChange() {
   if (isCrops && typeof _batchCropsInit === 'function') _batchCropsInit(op);
 }
 
+// ── In-panel confirmation (no browser dialog) ────────────────────────────────
+// `confirm()` is a blocking popup, and a browser that was told to suppress a
+// page's dialogs answers it "no" without showing anything — a batch run then
+// silently stops after its preview. This renders the question with Apply /
+// Cancel buttons inside the batch progress area instead and resolves to true
+// or false.
+function _batchConfirmInline(msg, applyLabel = '▶ Apply') {
+  return new Promise(resolve => {
+    const host = document.getElementById('batch-progress') || document.body;
+    const old = document.getElementById('batch-confirm-inline');
+    if (old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'batch-confirm-inline';
+    box.style.cssText = 'margin:6px 0;padding:8px 10px;border:1px solid #e94560;border-radius:5px;' +
+                        'background:#2a1020;color:#eee;font-size:12px;white-space:pre-wrap;';
+    const text = document.createElement('div');
+    text.textContent = msg;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+    const ok = document.createElement('button');
+    ok.className = 'nav-btn'; ok.textContent = applyLabel;
+    ok.style.cssText = 'background:#e94560;border-color:#e94560;color:#fff;font-weight:bold;';
+    const no = document.createElement('button');
+    no.className = 'nav-btn'; no.textContent = 'Cancel';
+    const finish = v => { box.remove(); resolve(v); };
+    ok.onclick = () => finish(true);
+    no.onclick = () => finish(false);
+    row.appendChild(ok); row.appendChild(no);
+    box.appendChild(text); box.appendChild(row);
+    host.prepend(box);
+    ok.focus();
+  });
+}
+
 // ── Record chaining (⛓): settings live in the project config ───────────────
 async function _batchRecordsInit(op) {
   const info = document.getElementById('batch-rec-info');

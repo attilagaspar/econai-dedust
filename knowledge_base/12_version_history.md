@@ -289,3 +289,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   rows must hold ≥ 1 % of the slot width in ink on average, and a band
   must be ≥ 40 % of the page's median band height (when ≥ 3 bands). These
   are properties of print, not of the two pages; regression test extended.
+- **Oct 21 — batch confirmations in the panel, not browser dialogs**: the
+  derive-fragments, resweep-all, cut and write-back ops asked `confirm()`;
+  a browser set to suppress a page's dialogs answers "no" invisibly, so a
+  real run silently ended after its preview (two such runs on
+  compass_1877). `_batchConfirmInline` (batch.js) renders Apply / Cancel
+  inside the batch progress area instead.

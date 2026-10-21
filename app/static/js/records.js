@@ -369,7 +369,7 @@ async function _recResweepFrom(stem) {
 }
 
 async function _recResweepAll() {
-  if (!confirm('Renumber every record through the whole volume? Locked ids are kept; everything else is reassigned in reading order. (Batch undo restores the previous ids.)')) return;
+  if (!(await _batchConfirmInline('Renumber every record through the whole volume? Locked ids are kept; everything else is reassigned in reading order. (Batch undo restores the previous ids.)', '▶ Resweep'))) return;
   const d = await runRecordSweep({});
   if (d) await openRecordBrowser();
 }
@@ -475,7 +475,7 @@ async function runDeriveFragments(sorted, {dryRun = false} = {}) {
       '\n\nOnly untouched derived boxes are replaced; hand-drawn and edited boxes stay. ' +
       (body.sweep ? 'The record sweep runs over the whole volume afterwards. ' : '') +
       'A batch-undo snapshot of the selected pages is taken first.';
-    if (!confirm(msg)) return null;
+    if (!(await _batchConfirmInline(msg, '▶ Derive'))) return null;
     const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
     await _batchTakeSnapshot(body.sweep ? pages.map(p => p.stem) : stems, 'derive_fragments');
     if (prog) prog.textContent = 'Deriving fragments…';
