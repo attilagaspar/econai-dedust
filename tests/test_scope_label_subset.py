@@ -317,3 +317,37 @@ def test_merge_apply_labels_skips_human_pages_by_default(tmp_path):
     st = S.merge_apply_labels(ann, pred, ["table"], _w, statuses=None)
     assert set(writes) == {"p1", "p2", "p3", "p4"}
 
+
+def test_label_checks_use_the_trained_class_list(client):
+    # compass_1877's palette grew by "firm" (for the derive step) after its
+    # start/stop/ignore model was trained; fine-tuning compass_1882 from it
+    # was refused on the palette. The checks now read the class list the
+    # model was trained with (train_summary.json), in order.
+    import json as _json, shutil, uuid
+    from app.pipeline import create_project
+    sfx = uuid.uuid4().hex[:6]
+    src = create_project(f"_smoke_tl_src_{sfx}", "A", ["start", "stop", "ignore", "firm"])
+    tgt = create_project(f"_smoke_tl_tgt_{sfx}", "A", ["start", "stop", "ignore"])
+    try:
+        inter = src / "intermediate"; inter.mkdir(exist_ok=True)
+        (inter / "train_summary.json").write_text(_json.dumps(
+            {"model_labels": ["start", "stop", "ignore"], "scope": "page"}), encoding="utf-8")
+        # fine-tune: label check passes, the request then stops at the GPU-server gate
+        r = client.post(f"/api/project/{tgt.name}/finetune-from/{src.name}", json={})
+        assert r.status_code == 400 and "mismatch" not in r.json()["detail"].lower(), r.text
+        # the detail panel exposes the trained list
+        r = client.get(f"/api/project/{src.name}")
+        assert r.json()["trained_labels"] == ["start", "stop", "ignore"]
+        # same set, different order → refused with a reorder hint (class ids follow order)
+        (inter / "train_summary.json").write_text(_json.dumps(
+            {"model_labels": ["stop", "start", "ignore"], "scope": "page"}), encoding="utf-8")
+        r = client.post(f"/api/project/{tgt.name}/finetune-from/{src.name}", json={})
+        assert r.status_code == 400 and "order" in r.json()["detail"].lower()
+        # a genuinely different class → refused as a mismatch
+        (inter / "train_summary.json").write_text(_json.dumps(
+            {"model_labels": ["start", "stop"], "scope": "page"}), encoding="utf-8")
+        r = client.post(f"/api/project/{tgt.name}/finetune-from/{src.name}", json={})
+        assert r.status_code == 400 and "mismatch" in r.json()["detail"].lower()
+    finally:
+        shutil.rmtree(src, ignore_errors=True); shutil.rmtree(tgt, ignore_errors=True)
+

@@ -4566,6 +4566,7 @@ def api_get_project(name: str):
             "pipeline": state,
             "stats":   {"json": n_json, "images": n_img},
             "stages":  stages_for(cfg["type"]),
+            "trained_labels": _trained_labels(name),
             "annotations_path": str(ann),
         }
     except FileNotFoundError as e:
@@ -7160,7 +7161,8 @@ def _ledger_row_from_summary(inter: Path, mode: str, **extra) -> dict:
             "server_side_split", "status_counts", "train_fraction",
             "n_train_pool",
             # §H8 nested detection scope
-            "scope", "n_parents", "n_crop_negatives", "n_scope_pages")
+            "scope", "n_parents", "n_crop_negatives", "n_scope_pages",
+            "model_labels")
     row = {"mode": mode, **{k: summary[k] for k in keys if k in summary}}
     row.update(extra)
     return row
@@ -7506,6 +7508,31 @@ async def api_infer(name: str, body: InferRequest = InferRequest()):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _trained_labels(name: str):
+    """The class list the project's CURRENT model was trained with, in
+    class-id order — what the weights actually know. From the prepare
+    step's train_summary.json (`model_labels`), else the COCO categories it
+    exported; None when the project never trained. The palette may have
+    grown since (a label added for a later step), which must not block
+    reusing the model."""
+    inter = project_dir(name) / "intermediate"
+    try:
+        summ = json.loads((inter / "train_summary.json").read_text(encoding="utf-8"))
+        ml = summ.get("model_labels")
+        if ml:
+            return [str(l) for l in ml]
+    except Exception:
+        pass
+    try:
+        coco = json.loads((inter / "annotations.json").read_text(encoding="utf-8"))
+        cats = sorted(coco.get("categories") or [], key=lambda c: c.get("id", 0))
+        if cats:
+            return [str(c["name"]) for c in cats]
+    except Exception:
+        pass
+    return None
+
+
 def _require_label_subset(target_name: str, target_labels: list,
                           source_name: str, source_labels: list) -> None:
     """400 unless every source label exists in the target palette. The
@@ -7553,7 +7580,7 @@ def _push_infer_from_gen(new_name: str, source_name: str,
     # in the target palette (subset, not identity); the source order defines
     # the model's class ids and is what the infer script receives.
     new_labels = new_cfg.get("labels", [])
-    src_labels = src_cfg.get("labels", [])
+    src_labels = _trained_labels(source_name) or src_cfg.get("labels", [])
     _require_label_subset(new_name, new_labels, source_name, src_labels)
     model_labels = _scope.scope_labels(src_labels, scope)
     untouched    = [l for l in new_labels if l not in model_labels]
@@ -7784,21 +7811,31 @@ async def api_finetune_from(name: str, source: str,
             src_cfg = load_config(source)
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
+        scope      = _resolve_scope(cfg, body.scope)
         # Deliberately STRICT (unlike infer-from's subset rule): the warm
         # start copies the source's class head, whose rows are the source's
-        # class ids. A target with more (or fewer) labels has a different
+        # class ids. A target with more (or fewer) classes has a different
         # NUM_CLASSES, detectron2 silently drops the mismatched head and
         # re-initialises it, and the "fine-tune" degrades to a backbone-only
-        # warm start without telling anyone. Same label set keeps the head.
-        if set(cfg.get("labels", [])) != set(src_cfg.get("labels", [])):
-            raise HTTPException(
-                status_code=400,
-                detail=(f"Label mismatch: '{name}' has {cfg.get('labels')} but "
-                        f"'{source}' was trained with {src_cfg.get('labels')}. "
-                        f"Fine-tune-from needs the same label set (the class "
-                        f"head is copied); infer-from accepts a subset."))
+        # warm start without telling anyone. The comparison is against the
+        # class list the source MODEL was trained with (not its palette,
+        # which may have grown since), in order — class ids follow it.
+        from app import scope as _scope_mod
+        trained = _trained_labels(source) or list(src_cfg.get("labels", []))
+        want    = list(_scope_mod.scope_labels(cfg.get("labels", []), scope))
+        if want != trained:
+            if set(want) == set(trained):
+                detail = (f"Label order differs: '{name}' lists {want} but the "
+                          f"'{source}' model's classes are {trained}. Class ids "
+                          f"follow the palette order — reorder '{name}'s labels "
+                          f"to match (dashboard label palette).")
+            else:
+                detail = (f"Label mismatch: '{name}' has {want} but the '{source}' "
+                          f"model was trained with {trained}. Fine-tune-from needs "
+                          f"the same class list (the class head is copied); "
+                          f"infer-from accepts a subset.")
+            raise HTTPException(status_code=400, detail=detail)
 
-        scope      = _resolve_scope(cfg, body.scope)
         srv        = _server_cfg(name)
         passphrase = body.passphrase or srv.get("passphrase")
         pdir       = project_dir(name)

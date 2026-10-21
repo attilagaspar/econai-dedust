@@ -309,3 +309,11 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   modes take `statuses` (default `["predicted"]`, status-less pages count
   as predicted; `skip` refused); the dashboard picker has page-status
   checkboxes with corrected and verified off. Test.
+- **Oct 21 — model reuse checks read the trained class list, not the
+  palette** (compass_1877's palette gained `firm` after its start/stop/
+  ignore model was trained, so fine-tuning 1882 from it was refused).
+  `_trained_labels(project)` = train_summary.json `model_labels` (else the
+  exported COCO categories); fine-tune-from compares the target's classes
+  with it in order (same set / other order → reorder hint), infer-from
+  takes it as the model's label set; the project detail exposes
+  `trained_labels`; ledger rows record `model_labels`. Test.

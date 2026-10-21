@@ -380,8 +380,10 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   target's — a one-label parent detector runs onto a richer project, the
   SSE log names the labels it predicts and the target labels it leaves
   alone), **fine-tune-from** (warm-start from another project's model — the
-  per-decade chaining strategy; deliberately requires the *same* label set,
-  because the class head is copied), **self-fine-tune** (source = target,
+  per-decade chaining strategy; deliberately requires the *same* class
+  list, in order, because the class head is copied — compared against the
+  classes the source model was *trained* with, not its current palette;
+  infer-from likewise reads the trained list), **self-fine-tune** (source = target,
   bootstrap weights copied aside), apply-to-empty-pages (never touches skip
   pages), and **merge-apply by label set** (`apply-predictions-merge` with
   `labels`: on already-populated pages, earlier *predicted* shapes of those

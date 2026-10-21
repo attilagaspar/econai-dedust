@@ -2333,7 +2333,8 @@ async function runInferFrom() {
   try {
     const sj = await (await fetch(`/api/project/${encodeURIComponent(src)}`)).json();
     const parent = scope.startsWith('within:') ? scope.slice(7) : null;
-    srcLabels = (sj.config?.labels || []).filter(l => l !== parent);
+    const trained = Array.isArray(sj.trained_labels) && sj.trained_labels.length ? sj.trained_labels : null;
+    srcLabels = (trained || sj.config?.labels || []).filter(l => l !== parent);
   } catch {}
   const url   = `/api/project/${activeProj.name}/infer-from/${encodeURIComponent(src)}`;
   const title = `🔄 Inference from '${src}' → '${activeProj.name}'`;
