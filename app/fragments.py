@@ -81,6 +81,10 @@ MIN_INK_PIXELS = 2            # a row / column counts as inked from this many in
 COLUMN_PEAK_FRACTION = 0.05   # a page column (x) belongs to the text block when its ink over
                               # the whole page reaches this fraction of the densest column
 COLUMN_SMOOTH_FRACTION = 0.01 # a run of such columns must be this wide (fraction of the slot) to count
+TEXT_DENSITY_FRACTION = 0.01  # … and its rows hold on average this much ink (fraction of the
+                              # slot width): scattered dust spreads wide but holds almost none
+TEXT_HEIGHT_FRACTION = 0.4    # … and it is at least this fraction of the page's median band
+                              # height: a scanner-edge hairline is a few rows, a line ~20
 TEXT_EXTENT_FRACTION = 0.06   # a run of inked rows is a text band when its ink spans at least
                               # this much of the slot width (stains, specks, hairs are narrower)
 OVERLAP_SUPPRESS = 0.5        # fragment vs protected box: overlap / smaller area
@@ -188,13 +192,19 @@ class InkMap:
         return y1 + int(rows[0]), y1 + int(rows[-1]) + 1
 
     def text_bands(self, x1, x2, y1, y2, min_pixels: int = MIN_INK_PIXELS,
-                   extent_frac: float = TEXT_EXTENT_FRACTION) -> list:
+                   extent_frac: float = TEXT_EXTENT_FRACTION,
+                   density_frac: float = TEXT_DENSITY_FRACTION,
+                   height_frac: float = TEXT_HEIGHT_FRACTION) -> list:
         """[(first_y, last_y + 1)] of the runs of inked rows inside the
-        rectangle that look like printed lines: the run's ink spans at least
-        `extent_frac` of the slot width. A stain, a speck or a hair is
-        narrower and is not a band — so the first/last band is where the
-        text really starts/ends (a lone very short word may be lost at a
-        fragment's edge; draw the box by hand there)."""
+        rectangle that look like printed lines. A run is a line when its
+        ink spans at least `extent_frac` of the slot width AND its rows hold
+        on average at least `density_frac` of the slot width in ink AND it is
+        at least `height_frac` of the median height of such runs on the
+        page (judged when there are at least three). A stain or a hair is
+        narrow, scattered dust is wide but empty, a scanner-edge line is
+        wide and dense but a few rows tall — none is a band, so the
+        first/last band is where the text really starts/ends (a lone very
+        short word at a fragment edge may be lost; draw that box by hand)."""
         import numpy as np
         x1, y1, x2, y2 = self._clamp(x1, y1, x2, y2)
         if x2 <= x1 or y2 <= y1:
@@ -203,7 +213,7 @@ class InkMap:
         counts = sub.sum(axis=1)
         inked = counts >= min_pixels
         width = x2 - x1
-        bands, start = [], None
+        runs, start = [], None
         for i in range(len(inked) + 1):
             on = i < len(inked) and inked[i]
             if on and start is None:
@@ -211,10 +221,13 @@ class InkMap:
             elif not on and start is not None:
                 cols = np.flatnonzero(sub[start:i].any(axis=0))
                 extent = (cols[-1] - cols[0] + 1) if cols.size else 0
-                if extent >= extent_frac * width:
-                    bands.append((y1 + start, y1 + i))
+                if extent >= extent_frac * width and counts[start:i].mean() >= density_frac * width:
+                    runs.append((y1 + start, y1 + i))
                 start = None
-        return bands
+        if len(runs) >= 3:
+            med = float(np.median([b - a for a, b in runs]))
+            runs = [(a, b) for a, b in runs if (b - a) >= height_frac * med]
+        return runs
 
     def slot_text_extent(self, x1, x2, peak_frac: float = COLUMN_PEAK_FRACTION,
                          min_run_frac: float = COLUMN_SMOOTH_FRACTION, exclude_rows=()):

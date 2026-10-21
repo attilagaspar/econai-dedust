@@ -283,3 +283,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   runs ≥ 1 % of the slot wide; `_slot_extent` falls back to the median
   edges of the role boxes, then to the rows' own extent. Every fragment of
   a slot shares that x extent. Test; doc 09.
+- **Oct 21 — text bands: density and height conditions** (p82 scattered
+  dust spread wide but held ~2 px per row; p446 a 4-row scanner-edge line
+  at the frame's edge — both passed the width-only band test). A band's
+  rows must hold ≥ 1 % of the slot width in ink on average, and a band
+  must be ≥ 40 % of the page's median band height (when ≥ 3 bands). These
+  are properties of print, not of the two pages; regression test extended.

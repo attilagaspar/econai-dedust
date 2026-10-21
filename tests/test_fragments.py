@@ -197,6 +197,10 @@ def test_scan_edges_and_running_head_line_are_not_ink(tmp_path):
     dr.rectangle([30, 60, 70, 80], fill=0)            # page number in the margin
     dr.rectangle([200, 60, 800, 80], fill=0)          # running head (the ignore box)
     dr.ellipse([400, 24, 450, 56], fill=0)            # a stain below the edge frame (p38)
+    for k in range(40):                                # scattered dust, wide but empty (p82)
+        dr.point((150 + k * 17, 60 + (k * 7) % 40), fill=0)
+        dr.point((151 + k * 17, 60 + (k * 7) % 40), fill=0)
+    dr.rectangle([25, 104, 300, 107], fill=0)         # a scanner-edge hairline, 4 rows (p446)
     for x1, y1, x2, y2 in _text_lines(100, 900, 120, 400):
         dr.rectangle([x1, y1, x2 - 1, y2 - 1], fill=0)
     dr.rectangle([100, 420, 190, 438], fill=0)        # a short last line (two words) is text
