@@ -298,7 +298,11 @@ def _resolve_pdf_source(ann_dir: Path, pdf_source: str) -> Optional[Path]:
     if not pdf_source:
         return None
     proj = ann_dir.parent                 # annotations/ -> project root
-    base = Path(pdf_source).name
+    # The basename must survive a path from the OTHER operating system: a
+    # Windows path has no forward slashes, so on Linux Path(...).name would
+    # be the whole string and the sources/ fallback could never match
+    # (foldbirtok1935 on Azure, 2026-10-21). Split on both separators.
+    base = re.split(r"[\\/]", pdf_source.rstrip("\\/"))[-1]
     cands = []
     p = Path(pdf_source)
     if p.is_absolute():

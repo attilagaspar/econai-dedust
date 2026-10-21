@@ -329,3 +329,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   ▸ toggle (state in localStorage, active project's group always open).
   `pipeline.json` untouched; CLI `advance` / `set-stage` marked deprecated.
   Test (`tests/test_dashboard_config.py`).
+- **Oct 21 — source-PDF fallback works across operating systems**
+  (foldbirtok1935 on Azure: page JSONs carry the Windows path baked in at
+  import; on Linux `Path(...).name` left it whole, so the sources/ basename
+  fallback never matched and "PDF refresh" / text-layer clipping failed).
+  `_resolve_pdf_source` splits the basename on both separators. Test.
