@@ -78,6 +78,9 @@ EDGE_FRACTION = 0.02          # scan borders: this much of the page edge is neve
 FURNITURE_FRACTION = 0.20     # an ignore box this close to the top/bottom edge is a running
                               # head/foot: its whole line is masked (page numbers in the margin)
 MIN_INK_PIXELS = 2            # a row / column counts as inked from this many ink pixels
+COLUMN_PEAK_FRACTION = 0.05   # a page column (x) belongs to the text block when its ink over
+                              # the whole page reaches this fraction of the densest column
+COLUMN_SMOOTH_FRACTION = 0.01 # a run of such columns must be this wide (fraction of the slot) to count
 TEXT_EXTENT_FRACTION = 0.06   # a run of inked rows is a text band when its ink spans at least
                               # this much of the slot width (stains, specks, hairs are narrower)
 OVERLAP_SUPPRESS = 0.5        # fragment vs protected box: overlap / smaller area
@@ -213,6 +216,49 @@ class InkMap:
                 start = None
         return bands
 
+    def slot_text_extent(self, x1, x2, peak_frac: float = COLUMN_PEAK_FRACTION,
+                         min_run_frac: float = COLUMN_SMOOTH_FRACTION, exclude_rows=()):
+        """(first_x, last_x + 1) of the text block inside the x-slot, judged
+        over the WHOLE page height: the per-column ink profile, kept where it
+        reaches `peak_frac` of its peak, in runs at least `min_run_frac` of
+        the slot wide (a speck or a hair is a narrower run). Hundreds of
+        lines vote, so a speck in the margin or a gutter shadow cannot move
+        the edge. `exclude_rows`: (y1, y2) bands left out of the vote (the
+        full-width elements of a two-column page). None when no ink."""
+        import numpy as np
+        x1, y1, x2, y2 = self._clamp(x1, 0, x2, self.h)
+        if x2 <= x1:
+            return None
+        sub = self.ink[:, x1:x2]
+        if exclude_rows:
+            keep = np.ones(self.h, dtype=bool)
+            for ya, yb in exclude_rows:
+                ya = max(0, int(ya)); yb = min(self.h, int(round(yb)))
+                if yb > ya:
+                    keep[ya:yb] = False
+            sub = sub[keep]
+        prof = sub.sum(axis=0)
+        peak = int(prof.max()) if prof.size else 0
+        if peak <= 0:
+            return None
+        on = prof >= max(1.0, peak_frac * peak)
+        min_run = max(3, int(round(min_run_frac * (x2 - x1))))
+        first = last = None
+        start = None
+        for i in range(len(on) + 1):
+            if i < len(on) and on[i]:
+                if start is None:
+                    start = i
+            elif start is not None:
+                if i - start >= min_run:
+                    if first is None:
+                        first = start
+                    last = i
+                start = None
+        if first is None:
+            return None
+        return x1 + first, x1 + last
+
     def col_extent(self, x1, x2, y1, y2, min_pixels: int = MIN_INK_PIXELS):
         """(first_x, last_x + 1) of the inked columns inside the rectangle."""
         import numpy as np
@@ -289,10 +335,12 @@ def _columns(band: dict, page_w: float, mode) -> list:
 
 # ── the derivation ───────────────────────────────────────────────────────────
 
-def _trim(ink, x_lo, x_hi, y1, y2, margin, trim_top: bool, min_pixels: int):
+def _trim(ink, x_lo, x_hi, y1, y2, margin, trim_top: bool, min_pixels: int,
+          x_ext=None):
     """The inked box inside [x_lo, x_hi) × [y1, y2): rows trimmed to the
     last text band (and to the first when trim_top; see `InkMap.text_bands`
-    — specks and stains are not text), x to the inked extent of those rows;
+    — specks and stains are not text); x = `x_ext`, the slot's page-level
+    text extent (see `_slot_extent`), else the inked extent of the rows;
     `margin` px added, clamped to the slot. None = no text."""
     if y2 - y1 <= 0:
         return None
@@ -303,11 +351,28 @@ def _trim(ink, x_lo, x_hi, y1, y2, margin, trim_top: bool, min_pixels: int):
         return None
     ry1 = bands[0][0] if trim_top else y1
     ry2 = bands[-1][1]
-    cols = ink.col_extent(x_lo, x_hi, ry1, ry2, min_pixels)
+    cols = x_ext if x_ext is not None else ink.col_extent(x_lo, x_hi, ry1, ry2, min_pixels)
     if cols is None:
         return None
     return [max(x_lo, cols[0] - margin), max(y1, ry1 - margin) if trim_top else y1,
             min(x_hi, cols[1] + margin), min(y2, ry2 + margin)]
+
+
+def _slot_extent(ink, x_lo, x_hi, role_boxes: list, exclude_rows=()):
+    """The x extent every fragment of a column slot shares: in one column
+    all fragments span the same text block, so the edge is decided once per
+    page, not per fragment. Page-level ink histogram first; the median of
+    the role boxes inside the slot (the detector draws them tight) when the
+    page has too little ink; None (= the rows' own extent) as the last
+    resort."""
+    ext = ink.slot_text_extent(x_lo, x_hi, exclude_rows=exclude_rows) if ink is not None else None
+    if ext is not None:
+        return ext
+    inside = [b for b in role_boxes if x_lo <= (b[0] + b[2]) / 2.0 < x_hi]
+    if inside:
+        xs1 = sorted(b[0] for b in inside); xs2 = sorted(b[2] for b in inside)
+        return xs1[len(xs1) // 2], xs2[len(xs2) // 2]
+    return None
 
 
 def _fragment(box, record_label, continuation, start, column):
@@ -357,10 +422,17 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
             else:
                 ink.mask_out(b)
     items = [(i, b, "start") for i, b in rs["start"]] + [(i, b, "stop") for i, b in rs["stop"]]
+    all_role_boxes = [b for lst in rs.values() for _, b in lst]
     open_rec = bool(carry_open)
     frags = []
     n_cols = 0
-    for band in _bands(items, page_w, page_h, mode):
+    bands = _bands(items, page_w, page_h, mode)
+    # rows that never belong to a fragment do not vote on the text block's
+    # width: full-width bands and every stop box (section headings are
+    # often wider than the text)
+    wide_rows = [(bd["y1"], bd["y2"]) for bd in bands if bd["kind"] == "wide"] + \
+                [(b[1], b[3]) for _, b in rs["stop"]]
+    for band in bands:
         if band["kind"] == "wide":
             idx, b, role = band["items"][0]
             if role == "stop":
@@ -375,11 +447,12 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
         for k, (x_lo, x_hi, members) in enumerate(_columns(band, page_w, mode)):
             n_cols += 1
             members = sorted(members, key=lambda t: (t[1][1], t[1][0], t[0]))
+            x_ext = _slot_extent(ink, x_lo, x_hi, all_role_boxes, wide_rows) if ink is not None else None
             y = band["y1"]
             # leading continuation: the open record runs on at the column top
             first_y = members[0][1][1] if members else band["y2"]
             if open_rec:
-                box = _trim(ink, x_lo, x_hi, y, first_y, margin, True, min_pixels)
+                box = _trim(ink, x_lo, x_hi, y, first_y, margin, True, min_pixels, x_ext)
                 if box is not None:
                     frags.append(_fragment(box, record_label, True, None, k))
             for j, (idx, b, role) in enumerate(members):
@@ -387,7 +460,7 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
                     open_rec = False
                     continue
                 nxt = members[j + 1][1][1] if j + 1 < len(members) else band["y2"]
-                box = _trim(ink, x_lo, x_hi, b[1], max(nxt, b[3]), margin, False, min_pixels)
+                box = _trim(ink, x_lo, x_hi, b[1], max(nxt, b[3]), margin, False, min_pixels, x_ext)
                 if box is not None:
                     frags.append(_fragment(box, record_label, False,
                                            (idx, b, shapes[idx].get("label")), k))

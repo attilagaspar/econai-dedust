@@ -140,7 +140,9 @@ def test_single_column_wide_starts_head_their_fragments():
     doc = _doc([_sh("name", 60, 100, 940, 130), _sh("name", 60, 420, 940, 450)])
     for layout in (1, "auto"):
         res = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=True, layout=layout)
-        assert _boxes(res) == [[80, 20, 920, 98], [60, 100, 940, 408], [60, 420, 940, 698]], layout
+        # the headings are the widest lines of the column, so the page-level
+        # text block (and every fragment's x) spans them
+        assert _boxes(res) == [[60, 20, 940, 98], [60, 100, 940, 408], [60, 420, 940, 698]], layout
         assert _conts(res) == [True, False, False], layout
         assert res["open_at_end"] is True
 
@@ -204,6 +206,23 @@ def test_scan_edges_and_running_head_line_are_not_ink(tmp_path):
     doc = _doc([_sh("advert", 200, 60, 800, 80)], w=w, h=h)
     res = F.derive_page(doc, ROLES, REC, ink=ink, margin=0, carry_open=True, layout=1)
     assert _boxes(res) == [[100, 120, 900, 439]] and _conts(res) == [True]
+
+
+def test_fragment_width_is_the_pages_text_block_not_a_speck():
+    # A speck in the margin on the rows of one fragment used to pull that
+    # fragment's edge out to the page edge. The x extent is now decided
+    # once per column slot from the whole page's ink histogram.
+    lines = _text_lines(100, 900, 50, 700)
+    lines.append((20, 300, 26, 306))                   # speck in the left margin
+    lines.append((970, 500, 976, 506))                 # and one in the right margin
+    doc = _doc([_sh("name", 100, 50, 900, 68), _sh("name", 100, 380, 900, 398)])
+    res = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=False, layout=1)
+    assert _boxes(res) == [[100, 50, 900, 368], [100, 380, 900, 698]]
+    # no ink in the slot: the median edges of the role boxes stand in
+    blank = F.InkMap.blank(1000, 800)
+    assert F._slot_extent(blank, 0, 1000,
+                          [[120, 50, 880, 68], [110, 380, 890, 398], [115, 700, 885, 720]]) == (115, 885)
+    assert F._slot_extent(blank, 0, 1000, []) is None
 
 
 def test_margin_and_no_ink_map():

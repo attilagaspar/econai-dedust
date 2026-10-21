@@ -276,3 +276,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   when its ink spans ≥ 6 % of the slot width; `_trim` uses the first/last
   band. Regression test extended (stain, short last line kept, blot
   ignored); doc 09.
+- **Oct 21 — fragment width: one text extent per column slot** (user
+  report: a speck in the margin pulled single fragments out to the page
+  edge). `InkMap.slot_text_extent`: the page-level per-column ink profile
+  (full-width bands and stop boxes left out), kept at ≥ 5 % of its peak in
+  runs ≥ 1 % of the slot wide; `_slot_extent` falls back to the median
+  edges of the role boxes, then to the rows' own extent. Every fragment of
+  a slot shares that x extent. Test; doc 09.
