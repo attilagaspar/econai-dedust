@@ -216,11 +216,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_st.add_argument("name", help="Project name")
 
     # advance
-    p_adv = sub.add_parser("advance", help="Advance project to the next pipeline stage")
+    p_adv = sub.add_parser("advance", help="[deprecated] Advance the vestigial pipeline stage in pipeline.json "
+                                            "(nothing reads it; the dashboard uses tags instead)")
     p_adv.add_argument("name", help="Project name")
 
     # set-stage
-    p_ss = sub.add_parser("set-stage", help="Jump to a specific pipeline stage")
+    p_ss = sub.add_parser("set-stage", help="[deprecated] Set the vestigial pipeline stage in pipeline.json "
+                                           "(nothing reads it; the dashboard uses tags instead)")
     p_ss.add_argument("name", help="Project name")
     p_ss.add_argument("stage", help="Stage name (see: econai stages)")
 

@@ -38,6 +38,7 @@ from app.pipeline import (
     project_dir,
     advance_stage,
     set_stage,
+    normalize_tags,
 )
 
 from contextlib import asynccontextmanager
@@ -4592,6 +4593,10 @@ class ConfigUpdate(BaseModel):
     # clears; wins over render_scale when set)
     render_scale:      Optional[object] = None
     render_longest_px: Optional[object] = None
+    # dashboard: free-text project notes ("" clears) and tags (list of short
+    # strings — trimmed, blanks dropped, de-duplicated; [] clears)
+    notes: Optional[str]  = None
+    tags:  Optional[list] = None
 
 
 @app.patch("/api/project/{name}/config")
@@ -4649,6 +4654,20 @@ def api_update_config(name: str, body: ConfigUpdate):
             cfg["llm"] = {**cfg.get("llm", {}), **body.llm}
         if body.labels is not None:
             cfg["labels"] = body.labels
+        if body.notes is not None:
+            if body.notes.strip():
+                cfg["notes"] = body.notes
+            else:
+                cfg.pop("notes", None)
+        if body.tags is not None:
+            try:
+                tags = normalize_tags(body.tags)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            if tags:
+                cfg["tags"] = tags
+            else:
+                cfg.pop("tags", None)
         if body.render_scale is not None or body.render_longest_px is not None:
             from app.page_import import normalize_render_settings, DEFAULT_SCALE
             rs = cfg.get("render_scale") if body.render_scale is None else body.render_scale

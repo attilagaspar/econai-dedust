@@ -49,10 +49,34 @@ header span { color: #888; font-size: 0.85rem; }
 .project-row.active { background: #0f3460; border-left: 3px solid #e94560; }
 .project-row .proj-name { font-weight: 600; font-size: 0.95rem; }
 .project-row .proj-meta { font-size: 0.75rem; color: #888; margin-top: 3px; display: flex; gap: 12px; }
-.project-row .stage-pill {
-  display: inline-block; font-size: 0.7rem; padding: 1px 7px; border-radius: 10px;
-  font-weight: 600; margin-top: 5px;
+.project-row .proj-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+
+/* Tags — chips in the list rows and in the Tags card */
+.tag-chip {
+  display: inline-block; font-size: 0.7rem; padding: 1px 8px; border-radius: 10px;
+  font-weight: 600; background: #0f3460; color: #9fb7e0; border: 1px solid #1d4a8a;
+  cursor: pointer; white-space: nowrap;
 }
+.tag-chip:hover { background: #1d4a8a; color: #fff; }
+.tag-chip.on { background: #e94560; color: #fff; border-color: #e94560; }
+.tag-filter-bar {
+  padding: 8px 16px; border-bottom: 1px solid #0f3460; font-size: 0.75rem; color: #888;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.tag-filter-bar .all { cursor: pointer; color: #aaa; text-decoration: underline; }
+.tag-filter-bar .all:hover { color: #fff; }
+
+/* Collapsed project groups: <prefix>_<digits> siblings fold under one row */
+.group-row {
+  display: flex; align-items: center; gap: 8px; padding: 12px 16px; cursor: pointer;
+  border-bottom: 1px solid #0d1b35; font-weight: 600; font-size: 0.95rem;
+  transition: background 0.1s; user-select: none;
+}
+.group-row:hover { background: #1d2e50; }
+.group-row .caret { display: inline-block; width: 12px; color: #888; transition: transform 0.12s; }
+.group-row.open .caret { transform: rotate(90deg); }
+.group-members .project-row { padding-left: 36px; }
+.group-members .project-row.active { padding-left: 33px; }
 
 /* ── RIGHT PANEL: project detail ── */
 .detail {
@@ -72,16 +96,14 @@ header span { color: #888; font-size: 0.85rem; }
 }
 .card h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 14px; }
 
-/* Pipeline progress bar */
-.pipeline-stages { display: flex; flex-wrap: wrap; gap: 6px; }
-.ps {
-  padding: 4px 12px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
-  border: 1px solid #333;
-  color: #888; background: #1a1a2e;
+/* Notes card */
+#proj-notes {
+  width: 100%; min-height: 72px; resize: vertical; box-sizing: border-box;
+  background: #0d1b35; border: 1px solid #0f3460; color: #e0e0e0;
+  border-radius: 4px; padding: 8px 10px; font-size: 0.88rem; line-height: 1.45;
+  font-family: inherit;
 }
-.ps.done-stage { color: #4caf50; border-color: #4caf50; }
-.ps.current-stage { color: #fff; background: #e94560; border-color: #e94560; }
-.ps.future-stage { color: #555; border-color: #333; }
+#proj-notes:focus { outline: none; border-color: #e94560; }
 
 /* Buttons */
 .btn {
@@ -697,20 +719,6 @@ async function ibPollStatus() {
   } catch (e) {}
 }
 
-const STAGE_COLORS = {
-  raw:            '#555',
-  annotating:     '#9c27b0',
-  training:       '#ff9800',
-  predicting:     '#ff9800',
-  correcting:     '#2196f3',
-  superstructure: '#2196f3',
-  ocr:            '#00bcd4',
-  llm_cleaning:   '#00bcd4',
-  validating:     '#4caf50',
-  exporting:      '#8bc34a',
-  done:           '#4caf50',
-};
-
 function errMsg(data) {
   const d = data.detail ?? data.error ?? data;
   if (typeof d === 'string') return d;
@@ -770,16 +778,41 @@ async function loadProjects(selectName = null) {
 // ============================================================
 // Sidebar rendering
 // ============================================================
-function renderProjectList() {
-  const el = document.getElementById('project-list');
-  if (!projects.length) {
-    el.innerHTML = `<div class="empty"><div class="big">📂</div>No projects yet.<br>Click <b>+ New</b> to create one.</div>`;
-    return;
-  }
-  el.innerHTML = projects.map(p => {
-    const color = STAGE_COLORS[p.stage] || '#888';
-    const active = activeProj && activeProj.name === p.name ? 'active' : '';
-    return `
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Tag filter: when set, the list shows only the projects carrying that tag,
+// ungrouped. Clicking a chip in a row sets it; clicking it again (or "all") clears.
+let tagFilter = null;
+function setTagFilter(tag) {
+  tagFilter = (tag == null || tag === tagFilter) ? null : tag;
+  renderProjectList();
+}
+
+// Collapsed groups — purely a display layer over the flat project list:
+// strip a trailing _<digits>; projects sharing the remaining prefix (two or
+// more, a project named exactly like the prefix included) fold under one
+// row showing the bare prefix. Open/closed is remembered per group; the
+// group holding the active project is always open.
+function groupKeyOf(name) { return name.replace(/_\d+$/, ''); }
+function _groupsOpen() {
+  try { return JSON.parse(localStorage.getItem('projectGroupsOpen') || '{}'); } catch (e) { return {}; }
+}
+function toggleGroup(key) {
+  const st = _groupsOpen();
+  st[key] = !st[key];
+  try { localStorage.setItem('projectGroupsOpen', JSON.stringify(st)); } catch (e) {}
+  renderProjectList();
+}
+
+function projectRowHtml(p) {
+  const active = activeProj && activeProj.name === p.name ? 'active' : '';
+  const tags = (p.tags || []).map(t =>
+    `<span class="tag-chip ${t === tagFilter ? 'on' : ''}" data-tag="${escHtml(t)}"
+           onclick="event.stopPropagation();setTagFilter(this.dataset.tag)"
+           title="${t === tagFilter ? 'click to show all projects' : 'click to show only projects tagged ' + escHtml(t)}">${escHtml(t)}</span>`).join('');
+  return `
       <div class="project-row ${active}" onclick="selectProject('${p.name}')">
         <div class="proj-name">${p.name}</div>
         <div class="proj-meta">
@@ -787,17 +820,55 @@ function renderProjectList() {
           <span>${p.pages} pages</span>
           <span>${p.updated ? p.updated.slice(0,10) : ''}</span>
         </div>
-        <span class="stage-pill" style="background:${color}22;color:${color};border-color:${color}55">
-          ${p.stage}
-        </span>
+        ${tags ? `<div class="proj-tags">${tags}</div>` : ''}
       </div>`;
-  }).join('');
+}
+
+function renderProjectList() {
+  const el = document.getElementById('project-list');
+  if (!projects.length) {
+    el.innerHTML = `<div class="empty"><div class="big">📂</div>No projects yet.<br>Click <b>+ New</b> to create one.</div>`;
+    return;
+  }
+  if (tagFilter) {
+    const rows = projects.filter(p => (p.tags || []).includes(tagFilter));
+    el.innerHTML =
+      `<div class="tag-filter-bar">showing tag
+         <span class="tag-chip on" data-tag="${escHtml(tagFilter)}" onclick="setTagFilter(this.dataset.tag)"
+               title="click to show all projects">${escHtml(tagFilter)} ✕</span>
+         <span class="all" onclick="setTagFilter(null)">all</span></div>` +
+      (rows.length ? rows.map(projectRowHtml).join('')
+                   : `<div class="empty">No project carries this tag.</div>`);
+    return;
+  }
+  const count = {};
+  projects.forEach(p => { const k = groupKeyOf(p.name); count[k] = (count[k] || 0) + 1; });
+  const open = _groupsOpen();
+  const seen = new Set();
+  let html = '';
+  projects.forEach(p => {
+    const key = groupKeyOf(p.name);
+    if (count[key] < 2) { html += projectRowHtml(p); return; }   // no sibling → as today
+    if (seen.has(key)) return;                                   // group row already emitted
+    seen.add(key);
+    const members   = projects.filter(q => groupKeyOf(q.name) === key);
+    const hasActive = !!(activeProj && members.some(m => m.name === activeProj.name));
+    const isOpen    = hasActive || !!open[key];
+    html += `
+      <div class="group-row ${isOpen ? 'open' : ''}" data-group="${escHtml(key)}" onclick="toggleGroup(this.dataset.group)"
+           title="${hasActive ? 'contains the selected project (stays open)' : (isOpen ? 'click to hide the ' : 'click to show the ') + members.length + ' projects'}">
+        <span class="caret">▸</span><span>${escHtml(key)}</span>
+      </div>`;
+    if (isOpen) html += `<div class="group-members">${members.map(projectRowHtml).join('')}</div>`;
+  });
+  el.innerHTML = html;
 }
 
 // ============================================================
 // Project detail
 // ============================================================
 async function selectProject(name) {
+  flushNotes();   // a pending notes edit of the previous project is saved now
   const res  = await fetch(`/api/project/${name}`);
   const data = await res.json();
   activeProj = { name, ...data };
@@ -805,6 +876,7 @@ async function selectProject(name) {
   renderProjectList(); // re-render sidebar to update active highlight
   renderDetail();
   renderLabelChips();
+  renderTagChips();
   // GPU profile dropdown: populate, and show the profile's settings if used
   await loadGpuProfiles();
   renderGpuProfileDropdown();
@@ -1052,15 +1124,12 @@ async function runMergeLabelPredictions() {
 
 function renderDetail() {
   if (!activeProj) return;
-  const { config: cfg, pipeline: pl, stats, stages, annotations_path } = activeProj;
+  const { config: cfg, pipeline: pl, stats, annotations_path } = activeProj;
   const detail = document.getElementById('detail-panel');
 
-  const stagesHtml = stages.map(s => {
-    const idx_s = stages.indexOf(s);
-    const idx_c = stages.indexOf(pl.stage);
-    let cls = idx_s < idx_c ? 'done-stage' : idx_s === idx_c ? 'current-stage' : 'future-stage';
-    return `<span class="ps ${cls}">${s}</span>`;
-  }).join('');
+  // A notes edit still waiting for its debounced save survives a re-render.
+  const notes = (_notesDraft && _notesDraft.project === activeProj.name)
+    ? _notesDraft.text : (cfg.notes || '');
 
   const srv = cfg.server || {};
   const connStatus = srv.host
@@ -1073,16 +1142,29 @@ function renderDetail() {
               title="Rename the project (the folder on disk is renamed too)">✏ Rename</button>
       <button class="btn btn-secondary" style="font-size:0.72rem;padding:3px 10px;color:#e94560;border-color:#e9456055;" onclick="deleteActiveProject()"
               title="Delete the project — the folder is moved to projects/_trash (recoverable)">🗑 Delete</button>
+      <button class="btn btn-primary" style="margin-left:auto;" onclick="openEditor()"
+              title="Open the annotation editor on this project">📝 Open Editor</button>
     </h2>
     <div class="subtitle">Type ${cfg.type} &nbsp;·&nbsp; ${cfg.type === 'A' ? 'Tables' : 'Structured text'} &nbsp;·&nbsp; ${stats.json} pages (${stats.images} images)</div>
 
-    <!-- Pipeline progress -->
+    <!-- Notes: free text, autosaved while typing -->
     <div class="card">
-      <h3>Pipeline</h3>
-      <div class="pipeline-stages">${stagesHtml}</div>
-      <div class="btn-row">
-        <button class="btn btn-secondary" onclick="openEditor()">📝 Open Editor</button>
-        <button class="btn btn-secondary" onclick="advanceStage()">▶ Advance Stage</button>
+      <h3>Notes <small id="notes-state" style="color:#666;font-weight:normal;text-transform:none;letter-spacing:0;margin-left:8px;"></small></h3>
+      <textarea id="proj-notes" placeholder="Notes about this project — saved automatically while you type"
+                oninput="notesChanged()">${escHtml(notes)}</textarea>
+    </div>
+
+    <!-- Tags: short labels shown as chips in the project list; click one there to filter -->
+    <div class="card">
+      <h3>Tags <small style="color:#666;font-weight:normal;">— short labels shown in the project list; click a tag there to filter by it</small></h3>
+      <div id="tag-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;"></div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="tag-new" list="tag-suggestions" placeholder="add a tag (e.g. compass, 1930s, done)" autocomplete="off"
+               style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:5px 8px;font-size:0.82rem;flex:1;max-width:280px;"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();tagAdd();}">
+        <datalist id="tag-suggestions"></datalist>
+        <button class="btn btn-secondary" onclick="tagAdd()">＋ Add</button>
+        <span style="font-size:0.75rem;color:#666;">Suggestions come from the tags other projects already use, so spellings stay consistent.</span>
       </div>
     </div>
 
@@ -1667,18 +1749,107 @@ function openDataLab() {
 }
 
 // ============================================================
-// Pipeline stage
+// Notes (config.notes) — autosaved ~800 ms after the last keystroke
 // ============================================================
-async function advanceStage() {
-  if (!activeProj) return;
-  if (!confirm(`Advance "${activeProj.name}" to the next stage?`)) return;
-  const res  = await fetch(`/api/project/${activeProj.name}/advance`, { method: 'POST' });
-  const data = await res.json();
-  if (data.ok) {
-    await selectProject(activeProj.name);
+let _notesTimer = null;
+let _notesDraft = null;   // {project, text} not yet written to the server
+
+function _setNotesState(text, color) {
+  const el = document.getElementById('notes-state');
+  if (el) { el.textContent = text; el.style.color = color; }
+}
+
+function notesChanged() {
+  const ta = document.getElementById('proj-notes');
+  if (!ta || !activeProj) return;
+  _notesDraft = { project: activeProj.name, text: ta.value };
+  _setNotesState('saving…', '#ff9800');
+  clearTimeout(_notesTimer);
+  _notesTimer = setTimeout(saveNotes, 800);
+}
+
+// Save a pending draft right away (project switch, page unload).
+function flushNotes() {
+  if (!_notesTimer) return;
+  clearTimeout(_notesTimer);
+  saveNotes();
+}
+window.addEventListener('beforeunload', flushNotes);
+
+async function saveNotes() {
+  _notesTimer = null;
+  const d = _notesDraft;
+  if (!d) return;
+  _notesDraft = null;
+  let res, data = {};
+  try {
+    res = await fetch(`/api/project/${encodeURIComponent(d.project)}/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: d.text }), keepalive: true,
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (e) { res = null; data = { detail: String(e) }; }
+  if (!activeProj || activeProj.name !== d.project) return;   // user moved on
+  if (res && res.ok) {
+    activeProj.config.notes = d.text;
+    if (!_notesDraft) _setNotesState('saved ✓', '#4caf50');   // unless typing resumed
   } else {
-    alert('Error: ' + (errMsg(data)));
+    _setNotesState('not saved — ' + errMsg(data), '#e94560');
   }
+}
+
+// ============================================================
+// Tags (config.tags) — chips in the Tags card and the project list
+// ============================================================
+function renderTagChips() {
+  const el = document.getElementById('tag-chips');
+  if (!el || !activeProj) return;
+  const tags = activeProj.config.tags || [];
+  el.innerHTML = tags.length
+    ? tags.map(t =>
+        `<span class="tag-chip" style="cursor:default;font-size:0.8rem;padding:3px 10px;">${escHtml(t)}
+           <span data-tag="${escHtml(t)}" onclick="tagRemove(this.dataset.tag)"
+                 style="cursor:pointer;color:#e94560;margin-left:5px;" title="remove this tag">✕</span></span>`).join('')
+    : '<span style="color:#666;font-size:0.8rem;">no tags yet</span>';
+  // Suggestions: every tag any project uses, minus the ones already on this one.
+  const all = new Set();
+  projects.forEach(p => (p.tags || []).forEach(t => all.add(t)));
+  const dl = document.getElementById('tag-suggestions');
+  if (dl) dl.innerHTML = [...all].filter(t => !tags.includes(t)).sort()
+                                 .map(t => `<option value="${escHtml(t)}">`).join('');
+}
+
+async function saveTags(tags) {
+  if (!activeProj) return;
+  const name = activeProj.name;
+  const res  = await fetch(`/api/project/${encodeURIComponent(name)}/config`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tags }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { showToast('Tags not saved: ' + errMsg(data), 4000, 'red'); return; }
+  if (!activeProj || activeProj.name !== name) return;
+  activeProj.config.tags = (data.config && data.config.tags) || [];
+  const p = projects.find(q => q.name === name);
+  if (p) p.tags = activeProj.config.tags;
+  renderTagChips();
+  renderProjectList();
+}
+
+function tagAdd() {
+  const inp = document.getElementById('tag-new');
+  if (!inp || !activeProj) return;
+  const t = inp.value.trim();
+  if (!t) return;
+  inp.value = '';
+  const cur = activeProj.config.tags || [];
+  if (cur.includes(t)) { showToast(`already tagged "${t}"`, 2000); return; }
+  saveTags([...cur, t]);
+}
+
+function tagRemove(t) {
+  if (!activeProj) return;
+  saveTags((activeProj.config.tags || []).filter(x => x !== t));
 }
 
 // ============================================================

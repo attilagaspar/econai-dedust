@@ -115,6 +115,23 @@ def load_config(name: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def normalize_tags(tags) -> list[str]:
+    """Project tags (config.json `tags`): a list of short free-text labels
+    the dashboard shows as chips and filters the project list by.
+    Trimmed, blanks dropped, duplicates removed (first occurrence wins,
+    order kept). Raises ValueError for anything but a list of strings."""
+    if not isinstance(tags, list):
+        raise ValueError("tags must be a list of strings")
+    out: list[str] = []
+    for t in tags:
+        if not isinstance(t, str):
+            raise ValueError(f"tags must be strings, got {type(t).__name__}: {t!r}")
+        t = t.strip()
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
 def load_pipeline(name: str) -> dict:
     p = pipeline_path(name)
     if not p.exists():
@@ -282,6 +299,7 @@ def list_projects() -> list[dict]:
                 "description": STAGE_DESCRIPTIONS.get(state["stage"], ""),
                 "pages": n_pages,
                 "updated": state.get("updated", ""),
+                "tags": cfg.get("tags") or [],
             })
         except Exception:
             pass

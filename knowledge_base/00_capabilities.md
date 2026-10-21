@@ -20,6 +20,27 @@ one LabelMe-style JSON per page as the single source of truth.
 
 - **Project lifecycle**: create (type A tables / B structured text, custom
   labels), clone, rename, soft-delete; active project remembered.
+- **Notes card** (first card of the project detail): one free-text field
+  per project, `config.notes`, autosaved ~800 ms after the last keystroke
+  ("saving… / saved ✓" indicator; a pending edit is flushed on project
+  switch and page unload). Nothing else reads it.
+- **Tags** (`config.tags`, list of short strings — trimmed, de-duplicated
+  by the config PATCH): the Tags card replaces the former Pipeline card
+  (chips with ✕, an add box whose datalist suggests the tags every other
+  project uses); the project list shows them as chips in the row, and
+  clicking a chip filters the list to that tag (click again / "all"
+  clears). `GET /api/projects` returns `tags` per project. The pipeline
+  *stage* is vestigial: nothing in the UI shows or changes it any more
+  (the Advance Stage button is gone; `pipeline.json` stays on disk, its
+  `updated` timestamp still shown in the row; the CLI `advance` /
+  `set-stage` commands remain, marked deprecated).
+- **Collapsed project groups** in the list — display only: a trailing
+  `_<digits>` is stripped from the name and two or more projects sharing
+  the remaining prefix (a project named exactly like the prefix included)
+  fold under one row showing the bare prefix with a ▸ toggle; the members
+  appear beneath as ordinary rows. Open/closed remembered per group in
+  localStorage; the group holding the active project is always open; an
+  active tag filter shows matching rows ungrouped.
 - **Import**: PDF/image upload split into page JPEGs; source filenames
   preserved (`xyz.pdf → xyz_1.jpg…`); **Inbox bulk import** (server-side
   staging folder → project, can copy the label set from an existing project).

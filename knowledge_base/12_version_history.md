@@ -317,3 +317,15 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   with it in order (same set / other order → reorder hint), infer-from
   takes it as the model's label set; the project detail exposes
   `trained_labels`; ledger rows record `model_labels`. Test.
+- **Oct 21 — dashboard: notes, tags instead of the pipeline stage,
+  collapsed project groups.** Notes card on top of the project detail
+  (`config.notes`, autosaved, debounced); the Pipeline card and Advance
+  Stage button are gone, a Tags card (`config.tags`: chips, add box with
+  cross-project datalist suggestions) takes its place and the list rows
+  show tags as chips that filter the list; the config PATCH accepts
+  `notes` (string) and `tags` (list of unique non-empty strings, trimmed,
+  400 on anything else), `GET /api/projects` returns `tags`; the project
+  list folds `<prefix>_<digits>` siblings under one bare-prefix row with a
+  ▸ toggle (state in localStorage, active project's group always open).
+  `pipeline.json` untouched; CLI `advance` / `set-stage` marked deprecated.
+  Test (`tests/test_dashboard_config.py`).
