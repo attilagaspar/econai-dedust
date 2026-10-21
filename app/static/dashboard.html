@@ -986,7 +986,8 @@ async function mergePredictions() {
   const data = await res.json().catch(() => ({}));
   clearToast();
   if (res.ok) showToast(`✓ Merged into ${data.applied} page(s): +${data.inserted} / −${data.removed} boxes · ` +
-                        `${data.skipped_unchanged} unchanged · ${data.skipped_no_parents} without parents skipped.`, 6000);
+                        `${data.skipped_unchanged} unchanged · ${data.skipped_status} corrected/verified skipped · ` +
+                        `${data.skipped_no_parents} without parents skipped.`, 7000);
   else showToast('Error: ' + errMsg(data), 4000, 'red');
 }
 
@@ -1009,6 +1010,12 @@ function mergeLabelPredictions() {
     `(ones carrying a score) of a ticked label are replaced by the new predictions; boxes of unticked labels and boxes without a score ` +
     `are never touched. <b>Untick a label whose boxes you have already checked by hand</b> if they still carry a score ` +
     `(e.g. boxes carried into a crop project).</div>` +
+    `<div style="color:#aaa;margin:6px 0 4px;">Pages written: ` +
+    ['predicted', 'corrected', 'verified'].map(st =>
+      `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:12px;"><input type="checkbox" data-merge-status="${st}"` +
+      `${st === 'predicted' ? ' checked' : ''} style="accent-color:#e94560;">${st}</label>`).join('') +
+    `<span style="color:#777;">(corrected and verified pages are your work — off unless you say so)</span></div>` +
+    `<div style="color:#aaa;margin-bottom:4px;">Labels written:</div>` +
     `<div id="merge-labels-list" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px;">` +
     labels.map(l => `<label style="display:flex;gap:5px;align-items:center;"><input type="checkbox" data-merge-label="${l}"` +
                     `${preset.includes(l) ? ' checked' : ''} style="accent-color:#e94560;">${l}</label>`).join('') +
@@ -1024,10 +1031,13 @@ async function runMergeLabelPredictions() {
   const labels = [...document.querySelectorAll('#merge-labels-list input[data-merge-label]')]
     .filter(c => c.checked).map(c => c.getAttribute('data-merge-label'));
   if (!labels.length) { showToast('Tick at least one label.', 4000, 'red'); return; }
+  const statuses = [...document.querySelectorAll('#merge-labels-panel input[data-merge-status]')]
+    .filter(c => c.checked).map(c => c.getAttribute('data-merge-status'));
+  if (!statuses.length) { showToast('Tick at least one page status.', 4000, 'red'); return; }
   showToast('Merging predictions…', 0);
   const res  = await fetch(`/api/project/${activeProj.name}/apply-predictions-merge`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: 'page', labels }),
+    body: JSON.stringify({ scope: 'page', labels, statuses }),
   });
   const data = await res.json().catch(() => ({}));
   clearToast();
@@ -1035,7 +1045,8 @@ async function runMergeLabelPredictions() {
   if (res.ok) {
     if (panel) panel.remove();
     showToast(`✓ Merged [${data.labels.join(', ')}] into ${data.applied} page(s): +${data.inserted} / −${data.removed} boxes · ` +
-              `${data.skipped_unchanged} unchanged · ${data.skipped_clutter} skip page(s) left alone.`, 7000);
+              `${data.skipped_unchanged} unchanged · ${data.skipped_status} page(s) skipped by status · ` +
+              `${data.skipped_clutter} skip page(s) left alone.`, 8000);
   } else showToast('Error: ' + errMsg(data), 4000, 'red');
 }
 

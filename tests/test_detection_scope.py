@@ -299,9 +299,9 @@ def test_merge_apply_over_folders(tmp_path):
                          "c": [_sh("name", 1, 1, 2, 2, score=0.9)],
                          "d": [], "zz_no_page": [_sh("name", 1, 1, 2, 2)]}.items():
         (pred / f"{stem}.json").write_text(json.dumps({"shapes": shapes}))
-    st = S.merge_apply(ann, pred, "firm_area", ["name", "address"], _w)
+    st = S.merge_apply(ann, pred, "firm_area", ["name", "address"], _w, statuses=None)
     assert st == {"applied": 1, "skipped_unchanged": 1, "skipped_no_parents": 1,
-                  "skipped_clutter": 1, "skipped_no_page": 1, "inserted": 1, "removed": 1}
+                  "skipped_clutter": 1, "skipped_status": 0, "skipped_no_page": 1, "inserted": 1, "removed": 1}
     assert writes == ["a.json"]
     a = json.loads((ann / "a.json").read_text())
     assert [(s["label"], s.get("score")) for s in a["shapes"]] == [("firm_area", None), ("name", 0.8)]
@@ -378,7 +378,7 @@ def test_merge_apply_endpoint(client, smoke_project):
     # page scope → refused
     r = client.post(f"/api/project/{name}/apply-predictions-merge", json={})
     assert r.status_code == 400
-    r = client.post(f"/api/project/{name}/apply-predictions-merge", json={"scope": "within:firm_area"})
+    r = client.post(f"/api/project/{name}/apply-predictions-merge", json={"scope": "within:firm_area", "statuses": ["predicted", "corrected", "verified"]})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["applied"] == 1 and d["inserted"] == 1 and d["removed"] == 1
@@ -386,7 +386,7 @@ def test_merge_apply_endpoint(client, smoke_project):
     got = [(s["label"], s.get("score")) for s in page["shapes"]]
     assert got == [("firm_area", None), ("address", None), ("name", 0.91)]
     # second run: same prediction → replaced again, nothing else moves
-    r = client.post(f"/api/project/{name}/apply-predictions-merge", json={"scope": "within:firm_area"})
+    r = client.post(f"/api/project/{name}/apply-predictions-merge", json={"scope": "within:firm_area", "statuses": ["predicted", "corrected", "verified"]})
     assert r.json()["applied"] == 1 and r.json()["removed"] == 1
 
 
@@ -399,7 +399,7 @@ def test_infer_endpoints_validate_scope_before_ssh(client, smoke_project):
     r = client.post(f"/api/project/{name}/infer-from/{name}", json={"scope": "within:bogus"})
     assert r.status_code == 400 and "not one of" in r.json()["detail"]
     # a valid scope gets as far as the (unconfigured) GPU server gate
-    r = client.post(f"/api/project/{name}/infer", json={"scope": "within:firm_area"})
+    r = client.post(f"/api/project/{name}/infer", json={"scope": "within:firm_area", "statuses": ["predicted", "corrected", "verified"]})
     assert r.status_code == 400 and "Server" in r.json()["detail"]
 
 

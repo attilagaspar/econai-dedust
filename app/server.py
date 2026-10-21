@@ -8036,8 +8036,10 @@ def api_apply_predictions(name: str):
 
 
 class MergeApplyRequest(BaseModel):
-    scope:  Optional[str] = None        # None → config detection_scope
-    labels: Optional[list[str]] = None  # page scope: the label set the predictions carry
+    scope:    Optional[str] = None        # None → config detection_scope
+    labels:   Optional[list[str]] = None  # page scope: the label set the predictions carry
+    statuses: Optional[list[str]] = None  # pages that may be written; None → ["predicted"]
+                                          # (corrected / verified pages are a person's work)
 
 
 @app.post("/api/project/{name}/apply-predictions-merge")
@@ -8064,6 +8066,9 @@ def api_apply_predictions_merge(name: str, body: MergeApplyRequest = MergeApplyR
     parent = _scope.parent_label_of(scope)
     pdir     = project_dir(name)
     pred_dir = pdir / "predictions"
+    statuses = [st for st in (body.statuses or []) if st] or list(_scope.MERGE_STATUSES_DEFAULT)
+    if "skip" in statuses:
+        raise HTTPException(status_code=400, detail="skip pages never receive predictions")
     if parent is None:
         labels = [l for l in (body.labels or []) if l]
         if not labels:
@@ -8081,13 +8086,14 @@ def api_apply_predictions_merge(name: str, body: MergeApplyRequest = MergeApplyR
         if not pred_dir.exists():
             raise HTTPException(status_code=400, detail="No predictions pulled yet")
         stats = _scope.merge_apply_labels(pdir / "annotations", pred_dir, labels,
-                                          _write_json)
-        return {"ok": True, "scope": scope, "labels": labels, **stats}
+                                          _write_json, statuses=statuses)
+        return {"ok": True, "scope": scope, "labels": labels, "statuses": statuses, **stats}
     if not pred_dir.exists():
         raise HTTPException(status_code=400, detail="No predictions pulled yet")
     stats = _scope.merge_apply(pdir / "annotations", pred_dir, parent,
-                               _scope.scope_labels(cfg["labels"], scope), _write_json)
-    return {"ok": True, "scope": scope, **stats}
+                               _scope.scope_labels(cfg["labels"], scope), _write_json,
+                               statuses=statuses)
+    return {"ok": True, "scope": scope, "statuses": statuses, **stats}
 
 
 # ---------------------------------------------------------------------------

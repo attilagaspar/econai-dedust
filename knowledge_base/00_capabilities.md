@@ -386,7 +386,7 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   pages), and **merge-apply by label set** (`apply-predictions-merge` with
   `labels`: on already-populated pages, earlier *predicted* shapes of those
   labels are replaced, other labels and unscored shapes untouched,
-  idempotent; dashboard **⤵ Merge model labels** in any page-scope project — own model or infer-from — with a label picker, so e.g. `table` can be merged into crop pages that already carry scored start boxes).
+  idempotent; dashboard **⤵ Merge model labels** in any page-scope project — own model or infer-from — with a label picker and a page-status filter — by default only `predicted` pages are written, corrected / verified pages are a person's work and are skipped — so e.g. `table` can be merged into untouched crop pages that already carry scored start boxes).
 - **Learning diagnostics (P10)**: frozen test set per project (training
   always excludes it), status-filtered training export (only corrected +
   verified; verified-empty pages train as negatives), **training ledger**

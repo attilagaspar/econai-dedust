@@ -156,8 +156,8 @@ def test_merge_apply_labels_over_folders(tmp_path):
                          "c": [_sh("firm_area", 1, 1, 2, 2, score=0.9)],
                          "d": [], "zz_no_page": [_sh("firm_area", 1, 1, 2, 2)]}.items():
         (pred / f"{stem}.json").write_text(json.dumps({"shapes": shapes}))
-    st = S.merge_apply_labels(ann, pred, ["firm_area"], _w)
-    assert st == {"applied": 2, "skipped_unchanged": 1, "skipped_clutter": 1,
+    st = S.merge_apply_labels(ann, pred, ["firm_area"], _w, statuses=None)
+    assert st == {"applied": 2, "skipped_unchanged": 1, "skipped_clutter": 1, "skipped_status": 0,
                   "skipped_no_page": 1, "inserted": 2, "removed": 1}
     assert writes == ["a.json", "b.json"]
     assert _labels(ann, "a") == [("name", None), ("firm_area", 0.8)]
@@ -167,7 +167,7 @@ def test_merge_apply_labels_over_folders(tmp_path):
     assert json.loads((ann / "a.json").read_text())["flags"]["status"] == "verified"
     # second pass: nothing changes, nothing is written
     writes.clear()
-    st2 = S.merge_apply_labels(ann, pred, ["firm_area"], _w)
+    st2 = S.merge_apply_labels(ann, pred, ["firm_area"], _w, statuses=None)
     assert st2["applied"] == 0 and st2["skipped_unchanged"] == 3 and writes == []
 
 
@@ -242,7 +242,7 @@ def test_cascade_parent_merge_then_within_scope_merge(client, cascade_projects):
                          "p3": [_sh("firm_area", 0, 0, 900, 700, score=0.9)]}.items():
         (pred / f"{stem}.json").write_text(json.dumps({"shapes": shapes}))
     r = client.post(f"/api/project/{target}/apply-predictions-merge",
-                    json={"scope": "page", "labels": ["firm_area"]})
+                    json={"scope": "page", "labels": ["firm_area"], "statuses": ["predicted", "corrected", "verified"]})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["labels"] == ["firm_area"]
@@ -253,7 +253,7 @@ def test_cascade_parent_merge_then_within_scope_merge(client, cascade_projects):
     assert _labels(ann, "p3") == [("name", None)]                     # skip page untouched
     # idempotent: same predictions → nothing written
     r = client.post(f"/api/project/{target}/apply-predictions-merge",
-                    json={"scope": "page", "labels": ["firm_area"]})
+                    json={"scope": "page", "labels": ["firm_area"], "statuses": ["predicted", "corrected", "verified"]})
     assert r.json()["applied"] == 0 and r.json()["skipped_unchanged"] == 2
 
     # ── step 2: the within:firm_area parts model's predictions ───────────────
@@ -266,7 +266,7 @@ def test_cascade_parent_merge_then_within_scope_merge(client, cascade_projects):
     (pred / "p2.json").write_text(json.dumps({"shapes": [_sh("name", 60, 60, 600, 90, score=0.7)]}))
     (pred / "p3.json").write_text(json.dumps({"shapes": [_sh("name", 1, 1, 50, 20, score=0.7)]}))
     r = client.post(f"/api/project/{target}/apply-predictions-merge",
-                    json={"scope": "within:firm_area"})
+                    json={"scope": "within:firm_area", "statuses": ["predicted", "corrected", "verified"]})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["scope"] == "within:firm_area"
@@ -283,7 +283,37 @@ def test_cascade_parent_merge_then_within_scope_merge(client, cascade_projects):
         _sh("firm_area", 100, 100, 500, 400, score=0.93),
         _sh("firm_area", 100, 450, 500, 700, score=0.88)]}))
     r = client.post(f"/api/project/{target}/apply-predictions-merge",
-                    json={"scope": "page", "labels": ["firm_area"]})
+                    json={"scope": "page", "labels": ["firm_area"], "statuses": ["predicted", "corrected", "verified"]})
     assert r.json()["applied"] == 0
     assert _labels(ann, "p1") == [("name", None), ("firm_area", 0.93), ("firm_area", 0.88),
                                   ("name", 0.9), ("address", 0.85), ("capital", 0.8)]
+
+
+def test_merge_apply_labels_skips_human_pages_by_default(tmp_path):
+    # A merge replaces every SCORED box of its labels, and a box a person
+    # moved or checked still carries its score — so corrected and verified
+    # pages are skipped unless listed (2026-10-21: a merge wrote over
+    # verified firm images).
+    import json as _json
+    ann = tmp_path / "annotations"; pred = tmp_path / "predictions"
+    ann.mkdir(); pred.mkdir()
+    def page(stem, status):
+        (ann / f"{stem}.json").write_text(_json.dumps({
+            "flags": {"status": status}, "imageWidth": 100, "imageHeight": 100,
+            "shapes": [{"label": "table", "points": [[1, 1], [10, 10]], "score": 0.9,
+                        "shape_type": "rectangle", "flags": {}}]}), encoding="utf-8")
+        (pred / f"{stem}.json").write_text(_json.dumps({
+            "shapes": [{"label": "table", "points": [[20, 20], [30, 30]], "score": 0.8,
+                        "shape_type": "rectangle", "flags": {}}]}), encoding="utf-8")
+    page("p1", "predicted"); page("p2", "verified"); page("p3", "corrected"); page("p4", None)
+    writes = {}
+    def _w(path, obj): writes[path.stem] = obj
+    st = S.merge_apply_labels(ann, pred, ["table"], _w)
+    assert set(writes) == {"p1", "p4"} and st["skipped_status"] == 2
+    writes.clear()
+    st = S.merge_apply_labels(ann, pred, ["table"], _w, statuses=["predicted", "verified"])
+    assert set(writes) == {"p1", "p2", "p4"} and st["skipped_status"] == 1
+    writes.clear()
+    st = S.merge_apply_labels(ann, pred, ["table"], _w, statuses=None)
+    assert set(writes) == {"p1", "p2", "p3", "p4"}
+

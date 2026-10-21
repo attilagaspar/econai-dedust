@@ -317,12 +317,33 @@ def merge_children(ann_shapes: list, pred_shapes: list, parent_label: str,
             "n_parents": len(pboxes), "changed": changed}
 
 
+
+# Pages a model may write onto. A merge replaces every scored box of the
+# labels it carries, and a box a human has moved or checked still carries its
+# score — so by default only untouched pages ("predicted", or no status at
+# all) are written; corrected and verified pages are a person's work and are
+# skipped unless explicitly listed.
+MERGE_STATUSES_DEFAULT = ("predicted",)
+
+
+def _page_status(ann: dict) -> str:
+    return ((ann.get("flags") or {}).get("status")) or "predicted"
+
+
+def _merge_allowed(ann: dict, statuses) -> bool:
+    st = _page_status(ann)
+    if st == "skip":
+        return False
+    if not statuses:
+        return True
+    return st in set(statuses)
+
 def merge_apply(ann_dir: Path, pred_dir: Path, parent_label: str,
-                child_labels, write_json) -> dict:
+                child_labels, write_json, statuses=MERGE_STATUSES_DEFAULT) -> dict:
     """Apply predictions/*.json into annotations/*.json with merge_children.
     write_json(path, obj) is injected (the server's atomic writer)."""
     stats = {"applied": 0, "skipped_unchanged": 0, "skipped_no_parents": 0,
-             "skipped_clutter": 0, "skipped_no_page": 0,
+             "skipped_clutter": 0, "skipped_status": 0, "skipped_no_page": 0,
              "inserted": 0, "removed": 0}
     for pf in sorted(pred_dir.glob("*.json")):
         af = ann_dir / pf.name
@@ -330,8 +351,11 @@ def merge_apply(ann_dir: Path, pred_dir: Path, parent_label: str,
             stats["skipped_no_page"] += 1
             continue
         ann = json.loads(af.read_text(encoding="utf-8"))
-        if (ann.get("flags") or {}).get("status") == "skip":
+        if _page_status(ann) == "skip":
             stats["skipped_clutter"] += 1
+            continue
+        if not _merge_allowed(ann, statuses):
+            stats["skipped_status"] += 1
             continue
         try:
             pred = json.loads(pf.read_text(encoding="utf-8"))
@@ -395,21 +419,24 @@ def _shape_multiset(shapes) -> list:
 
 
 def merge_apply_labels(ann_dir: Path, pred_dir: Path, labels,
-                       write_json) -> dict:
+                       write_json, statuses=MERGE_STATUSES_DEFAULT) -> dict:
     """Apply predictions/*.json into annotations/*.json with merge_labels.
     Skip (clutter) pages are never populated; a page is written only when
     its shape list actually changes, so the operation is idempotent.
     write_json(path, obj) is injected (the server's atomic writer)."""
     stats = {"applied": 0, "skipped_unchanged": 0, "skipped_clutter": 0,
-             "skipped_no_page": 0, "inserted": 0, "removed": 0}
+             "skipped_status": 0, "skipped_no_page": 0, "inserted": 0, "removed": 0}
     for pf in sorted(pred_dir.glob("*.json")):
         af = ann_dir / pf.name
         if not af.exists():
             stats["skipped_no_page"] += 1
             continue
         ann = json.loads(af.read_text(encoding="utf-8"))
-        if (ann.get("flags") or {}).get("status") == "skip":
+        if _page_status(ann) == "skip":
             stats["skipped_clutter"] += 1
+            continue
+        if not _merge_allowed(ann, statuses):
+            stats["skipped_status"] += 1
             continue
         try:
             pred = json.loads(pf.read_text(encoding="utf-8"))

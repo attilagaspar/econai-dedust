@@ -302,3 +302,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   labels) and no `confirm()`. Needed in a crop project whose pages already
   carry the parent's start boxes: merge `table` alone, leave the carried
   (still scored) start boxes untouched.
+- **Oct 21 — merge-apply skips corrected / verified pages by default**
+  (incident: a page-scope merge wrote over verified firm images — a box a
+  person moved or checked still carries its detector score, so "scored =
+  predicted" is not a safe guard on a human-touched page). Both merge
+  modes take `statuses` (default `["predicted"]`, status-less pages count
+  as predicted; `skip` refused); the dashboard picker has page-status
+  checkboxes with corrected and verified off. Test.
