@@ -295,3 +295,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   real run silently ended after its preview (two such runs on
   compass_1877). `_batchConfirmInline` (batch.js) renders Apply / Cancel
   inside the batch progress area instead.
+- **Oct 21 — ⤵ Merge model labels for a project's own model + label
+  picker**: the page-scope merge-apply was only offered after an
+  infer-from; it now shows in page scope always, with an in-panel label
+  picker (preset = the last infer-from source's labels, else all project
+  labels) and no `confirm()`. Needed in a crop project whose pages already
+  carry the parent's start boxes: merge `table` alone, leave the carried
+  (still scored) start boxes untouched.

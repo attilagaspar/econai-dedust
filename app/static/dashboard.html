@@ -928,12 +928,18 @@ function rememberInferFrom(name, rec) {
 function _reflectLastInferFrom() {
   const btn = document.getElementById('btn-merge-labels');
   if (!btn || !activeProj) return;
-  const rec = lastInferFrom(activeProj.name);
-  const show = rec && rec.scope === 'page' && Array.isArray(rec.labels) && rec.labels.length;
+  // Page scope: merge is always available — for the project's own model
+  // (its labels) as much as for a model run via "Infer from" (the source's
+  // labels, remembered). A label picker decides what gets written.
+  const show = !currentScope().startsWith('within:');
   btn.style.display = show ? '' : 'none';
-  if (show) btn.title = `Merge the predictions of '${rec.source}' (labels: ${rec.labels.join(', ')}) onto pages ` +
-    `that already have shapes. Only earlier PREDICTED boxes of these labels are replaced; other labels and ` +
-    `hand-drawn boxes are never touched.`;
+  const rec = lastInferFrom(activeProj.name);
+  if (show) btn.title = (rec && rec.scope === 'page' && rec.labels?.length
+      ? `Last whole-page run: '${rec.source}' (labels: ${rec.labels.join(', ')}). `
+      : `Last whole-page run: this project's own model. `) +
+    'Write the pulled predictions onto pages that already have shapes, for the labels you tick. ' +
+    'Only earlier PREDICTED boxes (with a score) of those labels are replaced; other labels and ' +
+    'hand-drawn boxes are never touched.';
 }
 
 function _reflectScope() {
@@ -984,24 +990,53 @@ async function mergePredictions() {
   else showToast('Error: ' + errMsg(data), 4000, 'red');
 }
 
-async function mergeLabelPredictions() {
+function mergeLabelPredictions() {
   if (!activeProj) return;
+  const old = document.getElementById('merge-labels-panel');
+  if (old) { old.remove(); return; }
   const rec = lastInferFrom(activeProj.name);
-  if (!rec || !rec.labels?.length) { alert('No whole-page "Infer from" run is recorded for this project.'); return; }
-  if (!confirm(`Merge the predictions of '${rec.source}' into '${activeProj.name}'?\n\n` +
-               `Labels written: ${rec.labels.join(', ')}\n\n` +
-               'On every non-skip page, earlier PREDICTED boxes (with a score) of these labels are replaced ' +
-               'by the new predictions. Boxes of other labels and hand-drawn boxes are never touched.')) return;
+  const projLabels = activeProj.config?.labels || [];
+  const preset = (rec && rec.scope === 'page' && rec.labels?.length) ? rec.labels : projLabels;
+  const labels = [...new Set([...projLabels, ...(preset || [])])];
+  if (!labels.length) { showToast('This project has no labels.', 4000, 'red'); return; }
+  const panel = document.createElement('div');
+  panel.id = 'merge-labels-panel';
+  panel.style.cssText = 'margin-top:8px;padding:10px;border:1px solid #e94560;border-radius:6px;background:#1a1028;font-size:0.85rem;';
+  panel.innerHTML =
+    `<div style="margin-bottom:6px;"><b>⤵ Merge model labels</b> — predictions of ` +
+    `<b>${rec && rec.scope === 'page' && rec.labels?.length ? rec.source : 'this project'}</b> onto pages that already have shapes.</div>` +
+    `<div style="color:#aaa;margin-bottom:6px;">Tick the labels to write. On every non-skip page, earlier <b>predicted</b> boxes ` +
+    `(ones carrying a score) of a ticked label are replaced by the new predictions; boxes of unticked labels and boxes without a score ` +
+    `are never touched. <b>Untick a label whose boxes you have already checked by hand</b> if they still carry a score ` +
+    `(e.g. boxes carried into a crop project).</div>` +
+    `<div id="merge-labels-list" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px;">` +
+    labels.map(l => `<label style="display:flex;gap:5px;align-items:center;"><input type="checkbox" data-merge-label="${l}"` +
+                    `${preset.includes(l) ? ' checked' : ''} style="accent-color:#e94560;">${l}</label>`).join('') +
+    `</div>` +
+    `<div class="btn-row"><button class="btn btn-primary" onclick="runMergeLabelPredictions()">⤵ Merge ticked labels</button>` +
+    `<button class="btn btn-secondary" onclick="document.getElementById('merge-labels-panel').remove()">Cancel</button></div>`;
+  const anchor = document.getElementById('btn-merge-labels');
+  anchor.closest('.btn-row').insertAdjacentElement('afterend', panel);
+}
+
+async function runMergeLabelPredictions() {
+  if (!activeProj) return;
+  const labels = [...document.querySelectorAll('#merge-labels-list input[data-merge-label]')]
+    .filter(c => c.checked).map(c => c.getAttribute('data-merge-label'));
+  if (!labels.length) { showToast('Tick at least one label.', 4000, 'red'); return; }
   showToast('Merging predictions…', 0);
   const res  = await fetch(`/api/project/${activeProj.name}/apply-predictions-merge`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: 'page', labels: rec.labels }),
+    body: JSON.stringify({ scope: 'page', labels }),
   });
   const data = await res.json().catch(() => ({}));
   clearToast();
-  if (res.ok) showToast(`✓ Merged [${data.labels.join(', ')}] into ${data.applied} page(s): +${data.inserted} / −${data.removed} boxes · ` +
-                        `${data.skipped_unchanged} unchanged · ${data.skipped_clutter} skip page(s) left alone.`, 7000);
-  else showToast('Error: ' + errMsg(data), 4000, 'red');
+  const panel = document.getElementById('merge-labels-panel');
+  if (res.ok) {
+    if (panel) panel.remove();
+    showToast(`✓ Merged [${data.labels.join(', ')}] into ${data.applied} page(s): +${data.inserted} / −${data.removed} boxes · ` +
+              `${data.skipped_unchanged} unchanged · ${data.skipped_clutter} skip page(s) left alone.`, 7000);
+  } else showToast('Error: ' + errMsg(data), 4000, 'red');
 }
 
 function renderDetail() {
