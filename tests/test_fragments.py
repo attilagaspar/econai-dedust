@@ -161,8 +161,10 @@ def test_page_without_starts_or_stops():
     # record open → one continuation per column (layout forced: no boxes to
     # find the gutter from)
     res = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=True, layout=2)
-    assert _boxes(res) == [[100, 100, 450, 688], [550, 100, 900, 688]]
-    assert _conts(res) == [True, True] and res["open_at_end"] is True
+    # the mid-column advertisement (ignore) is a hard cut: the right column's
+    # continuation becomes the piece above it and the piece below it
+    assert _boxes(res) == [[100, 100, 450, 688], [550, 100, 900, 500], [550, 610, 900, 688]]
+    assert _conts(res) == [True, True, True] and res["open_at_end"] is True
     assert res["starts"] == 0 and res["stops"] == 0 and res["ignores"] == 1
     # record closed → nothing
     res2 = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=False, layout=2)
@@ -227,6 +229,32 @@ def test_fragment_width_is_the_pages_text_block_not_a_speck():
     assert F._slot_extent(blank, 0, 1000,
                           [[120, 50, 880, 68], [110, 380, 890, 398], [115, 700, 885, 720]]) == (115, 885)
     assert F._slot_extent(blank, 0, 1000, []) is None
+
+
+def test_ignore_boxes_are_never_inside_a_fragment():
+    # An ignore box is a hard cut, whatever the ink around it says. Running
+    # head with a text-like line above it (bleed-through that passes the
+    # band test): the leading continuation starts BELOW the head. A footer
+    # at the bottom: the last fragment ends ABOVE it. An ignore box in the
+    # middle of a firm: the firm becomes two fragments, the second a
+    # continuation, and neither covers the box.
+    lines = ([(100, 30, 900, 48)]                       # bleed-through above the head
+             + [(200, 60, 800, 80)]                     # running head (ignore)
+             + _text_lines(100, 900, 100, 300)          # continuation text
+             + [(100, 320, 900, 350)]                   # start A
+             + _text_lines(100, 900, 360, 480)
+             + [(300, 500, 700, 540)]                   # a stamp in the middle (ignore)
+             + _text_lines(100, 900, 560, 700)
+             + [(200, 740, 800, 760)])                  # footer (ignore)
+    doc = _doc([_sh("advert", 200, 60, 800, 80), _sh("name", 100, 320, 900, 350),
+                _sh("advert", 300, 500, 700, 540), _sh("advert", 200, 740, 800, 760)])
+    res = F.derive_page(doc, ROLES, REC, ink=_ink(lines), margin=0, carry_open=True, layout=1)
+    boxes, conts = _boxes(res), _conts(res)
+    assert boxes == [[100, 100, 900, 298], [100, 320, 900, 468], [100, 560, 900, 698]], boxes
+    assert conts == [True, False, True]
+    for b in boxes:
+        for ig in ([200, 60, 800, 80], [300, 500, 700, 540], [200, 740, 800, 760]):
+            assert not (b[0] < ig[2] and ig[0] < b[2] and b[1] < ig[3] and ig[1] < b[3]), (b, ig)
 
 
 def test_margin_and_no_ink_map():

@@ -388,6 +388,44 @@ def _slot_extent(ink, x_lo, x_hi, role_boxes: list, exclude_rows=()):
     return None
 
 
+def _carve(ink, x_lo, x_hi, y1, y2, ignores, margin, trim_top: bool,
+           min_pixels: int, x_ext=None, page_h: float = 0.0) -> list:
+    """The trimmed boxes of [y1, y2) in the slot, CUT at every ignore box
+    that overlaps the range — a fragment never covers an ignore box, full
+    stop. The y-range is split into the pieces between the ignore boxes;
+    each piece is trimmed on its own (`_trim`), the first with `trim_top`
+    as given, the later ones always trimmed at the top (they begin right
+    under an ignore box). Furniture (an ignore box in the top or bottom
+    FURNITURE_FRACTION of the page — a running head, a footer) bounds the
+    live area: whatever lies above a running head or below a footer is
+    not page content and yields no piece. A mid-page ignore box (a stamp,
+    an advertisement) splits the fragment in two."""
+    hits = sorted((b for b in ignores
+                   if b[2] > x_lo and b[0] < x_hi and b[3] > y1 and b[1] < y2),
+                  key=lambda b: b[1])
+    pieces, cur, first = [], y1, True
+    def _add(a, b, top):
+        box = _trim(ink, x_lo, x_hi, a, b, margin, top, min_pixels, x_ext)
+        if box is not None:
+            pieces.append(box)
+    for b in hits:
+        cy = (b[1] + b[3]) / 2.0
+        head = page_h > 0 and cy < FURNITURE_FRACTION * page_h
+        foot = page_h > 0 and cy > (1.0 - FURNITURE_FRACTION) * page_h
+        if head:                       # nothing above a running head is content
+            cur = max(cur, b[3])
+            continue
+        if b[1] > cur:
+            _add(cur, b[1], trim_top if first else True)
+            first = False
+        if foot:                       # nothing below a footer is content
+            return pieces
+        cur = max(cur, b[3])
+    if y2 > cur:
+        _add(cur, y2, trim_top if first else True)
+    return pieces
+
+
 def _fragment(box, record_label, continuation, start, column):
     sh = {"label": record_label,
           "points": [[float(box[0]), float(box[1])], [float(box[2]), float(box[3])]],
@@ -436,6 +474,7 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
                 ink.mask_out(b)
     items = [(i, b, "start") for i, b in rs["start"]] + [(i, b, "stop") for i, b in rs["stop"]]
     all_role_boxes = [b for lst in rs.values() for _, b in lst]
+    ignore_boxes = [b for _, b in rs["ignore"]]   # hard cuts: never inside a fragment
     open_rec = bool(carry_open)
     frags = []
     n_cols = 0
@@ -451,10 +490,10 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
             if role == "stop":
                 open_rec = False
                 continue
-            box = _trim(ink, 0.0, page_w, b[1], b[3], margin, False, min_pixels)
-            if box is not None:
-                frags.append(_fragment(box, record_label, False,
-                                       (idx, b, shapes[idx].get("label")), 0))
+            for n, box in enumerate(_carve(ink, 0.0, page_w, b[1], b[3], ignore_boxes,
+                                           margin, False, min_pixels, None, page_h)):
+                frags.append(_fragment(box, record_label, n > 0,
+                                       None if n else (idx, b, shapes[idx].get("label")), 0))
             open_rec = True
             continue
         for k, (x_lo, x_hi, members) in enumerate(_columns(band, page_w, mode)):
@@ -465,18 +504,18 @@ def derive_page(data: dict, roles: dict, record_label: str, ink=None,
             # leading continuation: the open record runs on at the column top
             first_y = members[0][1][1] if members else band["y2"]
             if open_rec:
-                box = _trim(ink, x_lo, x_hi, y, first_y, margin, True, min_pixels, x_ext)
-                if box is not None:
+                for box in _carve(ink, x_lo, x_hi, y, first_y, ignore_boxes,
+                                  margin, True, min_pixels, x_ext, page_h):
                     frags.append(_fragment(box, record_label, True, None, k))
             for j, (idx, b, role) in enumerate(members):
                 if role == "stop":
                     open_rec = False
                     continue
                 nxt = members[j + 1][1][1] if j + 1 < len(members) else band["y2"]
-                box = _trim(ink, x_lo, x_hi, b[1], max(nxt, b[3]), margin, False, min_pixels, x_ext)
-                if box is not None:
-                    frags.append(_fragment(box, record_label, False,
-                                           (idx, b, shapes[idx].get("label")), k))
+                for n, box in enumerate(_carve(ink, x_lo, x_hi, b[1], max(nxt, b[3]), ignore_boxes,
+                                               margin, False, min_pixels, x_ext, page_h)):
+                    frags.append(_fragment(box, record_label, n > 0,
+                                           None if n else (idx, b, shapes[idx].get("label")), k))
                 open_rec = True
     return {"fragments": frags, "open_at_end": open_rec,
             "starts": len(rs["start"]), "stops": len(rs["stop"]),

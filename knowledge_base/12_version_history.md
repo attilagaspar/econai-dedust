@@ -337,3 +337,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 2 — `gpu_scaffold/wait_for_vm.ps1`**: retries starting the Azure GPU VM
   every 5 minutes while Azure reports no capacity (`AllocationFailed`), notifies
   on start, stops on any other error, gives up after 12 hours.
+- **Nov 2 — ignore boxes are hard cuts in fragment derivation** (user:
+  running heads flagged `ignore` still ended up inside the leading
+  continuation when anything band-like sat above them). `_carve` splits
+  every fragment's y-range at the ignore boxes overlapping it and trims
+  the pieces separately; later pieces are ⛓ continuations. A fragment can
+  no longer overlap an ignore box. Test.
