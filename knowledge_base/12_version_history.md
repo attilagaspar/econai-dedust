@@ -334,3 +334,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   import; on Linux `Path(...).name` left it whole, so the sources/ basename
   fallback never matched and "PDF refresh" / text-layer clipping failed).
   `_resolve_pdf_source` splits the basename on both separators. Test.
+- **Nov 2 — `gpu_scaffold/wait_for_vm.ps1`**: retries starting the Azure GPU VM
+  every 5 minutes while Azure reports no capacity (`AllocationFailed`), notifies
+  on start, stops on any other error, gives up after 12 hours.

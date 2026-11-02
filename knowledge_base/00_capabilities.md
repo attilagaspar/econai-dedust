@@ -457,7 +457,7 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 - **Deployments**: home PC behind Cloudflare Tunnel
   (dedust.gasparattila.hu); Azure VM (`Dockerfile.web` +
   `docker-compose.yml`, webapp + cloudflared, azure.gasparattila.hu);
-  Azure T4 GPU VM (start/stop around jobs) coexists with Koren's GPU by
+  Azure T4 GPU VM (start/stop around jobs; `gpu_scaffold/wait_for_vm.ps1` retries a start until Azure has capacity) coexists with Koren's GPU by
   per-project profile.
 - **Project sync**: `econai.py push-project` / `pull-project` (SFTP, live
   progress, additive pull with `--overwrite`); datasets/ (declarations +

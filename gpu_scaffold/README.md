@@ -41,3 +41,17 @@ key or password, `remote_path` = the workspace dir) → **Docker settings →
 Build (predict / train)** — this builds the `dedust-layout` image and creates
 the per-workspace containers on the host. Train / Infer / Fine-tune work from
 that point exactly as on any other GPU backend.
+
+## When Azure has no GPU capacity
+
+`az vm start` can fail with `AllocationFailed` when the region has no free GPU.
+This retries every 5 minutes (from the PC, logged in with `az login`) and
+notifies when the VM is up; other errors stop it, and it gives up after 12 hours:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File gpu_scaffold\wait_for_vm.ps1
+```
+
+Options: `-IntervalMinutes`, `-MaxHours`, `-ResourceGroup`, `-VmName`,
+`-NtfyTopic <topic>` (also pushes to https://ntfy.sh/<topic>, for a phone).
+The VM bills from the moment it starts, until stopped or the nightly auto-shutdown.
