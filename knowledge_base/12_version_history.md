@@ -350,3 +350,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   scoring counts only the model's classes (it counted every label, so
   derived record boxes inflated corrections-per-page). Plan: roadmap P13,
   doc 11 "Pooling". Tests.
+- **Nov 6 — training on several projects (P13, phase 2)**: `training_sources`
+  / `eval_projects` in the config (validated: existing, not itself, not
+  both); Prepare / Fine-tune export every source's pages with its own test
+  set (400 when a source lacks a model class), multi-project COCO names
+  under `/workspace`, source images uploaded only where missing, per-source
+  counts in the summary + ledger. Single-project exports unchanged. Tests.

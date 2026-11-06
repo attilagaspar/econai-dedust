@@ -424,6 +424,14 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   page holding only non-classes trains as a negative. Fine-tune's class
   check, own inference and the infer-from gate use the chosen / trained
   classes, and test-set scoring counts only the model's classes.
+- **Several training projects (P13)**: per-project `training_sources`
+  (other projects whose pages train with this one's; a "model project"
+  with no pages of its own holds a pooled model) — each source filtered
+  like the own pages with its own frozen test set, refused unless it holds
+  every model class; COCO names `<project>/images/<file>` read from
+  `/workspace`, each source's images uploaded once into its own folder
+  (only missing files); Train and Fine-tune; per-project counts in the
+  summary and the ledger. Whole-page scope only.
 - **Detection scope — nested detection** (§H8 of
   [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)):
   per-project `detection_scope` = `page` (default) or `within:<label>`.

@@ -4602,8 +4602,11 @@ class ConfigUpdate(BaseModel):
     notes: Optional[str]  = None
     tags:  Optional[list] = None
     # P13: the model's classes, a subset of labels ([] or the whole palette
-    # clears → every label is a class)
-    train_labels: Optional[list] = None
+    # clears → every label is a class); further projects whose pages train
+    # with this one's, and projects only scored (held out) — [] clears
+    train_labels:     Optional[list] = None
+    training_sources: Optional[list] = None
+    eval_projects:    Optional[list] = None
 
 
 @app.patch("/api/project/{name}/config")
@@ -4673,6 +4676,19 @@ def api_update_config(name: str, body: ConfigUpdate):
                 cfg.pop("train_labels", None)
             else:
                 cfg["train_labels"] = picked
+        for field in ("training_sources", "eval_projects"):
+            value = getattr(body, field)
+            if value is None:
+                continue
+            lst = _normalize_project_list(name, value, field)
+            if lst:
+                cfg[field] = lst
+            else:
+                cfg.pop(field, None)
+        both = set(cfg.get("training_sources") or []) & set(cfg.get("eval_projects") or [])
+        if both:
+            raise HTTPException(status_code=400,
+                                detail=f"{sorted(both)} cannot both train and be held out")
         if body.notes is not None:
             if body.notes.strip():
                 cfg["notes"] = body.notes
@@ -6707,6 +6723,55 @@ def _model_labels(cfg: dict, scope: str) -> list:
          if l in _train_labels(cfg) or l == _scope.parent_label_of(scope)], scope)
 
 
+def _check_label_coverage(name: str, other: str, model_labels: list) -> None:
+    """400 unless `other`'s palette holds every model class: its verified
+    pages would otherwise teach "no X here" for a class it never annotates."""
+    try:
+        palette = load_config(other).get("labels") or []
+    except FileNotFoundError:
+        raise HTTPException(status_code=404,
+                            detail=f"'{name}' lists project '{other}', which does not exist")
+    gap = [l for l in model_labels if l not in palette]
+    if gap:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Project '{other}' has no label {gap} (its labels: {palette}), "
+                    f"so its pages cannot train or score '{name}''s classes "
+                    f"{model_labels}. Drop it, or untick those classes."))
+
+
+def _training_sources(name: str, cfg: dict, model_labels: list) -> list:
+    """The export's further projects (config `training_sources`, P13), each
+    with its annotations folder and frozen test set. Every one must exist and
+    hold all model classes (400 / 404 otherwise)."""
+    out = []
+    for src in cfg.get("training_sources") or []:
+        _check_label_coverage(name, src, model_labels)
+        sdir = project_dir(src)
+        out.append({"name": src, "ann_dir": sdir / "annotations",
+                    "test_stems": _frozen_test_stems(sdir)})
+    return out
+
+
+def _normalize_project_list(name: str, value, field: str) -> list:
+    """A list of other project names for the config (training_sources /
+    eval_projects): existing projects only, never the project itself,
+    duplicates dropped, order kept."""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise HTTPException(status_code=400, detail=f"{field} must be a list of project names")
+    out = []
+    for v in (x.strip() for x in value):
+        if not v or v in out:
+            continue
+        if v == name:
+            raise HTTPException(status_code=400,
+                                detail=f"{field}: a project cannot list itself")
+        if not (project_dir(v) / "config.json").exists():
+            raise HTTPException(status_code=404, detail=f"{field}: no project '{v}'")
+        out.append(v)
+    return out
+
+
 def _frozen_test_stems(pdir) -> list:
     """Frozen test-set stems for the training export, [] when none frozen."""
     from app import training_meta
@@ -6743,8 +6808,11 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             scope                  = scope,
             crop_margin            = body.crop_margin if body.crop_margin is not None else 12.0,
             train_labels           = _train_labels(cfg),
+            sources                = _training_sources(name, cfg, _model_labels(cfg, scope)),
         )
         return {"ok": True, **result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except FileNotFoundError as e:
@@ -7021,6 +7089,50 @@ def _sftp_write_force(sftp, content: bytes, dest: str):
             raise RuntimeError(f"Upload failed for {dest}: {e}") from e
 
 
+def _source_image_files(inter: Path, name: str) -> dict:
+    """{project: [image file names]} of the OTHER projects a multi-project
+    export (P13) references — COCO file names are "<project>/images/<file>"."""
+    try:
+        coco = json.loads((inter / "annotations.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out: dict = {}
+    for im in coco.get("images") or []:
+        parts = str(im.get("file_name", "")).split("/")
+        if len(parts) == 3 and parts[1] == "images" and parts[0] != name:
+            out.setdefault(parts[0], []).append(parts[2])
+    return out
+
+
+def _upload_missing_images(sftp, local_dir: Path, names: list, remote_dir: str,
+                           tag: str):
+    """Generator: upload the named images from local_dir that remote_dir lacks
+    (or holds at a different size) — another project's images normally sit on
+    the server already, from its own training or inference."""
+    from app import ssh_ops
+    ssh_ops._sftp_mkdir_p(sftp, remote_dir)
+    try:
+        have = {a.filename: a.st_size for a in sftp.listdir_attr(remote_dir)}
+    except OSError:
+        have = {}
+    todo, missing_local = [], []
+    for n in names:
+        p = local_dir / n
+        if not p.exists():
+            missing_local.append(n)
+        elif have.get(n) != p.stat().st_size:
+            todo.append(p)
+    yield (f"[push] {tag}: {len(names) - len(todo) - len(missing_local)} image(s) "
+           f"already in {remote_dir}, uploading {len(todo)}")
+    if missing_local:
+        yield (f"[push] ⚠ {tag}: {len(missing_local)} image(s) not found locally, "
+               f"e.g. {missing_local[0]}")
+    for i, p in enumerate(todo, 1):
+        _sftp_put_force(sftp, str(p), f"{remote_dir}/{p.name}")
+        if i % 10 == 0 or i == len(todo):
+            yield f"[push]   {tag}: {i}/{len(todo)}  {p.name}"
+
+
 def _push_training_data_gen(name: str, srv: dict, passphrase: str,
                             skip_images: bool = False):
     """Generator: push images + COCO JSON + config + scripts, yielding progress lines."""
@@ -7072,6 +7184,11 @@ def _push_training_data_gen(name: str, srv: dict, passphrase: str,
                 _sftp_put_force(sftp, str(img), dest)
                 if i % 5 == 0 or i == total:
                     yield f"[push]   {i}/{total}  {img.name} → {dest}"
+
+        # P13: the other training projects' images, in their own folders
+        for src, files in sorted(_source_image_files(inter, name).items()):
+            yield from _upload_missing_images(sftp, project_dir(src) / "annotations",
+                                              files, f"{remote}/{src}/images", src)
 
         dest = f"{remote}/{name}/annotations.json"
         yield f"[push] {inter/'annotations.json'} → {dest}"
@@ -7224,7 +7341,9 @@ def _ledger_row_from_summary(inter: Path, mode: str, **extra) -> dict:
             "n_train_pool",
             # §H8 nested detection scope
             "scope", "n_parents", "n_crop_negatives", "n_scope_pages",
-            "model_labels")
+            "model_labels",
+            # P13 several training projects
+            "training_sources", "sources")
     row = {"mode": mode, **{k: summary[k] for k in keys if k in summary}}
     row.update(extra)
     return row
@@ -7924,8 +8043,9 @@ async def api_finetune_from(name: str, source: str,
             test_stems             = _frozen_test_stems(pdir),
             scope                  = scope,
             train_labels           = _train_labels(cfg),
+            sources                = _training_sources(name, cfg, want),
         )
-        img_subdir = images_subdir(scope)
+        image_root = prep["image_root"]
 
         # The fine-tune script: identical to train.sh except MODEL.WEIGHTS
         # points at the source model and the solver is short + gentle.
@@ -7958,9 +8078,9 @@ cd /workspace/layout-model-training/tools
 python3 train_net.py \\
     --dataset_name          {name}-layout \\
     --json_annotation_train /workspace/{name}/train.json \\
-    --image_path_train      /workspace/{name}/{img_subdir} \\
+    --image_path_train      {image_root} \\
     --json_annotation_val   /workspace/{name}/test.json \\
-    --image_path_val        /workspace/{name}/{img_subdir} \\
+    --image_path_val        {image_root} \\
     --config-file           /workspace/layout-model-training/configs/{name}/fast_rcnn_R_50_FPN_3x.yaml \\
     OUTPUT_DIR  {out_dir}/ \\
     MODEL.WEIGHTS {src_weights} \\
@@ -8080,6 +8200,8 @@ echo "=== Fine-tune complete ==="
 
     except HTTPException:
         raise
+    except ValueError as e:                    # export refused (labels / scope)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

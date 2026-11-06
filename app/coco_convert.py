@@ -60,6 +60,8 @@ def pages_to_coco(pages: list[dict], labels: list[str]) -> dict:
     for img_id, page in enumerate(pages, start=1):
         data = page["data"]
         fname = data.get("imagePath", page["stem"] + ".jpg")
+        if page.get("file_prefix"):            # multi-project export (P13)
+            fname = page["file_prefix"] + Path(fname).name
         w = data.get("imageWidth", 0)
         h = data.get("imageHeight", 0)
 
@@ -116,7 +118,8 @@ def prepare_training_data(project_name: str, ann_dir: Path,
                           train_fraction: float = 1.0,
                           scope: str = "page",
                           crop_margin: float = 12.0,
-                          train_labels: list[str] | None = None) -> dict:
+                          train_labels: list[str] | None = None,
+                          sources: list[dict] | None = None) -> dict:
     """
     1. Convert LabelMe JSONs → COCO annotations.json (status-filtered).
     2. When a frozen test set is given: write train.json/test.json here
@@ -137,6 +140,14 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     None = all of them. Boxes of other labels are ignored, and a page whose
     boxes are ALL other labels counts as empty (a verified one trains as a
     negative). Class ids follow the palette order, whatever order is given.
+
+    sources (P13) — further projects whose pages train with this one's:
+    [{"name", "ann_dir", "test_stems"}], each filtered like the own pages and
+    with its own frozen test set (whole-page scope only). With sources, COCO
+    file names become "<project>/images/<file>" and the scripts read images
+    from /workspace itself, where every project's images already live; the
+    summary's `sources` breaks the counts down per project. Without sources
+    the export is exactly the single-project one.
     """
     from app import scope as _scope
     scope = _scope.normalize_scope(scope)
@@ -168,40 +179,61 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     intermediate_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. page selection ────────────────────────────────────────────────────
-    pages = collect_pages(ann_dir)
-    test_set = set(test_stems or [])
-    missing_test = sorted(test_set - {p["stem"] for p in pages})
+    # The project's own pages, then each training source's (P13), every
+    # group with its own frozen test set and the same filters.
+    groups = [{"name": project_name, "ann_dir": ann_dir,
+               "test_stems": test_stems or []}] + list(sources or [])
+    multi = len(groups) > 1
+    if multi and parent_label is not None:
+        raise ValueError("training sources need the whole-page scope "
+                         f"(this export is {scope})")
 
     counts = {"verified": 0, "corrected": 0, "predicted": 0, "problem": 0,
               "skip": 0}
     train_pages, test_pages = [], []
+    missing_test: list[str] = []
     n_excluded_status = 0
     n_negatives = 0
-    for p in pages:
-        counts[p["status"]] = counts.get(p["status"], 0) + 1
-        if p["status"] == "skip":
-            continue                           # never trains, never evaluates
-        if p["stem"] in test_set:
-            test_pages.append(p)               # frozen pages evaluate, period
-            continue
-        if status_filter and p["status"] not in TRAIN_STATUSES:
-            n_excluded_status += 1
-            continue
-        # page scope: only the model's classes count (a nested scope needs
-        # the page's parent shapes, which are never classes)
-        n_boxes = p["n_shapes"] if parent_label is not None else sum(
-            1 for sh in p["data"].get("shapes") or [] if sh.get("label") in model_set)
-        p["n_boxes"] = n_boxes
-        if n_boxes == 0:
-            # empty page: a verified empty is a negative example (opt-out);
-            # any other empty is just "not annotated yet" and must stay out.
-            if include_empty_verified and p["status"] == "verified":
-                n_negatives += 1
-                train_pages.append(p)
-            elif not status_filter:
-                train_pages.append(p)          # legacy: cocosplit pools it
-            continue
-        train_pages.append(p)
+    per_source: dict = {}
+    for g in groups:
+        gdir = Path(g["ann_dir"])
+        pages = collect_pages(gdir) if gdir.exists() else []
+        test_set = set(g.get("test_stems") or [])
+        miss = sorted(test_set - {p["stem"] for p in pages})
+        missing_test += [f"{g['name']}/{s}" for s in miss] if multi else miss
+        st = per_source[g["name"]] = {"n_test_pages": 0, "n_excluded_status": 0,
+                                      "n_skip": 0}
+        for p in pages:
+            if multi:
+                p["project"] = g["name"]
+                p["file_prefix"] = f"{g['name']}/images/"
+            counts[p["status"]] = counts.get(p["status"], 0) + 1
+            if p["status"] == "skip":
+                st["n_skip"] += 1
+                continue                       # never trains, never evaluates
+            if p["stem"] in test_set:
+                st["n_test_pages"] += 1
+                test_pages.append(p)           # frozen pages evaluate, period
+                continue
+            if status_filter and p["status"] not in TRAIN_STATUSES:
+                st["n_excluded_status"] += 1
+                n_excluded_status += 1
+                continue
+            # page scope: only the model's classes count (a nested scope needs
+            # the page's parent shapes, which are never classes)
+            n_boxes = p["n_shapes"] if parent_label is not None else sum(
+                1 for sh in p["data"].get("shapes") or [] if sh.get("label") in model_set)
+            p["n_boxes"] = n_boxes
+            if n_boxes == 0:
+                # empty page: a verified empty is a negative example (opt-out);
+                # any other empty is just "not annotated yet" and must stay out.
+                if include_empty_verified and p["status"] == "verified":
+                    n_negatives += 1
+                    train_pages.append(p)
+                elif not status_filter:
+                    train_pages.append(p)      # legacy: cocosplit pools it
+                continue
+            train_pages.append(p)
 
     # P10.5 learning-curve runs: train on a deterministic NESTED subset.
     # Ordering by each stem's hash is stable across runs and projects, so the
@@ -215,14 +247,21 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     n_before_fraction = len(train_pages)
     if train_fraction < 1.0 and train_pages:
         import hashlib
-        ranked = sorted(train_pages,
-                        key=lambda p: hashlib.sha1(p["stem"].encode()).hexdigest())
-        keep = max(1, round(len(ranked) * train_fraction))
-        kept_stems = {p["stem"] for p in ranked[:keep]}
-        train_pages = [p for p in train_pages if p["stem"] in kept_stems]
-        n_negatives = sum(1 for p in train_pages if p["n_boxes"] == 0)
 
-    server_side_split = bool(test_set)
+        def _key(p):                           # stem alone = the single-project key
+            return f"{p['project']}/{p['stem']}" if multi else p["stem"]
+        ranked = sorted(train_pages,
+                        key=lambda p: hashlib.sha1(_key(p).encode()).hexdigest())
+        keep = max(1, round(len(ranked) * train_fraction))
+        kept_stems = {_key(p) for p in ranked[:keep]}
+        train_pages = [p for p in train_pages if _key(p) in kept_stems]
+        n_negatives = sum(1 for p in train_pages if p["n_boxes"] == 0)
+    for name, st in per_source.items():
+        mine = [p for p in train_pages if p.get("project", project_name) == name]
+        st["n_train_pages"] = len(mine)
+        st["n_negatives"] = sum(1 for p in mine if p.get("n_boxes") == 0)
+
+    server_side_split = any(g.get("test_stems") for g in groups)
 
     # ── 1b. nested scope: expand pages into per-parent crops ─────────────────
     n_parents = n_crop_negatives = 0
@@ -278,7 +317,8 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     # ── 4. Training shell script ─────────────────────────────────────────────
     remote_ws = "/workspace"
     split_block = make_split_block(project_name, server_side_split)
-    img_subdir = images_subdir(scope)
+    # multi-project: file names carry "<project>/images/", read from the root
+    image_root = remote_ws if multi else f"{remote_ws}/{project_name}/{images_subdir(scope)}"
     extra_opts = ""
     if n_negatives:
         # otherwise detectron2 silently drops the negative examples
@@ -296,9 +336,9 @@ cd {remote_ws}/layout-model-training/tools
 python3 train_net.py \\
     --dataset_name          {project_name}-layout \\
     --json_annotation_train {remote_ws}/{project_name}/train.json \\
-    --image_path_train      {remote_ws}/{project_name}/{img_subdir} \\
+    --image_path_train      {image_root} \\
     --json_annotation_val   {remote_ws}/{project_name}/test.json \\
-    --image_path_val        {remote_ws}/{project_name}/{img_subdir} \\
+    --image_path_val        {image_root} \\
     --resume \\
     --config-file           {remote_ws}/layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml \\
     OUTPUT_DIR  {remote_ws}/layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/ \\
@@ -343,6 +383,10 @@ echo "=== Training complete ==="
         "n_skip":                 counts.get("skip", 0),
         "status_counts":          counts,
         "missing_test_stems":     missing_test,
+        "image_root":             image_root,
+        # several training projects (P13): per-project counts
+        **({"training_sources": [g["name"] for g in groups[1:]],
+            "sources": per_source} if multi else {}),
         # nested detection scope (§H8)
         "scope":                  scope,
         "model_labels":           list(labels),
