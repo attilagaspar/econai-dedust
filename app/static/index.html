@@ -72,6 +72,8 @@
         <span style="font-size:11px;color:#666">%</span>
         <button class="nav-btn" id="trim-overlaps-btn" onclick="trimOverlaps()" disabled
                 title="For every overlapping pair, split the overlap region evenly between both shapes">✂ Trim overlaps</button>
+        <button class="nav-btn" id="merge-overlaps-btn" onclick="mergeOverlaps()" disabled
+                title="Merge overlapping boxes of the SAME label into one box that covers them all (e.g. a stack of predicted 'stop' boxes → one stop box). Never merges different labels; lattice cells are left alone. Ctrl+Z undoes it.">⊞ Merge overlaps</button>
         <button class="nav-btn" id="lattice-btn" onclick="openLatticeModal()" disabled
                 title="Detect lattice rows and columns from annotated cells (whole page = one table)">🔲 Lattice</button>
         <button class="nav-btn" id="lattice-sel-btn" onclick="runLatticeDetectSelection()" disabled

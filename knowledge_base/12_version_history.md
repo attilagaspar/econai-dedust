@@ -363,3 +363,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   frozen test pages, scored separately, saved as `score_by_project` on the
   ledger row and shown in the history). Smoke-tested locally; the GPU path
   is untested on a real run. Tests.
+- **Nov 6 — editor ⊞ Merge overlaps**: merges overlapping boxes of the same
+  label into their union box (chains and several groups per page; never
+  across labels; lattice cells untouched; best score kept, stale text
+  dropped; undoable) — for verifying model predictions that stack several
+  boxes on one object. Checked in the browser on a smoke page.

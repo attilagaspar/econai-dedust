@@ -154,6 +154,7 @@ async function loadFolder() {
   document.getElementById('clear-ann-btn').disabled=false;
   document.getElementById('overlap-btn').disabled=false;
   document.getElementById('trim-overlaps-btn').disabled=false;
+  document.getElementById('merge-overlaps-btn').disabled=false;
   document.getElementById('lattice-btn').disabled=false;
   document.getElementById('lattice-sel-btn').disabled=false;
   document.getElementById('newsflow-btn').disabled=false;

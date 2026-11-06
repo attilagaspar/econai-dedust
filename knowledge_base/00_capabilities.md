@@ -196,6 +196,12 @@ one LabelMe-style JSON per page as the single source of truth.
 
 - **Detect** from box geometry; **completion** fills grid holes; multi-pass
   hole fix; overlap removal; snap-to-grid; trim overlaps.
+- **⊞ Merge overlaps** (editor toolbar, any page): overlapping boxes of the
+  *same* label become one box covering them all, repeated until none
+  overlap (chains merge), several groups per page; different labels never
+  merge, lattice cells are left alone; the kept box is the group's
+  highest-scoring one, its OCR/LLM text is dropped (the box changed);
+  merged boxes are selected; Ctrl+Z undoes it.
 - **Multi-table pages**: independent lattices per page (`table` id), carve /
   ✂ split / ✕ delete per table; **multi-lattice segmentation** option
   (stacked tables split at coverage gaps or divider annotations) on both the

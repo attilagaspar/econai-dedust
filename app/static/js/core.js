@@ -664,6 +664,73 @@ async function trimOverlaps() {
   showToast(`Trimmed ${trimmed} overlapping pair${trimmed !== 1 ? 's' : ''}`);
 }
 
+// Merge overlapping boxes of the SAME label into one box covering them all
+// (e.g. a model that predicts a stack of overlapping "stop" boxes). Repeats
+// until no two same-label boxes overlap, so a merged box that now reaches a
+// further box absorbs it too; boxes of different labels are never merged.
+// Lattice cells are left alone. Undoable (Ctrl+Z).
+async function mergeOverlaps() {
+  if (!pageData?.shapes?.length) return;
+  const before = pageData.shapes.length;
+  const snapshot = JSON.parse(JSON.stringify(pageData.shapes));
+  const { shapes, merged } = _mergeSameLabelOverlaps(pageData.shapes);
+  if (!merged.length) { showToast('No overlapping boxes of the same label'); return; }
+  undoStack.push(snapshot);
+  if (undoStack.length > 50) undoStack.shift();
+  pageData.shapes = shapes;
+  selSet.clear();
+  merged.forEach(i => selSet.add(i));
+  selIdx = merged[0];
+  drawOverlay();
+  await replaceAllShapes();          // persist before the panel fetches crops
+  updatePanel();
+  const n = before - shapes.length;
+  showToast(`Merged ${n + merged.length} box${n + merged.length !== 1 ? 'es' : ''} into ${merged.length} ` +
+            `(selected) — Ctrl+Z to undo`);
+}
+
+/** Pure: merge same-label overlapping boxes. Returns {shapes, merged} where
+ *  merged lists the indices (in the returned array) of the boxes that grew.
+ *  The kept box is the group's highest-scoring one (else the first); it
+ *  takes the union bounding box and the group's best score. Text read from
+ *  the old boxes no longer matches the new box, so it is dropped. */
+function _mergeSameLabelOverlaps(shapes) {
+  const out = shapes.map(s => ({ ...s }));
+  const alive = out.map(s => s.super_row == null && (s.points?.length || 0) >= 2);
+  const grew = new Set();
+  const rect = s => _shapeRect(s);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < out.length && !changed; i++) {
+      if (!alive[i]) continue;
+      for (let j = i + 1; j < out.length; j++) {
+        if (!alive[j] || out[j].label !== out[i].label) continue;
+        const a = rect(out[i]), b = rect(out[j]);
+        if (_intersectionArea(a, b) <= 0) continue;
+        const sa = out[i].score, sb = out[j].score;
+        const keepJ = sb != null && (sa == null || sb > sa);
+        const [k, d] = keepJ ? [j, i] : [i, j];
+        out[k].points = [[Math.min(a.x1, b.x1), Math.min(a.y1, b.y1)],
+                         [Math.max(a.x2, b.x2), Math.max(a.y2, b.y2)]];
+        out[k].shape_type = 'rectangle';
+        if (sa != null || sb != null) out[k].score = Math.max(sa ?? -Infinity, sb ?? -Infinity);
+        for (const key of ['tesseract_output', 'easyocr_output', 'openai_output', 'human_output'])
+          delete out[k][key];
+        alive[d] = false;
+        grew.delete(d);
+        grew.add(k);
+        changed = true;
+        break;
+      }
+    }
+  }
+  const keep = [], index = new Map();
+  out.forEach((s, i) => { if (alive[i] || s.super_row != null || (s.points?.length || 0) < 2) {
+    index.set(i, keep.length); keep.push(s); } });
+  return { shapes: keep, merged: [...grew].map(i => index.get(i)).sort((x, y) => x - y) };
+}
+
 // ── Pure (no-UI) helpers for batch use ───────────────────────────────────────
 
 /** Snap all lattice shapes in `shapes` in-place to their row/col band medians,
