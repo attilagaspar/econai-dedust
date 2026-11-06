@@ -896,7 +896,44 @@ async function selectProject(name) {
   }
   renderDetectionScope();
   renderRecordSettings();
+  renderTrainLabels();
   renderRenderScale();
+}
+
+// ── Model classes (roadmap P13) ─────────────────────────────────────────────
+// config.train_labels = the palette labels the model learns; absent = all.
+function renderTrainLabels() {
+  const box = document.getElementById('train-labels');
+  if (!box || !activeProj) return;
+  const labels = activeProj.config?.labels || [];
+  const chosen = activeProj.config?.train_labels || labels;
+  box.innerHTML = labels.map(l =>
+    `<label style="font-size:0.8rem;color:#ccc;margin-right:10px;cursor:pointer;white-space:nowrap;">` +
+    `<input type="checkbox" data-train-label="${l}"${chosen.includes(l) ? ' checked' : ''} ` +
+    `onchange="onTrainLabelsChange()" style="accent-color:#e94560;width:13px;height:13px;vertical-align:middle;"> ${l}</label>`
+  ).join('');
+  const hint = document.getElementById('train-labels-hint');
+  const trained = activeProj.trained_labels;
+  if (hint) hint.textContent = trained ? `current model: ${trained.join(', ')}` : 'no model trained yet';
+}
+
+async function onTrainLabelsChange() {
+  if (!activeProj) return;
+  const picked = [...document.querySelectorAll('[data-train-label]')]
+    .filter(c => c.checked).map(c => c.dataset.trainLabel);
+  if (!picked.length) { showToast('Keep at least one class', 3000, 'red'); renderTrainLabels(); return; }
+  const res = await fetch(`/api/project/${activeProj.name}/config`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ train_labels: picked }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    activeProj.config = data.config || activeProj.config;
+    showToast(`Model classes: ${(activeProj.config.train_labels || activeProj.config.labels).join(', ')}`);
+  } else {
+    showToast('Error: ' + errMsg(data), 4000, 'red');
+  }
+  renderTrainLabels();
 }
 
 // ── Record chaining settings (§H5: record_label + layout_columns) ───────────
@@ -1286,6 +1323,12 @@ function renderDetail() {
           <input id="tp-train-fraction" type="number" min="0.05" max="1" step="0.05" value="1"
                  style="width:60px;background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 6px;font-size:0.8rem;">
         </label>
+      </div>
+      <div class="btn-row" style="align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap;"
+           title="The labels the model learns (its classes). Boxes of unticked labels are ignored in training and scoring — e.g. record boxes derived from the start / stop / ignore boxes. Class ids follow the palette order; a fine-tune needs the same classes as its source model. Saved in the project config.">
+        <span style="font-size:0.8rem;color:#aaa;">Model classes:</span>
+        <span id="train-labels"></span>
+        <span id="train-labels-hint" style="font-size:0.75rem;color:#667;"></span>
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
@@ -2260,7 +2303,7 @@ async function prepareTrainingData() {
       if (data.scope && data.scope !== 'page')
         hygiene.push(`<span style="color:#7dd3fc;">scope ${data.scope}: ${data.n_parents} crop(s) from ${data.n_scope_pages} page(s)` +
                      (data.n_crop_negatives ? `, ${data.n_crop_negatives} childless parent(s) as negatives` : '') + '</span>');
-      el.innerHTML = `✓ ${data.n_annotated} annotated ${data.scope && data.scope !== 'page' ? 'crops' : 'pages'} · ${data.n_annotations} boxes · ${data.n_classes} labels<br>
+      el.innerHTML = `✓ ${data.n_annotated} annotated ${data.scope && data.scope !== 'page' ? 'crops' : 'pages'} · ${data.n_annotations} boxes · ${data.n_classes} classes (${(data.model_labels || []).join(', ')})<br>
         ${hygiene.join(' · ')}<br>
         Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch} · NUM_WORKERS=${data.num_workers}</code><br>
         COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;

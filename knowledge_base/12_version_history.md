@@ -343,3 +343,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   every fragment's y-range at the ignore boxes overlapping it and trims
   the pieces separately; later pieces are ⛓ continuations. A fragment can
   no longer overlap an ignore box. Test.
+- **Nov 6 — model classes as a subset of the palette (roadmap P13, phase 1)**:
+  `train_labels` in the config (dashboard checklist), used by Prepare /
+  Train / Fine-tune; negatives counted after the class filter; own
+  inference and the infer-from gate read the trained classes; test-set
+  scoring counts only the model's classes (it counted every label, so
+  derived record boxes inflated corrections-per-page). Plan: roadmap P13,
+  doc 11 "Pooling". Tests.

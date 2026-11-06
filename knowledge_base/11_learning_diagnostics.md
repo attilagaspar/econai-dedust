@@ -142,6 +142,25 @@ or a new source entirely, measure instead of guessing:
 The same measurement, repeated after the fine-tune, tells you when the new
 source has caught up.
 
+### Pooling: one model for a whole series
+
+Once several volumes of one source each have a verified set (Compass 1877,
+1882, 1887, 1892), a single model trained on all of them usually beats any
+one volume's model on the years *between* them: it has seen the whole range
+of the layout's drift instead of one point of it. Whether it does is again a
+measurement, not a belief:
+
+1. Train the pooled model on all volumes but one (e.g. leave out 1887).
+2. Score it on the left-out volume's frozen test set, and next to it the
+   neighbouring single-volume models and the left-out volume's own model.
+3. Pooled close to "own" and better than the neighbours → train the full
+   pool and use it for the in-between years, each with its own small frozen
+   test set (step 1 of the transfer recipe above).
+
+Two rules keep the comparison honest: the score counts only the labels the
+model predicts (a page's other boxes are not the model's job), and every
+volume's test pages stay out of training. Build items: roadmap P13.
+
 ---
 
 ## Rules of thumb

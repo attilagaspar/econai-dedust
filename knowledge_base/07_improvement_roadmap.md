@@ -357,6 +357,75 @@ Absorbs the old dataset-layer "Later: cross-project joins by entity id" note.
 
 ---
 
+## P13. Training on several projects + choosing the model's classes (added 2026-11-06)
+
+*Status: planned 2026-11-06, building on branch `multi-source-training`.*
+
+Motivation: a series of volumes of one source (four Compass years with
+~1,700 verified pages) wants ONE pooled model for the years in between, and
+the projects' palettes have grown labels the model must not learn (record
+fragments derived from start/stop/ignore). Both are general: any project
+may train on other projects' verified pages, and any training picks its
+classes from the palette.
+
+**Facts found while planning** (code as of 803f63b):
+- Prepare, Train and Fine-tune all take the class list from the project's
+  full palette (`cfg["labels"]`); a label added later (e.g. by fragment
+  derivation) silently becomes a class, and Fine-tune-from then refuses
+  ("Label mismatch") because the source model has fewer classes.
+- A project's own inference script passes the palette, not the class list
+  the weights were trained with — wrong class names as soon as the two
+  differ in anything but a trailing extra label.
+- Test-set scoring (`eval_diff`) counts every ground-truth label, so boxes
+  of labels the model never predicts all count as "missed" and inflate
+  corrections-per-page.
+
+**Config** (project `config.json`, all optional):
+- `train_labels` — the model's classes, a subset of `labels`, always in
+  palette order (class ids follow it). Absent = whole palette (today's
+  behaviour). Under a nested scope the parent label is never a class.
+- `training_sources` — other projects whose pages train with this one's.
+  A "model project" is simply a project with no pages of its own and a
+  list of sources; its output folder, history and infer-from all work as
+  for any project.
+- `eval_projects` — projects whose frozen test sets are scored but never
+  trained on (held-out volumes for the leave-one-out check).
+
+**Rules**:
+- Every source and eval project must exist on this instance and hold
+  every train label in its palette (a source without label X would teach
+  "no X here" on all its pages) — refused with a 400 naming the gap.
+- Sources use the same page filters as the own project (status filter,
+  skip pages, verified-empty negatives, train fraction); each source's
+  frozen test pages go to the test side, never to training.
+- First version: whole-page scope only when sources are set.
+- Negatives are counted after the class filter (a verified page whose boxes
+  are all non-classes is a negative).
+- Single-project exports stay byte-for-byte as today; only with sources do
+  COCO file names become `<project>/images/<file>` under `/workspace`.
+- Images: each source's images live once on the GPU server under
+  `/workspace/<source>/images`; the push uploads only files missing there.
+
+**Scoring**: `eval_diff` and test-eval count only the model's classes. After
+a multi-project training, "📏 Score per project" runs the model on each
+source's and eval project's frozen test pages and reports
+corrections-per-page per project (same metric as the history's `corr/page`
+column of each single-volume model), stored on the ledger row with the
+per-project page counts.
+
+**Phases**:
+1. **Class subset** — `train_labels` (config + Prepare / Train / Fine-tune),
+   negatives after filtering, own inference and infer-from gate on the
+   trained class list, scoring restricted to model classes; dashboard
+   checklist.
+2. **Several sources** — `training_sources` in the export, per-source image
+   upload, multi-root training/fine-tune scripts, ledger fields.
+3. **Panel + held-out scoring** — dashboard "Training data" section (sources
+   with verified / test counts and label compatibility; held-out checkbox),
+   `eval_projects`, "📏 Score per project".
+
+---
+
 ## Suggested sequencing
 
 1. **P7.1/2/5** (cache, atomic writes, hygiene) — one short session, removes recurring pain.

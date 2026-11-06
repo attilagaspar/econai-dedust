@@ -418,6 +418,12 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   page), nested train-fraction subsets for learning curves, correction
   telemetry (predicted→corrected diffs logged on status change), transfer
   check (score any model on any project's frozen set).
+- **Model classes (P13)**: per-project `train_labels` picks which palette
+  labels the model learns (dashboard checklist in Prepare Training Data,
+  palette order = class ids); other labels' boxes are ignored, a verified
+  page holding only non-classes trains as a negative. Fine-tune's class
+  check, own inference and the infer-from gate use the chosen / trained
+  classes, and test-set scoring counts only the model's classes.
 - **Detection scope — nested detection** (§H8 of
   [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)):
   per-project `detection_scope` = `page` (default) or `within:<label>`.

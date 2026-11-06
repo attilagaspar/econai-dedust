@@ -90,13 +90,19 @@ def diff_page(gt_shapes: list[dict], pred_shapes: list[dict],
 
 def evaluate_test_set(ann_dir: Path, pred_dir: Path, stems: list[str],
                       iou_match: float = IOU_MATCH,
-                      iou_tight: float = IOU_TIGHT) -> dict:
+                      iou_tight: float = IOU_TIGHT,
+                      labels: list[str] | None = None) -> dict:
     """Score predictions against annotations for the given stems.
     Pages without a prediction file count every GT shape as 'added'
-    (the model produced nothing for them)."""
+    (the model produced nothing for them).
+
+    labels — the model's classes; when given, shapes of every other label
+    are ignored on both sides (a page's other boxes are not the model's job,
+    and counting them as 'missed' inflates corrections-per-page)."""
     per_label: dict = {}
     per_page = []
     n_missing_pred = 0
+    keep = set(labels) if labels else None
 
     for stem in stems:
         ann_f = ann_dir / f"{stem}.json"
@@ -109,6 +115,9 @@ def evaluate_test_set(ann_dir: Path, pred_dir: Path, stems: list[str],
         else:
             pred = []
             n_missing_pred += 1
+        if keep is not None:
+            gt   = [s for s in gt if s.get("label", "") in keep]
+            pred = [s for s in pred if s.get("label", "") in keep]
         page = diff_page(gt, pred, iou_match, iou_tight)
         tot = {"added": 0, "deleted": 0, "moved": 0, "ok": 0}
         for label, c in page.items():
@@ -136,4 +145,5 @@ def evaluate_test_set(ann_dir: Path, pred_dir: Path, stems: list[str],
         "per_page": per_page,
         "iou_match": iou_match,
         "iou_tight": iou_tight,
+        "labels": list(labels) if labels else None,
     }

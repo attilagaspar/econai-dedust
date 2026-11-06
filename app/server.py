@@ -4601,6 +4601,9 @@ class ConfigUpdate(BaseModel):
     # strings — trimmed, blanks dropped, de-duplicated; [] clears)
     notes: Optional[str]  = None
     tags:  Optional[list] = None
+    # P13: the model's classes, a subset of labels ([] or the whole palette
+    # clears → every label is a class)
+    train_labels: Optional[list] = None
 
 
 @app.patch("/api/project/{name}/config")
@@ -4658,6 +4661,18 @@ def api_update_config(name: str, body: ConfigUpdate):
             cfg["llm"] = {**cfg.get("llm", {}), **body.llm}
         if body.labels is not None:
             cfg["labels"] = body.labels
+        if body.train_labels is not None:
+            palette = list(cfg.get("labels") or [])
+            unknown = [l for l in body.train_labels if l not in palette]
+            if unknown:
+                raise HTTPException(status_code=400,
+                                    detail=f"train_labels {unknown} are not labels of "
+                                           f"project '{name}' (labels: {palette})")
+            picked = [l for l in palette if l in body.train_labels]
+            if not picked or picked == palette:
+                cfg.pop("train_labels", None)
+            else:
+                cfg["train_labels"] = picked
         if body.notes is not None:
             if body.notes.strip():
                 cfg["notes"] = body.notes
@@ -6673,6 +6688,25 @@ def _resolve_scope(cfg: dict, requested: Optional[str] = None) -> str:
     return s
 
 
+def _train_labels(cfg: dict) -> list:
+    """The project's chosen model classes (config `train_labels`, roadmap
+    P13) in palette order; the whole palette when none are chosen. Labels
+    no longer in the palette are dropped; if none remain, the whole palette."""
+    palette = list(cfg.get("labels") or [])
+    chosen = set(cfg.get("train_labels") or [])
+    picked = [l for l in palette if l in chosen]
+    return picked or palette
+
+
+def _model_labels(cfg: dict, scope: str) -> list:
+    """The class list a Prepare under `scope` produces: the chosen classes
+    minus a nested scope's parent label."""
+    from app import scope as _scope
+    return _scope.scope_labels(
+        [l for l in cfg.get("labels") or []
+         if l in _train_labels(cfg) or l == _scope.parent_label_of(scope)], scope)
+
+
 def _frozen_test_stems(pdir) -> list:
     """Frozen test-set stems for the training export, [] when none frozen."""
     from app import training_meta
@@ -6708,6 +6742,7 @@ def api_prepare(name: str, body: Optional[PrepareRequest] = None):
             train_fraction         = body.train_fraction,
             scope                  = scope,
             crop_margin            = body.crop_margin if body.crop_margin is not None else 12.0,
+            train_labels           = _train_labels(cfg),
         )
         return {"ok": True, **result}
     except HTTPException:
@@ -6854,6 +6889,8 @@ class TestEvalRequest(BaseModel):
     iou_match: float = 0.5
     iou_tight: float = 0.9
     record:    bool  = True    # attach the result to the latest ledger row
+    # the classes to score; None → the project's current model classes
+    labels:    Optional[list] = None
 
 
 @app.post("/api/project/{name}/test-eval")
@@ -6872,17 +6909,19 @@ def api_test_eval(name: str, body: TestEvalRequest = TestEvalRequest()):
         raise HTTPException(status_code=400,
                             detail="No predictions pulled yet — run inference "
                                    "and 'Pull predictions' first.")
+    labels = body.labels or _trained_labels(name) or _train_labels(load_config(name))
     result = eval_diff.evaluate_test_set(pdir / "annotations", pred_dir,
                                          ts.get("stems", []),
                                          iou_match=body.iou_match,
-                                         iou_tight=body.iou_tight)
+                                         iou_tight=body.iou_tight,
+                                         labels=labels)
     if body.record:
         rows = training_meta.load_ledger(pdir)
         if rows:
             compact = {k: result[k] for k in
                        ("n_pages", "totals", "corrections_total",
                         "corrections_per_page", "per_label",
-                        "n_missing_predictions")}
+                        "n_missing_predictions", "labels")}
             training_meta.ledger_update(pdir, rows[-1]["id"],
                                         test_eval=compact)
     return result
@@ -7346,10 +7385,12 @@ def _push_infer_data_gen(name: str, srv: dict, passphrase: str, skip_images: boo
     parent_label = _scope.parent_label_of(scope)
 
     # infer.sh always reflects the CURRENT scope (the yaml + weights are the
-    # model's own, prepared under the same scope).
+    # model's own, prepared under the same scope). Class names come from what
+    # the weights were trained with — the palette may hold further labels.
     inter.mkdir(parents=True, exist_ok=True)
     (inter / "infer.sh").write_text(
-        make_infer_script(name, cfg["labels"], scope=scope), encoding="utf-8")
+        make_infer_script(name, _trained_labels(name) or _train_labels(cfg),
+                          scope=scope), encoding="utf-8")
     if parent_label is not None:
         pstats = _scope.export_parents(pdir / "annotations", inter / "parents", parent_label)
         yield (f"[push] detection scope = {scope}: {pstats['n_parents']} parent shape(s) "
@@ -7763,8 +7804,8 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
                                else src_cfg.get("detection_scope"))
         # Cheap label gate before the GPU-server gate, so a bad pairing is
         # a plain 400 rather than an error line deep in the SSE stream.
-        _require_label_subset(name, cfg.get("labels", []),
-                              source, src_cfg.get("labels", []))
+        _require_label_subset(name, cfg.get("labels", []), source,
+                              _trained_labels(source) or src_cfg.get("labels", []))
         srv = _server_cfg(name)
         passphrase = body.passphrase or srv.get("passphrase")
 
@@ -7843,9 +7884,8 @@ async def api_finetune_from(name: str, source: str,
         # warm start without telling anyone. The comparison is against the
         # class list the source MODEL was trained with (not its palette,
         # which may have grown since), in order — class ids follow it.
-        from app import scope as _scope_mod
         trained = _trained_labels(source) or list(src_cfg.get("labels", []))
-        want    = list(_scope_mod.scope_labels(cfg.get("labels", []), scope))
+        want    = _model_labels(cfg, scope)
         if want != trained:
             if set(want) == set(trained):
                 detail = (f"Label order differs: '{name}' lists {want} but the "
@@ -7853,10 +7893,11 @@ async def api_finetune_from(name: str, source: str,
                           f"follow the palette order — reorder '{name}'s labels "
                           f"to match (dashboard label palette).")
             else:
-                detail = (f"Label mismatch: '{name}' has {want} but the '{source}' "
-                          f"model was trained with {trained}. Fine-tune-from needs "
-                          f"the same class list (the class head is copied); "
-                          f"infer-from accepts a subset.")
+                detail = (f"Label mismatch: '{name}' trains the classes {want} but "
+                          f"the '{source}' model was trained with {trained}. "
+                          f"Fine-tune-from needs the same class list (the class "
+                          f"head is copied) — pick the model classes in Prepare "
+                          f"Training Data; infer-from accepts a subset.")
             raise HTTPException(status_code=400, detail=detail)
 
         srv        = _server_cfg(name)
@@ -7882,6 +7923,7 @@ async def api_finetune_from(name: str, source: str,
             include_empty_verified = body.include_empty_verified,
             test_stems             = _frozen_test_stems(pdir),
             scope                  = scope,
+            train_labels           = _train_labels(cfg),
         )
         img_subdir = images_subdir(scope)
 

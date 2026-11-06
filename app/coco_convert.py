@@ -115,7 +115,8 @@ def prepare_training_data(project_name: str, ann_dir: Path,
                           test_stems: list[str] | None = None,
                           train_fraction: float = 1.0,
                           scope: str = "page",
-                          crop_margin: float = 12.0) -> dict:
+                          crop_margin: float = 12.0,
+                          train_labels: list[str] | None = None) -> dict:
     """
     1. Convert LabelMe JSONs → COCO annotations.json (status-filtered).
     2. When a frozen test set is given: write train.json/test.json here
@@ -131,11 +132,25 @@ def prepare_training_data(project_name: str, ann_dir: Path,
     = negatives, crops inherit the page's train/test side); the model's
     classes are the labels minus the parent label; train.sh reads images
     from /workspace/<project>/crops.
+
+    train_labels (roadmap P13) — the model's classes, a subset of `labels`;
+    None = all of them. Boxes of other labels are ignored, and a page whose
+    boxes are ALL other labels counts as empty (a verified one trains as a
+    negative). Class ids follow the palette order, whatever order is given.
     """
     from app import scope as _scope
     scope = _scope.normalize_scope(scope)
     parent_label = _scope.parent_label_of(scope)
-    model_labels = _scope.scope_labels(labels, scope)
+    if train_labels:
+        unknown = [l for l in train_labels if l not in labels]
+        if unknown:
+            raise ValueError(f"train labels {unknown} are not in the project's "
+                             f"labels {labels}")
+        chosen = [l for l in labels if l in train_labels or l == parent_label]
+    else:
+        chosen = list(labels)
+    model_labels = _scope.scope_labels(chosen, scope)
+    model_set = set(model_labels)
     # Guard against junk values from the UI
     max_iter      = max(1, int(max_iter or 2000))
     ims_per_batch = max(1, int(ims_per_batch or 2))
@@ -172,7 +187,12 @@ def prepare_training_data(project_name: str, ann_dir: Path,
         if status_filter and p["status"] not in TRAIN_STATUSES:
             n_excluded_status += 1
             continue
-        if p["n_shapes"] == 0:
+        # page scope: only the model's classes count (a nested scope needs
+        # the page's parent shapes, which are never classes)
+        n_boxes = p["n_shapes"] if parent_label is not None else sum(
+            1 for sh in p["data"].get("shapes") or [] if sh.get("label") in model_set)
+        p["n_boxes"] = n_boxes
+        if n_boxes == 0:
             # empty page: a verified empty is a negative example (opt-out);
             # any other empty is just "not annotated yet" and must stay out.
             if include_empty_verified and p["status"] == "verified":
@@ -200,7 +220,7 @@ def prepare_training_data(project_name: str, ann_dir: Path,
         keep = max(1, round(len(ranked) * train_fraction))
         kept_stems = {p["stem"] for p in ranked[:keep]}
         train_pages = [p for p in train_pages if p["stem"] in kept_stems]
-        n_negatives = sum(1 for p in train_pages if p["n_shapes"] == 0)
+        n_negatives = sum(1 for p in train_pages if p["n_boxes"] == 0)
 
     server_side_split = bool(test_set)
 
