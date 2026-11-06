@@ -432,6 +432,16 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   `/workspace`, each source's images uploaded once into its own folder
   (only missing files); Train and Fine-tune; per-project counts in the
   summary and the ledger. Whole-page scope only.
+  Dashboard: "Training data → Choose projects…" in Prepare Training Data
+  (usable projects with corrected + verified and test-page counts; train /
+  held-out checkboxes; projects lacking a model class listed apart).
+- **Per-project scoring (P13)**: `eval_projects` (held out: scored, never
+  trained); "📏 Score per project" (`POST /api/project/<p>/score-projects`)
+  runs the model on the frozen test pages of the project, its sources and
+  its held-out projects (images symlinked under `/workspace/<p>/eval/`, no
+  copies), pulls and scores each project separately (corrections per page,
+  model classes only) onto the latest ledger row (`score_by_project`,
+  shown under the history row). Other projects are only read.
 - **Detection scope — nested detection** (§H8 of
   [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)):
   per-project `detection_scope` = `page` (default) or `within:<label>`.

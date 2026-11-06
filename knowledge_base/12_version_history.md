@@ -356,3 +356,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   set (400 when a source lacks a model class), multi-project COCO names
   under `/workspace`, source images uploaded only where missing, per-source
   counts in the summary + ledger. Single-project exports unchanged. Tests.
+- **Nov 6 — training data panel + per-project scoring (P13, phase 3)**:
+  "Training data → Choose projects…" in the dashboard (train / held-out per
+  usable project, counts, label gaps; `GET training-candidates`);
+  "📏 Score per project" (`POST score-projects`: model on each project's
+  frozen test pages, scored separately, saved as `score_by_project` on the
+  ledger row and shown in the history). Smoke-tested locally; the GPU path
+  is untested on a real run. Tests.

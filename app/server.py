@@ -7965,6 +7965,205 @@ async def api_infer_from(name: str, source: str, body: InferFromRequest = InferF
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Per-project scoring of a (pooled) model (roadmap P13) ────────────────────
+
+def _score_targets(name: str, cfg: dict, labels: list) -> list:
+    """The projects a model is scored on, each by its frozen test set: the
+    project itself (if it has one), its training sources and its held-out
+    eval projects. Every target must hold all model classes."""
+    out = []
+    roles = ([(name, "own")] +
+             [(p, "train") for p in cfg.get("training_sources") or []] +
+             [(p, "held out") for p in cfg.get("eval_projects") or []])
+    for proj, role in roles:
+        if proj != name:
+            _check_label_coverage(name, proj, labels)
+        pdir = project_dir(proj)
+        stems = [s for s in _frozen_test_stems(pdir)
+                 if (pdir / "annotations" / f"{s}.json").exists()]
+        if not stems:
+            continue
+        images = []
+        for s in stems:
+            data = json.loads((pdir / "annotations" / f"{s}.json").read_text(encoding="utf-8"))
+            images.append(Path(data.get("imagePath") or f"{s}.jpg").name)
+        out.append({"project": proj, "role": role, "stems": stems, "images": images})
+    return out
+
+
+def _score_pulled(name: str, targets: list, labels: list) -> dict:
+    """Score the pulled per-project predictions (intermediate/eval/<target>/)
+    against each target's verified annotations — the test-eval metric,
+    restricted to the model's classes. Reads the targets, never writes them."""
+    from app import eval_diff
+    out = {}
+    for t in targets:
+        res = eval_diff.evaluate_test_set(
+            project_dir(t["project"]) / "annotations",
+            project_dir(name) / "intermediate" / "eval" / t["project"],
+            t["stems"], labels=labels)
+        out[t["project"]] = {"role": t["role"], **{k: res[k] for k in
+                             ("n_pages", "totals", "corrections_per_page",
+                              "per_label", "n_missing_predictions")}}
+    return out
+
+
+@app.get("/api/project/{name}/training-candidates")
+def api_training_candidates(name: str):
+    """Other projects that could train with this one or be held out (P13):
+    for each, its role in the config, the model classes its palette lacks
+    (non-empty = not usable), its trainable pages (corrected + verified) and
+    its frozen test-set size. Pages are only counted for usable projects."""
+    from app.coco_convert import TRAIN_STATUSES
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    classes = _model_labels(cfg, "page")
+    sources = cfg.get("training_sources") or []
+    held = cfg.get("eval_projects") or []
+    out = []
+    for p in list_projects():
+        other = p["name"]
+        if other == name:
+            continue
+        try:
+            ocfg = load_config(other)
+        except Exception:
+            continue
+        missing = [l for l in classes if l not in (ocfg.get("labels") or [])]
+        row = {"name": other, "missing": missing, "pages": p.get("pages", 0),
+               "role": "train" if other in sources else "held out" if other in held else "",
+               "scope": ocfg.get("detection_scope") or "page"}
+        if not missing:
+            n_train = 0
+            for jf in (project_dir(other) / "annotations").glob("*.json"):
+                try:
+                    st = (json.loads(jf.read_text(encoding="utf-8")).get("flags") or {}).get("status")
+                except Exception:
+                    continue
+                n_train += st in TRAIN_STATUSES
+            row["n_trainable"] = n_train
+            row["n_test"] = len(_frozen_test_stems(project_dir(other)))
+        out.append(row)
+    out.sort(key=lambda r: (bool(r["missing"]), r["name"]))
+    return {"classes": classes, "candidates": out}
+
+
+class ScoreProjectsRequest(BaseModel):
+    passphrase:     Optional[str] = None
+    threshold:      float = 0.5       # the own-inference default
+    keep_container: bool = False
+
+
+@app.post("/api/project/{name}/score-projects")
+async def api_score_projects(name: str, body: ScoreProjectsRequest = ScoreProjectsRequest()):
+    """Run this project's model on the frozen test pages of itself, its
+    training sources and its held-out eval projects, pull the predictions
+    and score each project separately (corrections per page, model classes
+    only). The result goes on the latest ledger row as `score_by_project`.
+    Target projects are only read. Streams the log via SSE."""
+    from app import ssh_ops, training_meta
+    from app.coco_convert import make_score_script
+    try:
+        try:
+            cfg = load_config(name)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        labels = _trained_labels(name)
+        if not labels:
+            raise HTTPException(status_code=400, detail=f"'{name}' has no trained model yet")
+        targets = _score_targets(name, cfg, labels)
+        if not targets:
+            raise HTTPException(status_code=400,
+                                detail="No frozen test set on this project, its training "
+                                       "sources or its held-out projects — freeze one first.")
+        srv = _server_cfg(name)
+        passphrase   = body.passphrase or srv.get("passphrase")
+        remote       = srv["remote_path"].rstrip("/")
+        predict_root = srv.get("predict_remote_path", remote).rstrip("/")
+        pdir = project_dir(name)
+
+        def full_gen():
+            yield f"[score] model {name} · classes {', '.join(labels)}"
+            for t in targets:
+                yield f"[score] {t['project']} ({t['role']}): {len(t['stems'])} frozen test page(s)"
+            c = ssh_ops._client(srv["host"], srv["user"], srv["key_path"], passphrase)
+            try:
+                _, _out, _ = c.exec_command(
+                    f"docker inspect {_predict_container(srv)} "
+                    "--format '{{range .Mounts}}{{.Source}}:{{.Destination}}{{println}}{{end}}'")
+                container_ws_host = predict_root
+                for _bind in _out.read().decode().strip().splitlines():
+                    _parts = _bind.strip().split(':')
+                    if len(_parts) >= 2 and _parts[1].rstrip('/') == '/workspace':
+                        container_ws_host = _parts[0].rstrip('/')
+                        break
+                pfx = (remote[len(container_ws_host) + 1:] + "/"
+                       if remote.startswith(container_ws_host + "/") else "")
+                sftp = c.open_sftp()
+                try:
+                    for t in targets:
+                        yield from _upload_missing_images(
+                            sftp, project_dir(t["project"]) / "annotations", t["images"],
+                            f"{remote}/{t['project']}/images", t["project"])
+                    for d in (f"{predict_root}/layout-model-training/tools",
+                              f"{predict_root}/layout-model-training/scripts"):
+                        ssh_ops._sftp_mkdir_p(sftp, d)
+                    _sftp_put_force(sftp, str(Path(__file__).parent / "infer_layout.py"),
+                                    f"{predict_root}/layout-model-training/tools/infer_layout.py")
+                    script = make_score_script(name, labels, targets, ws=f"/workspace/{pfx}",
+                                               threshold=body.threshold)
+                    script_host = f"{predict_root}/layout-model-training/scripts/{name}_score.sh"
+                    _sftp_write_force(sftp, script.encode(), script_host)
+                finally:
+                    sftp.close()
+            finally:
+                c.close()
+            if script_host.startswith(container_ws_host + "/"):
+                container_script = "/workspace/" + script_host[len(container_ws_host) + 1:]
+            else:
+                container_script = f"/workspace/{pfx}layout-model-training/scripts/{name}_score.sh"
+
+            _cn = _predict_container(srv)
+            _fin = "" if body.keep_container else "; ec=$?; touch /tmp/dedust_selfstop; exit $ec"
+            yield f"[score] Running the model ({container_script})..."
+            yield from ssh_ops.stream_command(
+                srv["host"], srv["user"], srv["key_path"],
+                f"docker start {_cn} && docker exec {_cn} bash -c 'bash {container_script}{_fin}'",
+                passphrase)
+            yield from _stop_container_gen(srv, passphrase, _cn, "score", body.keep_container)
+
+            import shutil
+            for t in targets:
+                local = pdir / "intermediate" / "eval" / t["project"]
+                shutil.rmtree(local, ignore_errors=True)
+                r = ssh_ops.pull_folder(srv["host"], srv["user"], srv["key_path"],
+                                        f"{remote}/{name}/eval/{t['project']}/pred",
+                                        local, passphrase)
+                if not r.get("ok"):
+                    yield f"ERROR: could not pull {t['project']}'s predictions: {r.get('error')}"
+                    return
+                yield f"[score] pulled {r['files_downloaded']} prediction(s) for {t['project']}"
+            scores = _score_pulled(name, targets, labels)
+            _write_json(pdir / "intermediate" / "eval" / "scores.json",
+                        {"labels": labels, "scores": scores,
+                         "when": time.strftime("%Y-%m-%dT%H:%M:%S")})
+            rows = training_meta.load_ledger(pdir)
+            if rows:
+                training_meta.ledger_update(pdir, rows[-1]["id"], score_by_project=scores)
+            for proj, s in scores.items():
+                yield (f"[score] {proj} ({s['role']}): {s['corrections_per_page']} corrections "
+                       f"per page on {s['n_pages']} test page(s)")
+            yield "[score] Done — saved on the latest training-history row."
+
+        return await _sse_stream(full_gen())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class FinetuneFromRequest(BaseModel):
     passphrase:        Optional[str] = None
     max_iter:          int = 500          # short: we start from good weights

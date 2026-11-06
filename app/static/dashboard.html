@@ -897,6 +897,8 @@ async function selectProject(name) {
   renderDetectionScope();
   renderRecordSettings();
   renderTrainLabels();
+  const srcPanel = document.getElementById('train-sources-panel');
+  if (srcPanel) srcPanel.style.display = 'none';     // belonged to the previous project
   renderRenderScale();
 }
 
@@ -915,6 +917,84 @@ function renderTrainLabels() {
   const hint = document.getElementById('train-labels-hint');
   const trained = activeProj.trained_labels;
   if (hint) hint.textContent = trained ? `current model: ${trained.join(', ')}` : 'no model trained yet';
+  renderTrainSourcesSummary();
+}
+
+// ── Training data from several projects (roadmap P13) ───────────────────────
+// config.training_sources = other projects whose pages train with this one;
+// config.eval_projects = projects only scored (held out).
+function renderTrainSourcesSummary() {
+  const el = document.getElementById('train-sources-summary');
+  if (!el || !activeProj) return;
+  const src = activeProj.config?.training_sources || [];
+  const held = activeProj.config?.eval_projects || [];
+  el.innerHTML = (src.length ? `this project + ${src.length}: ${src.join(', ')}` : 'this project only') +
+    (held.length ? ` <span style="color:#7dd3fc;">· held out: ${held.join(', ')}</span>` : '');
+}
+
+async function toggleTrainSources() {
+  const panel = document.getElementById('train-sources-panel');
+  if (!panel || !activeProj) return;
+  if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  panel.innerHTML = '<span style="color:#888;">Counting pages…</span>';
+  await renderTrainSourcesPanel();
+}
+
+async function renderTrainSourcesPanel() {
+  const panel = document.getElementById('train-sources-panel');
+  if (!panel || !activeProj) return;
+  try {
+    const d = await (await fetch(`/api/project/${activeProj.name}/training-candidates`)).json();
+    const usable = d.candidates.filter(c => !c.missing.length);
+    const other  = d.candidates.filter(c => c.missing.length);
+    const cell = 'padding:2px 10px;';
+    const rows = usable.map(c => `<tr>
+        <td style="${cell}color:#ccc;">${c.name}</td>
+        <td style="${cell}text-align:center;"><input type="checkbox" data-src-train="${c.name}"${c.role === 'train' ? ' checked' : ''} onchange="onTrainSourcesChange(this)" style="accent-color:#e94560;"></td>
+        <td style="${cell}text-align:center;"><input type="checkbox" data-src-held="${c.name}"${c.role === 'held out' ? ' checked' : ''} onchange="onTrainSourcesChange(this)" style="accent-color:#7dd3fc;"></td>
+        <td style="${cell}color:#aaa;">${c.n_trainable}</td>
+        <td style="${cell}color:${c.n_test ? '#aaa' : '#f0c040'};">${c.n_test || 'none'}</td>
+        <td style="${cell}color:#667;">${c.scope !== 'page' ? `scope ${c.scope}` : ''}</td></tr>`).join('');
+    panel.innerHTML = `
+      <div style="color:#888;margin-bottom:4px;">Projects with every model class (${d.classes.join(', ')}):</div>
+      <table style="border-collapse:collapse;">
+        <tr style="color:#667;font-size:11px;"><td style="${cell}">project</td><td style="${cell}">train</td>
+          <td style="${cell}">held out</td><td style="${cell}" title="corrected + verified pages, frozen test pages included">corrected + verified</td>
+          <td style="${cell}" title="frozen test pages: never trained on, scored per project">test pages</td><td></td></tr>
+        ${rows || `<tr><td style="${cell}color:#667;" colspan="6">none</td></tr>`}
+      </table>
+      ${other.length ? `<div style="color:#667;margin-top:6px;" title="${other.map(c => `${c.name}: lacks ${c.missing.join(', ')}`).join('\n')}">${other.length} other project(s) lack a model class and cannot be used (hover for details).</div>` : ''}`;
+  } catch (e) {
+    panel.textContent = 'Could not load the projects: ' + (e?.message || e);
+  }
+}
+
+async function onTrainSourcesChange(box) {
+  if (!activeProj) return;
+  // a project either trains or is held out, never both
+  const name = box.dataset.srcTrain || box.dataset.srcHeld;
+  if (box.checked) {
+    const twin = document.querySelector(box.dataset.srcTrain
+      ? `[data-src-held="${name}"]` : `[data-src-train="${name}"]`);
+    if (twin) twin.checked = false;
+  }
+  const pick = sel => [...document.querySelectorAll(sel)].filter(c => c.checked)
+    .map(c => c.dataset.srcTrain || c.dataset.srcHeld);
+  const res = await fetch(`/api/project/${activeProj.name}/config`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ training_sources: pick('[data-src-train]'),
+                           eval_projects: pick('[data-src-held]') }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    activeProj.config = data.config || activeProj.config;
+    showToast('Training data saved');
+  } else {
+    showToast('Error: ' + errMsg(data), 4000, 'red');
+    await renderTrainSourcesPanel();
+  }
+  renderTrainSourcesSummary();
 }
 
 async function onTrainLabelsChange() {
@@ -1330,6 +1410,13 @@ function renderDetail() {
         <span id="train-labels"></span>
         <span id="train-labels-hint" style="font-size:0.75rem;color:#667;"></span>
       </div>
+      <div class="btn-row" style="align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;"
+           title="Train one model on the verified pages of several projects (e.g. several volumes of one source). Each project's frozen test pages stay out of training. 'Held out' projects never train — their frozen test sets are only scored, to see how the model does on a volume it has not seen. A project qualifies only if it has every model class. Saved in the project config.">
+        <span style="font-size:0.8rem;color:#aaa;">Training data:</span>
+        <span id="train-sources-summary" style="font-size:0.8rem;color:#ccc;"></span>
+        <button class="btn btn-secondary" style="padding:2px 10px;font-size:0.75rem;" onclick="toggleTrainSources()">Choose projects…</button>
+      </div>
+      <div id="train-sources-panel" style="display:none;font-size:0.8rem;margin:0 0 10px 0;max-height:280px;overflow-y:auto;"></div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="prepareTrainingData()">⚙ Prepare training data</button>
       </div>
@@ -1354,6 +1441,10 @@ function renderDetail() {
         <button class="btn btn-secondary" onclick="runTestEval()"
                 title="Score the pulled predictions against the frozen pages' verified annotations: boxes the model missed (added), invented (deleted), or misplaced (moved) — i.e. how much human correction a page costs.">
           📏 Score predictions on test set
+        </button>
+        <button class="btn btn-secondary" onclick="runScoreProjects()"
+                title="Run this project's model on the frozen test pages of this project, its training projects and its held-out projects (Prepare Training Data → Training data), and score each project separately. Uses the GPU server; the other projects are only read. The scores go on the latest training-history row.">
+          📏 Score per project
         </button>
       </div>
       <div id="test-eval-result" style="font-size:0.8rem;color:#888;margin-top:8px"></div>
@@ -1727,6 +1818,12 @@ async function loadTrainingLog() {
         : '<span style="color:#22c55e;">done</span>';
       const unfiltered = r.status_filter === false
         ? ' <span style="color:#e94560;" title="trained on ALL pages incl. uncorrected predictions">⚠unfiltered</span>' : '';
+      if ((r.training_sources || []).length)
+        mode += ` <span style="color:#86efac;" title="trained on several projects: ${Object.entries(r.sources || {}).map(([p, s]) => `${p} ${s.n_train_pages} pages`).join(', ')}">+${r.training_sources.length} proj</span>`;
+      const byProj = r.score_by_project ? `<tr><td></td><td colspan="6" style="padding:0 10px 4px;color:#888;font-size:11px;">per project (corrections/page): ` +
+        Object.entries(r.score_by_project).map(([p, s]) =>
+          `${p} <span style="color:${s.role === 'held out' ? '#7dd3fc' : '#aaa'};">${s.role}</span> <b style="color:#f0c040;">${s.corrections_per_page ?? '—'}</b> <span style="color:#667;">(${s.n_pages} p)</span>`).join(' · ') +
+        `</td></tr>` : '';
       return `<tr>
         <td style="padding:2px 10px 2px 0;color:#888;">${date}</td>
         <td style="padding:2px 10px;color:#ccc;">${mode}${unfiltered}</td>
@@ -1734,7 +1831,7 @@ async function loadTrainingLog() {
         <td style="padding:2px 10px;color:#aaa;">${r.max_iter ?? '—'} it</td>
         <td style="padding:2px 10px;color:#7dd3fc;" title="COCO AP on the test set">${ap}</td>
         <td style="padding:2px 10px;color:#f0c040;" title="corrections per page on the frozen test set">${cpp}</td>
-        <td style="padding:2px 10px;">${stat}</td></tr>`;
+        <td style="padding:2px 10px;">${stat}</td></tr>${byProj}`;
     }).join('');
     el.innerHTML = `
       <b style="color:#aaa;">Training history</b>
@@ -2300,11 +2397,14 @@ async function prepareTrainingData() {
       if (data.n_skip)            hygiene.push(`${data.n_skip} skip page(s) excluded`);
       if ((data.missing_test_stems || []).length)
         hygiene.push(`<span style="color:#e94560;">⚠ frozen test page(s) missing: ${data.missing_test_stems.join(', ')}</span>`);
+      const perProject = data.sources
+        ? '<br>per project: ' + Object.entries(data.sources).map(([p, s]) =>
+            `${p} ${s.n_train_pages} train / ${s.n_test_pages} test`).join(' · ') : '';
       if (data.scope && data.scope !== 'page')
         hygiene.push(`<span style="color:#7dd3fc;">scope ${data.scope}: ${data.n_parents} crop(s) from ${data.n_scope_pages} page(s)` +
                      (data.n_crop_negatives ? `, ${data.n_crop_negatives} childless parent(s) as negatives` : '') + '</span>');
       el.innerHTML = `✓ ${data.n_annotated} annotated ${data.scope && data.scope !== 'page' ? 'crops' : 'pages'} · ${data.n_annotations} boxes · ${data.n_classes} classes (${(data.model_labels || []).join(', ')})<br>
-        ${hygiene.join(' · ')}<br>
+        ${hygiene.join(' · ')}${perProject}<br>
         Solver: <code>MAX_ITER=${data.max_iter} · BASE_LR=${data.base_lr} · IMS_PER_BATCH=${data.ims_per_batch} · NUM_WORKERS=${data.num_workers}</code><br>
         COCO JSON, config YAML, and training scripts saved to <code>intermediate/</code>`;
       showToast('Training data prepared.');
@@ -2460,6 +2560,60 @@ async function runInfer() {
     }
     status.innerHTML = '<span class="status-dot dot-green"></span>Done';
     info.textContent = 'Stream ended.';
+  }).catch(err => {
+    if (err.name !== 'AbortError') {
+      body.textContent += '\nConnection error: ' + err.message;
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+    }
+  });
+}
+
+// Per-project scoring of this project's model (roadmap P13)
+async function runScoreProjects() {
+  if (!activeProj) return;
+  await saveServerConfig();
+  openLogModal('📏 Score per project — ' + activeProj.name);
+  const body   = document.getElementById('log-modal-body');
+  const info   = document.getElementById('log-modal-info');
+  const status = document.getElementById('log-modal-status');
+  const ctrl   = new AbortController();
+  activeSSE    = ctrl;
+  const finish = () => { loadTrainingLog(); };
+  fetch(`/api/project/${activeProj.name}/score-projects`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ passphrase: getPassphrase() }),
+    signal:  ctrl.signal,
+  }).then(async res => {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      body.textContent += '\nError: ' + (err.detail || res.statusText);
+      status.innerHTML = '<span class="status-dot dot-red"></span>Error';
+      return;
+    }
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const match = part.match(/^data: (.+)$/m);
+        if (!match) continue;
+        try {
+          const msg = JSON.parse(match[1]);
+          if (msg.done) { status.innerHTML = '<span class="status-dot dot-green"></span>Done'; info.textContent = 'Completed.'; finish(); return; }
+          if (msg.error) { body.textContent += '\nError: ' + msg.error; status.innerHTML = '<span class="status-dot dot-red"></span>Error'; return; }
+          if (msg.line !== undefined) { body.textContent += msg.line + '\n'; body.scrollTop = body.scrollHeight; }
+        } catch {}
+      }
+    }
+    status.innerHTML = '<span class="status-dot dot-green"></span>Done';
+    info.textContent = 'Stream ended.';
+    finish();
   }).catch(err => {
     if (err.name !== 'AbortError') {
       body.textContent += '\nConnection error: ' + err.message;

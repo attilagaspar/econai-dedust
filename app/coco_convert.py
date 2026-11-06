@@ -470,6 +470,35 @@ echo "=== Inference complete ==="
 """
 
 
+def make_score_script(project_name: str, labels: list[str], targets: list[dict],
+                      ws: str = "/workspace/", threshold: float = 0.5) -> str:
+    """Per-project scoring (roadmap P13): run the project's model on every
+    target project's frozen test images. targets = [{"project", "images"}].
+    Each target gets /workspace/<model>/eval/<target>/ with relative symlinks
+    to the images where they already live (no copies) and a pred/ folder the
+    dashboard pulls and scores. `ws` is the workspace root as the predict
+    container sees it (it may carry a per-user prefix)."""
+    import shlex
+    tool    = f"{ws}layout-model-training/tools/infer_layout.py"
+    config  = f"{ws}layout-model-training/configs/{project_name}/fast_rcnn_R_50_FPN_3x.yaml"
+    weights = f"{ws}layout-model-training/outputs/{project_name}/fast_rcnn_R_50_FPN_3x/model_final.pth"
+    lines = ["#!/bin/bash", "set -e",
+             f'echo "=== Dedust: score the {project_name} model per project ==="']
+    for t in targets:
+        proj = t["project"]
+        d = f"{ws}{project_name}/eval/{proj}"
+        lines += [f'echo "--- {proj}: {len(t["images"])} test image(s) ---"',
+                  f"rm -rf {d} && mkdir -p {d}/images {d}/pred", f"cd {d}/images"]
+        # eval/<target>/images → up four levels = the workspace root
+        lines += [f"ln -s {shlex.quote(f'../../../../{proj}/images/{f}')} {shlex.quote(f)}"
+                  for f in t["images"]]
+        lines += [f"python3 {tool} --config {config} --weights {weights} "
+                  f"--images {d}/images --output {d}/pred "
+                  f"--labels {' '.join(labels)} --threshold {threshold}"]
+    lines.append('echo "=== Scoring inference complete ==="')
+    return "\n".join(lines) + "\n"
+
+
 def _page_sort_key(name: str) -> tuple:
     import re
     parts = re.split(r"(\d+)", name)

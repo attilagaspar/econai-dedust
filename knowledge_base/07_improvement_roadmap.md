@@ -359,7 +359,10 @@ Absorbs the old dataset-layer "Later: cross-project joins by entity id" note.
 
 ## P13. Training on several projects + choosing the model's classes (added 2026-11-06)
 
-*Status: planned 2026-11-06, building on branch `multi-source-training`.*
+*Status: phases 1–3 BUILT 2026-11-06 on branch `multi-source-training` (not
+yet merged or deployed). Verified by tests and a local smoke run of the
+dashboard + Prepare; the GPU side (multi-root training, per-project
+scoring run) is not yet exercised on a real GPU run.*
 
 Motivation: a series of volumes of one source (four Compass years with
 ~1,700 verified pages) wants ONE pooled model for the years in between, and
