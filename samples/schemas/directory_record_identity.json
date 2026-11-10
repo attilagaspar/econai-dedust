@@ -1,0 +1,77 @@
+{
+  "$comment": "Identity schema for one record of a printed firm directory (knowledge_base/13 §1b): the thin, cross-volume-stable layer that record-level resolution consumes. Drafted 2026-11-10 from Compass 1877 and 1882 records. Copy into <project>/schemas/ and adjust; strict-mode friendly (every property required, nullable when absent, no extras). Copy values AS PRINTED; normalisation is the resolver's job.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "serial_no", "name_hu", "name_de", "other_names", "legal_form",
+    "seat", "county", "address", "founded", "charter_until",
+    "capital_nominal", "capital_paid_in", "currency", "notes"
+  ],
+  "properties": {
+    "serial_no": {
+      "type": ["integer", "null"],
+      "description": "The running number printed before the name in this volume (e.g. '284.'); null if none."
+    },
+    "name_hu": {
+      "type": ["string", "null"],
+      "description": "The firm's name in Hungarian exactly as printed, including a legal-form phrase that is part of the name (e.g. 'Török-Kanizsai kerületi takarékpénztár, mint részvénytársaság')."
+    },
+    "name_de": {
+      "type": ["string", "null"],
+      "description": "The firm's name in German exactly as printed (e.g. 'Török-Kanizsaer Bezirks-Sparcassa als Actiengesellschaft'); null if only one language is printed."
+    },
+    "other_names": {
+      "type": "array",
+      "description": "Any further name variant printed for the same firm (a third language, a former name, a trading name), each with its language code if known.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "lang"],
+        "properties": {
+          "name": {"type": "string"},
+          "lang": {"type": ["string", "null"], "description": "ISO 639-1: hu, de, …; null if unclear."}
+        }
+      }
+    },
+    "legal_form": {
+      "type": ["string", "null"],
+      "description": "The legal form as printed or implied by the name: 'részvénytársaság' (joint-stock company), 'szövetkezet' (cooperative), 'egylet' (association), 'betéti társaság', 'közkereseti társaság', or another printed form; null if not stated."
+    },
+    "seat": {
+      "type": ["string", "null"],
+      "description": "The seat (settlement) as printed, usually bold at the start of the first data line (e.g. 'Galánta', 'Budapest')."
+    },
+    "county": {
+      "type": ["string", "null"],
+      "description": "The county as printed after 'Megye—Comitat:' (e.g. 'Pozsony'); null if absent (e.g. Budapest entries)."
+    },
+    "address": {
+      "type": ["string", "null"],
+      "description": "Street address if printed (e.g. 'Deák Ferencz-utcza 3'); null otherwise."
+    },
+    "founded": {
+      "type": ["integer", "null"],
+      "description": "Year of foundation: the first year of 'Tartama—Dauer: 1873—1903' or a printed founding year; null if absent."
+    },
+    "charter_until": {
+      "type": ["integer", "null"],
+      "description": "The end year of the chartered duration ('Tartama—Dauer: 1873—1903' → 1903); null if absent or open-ended."
+    },
+    "capital_nominal": {
+      "type": ["number", "null"],
+      "description": "Nominal share or founding capital as printed after 'Alaptőke'/'Actiencapital'/'Törzstőke', as a number in the printed currency (e.g. 100000)."
+    },
+    "capital_paid_in": {
+      "type": ["number", "null"],
+      "description": "Paid-in capital if the entry states it separately (e.g. '… 50 frt befizetéssel = 50,000 frt' → 50000); null if not stated or equal to nominal by omission."
+    },
+    "currency": {
+      "type": ["string", "null"],
+      "description": "Currency unit of the capital figures as printed: 'frt' (forint), 'fl', 'K' (korona), …; null if no capital figure."
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Anything on the first lines that bears on identity and fits no field: a predecessor or successor mentioned, a merger, 'in liquidation', a second seat. Short, as printed. Null if nothing."
+    }
+  }
+}

@@ -31,7 +31,11 @@ reading order) — the one missing piece of glue. Two schema layers, both
 hand-written per volume family and stored in the project's `schemas/`:
 
 - **identity schema**, thin and stable: name as printed, other-language
-  names, legal form, seat, founding year. Filled from the name box + first
+  names, legal form, seat, founding year. Drafted from real 1877/1882
+  records: `samples/schemas/directory_record_identity.json` (serial no,
+  name_hu / name_de / other_names, legal form, seat, county, address,
+  founded, charter_until, capital nominal / paid-in, currency, notes) —
+  copy into a project's `schemas/` to use it. Filled from the name box + first
   text box. It is what resolution (§2) consumes — five structured fields,
   not the OCR of a name line — so it is built **before E3**.
 - **content schema**, rich and versioned per volume: officers (role, name),

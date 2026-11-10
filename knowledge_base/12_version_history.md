@@ -391,3 +391,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   on the head fragment as `structured` + `record`; record browser 🧩 chip +
   JSON popup; `/records` returns the summary. 6 tests, LLM stubbed. Not
   deployed.
+- **Nov 10 — sample identity schema** for directory records
+  (`samples/schemas/directory_record_identity.json`), drafted from Compass
+  1877/1882 crops: 14 nullable fields, strict-mode friendly. 13 §1b points to it.
