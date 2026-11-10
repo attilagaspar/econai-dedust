@@ -346,9 +346,13 @@ only ever written by a person.
   `structured` with a `record` key; human-edited data survives re-runs;
   records already carrying the schema are skipped unless overwrite; image
   cap per call (later fragments text-only); dry run plans without calling;
-  chunked client-side with progress. The record browser shows a 🧩 chip
-  per record (click = the object); Excel "Structured" sheet and JSON
-  export pick the objects up unchanged.
+  chunked client-side with progress; or **🌙 as a batch job**: the same
+  requests go to the provider's batch service (half price, OpenAI / Azure
+  models; `POST …/extract-records/submit`, SSE progress, chunked under the
+  file cap) into the project's overnight job list, where ⬇ Apply writes
+  the answers onto the records' head fragments (`batch_job` noted). The
+  record browser shows a 🧩 chip per record (click = the object); Excel
+  "Structured" sheet and JSON export pick the objects up unchanged.
 - **JSON export** batch op: reading-order records; per-label modes
   export / ignore / **propagate forward** (e.g. country headers become a
   field on subsequent records); on newsflow pages propagation follows

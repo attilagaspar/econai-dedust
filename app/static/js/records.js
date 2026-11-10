@@ -650,6 +650,36 @@ async function _batchRecxInit() {
   _batchRecxFillSchemas();
 }
 
+async function _recxSubmitBatch(base, prog) {
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/extract-records/submit`;
+  if (prog) prog.textContent = 'Building the batch file… (images are packaged; this can take a few minutes)';
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(base)});
+  if (!r.ok) { const m = await r.json().catch(() => ({})); throw new Error(m.detail || `HTTP ${r.status}`); }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '', jobs = [], done = null, err = null;
+  outer: while (true) {
+    const {done: rd, value} = await reader.read();
+    if (rd) break;
+    buf += dec.decode(value, {stream: true});
+    const chunks = buf.split('\n\n'); buf = chunks.pop();
+    for (const c of chunks) {
+      if (!c.startsWith('data: ')) continue;
+      let ev; try { ev = JSON.parse(c.slice(6)); } catch { continue; }
+      if (ev.type === 'building' && prog) prog.textContent = `Building… ${ev.requests} record(s), ~${ev.mb} MB so far`;
+      else if (ev.type === 'uploading' && prog) prog.textContent = `Uploading ${ev.requests} record(s) (${ev.mb} MB) to the provider…`;
+      else if (ev.type === 'chunk_done') { jobs.push(ev); showToast(`🌙 ${ev.id}: ${ev.cells} record(s), ${ev.mb} MB submitted`, 4000); }
+      else if (ev.type === 'done') done = ev;
+      else if (ev.type === 'error') { err = ev.error; break outer; }
+    }
+  }
+  if (err) throw new Error(err);
+  const msg = `🌙 ${jobs.length} job(s) submitted: ${done ? done.cells : jobs.reduce((a, j) => a + j.cells, 0)} record(s). ` +
+    'When it completes, apply it from ⚙ Batch → 🌙 LLM — overnight batch → jobs (⬇ Apply results).';
+  if (prog) prog.textContent = msg;
+  showToast(msg, 10000);
+  return {jobs, done};
+}
+
 async function runExtractRecords(sorted, {dryRun = false} = {}) {
   if (!_recNeedProject()) return null;
   const schema = document.getElementById('batch-recx-schema')?.value || '';
@@ -683,6 +713,11 @@ async function runExtractRecords(sorted, {dryRun = false} = {}) {
       showToast(planTxt, 8000); return plan;
     }
     if (!plan.n_planned) { showToast('Nothing to do: ' + planTxt, 6000); if (prog) prog.textContent = planTxt; return plan; }
+    const overnight = !!document.getElementById('batch-recx-overnight')?.checked;
+    if (overnight) {
+      if (!(await _batchConfirmInline(planTxt + '\n\nSubmit as a batch job (half price)? The answers are applied later from 🌙 LLM — overnight batch → jobs.', '🌙 Submit job'))) return null;
+      return await _recxSubmitBatch(base, prog);
+    }
     if (!(await _batchConfirmInline(planTxt + '\n\nOne LLM call per record; the object lands on each record\'s head fragment. Human-edited objects are kept.', '▶ Extract'))) return null;
     const ids = plan.items.map(i => i.id);
     const CH = 3;

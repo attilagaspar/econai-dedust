@@ -1700,7 +1700,7 @@ async function _refreshOvernightJobs() {
       const counts = j.counts ? ` · ${j.counts.completed}/${j.counts.total} done`
         + (j.counts.failed ? `, ${j.counts.failed} failed` : '') : '';
       const applied = j.status === 'applied'
-        ? ` · ✓ ${j.applied_cells} cell(s) written` + (j.failed_requests ? `, ${j.failed_requests} request(s) failed` : '')
+        ? ` · ✓ ${j.applied_cells} ${j.kind === 'records' ? 'record(s)' : 'cell(s)'} written` + (j.failed_requests ? `, ${j.failed_requests} request(s) failed` : '')
         : '';
       const btns = [];
       if (j.status === 'completed')
@@ -1713,7 +1713,7 @@ async function _refreshOvernightJobs() {
       return `<div style="display:flex;align-items:center;gap:8px;background:#091530;border:1px solid #0f3460;border-radius:5px;padding:5px 8px;font-size:11px;color:#aaa;">
         <span style="flex:none;color:#e0e0e0;font-weight:700;">${_escHtml(j.id)}</span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-          ${when} · ${_escHtml(j.model)} · ${_escHtml(j.mode)}${j.json ? ' · JSON' : ''} · ${j.n_cells} cell(s)${counts}${applied}
+          ${when} · ${_escHtml(j.model)} · ${j.kind === 'records' ? `🧩 records · ${_escHtml(j.schema_name || '')}` : _escHtml(j.mode) + (j.json ? ' · JSON' : '')} · ${j.n_cells} ${j.kind === 'records' ? 'record(s)' : 'cell(s)'}${counts}${applied}
           ${j.status_note ? ` · <span style=\"color:#ff9800;\">${_escHtml(j.status_note)}</span>` : ''}
         </span>
         ${chip(j.status)} ${btns.join(' ')}
@@ -1725,14 +1725,14 @@ async function _refreshOvernightJobs() {
 }
 
 async function _ovApply(jobId, btn) {
-  if (!confirm(`Write ${jobId}'s results into the pages? Existing human edits are kept.`)) return;
+  if (!(await _batchConfirmInline(`Write ${jobId}'s results into the pages? Existing human edits are kept.`, '⬇ Apply'))) return;
   btn.disabled = true; btn.textContent = '…';
   try {
     const r = await fetch(`${API}/api/llm_batch/apply?folder=${encodeURIComponent(folder)}&job=${encodeURIComponent(jobId)}`,
                           { method: 'POST' });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || r.status);
-    showToast(`⬇ ${jobId}: ${d.applied_cells} cell(s) written`
+    showToast(`⬇ ${jobId}: ${d.applied_cells} ${d.unit === 'records' ? 'record(s)' : 'cell(s)'} written`
       + (d.failed_requests ? `, ${d.failed_requests} request(s) failed` : '')
       + (d.bad_json ? `, ${d.bad_json} invalid JSON` : ''), 7000);
     if (pageData) { await reloadPageData(); updatePanel(); drawOverlay(); }

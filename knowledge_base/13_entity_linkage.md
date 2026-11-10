@@ -177,6 +177,7 @@ export specialised to one authority.
 |---|---|---|
 | E1 | authority schema additions (`lang` on aliases, `edges[]`, normalisation rules, id scheme); mint + slice + edge endpoints; `firms_hu` file created empty | **built 2026-11-10** |
 | E1b | record-level extraction: one batch op runs the identity (or content) schema over each record's fragments in reading order, stores the object on the record's head fragment | **built 2026-11-10** |
+| E1c | the same extraction through the provider's batch service (half price): submit from the extract panel, apply from the overnight job list | **built 2026-11-10** |
 | E2 | gold set: hand-link ~100 records 1877 ↔ 1882 in a throwaway sheet; matcher scorer script | user ½ day + ½ session |
 | E3 | record-level resolve: head-fragment `authority`, record browser chip + candidate panel with *same/new/successor*, batch op with bootstrap, "unresolved only" filter | **built 2026-11-10** |
 | E4 | matcher additions: sequence prior (seat/year/legal-form boosts landed with E3); measured against E2 | ½ session |

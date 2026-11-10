@@ -403,3 +403,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   mint-unmatched bootstrap, human marks kept); batch op 🏛 Records: resolve
   to entities; record browser 🏛 chip, resolve panel, unresolved filter. 6
   tests on a throwaway authority + `_smoke_` project. Not deployed.
+- **Nov 10 — record extraction through the batch service (E1c)**: `POST
+  …/extract-records/submit` (🌙 checkbox in the extract panel) packages one
+  request per record into the provider's batch service; the overnight job
+  list shows it as a 🧩 records job and ⬇ Apply writes the answers onto the
+  head fragments. The chunk / upload / manifest generator is now shared by
+  the cell and record lanes (`_batch_submit_stream`); the overnight apply
+  confirm is in-panel. 2 tests with a fake provider.

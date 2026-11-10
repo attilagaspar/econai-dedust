@@ -2773,12 +2773,128 @@ def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
                    ckey, None)
 
 
+def _batch_submit_stream(client, provider: str, folder: str, job_base: dict, lines,
+                         unit: str = "cells"):
+    """Shared by the cell lane and the record lane: consume `lines` —
+    (jsonl_line_dict, unit_key, meta_or_None) — chunk them under the
+    provider's file cap, upload each chunk as one job, append it to the
+    project's job manifest (fields from `job_base` + counts + meta), and
+    yield SSE progress strings: building / uploading / chunk_done / done /
+    error."""
+    import datetime as _dt, time as _time
+    import json as _json
+    chunk, chunk_bytes, chunk_meta, chunk_units = [], 0, {}, set()
+    made, req_total, unit_total = [], 0, 0
+
+    def flush():
+        nonlocal chunk, chunk_bytes, chunk_meta, chunk_units, unit_total
+        if not chunk:
+            return None
+        jsonl = "\n".join(_json.dumps(l, ensure_ascii=False) for l in chunk)
+        mb = len(jsonl.encode("utf-8")) / 1048576
+        # ONE bounded attempt, loud failure. The SDK default (600 s timeout
+        # × 2 silent full retries) meant a stalled Azure ingest looked like
+        # "uploading…" for up to half an hour with no feedback. A healthy
+        # upload of even a 200 MB chunk finishes in well under 300 s.
+        up = (client.with_options(timeout=300.0, max_retries=0)
+              if hasattr(client, "with_options") else client)
+        _t0 = _time.time()
+        try:
+            fobj = up.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
+                                   purpose="batch")
+            remote = up.batches.create(input_file_id=fobj.id,
+                                       endpoint="/v1/chat/completions",
+                                       completion_window="24h")
+        except Exception as exc:
+            raise RuntimeError(
+                f"upload of {mb:.1f} MB to {provider} failed after "
+                f"{_time.time() - _t0:.0f}s: {exc}") from exc
+        with _LLM_JOBS_LOCK:
+            jobs = _llm_jobs_load(folder)
+            job = {
+                "id": f"job-{len(jobs) + 1}", "remote_id": remote.id,
+                "provider": provider, **job_base,
+                "n_requests": len(chunk), "n_cells": len(chunk_units), "unit": unit,
+                "submitted": _dt.datetime.utcnow().isoformat() + "Z",
+                "status": getattr(remote, "status", "validating"),
+                "meta": chunk_meta,
+            }
+            jobs.append(job); _llm_jobs_save(folder, jobs)
+        info = {"id": job["id"], "requests": len(chunk),
+                "cells": len(chunk_units), "mb": round(mb, 1)}
+        made.append(info)
+        unit_total += len(chunk_units)
+        chunk, chunk_bytes, chunk_meta, chunk_units = [], 0, {}, set()
+        return info
+
+    try:
+        for line, ukey, mval in lines:
+            b = len(_json.dumps(line, ensure_ascii=False).encode("utf-8")) + 1
+            if chunk and (chunk_bytes + b > _BATCH_CHUNK_BYTES
+                          or len(chunk) >= _BATCH_CHUNK_MAX_REQ):
+                yield _json.dumps({"type": "uploading",
+                                   "mb": round(chunk_bytes / 1048576, 1),
+                                   "requests": len(chunk)})
+                info = flush()
+                yield _json.dumps({"type": "chunk_done", **info})
+            chunk.append(line); chunk_bytes += b
+            chunk_units.add(ukey)
+            if mval is not None:
+                chunk_meta[ukey] = mval
+            req_total += 1
+            if req_total % 400 == 0:
+                yield _json.dumps({"type": "building", "requests": req_total,
+                                   "cells": unit_total + len(chunk_units),
+                                   "mb": round((chunk_bytes) / 1048576, 1)})
+        if chunk:
+            yield _json.dumps({"type": "uploading",
+                               "mb": round(chunk_bytes / 1048576, 1),
+                               "requests": len(chunk)})
+            info = flush()
+            yield _json.dumps({"type": "chunk_done", **info})
+        if not made:
+            yield _json.dumps({"type": "error", "error": "No usable requests could be built"})
+            return
+        yield _json.dumps({"type": "done", "jobs": made, "unit": unit,
+                           "requests": sum(m["requests"] for m in made),
+                           "cells": sum(m["cells"] for m in made)})
+    except Exception as exc:
+        yield _json.dumps({"type": "error",
+            "error": f"Batch submit failed: {exc}"
+            + (f" — NOTE: {len(made)} chunk job(s) were already submitted "
+               f"before the failure (they appear in the jobs list below); "
+               f"only the remaining {unit} need resubmitting."
+               if made else " — nothing was submitted, safe to try again.")})
+
+
+def _sse_from_gen(gen):
+    """Run a blocking generator of SSE payload strings in a worker thread."""
+    import asyncio, concurrent.futures
+
+    async def event_gen():
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            it = iter(gen)
+            while True:
+                item = await loop.run_in_executor(pool, _safe_next, it)
+                if item is _SSE_DONE:
+                    break
+                yield f"data: {item}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _batch_provider(model: str) -> str:
+    return ("azure-us" if model.startswith(_AZURE_US_PREFIX)
+            else "azure" if model.startswith(_AZURE_PREFIX) else "openai")
+
+
 @app.post("/api/llm_batch/submit")
 def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
     """Build the batch request file(s) and submit them. Streams SSE progress
     (phase / requests built / running MB / per-chunk upload) and auto-splits
     into multiple provider jobs when the file nears the 200 MB limit."""
-    import asyncio, concurrent.futures, datetime as _dt, time as _time
     import json as _json
 
     if not _llm_batch_supported(body.model):
@@ -2792,110 +2908,22 @@ def api_llm_batch_submit(folder: str = Query(...), body: LlmBatchSubmit = ...):
     rf = (_json_schema_response_format(body.json_schema, body.schema_name or "record", True)
           if json_mode else None)
     client = _make_llm_client(body.model)   # fail early if unconfigured
-    provider = ("azure-us" if body.model.startswith(_AZURE_US_PREFIX)
-                else "azure" if body.model.startswith(_AZURE_PREFIX) else "openai")
+    provider = _batch_provider(body.model)
+    job_base = {"model": body.model, "mode": body.mode, "prompt": body.prompt,
+                "payload": body.payload, "rows_source": body.rows_source,
+                "json": json_mode, "schema_name": body.schema_name}
+    build_stats = {"bad_geometry": 0}
 
     def gen():
-        chunk, chunk_bytes, chunk_meta, chunk_cells = [], 0, {}, set()
-        made, req_total, cell_total = [], 0, 0
+        lines = _gen_batch_requests(d, folder, body, json_mode, rf, build_stats)
+        for ev in _batch_submit_stream(client, provider, folder, job_base, lines, "cells"):
+            if ev.startswith('{"type": "done"'):
+                obj = _json.loads(ev)
+                obj["skipped_bad_geometry"] = build_stats["bad_geometry"]
+                ev = _json.dumps(obj)
+            yield ev
 
-        def flush():
-            nonlocal chunk, chunk_bytes, chunk_meta, chunk_cells
-            if not chunk:
-                return None
-            jsonl = "\n".join(_json.dumps(l, ensure_ascii=False) for l in chunk)
-            mb = len(jsonl.encode("utf-8")) / 1048576
-            # ONE bounded attempt, loud failure. The SDK default (600 s timeout
-            # × 2 silent full retries) meant a stalled Azure ingest looked like
-            # "uploading…" for up to half an hour with no feedback. A healthy
-            # upload of even a 200 MB chunk finishes in well under 300 s.
-            up = (client.with_options(timeout=300.0, max_retries=0)
-                  if hasattr(client, "with_options") else client)
-            _t0 = _time.time()
-            try:
-                fobj = up.files.create(file=("econai_batch.jsonl", jsonl.encode("utf-8")),
-                                       purpose="batch")
-                remote = up.batches.create(input_file_id=fobj.id,
-                                           endpoint="/v1/chat/completions",
-                                           completion_window="24h")
-            except Exception as exc:
-                raise RuntimeError(
-                    f"upload of {mb:.1f} MB to {provider} failed after "
-                    f"{_time.time() - _t0:.0f}s: {exc}") from exc
-            with _LLM_JOBS_LOCK:
-                jobs = _llm_jobs_load(folder)
-                job = {
-                    "id": f"job-{len(jobs) + 1}", "remote_id": remote.id,
-                    "provider": provider, "model": body.model, "mode": body.mode,
-                    "prompt": body.prompt, "payload": body.payload,
-                    "rows_source": body.rows_source, "json": json_mode,
-                    "schema_name": body.schema_name,
-                    "n_requests": len(chunk), "n_cells": len(chunk_cells),
-                    "submitted": _dt.datetime.utcnow().isoformat() + "Z",
-                    "status": getattr(remote, "status", "validating"),
-                    "meta": chunk_meta,
-                }
-                jobs.append(job); _llm_jobs_save(folder, jobs)
-            info = {"id": job["id"], "requests": len(chunk),
-                    "cells": len(chunk_cells), "mb": round(mb, 1)}
-            made.append(info)
-            chunk, chunk_bytes, chunk_meta, chunk_cells = [], 0, {}, set()
-            return info
-
-        build_stats = {"bad_geometry": 0}
-        try:
-            for line, ckey, mval in _gen_batch_requests(d, folder, body, json_mode, rf,
-                                                        build_stats):
-                b = len(_json.dumps(line, ensure_ascii=False).encode("utf-8")) + 1
-                if chunk and (chunk_bytes + b > _BATCH_CHUNK_BYTES
-                              or len(chunk) >= _BATCH_CHUNK_MAX_REQ):
-                    yield _json.dumps({"type": "uploading",
-                                       "mb": round(chunk_bytes / 1048576, 1),
-                                       "requests": len(chunk)})
-                    info = flush()
-                    yield _json.dumps({"type": "chunk_done", **info})
-                chunk.append(line); chunk_bytes += b
-                chunk_cells.add(ckey)
-                if mval is not None:
-                    chunk_meta[ckey] = mval
-                req_total += 1
-                if req_total % 400 == 0:
-                    yield _json.dumps({"type": "building", "requests": req_total,
-                                       "cells": cell_total + len(chunk_cells),
-                                       "mb": round((chunk_bytes) / 1048576, 1)})
-            if chunk:
-                yield _json.dumps({"type": "uploading",
-                                   "mb": round(chunk_bytes / 1048576, 1),
-                                   "requests": len(chunk)})
-                info = flush()
-                yield _json.dumps({"type": "chunk_done", **info})
-            if not made:
-                yield _json.dumps({"type": "error", "error": "No usable requests could be built"})
-                return
-            yield _json.dumps({"type": "done", "jobs": made,
-                               "requests": sum(m["requests"] for m in made),
-                               "cells": sum(m["cells"] for m in made),
-                               "skipped_bad_geometry": build_stats["bad_geometry"]})
-        except Exception as exc:
-            yield _json.dumps({"type": "error",
-                "error": f"Batch submit failed: {exc}"
-                + (f" — NOTE: {len(made)} chunk job(s) were already submitted "
-                   f"before the failure (they appear in the jobs list below); "
-                   f"only the remaining cells need resubmitting."
-                   if made else " — nothing was submitted, safe to try again.")})
-
-    async def event_gen():
-        loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            it = iter(gen())
-            while True:
-                item = await loop.run_in_executor(pool, _safe_next, it)
-                if item is _SSE_DONE:
-                    break
-                yield f"data: {item}\n\n"
-
-    return StreamingResponse(event_gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return _sse_from_gen(gen())
 
 
 def _llm_job_public(j: dict) -> dict:
@@ -3027,6 +3055,46 @@ def api_llm_batch_apply(folder: str = Query(...), job: str = Query(...)):
     timestamp = _dt.datetime.utcnow().isoformat() + "Z"
     meta = j.get("meta") or {}
     mode, json_mode = j.get("mode"), bool(j.get("json"))
+
+    if j.get("kind") == "records":
+        # Record lane (13 §1b): one answer per record, stored on the head
+        # fragment exactly like the live extract-records path.
+        from app import record_extract as _rx
+        applied, bad_json = 0, 0
+        for cid, text in answers.items():
+            gid_s = cid.split("|", 1)[1] if cid.startswith("rec|") else None
+            m = meta.get(gid_s) if gid_s is not None else None
+            if not m:
+                failed.append(cid); continue
+            try:
+                parsed = json.loads(text)
+                if not isinstance(parsed, dict):
+                    raise ValueError("non-object")
+            except Exception:
+                bad_json += 1; continue
+            jf = d / f"{m['stem']}.json"
+            if not jf.exists():
+                failed.append(cid); continue
+            try:
+                prev = json.loads(jf.read_text(encoding="utf-8"))["shapes"][m["idx"]].get("structured")
+            except Exception:
+                prev = None
+            payload = _rx.structured_payload(parsed, j.get("schema_name"), j["model"], timestamp,
+                                             {"fragments": m.get("fragments") or []}, int(gid_s), prev)
+            payload["batch_job"] = j["id"]
+            if _merge_shape_fields(jf, m["idx"], {"structured": payload}):
+                applied += 1
+            else:
+                failed.append(cid)
+        with _LLM_JOBS_LOCK:
+            jobs = _llm_jobs_load(folder)
+            j2 = next((x for x in jobs if x["id"] == job), None)
+            if j2 is not None:
+                j2["status"] = "applied"; j2["applied_ts"] = timestamp
+                j2["applied_cells"] = applied; j2["failed_requests"] = len(failed)
+                _llm_jobs_save(folder, jobs)
+        return {"ok": True, "applied_cells": applied, "failed_requests": len(failed),
+                "bad_json": bad_json, "failed_ids": failed[:50], "unit": "records"}
 
     # group per page, write each page once under the merge lock
     per_stem = defaultdict(dict)          # stem -> idx -> {row -> text}
@@ -9330,27 +9398,17 @@ class ExtractRecordsRequest(BaseModel):
     dry_run:       bool = False                   # plan only: no LLM call, no write
 
 
-@app.post("/api/project/{name}/extract-records")
-def api_extract_records(name: str, body: ExtractRecordsRequest):
-    """Record-level structured extraction (13 §1b): for every selected record
-    (group_id), send ALL its fragments in reading order — crop image + the
-    text the pages hold for it — in ONE schema-constrained LLM call and
-    store the object on the record's head fragment as `structured` (with a
-    `record` key naming the fragments). Human-edited `data` survives a
-    re-run. Records already carrying this schema are skipped unless
-    `overwrite`. A dry run returns the plan (records, fragments, text yes/no)
-    without calling the model. Meant to be called in chunks (`record_ids`)
-    by the batch op, which shows progress."""
+def _plan_record_extraction(name: str, body: "ExtractRecordsRequest"):
+    """What the live run and the batch submit share: schema, pages, the
+    records to send (after `record_ids` / `pattern` / existing-schema skip)."""
     from app import records as _records
-    from app import record_extract as _rx
     try:
         cfg = load_config(name)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     label, mode = _records_settings(cfg)
     ann = project_dir(name) / "annotations"
-    sdir = ann.parent / "schemas"
-    sp = sdir / f"{_safe_schema_name(body.schema_name)}.json"
+    sp = ann.parent / "schemas" / f"{_safe_schema_name(body.schema_name)}.json"
     if not sp.exists():
         raise HTTPException(status_code=404, detail=f"Schema not found: {body.schema_name} "
                                                    f"(expected {sp})")
@@ -9377,12 +9435,62 @@ def api_extract_records(name: str, body: ExtractRecordsRequest):
             continue
         head_shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
         prev = head_shapes[head["idx"]].get("structured") if 0 <= head["idx"] < len(head_shapes) else None
-        if (prev and not body.overwrite and prev.get("schema_name") == body.schema_name):
+        if prev and not body.overwrite and prev.get("schema_name") == body.schema_name:
             skipped.append({"id": gid, "reason": "has this schema"})
             continue
-        if prev and prev.get("edited") and body.overwrite:
-            pass            # allowed: `data` (the human copy) survives, only `llm` is refreshed
         plan.append((gid, r, head, prev))
+    return label, ann, by_stem, schema, coll, plan, skipped
+
+
+@app.post("/api/project/{name}/extract-records/submit")
+def api_extract_records_submit(name: str, body: ExtractRecordsRequest):
+    """The record lane of the provider's batch service (half price, usually
+    minutes, at most 24 h): the same requests as the live extract-records
+    call — one per record, all fragments' crops + attached text — packaged
+    into a job of this project's overnight list (⚙ Batch → 🌙 LLM — overnight
+    batch → jobs), applied from there onto the records' head fragments.
+    Streams the same SSE progress as the cell lane."""
+    from app import record_extract as _rx
+    if not _llm_batch_supported(body.model):
+        raise HTTPException(status_code=400,
+            detail="Batch jobs need an OpenAI-hosted (or Azure) model — "
+                   "TK/local models have no batch service.")
+    label, ann, by_stem, schema, coll, plan, skipped = _plan_record_extraction(name, body)
+    if not plan:
+        raise HTTPException(status_code=400, detail="No records to send"
+                            + (f" ({len(skipped)} already carry this schema)" if skipped else ""))
+    client = _make_llm_client(body.model)
+    provider = _batch_provider(body.model)
+    rf = _json_schema_response_format(schema, body.schema_name or "record", True)
+    job_base = {"kind": "records", "model": body.model, "mode": "records",
+                "prompt": body.prompt or _rx.DEFAULT_PROMPT, "json": True,
+                "schema_name": body.schema_name, "record_label": label, "project": name}
+
+    def lines():
+        for gid, r, head, prev in plan:
+            inputs = _rx.record_inputs(r, by_stem, ann, label, max_fragments=max(1, body.max_fragments),
+                                       with_images=True, with_text=body.with_text)
+            msgs = _rx.build_messages(body.prompt, inputs)
+            meta = {"stem": head["stem"], "idx": head["idx"],
+                    "fragments": [{"stem": f["stem"], "idx": f["idx"]} for f in r["fragments"]]}
+            yield _llm_batch_line(f"rec|{gid}", body.model, msgs, 4096, 0, rf), str(gid), meta
+
+    return _sse_from_gen(_batch_submit_stream(client, provider, str(ann), job_base, lines(), "records"))
+
+
+@app.post("/api/project/{name}/extract-records")
+def api_extract_records(name: str, body: ExtractRecordsRequest):
+    """Record-level structured extraction (13 §1b): for every selected record
+    (group_id), send ALL its fragments in reading order — crop image + the
+    text the pages hold for it — in ONE schema-constrained LLM call and
+    store the object on the record's head fragment as `structured` (with a
+    `record` key naming the fragments). Human-edited `data` survives a
+    re-run. Records already carrying this schema are skipped unless
+    `overwrite`. A dry run returns the plan (records, fragments, text yes/no)
+    without calling the model. Meant to be called in chunks (`record_ids`)
+    by the batch op, which shows progress."""
+    from app import record_extract as _rx
+    label, ann, by_stem, schema, coll, plan, skipped = _plan_record_extraction(name, body)
 
     items, failures = [], []
     tokens_in = tokens_out = 0

@@ -192,3 +192,79 @@ def test_module_helpers():
     assert msgs[0]["content"][0]["text"] == rx.DEFAULT_PROMPT.strip()
     assert rx.summary(None) is None
     assert rx.summary({"schema_name": "x", "llm": {"a": 1}})["data"] == {"a": 1}
+
+
+# ── the batch-service lane for records (E1c) ────────────────────────────────
+
+class _FakeProvider:
+    """The OpenAI SDK surface the batch lane uses (files / batches)."""
+    def __init__(self):
+        self.uploaded = None; self.status = "in_progress"; self.output_lines = []
+        outer = self
+
+        class _Files:
+            def create(self, file, purpose):
+                outer.uploaded = file[1].decode("utf-8"); return SimpleNamespace(id="file-in")
+            def content(self, fid):
+                return SimpleNamespace(text="\n".join(outer.output_lines))
+
+        class _Batches:
+            def create(self, input_file_id, endpoint, completion_window):
+                return SimpleNamespace(id="batch-remote-1", status="validating")
+            def retrieve(self, rid):
+                return SimpleNamespace(id=rid, status=outer.status,
+                                       output_file_id="file-out" if outer.status == "completed" else None,
+                                       request_counts=SimpleNamespace(completed=1, failed=0, total=1))
+        self.files = _Files(); self.batches = _Batches()
+
+
+def _answer(cid, obj):
+    return json.dumps({"custom_id": cid, "error": None,
+                       "response": {"status_code": 200, "body": {"choices": [{"message": {"content": json.dumps(obj)}}]}}})
+
+
+def test_batch_lane_submits_one_request_per_record_and_applies_onto_heads(client, project, monkeypatch):
+    prov = _FakeProvider()
+    monkeypatch.setattr(srv, "_make_llm_client", lambda model: prov)
+    r = client.post(f"/api/project/{project}/extract-records/submit",
+                    json={"schema_name": "identity", "model": "gpt-4o-mini", "max_fragments": 1})
+    assert r.status_code == 200, r.text
+    evs = [json.loads(c[6:]) for c in r.text.split("\n\n") if c.startswith("data: ")]
+    done = next(e for e in evs if e["type"] == "done")
+    assert done["requests"] == 1 and done["cells"] == 1 and done["unit"] == "records"   # record 2 already has the schema
+    lines = [json.loads(l) for l in prov.uploaded.splitlines()]
+    assert lines[0]["custom_id"] == "rec|1"
+    body = lines[0]["body"]
+    assert body["response_format"]["json_schema"]["schema"] == SCHEMA and body["max_tokens"] == 4096
+    content = body["messages"][0]["content"]
+    assert sum(1 for c in content if c["type"] == "image_url") == 1              # max_fragments 1
+    assert any("image omitted, text only" in c["text"] for c in content if c["type"] == "text")
+    assert any("[name] PESTI HENGERMALOM" in c["text"] for c in content if c["type"] == "text")
+    # the job sits in the project's overnight list, marked as a record job
+    ann = str(PROJECTS_ROOT / project / "annotations")
+    jobs = client.get("/api/llm_batch/jobs", params={"folder": ann, "refresh": "false"}).json()["jobs"]
+    assert jobs[-1]["kind"] == "records" and jobs[-1]["schema_name"] == "identity" and jobs[-1]["n_cells"] == 1
+    assert "meta" not in jobs[-1]
+    # nothing to send → 400, not an empty job
+    r = client.post(f"/api/project/{project}/extract-records/submit",
+                    json={"schema_name": "identity", "model": "gpt-4o-mini", "record_ids": [2]})
+    assert r.status_code == 400 and "already carry" in r.text
+    # the provider finishes; apply writes the head fragment like the live path
+    prov.status = "completed"
+    prov.output_lines = [_answer("rec|1", {"name": "Pesti Hengermalom", "seat": "Budapest", "founded": 1866})]
+    r = client.post("/api/llm_batch/apply", params={"folder": ann, "job": jobs[-1]["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["applied_cells"] == 1 and r.json()["unit"] == "records" and r.json()["bad_json"] == 0
+    doc = json.loads((PROJECTS_ROOT / project / "annotations" / "p1.json").read_text(encoding="utf-8"))
+    st = doc["shapes"][0]["structured"]
+    assert st["data"]["founded"] == 1866 and st["batch_job"] == jobs[-1]["id"] and st["schema_name"] == "identity"
+    assert st["record"]["group_id"] == 1 and [f["stem"] for f in st["record"]["fragments"]] == ["p1", "p2"]
+    jobs = client.get("/api/llm_batch/jobs", params={"folder": ann, "refresh": "false"}).json()["jobs"]
+    assert jobs[-1]["status"] == "applied" and jobs[-1]["applied_cells"] == 1
+
+
+def test_batch_lane_refuses_local_models(client, project, monkeypatch):
+    monkeypatch.setattr(srv, "_make_llm_client", lambda model: object())
+    r = client.post(f"/api/project/{project}/extract-records/submit",
+                    json={"schema_name": "identity", "model": "tk:vllm/some-model"})
+    assert r.status_code == 400 and "batch service" in r.text
