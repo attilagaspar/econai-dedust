@@ -4601,6 +4601,11 @@ class ConfigUpdate(BaseModel):
     # strings — trimmed, blanks dropped, de-duplicated; [] clears)
     notes: Optional[str]  = None
     tags:  Optional[list] = None
+    # Record-level entity resolution (13 §2): the authority file records of
+    # this project resolve against, and the year the source describes
+    # (slices are keyed on it). "" / null clear.
+    record_authority: Optional[str] = None
+    source_year:      Optional[object] = None
     # P13: the model's classes, a subset of labels ([] or the whole palette
     # clears → every label is a class); further projects whose pages train
     # with this one's, and projects only scored (held out) — [] clears
@@ -4694,6 +4699,23 @@ def api_update_config(name: str, body: ConfigUpdate):
                 cfg["notes"] = body.notes
             else:
                 cfg.pop("notes", None)
+        if body.record_authority is not None:
+            ra = body.record_authority.strip()
+            if not ra:
+                cfg.pop("record_authority", None)
+            else:
+                if not (AUTHORITIES_DIR / ra).exists():
+                    raise HTTPException(status_code=400, detail=f"Authority file not found: {ra}")
+                cfg["record_authority"] = ra
+        if body.source_year is not None:
+            sy = body.source_year
+            if sy in ("", None):
+                cfg.pop("source_year", None)
+            else:
+                try:
+                    cfg["source_year"] = int(str(sy).strip())
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="source_year must be an integer year")
         if body.tags is not None:
             try:
                 tags = normalize_tags(body.tags)
@@ -5664,6 +5686,7 @@ def _auth_entity_view(e: dict) -> dict:
 
 def _build_auth_index(data: dict) -> dict:
     by_id: dict = {}
+    raw_by_id: dict = {}
     children: dict = {}
     pools: dict = {"county": [], "district": [], "settlement": []}
     for e in data.get("entities", []):
@@ -5671,6 +5694,7 @@ def _build_auth_index(data: dict) -> dict:
         if not v["id"]:
             continue
         by_id[v["id"]] = v
+        raw_by_id[v["id"]] = e
         if v["parent"]:
             children.setdefault(v["parent"], []).append(v["id"])
         t = v["type"] or "settlement"
@@ -5755,7 +5779,7 @@ def _build_auth_index(data: dict) -> dict:
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
             "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
             "strip": strip, "phrases": phrases, "fold_phrases": fold_phrases,
-            "edges_by_id": edges_by_id, "canonical": canonical}
+            "edges_by_id": edges_by_id, "canonical": canonical, "raw_by_id": raw_by_id}
 
 
 def _load_authority(name: Optional[str] = None) -> dict:
@@ -8838,7 +8862,8 @@ def api_records_context(folder: str = Query(...)):
     cfgp = d.parent / "config.json"
     if not cfgp.exists():
         return {"project": None, "record_label": None, "layout_columns": "auto",
-                "record_roles": {}, "labels": [], "projects_root": str(PROJECTS_ROOT)}
+                "record_roles": {}, "record_authority": None, "source_year": None,
+                "labels": [], "projects_root": str(PROJECTS_ROOT)}
     try:
         cfg = json.loads(cfgp.read_text(encoding="utf-8"))
     except Exception:
@@ -8848,6 +8873,8 @@ def api_records_context(folder: str = Query(...)):
             "record_label": _records.record_label_for(cfg),
             "layout_columns": _records.layout_columns_for(cfg),
             "record_roles": _fragments.record_roles_for(cfg),
+            "record_authority": cfg.get("record_authority"),
+            "source_year": cfg.get("source_year"),
             "labels": cfg.get("labels") or [],
             "projects_root": str(PROJECTS_ROOT)}
 
@@ -8990,6 +9017,7 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
     Boxes without an id are returned under `unswept`. Read-only."""
     from app import records as _records
     from app import record_extract as _record_extract
+    from app import record_resolve as _record_resolve
     try:
         cfg = load_config(name)
     except FileNotFoundError as e:
@@ -9013,18 +9041,280 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
         head_shape = (dict(pages).get(head["stem"]) or {}).get("shapes", [])
         structured = (head_shape[head["idx"]].get("structured")
                       if 0 <= head["idx"] < len(head_shape) else None)
+        authority = (head_shape[head["idx"]].get("authority")
+                     if 0 <= head["idx"] < len(head_shape) else None)
         items.append({"id": gid, "name": r["name"], "n_fragments": len(r["fragments"]),
                       "page_span": r["page_span"], "n_pages": r["n_pages"],
                       "flags": flags, "fragments": r["fragments"],
-                      "structured": _record_extract.summary(structured)})
+                      "structured": _record_extract.summary(structured),
+                      "authority": _record_resolve.summary(authority)})
     n_orphan = sum(1 for r in coll["records"].values() if r["orphan"])
     n_long = sum(1 for r in coll["records"].values() if r["n_pages"] > max_pages)
+    n_resolved = sum(1 for i in items if i["authority"])
     return {"record_label": label, "layout_columns": mode, "max_pages": max_pages,
+            "record_authority": cfg.get("record_authority"), "source_year": cfg.get("source_year"),
+            "n_resolved": n_resolved,
             "pages": len(pages), "boxes": coll["n_boxes"],
             "n_records": len(coll["records"]), "n_orphans": n_orphan, "n_long": n_long,
             "n_unswept": len(coll["unswept"]), "unswept": coll["unswept"],
             "page_order": _records.page_order_check([s for s, _ in pages]),
             "records": items}
+
+
+# ---------------------------------------------------------------------------
+# Routes — record-level entity resolution (app/record_resolve.py, 13 §2 E3)
+# ---------------------------------------------------------------------------
+
+def _records_resolve_ctx(name: str):
+    """(cfg, label, mode, ann, authority file, source_year) or 400 when the
+    project names no record authority."""
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    label, mode = _records_settings(cfg)
+    fname = cfg.get("record_authority")
+    if not fname:
+        raise HTTPException(status_code=400, detail=(
+            "No record authority: set `record_authority` in the project config "
+            "(⚙ Batch → Records: resolve) to the authority file records resolve against."))
+    if not (AUTHORITIES_DIR / fname).exists():
+        raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
+    return cfg, label, mode, project_dir(name) / "annotations", fname, cfg.get("source_year")
+
+
+def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int) -> dict:
+    """Candidates for one collected record: queries from its identity object
+    (13 §1b) or its name text; union over the queries; blocking boosts."""
+    from app import record_resolve as _rr
+    head = rec["fragments"][0]
+    shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
+    head_shape = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
+    ident = _rr.identity_of(head_shape.get("structured"))
+    queries = _rr.queries_for(rec.get("name") or "", ident)
+    index = _load_authority(fname)
+    per_query = [(q, lang, _authority_match(q, None, None, max(k, 8), fname)) for q, lang in queries]
+    cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k)
+    for c in cands:
+        prov = (c.get("last_slice") or {}).get("provenance") or {}
+        if prov.get("project") and prov.get("stem"):
+            c["crop"] = {"folder": str(PROJECTS_ROOT / prov["project"] / "annotations"),
+                         "stem": prov["stem"], "idx": prov.get("idx"), "group_id": prov.get("group_id")}
+    return {"queries": queries, "identity": ident, "candidates": cands,
+            "head": {"stem": head["stem"], "idx": head["idx"]},
+            "current": _rr.summary(head_shape.get("authority"))}
+
+
+def _collect_for(name: str, label: str, mode: str):
+    from app import records as _records
+    ann = project_dir(name) / "annotations"
+    pages = _records_pages(ann)
+    stem_order = {s: i for i, (s, _) in enumerate(pages)}
+    coll = _records.collect_records(pages, label, mode, stem_order)
+    return coll, dict(pages)
+
+
+@app.get("/api/project/{name}/records/candidates")
+def api_record_candidates(name: str, gid: int = Query(...), k: int = Query(8, ge=1, le=30)):
+    """Ranked entity candidates for one record, with each candidate's facts
+    (seat, founded…), its last slice (year, source, provenance → crop of
+    the record it came from) and why it was boosted. Read-only."""
+    cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
+    coll, by_stem = _collect_for(name, label, mode)
+    rec = coll["records"].get(gid)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"Record {gid} not found")
+    out = _record_candidates(name, rec, by_stem, fname, k)
+    out.update({"gid": gid, "name": rec.get("name"), "authority_file": fname, "source_year": sy,
+                "accept_floor": _AUTH_MIN_ACCEPT})
+    return out
+
+
+class ResolveRecordRequest(BaseModel):
+    gid:       int
+    outcome:   str                          # same | new | successor | clear
+    entity_id: Optional[str] = None         # same: the entity; successor: the predecessor
+    edge_type: Optional[str] = None         # successor: rename | merger | split | legal_form | successor
+    note:      Optional[str] = None
+    source:    str = "human"                # human | auto
+    score:     Optional[float] = None
+
+
+def _apply_resolution(name: str, rec: dict, by_stem: dict, ann: Path, fname: str,
+                      source_year, gid: int, outcome: str, entity_id, edge_type, note,
+                      source: str, score) -> dict:
+    """Write one resolution: the authority file (slice / mint / edge) and the
+    head fragment's `authority` mark. Returns what was written."""
+    from app import record_resolve as _rr
+    head = rec["fragments"][0]
+    jf = ann / f"{head['stem']}.json"
+    shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
+    head_shape = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
+    ident = _rr.identity_of(head_shape.get("structured"))
+    rname = rec.get("name") or ""
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    seq = ident.get("serial_no") if isinstance(ident.get("serial_no"), int) else None
+
+    if outcome == "clear":
+        if "authority" in head_shape:
+            with _SHAPE_MERGE_LOCK:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+                data["shapes"][head["idx"]].pop("authority", None)
+                _write_json(jf, data)
+        return {"gid": gid, "outcome": "clear"}
+
+    index = _load_authority(fname)
+    types = (_authority_meta(fname).get("entity_types") or [])
+    etype = types[0] if len(types) == 1 else None
+    edge = None
+    if outcome == "same":
+        if not entity_id or entity_id not in index["by_id"]:
+            raise HTTPException(status_code=400, detail="same: entity_id must name an existing entity")
+        entity_id = (index.get("canonical") or {}).get(entity_id, entity_id)
+        sl = _rr.slice_from(ident, rname, name, head["stem"], gid, seq, source_year, etype)
+        printed = _rr.display_name(rname, ident)
+        alias = {"name": printed, "lang": "hu" if ident.get("name_hu") else None, "source": name} if printed else None
+        extra = [a for a in _rr.aliases_from(ident, name) if a["name"] != printed]
+
+        def _do(data):
+            e = next((x for x in data.get("entities") or [] if x.get("id") == entity_id), None)
+            if not e:
+                raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
+            slices = e.setdefault("slices", [])
+            sig = json.dumps(sl.get("provenance"), sort_keys=True)
+            for i, old in enumerate(slices):
+                if json.dumps(old.get("provenance"), sort_keys=True) == sig and old.get("source") == sl["source"]:
+                    slices[i] = sl; break
+            else:
+                slices.append(sl)
+            known = {_auth_norm(e.get("name") or "")} | {_auth_norm(a.get("name") or "") for a in e.get("aliases") or []}
+            for a in ([alias] if alias else []) + extra:
+                if _auth_norm(a["name"]) not in known:
+                    e.setdefault("aliases", []).append({k: v for k, v in a.items() if v is not None})
+                    known.add(_auth_norm(a["name"]))
+            return e
+        ent = _auth_file_update(fname, _do)
+    elif outcome in ("new", "successor"):
+        if outcome == "successor":
+            if not entity_id or entity_id not in index["by_id"]:
+                raise HTTPException(status_code=400, detail="successor: entity_id must name the predecessor")
+            if edge_type not in AUTH_EDGE_TYPES or edge_type == "duplicate_of":
+                raise HTTPException(status_code=400, detail=f"successor: edge_type must be one of "
+                                                            f"{[t for t in AUTH_EDGE_TYPES if t != 'duplicate_of']}")
+        printed = _rr.display_name(rname, ident)
+        if not printed:
+            raise HTTPException(status_code=400, detail="the record has no name to mint from")
+        sl = _rr.slice_from(ident, rname, name, head["stem"], gid, seq, source_year, etype)
+
+        def _do(data):
+            if types and etype not in types:
+                raise HTTPException(status_code=400, detail=f"the authority declares several entity types {types}; "
+                                                            "record resolution needs exactly one")
+            ent = {"id": _auth_next_id(data), "name": printed,
+                   "aliases": [{k: v for k, v in a.items() if v is not None}
+                               for a in _rr.aliases_from(ident, name) if a["name"] != printed],
+                   "xref": {}, "attrs": _rr.entity_attrs(ident), "slices": [sl]}
+            if etype:
+                ent["type"] = etype
+            data.setdefault("entities", []).append(ent)
+            ed = None
+            if outcome == "successor":
+                ed = {"from": entity_id, "to": ent["id"], "type": edge_type, "as_of": source_year,
+                      "source": name, "note": note, "ts": ts}
+                data.setdefault("edges", []).append(ed)
+            return ent, ed
+        ent, edge = _auth_file_update(fname, _do)
+    else:
+        raise HTTPException(status_code=400, detail="outcome must be same | new | successor | clear")
+
+    m = _rr.mark(ent, outcome, source, score, fname, gid, ts, edge)
+    if not _merge_shape_fields(jf, head["idx"], {"authority": m}):
+        raise HTTPException(status_code=500, detail="could not write the head fragment")
+    return {"gid": gid, "outcome": outcome, "entity": {"id": ent.get("id"), "name": ent.get("name")},
+            "edge": edge, "mark": m}
+
+
+@app.post("/api/project/{name}/records/resolve")
+def api_resolve_record(name: str, body: ResolveRecordRequest):
+    """One record, one decision (13 §2.2): same → slice (+ printed-name
+    alias) on the entity; new → mint; successor → mint + typed edge from
+    the predecessor; clear → drop the mark. The head fragment's `authority`
+    records the decision with `outcome` and `source` (human | auto)."""
+    if body.outcome not in ("same", "new", "successor", "clear"):
+        raise HTTPException(status_code=400, detail="outcome must be same | new | successor | clear")
+    cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
+    coll, by_stem = _collect_for(name, label, mode)
+    rec = coll["records"].get(body.gid)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"Record {body.gid} not found")
+    return _apply_resolution(name, rec, by_stem, ann, fname, sy, body.gid, body.outcome,
+                             body.entity_id, body.edge_type, body.note, body.source, body.score)
+
+
+class ResolveRecordsBatch(BaseModel):
+    record_ids:     Optional[list[int]] = None
+    pattern:        Optional[str] = None     # regex on the head fragment's stem
+    accept_floor:   float = _AUTH_MIN_ACCEPT # raw similarity needed to auto-accept the best candidate
+    margin:         float = 5.0              # best must lead the runner-up by this (ranked score) to be unambiguous
+    mint_unmatched: bool = False             # bootstrap: records with no acceptable candidate become new entities
+    overwrite:      bool = False             # re-decide records already marked by auto (human marks are never touched)
+    dry_run:        bool = False
+
+
+@app.post("/api/project/{name}/resolve-records")
+def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
+    """Resolve many records: best candidate at or above `accept_floor` and
+    unambiguous (leads by `margin`) → same (source auto); otherwise → new
+    when `mint_unmatched` (the bootstrap of a first source), else left for
+    the browser. Human decisions are never overwritten; auto ones only with
+    `overwrite`. Dry run reports the decisions without writing."""
+    cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
+    try:
+        rx = re.compile(body.pattern) if body.pattern else None
+    except re.error as e:
+        raise HTTPException(status_code=400, detail=f"Bad pattern: {e}")
+    coll, by_stem = _collect_for(name, label, mode)
+    wanted = set(body.record_ids) if body.record_ids is not None else None
+    items, counts = [], {"same": 0, "new": 0, "unresolved": 0, "kept": 0}
+    for gid in sorted(coll["records"]):
+        rec = coll["records"][gid]
+        head = rec["fragments"][0]
+        if wanted is not None and gid not in wanted:
+            continue
+        if rx and not rx.search(head["stem"]):
+            continue
+        shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
+        cur = (shapes[head["idx"]].get("authority") if 0 <= head["idx"] < len(shapes) else None) or {}
+        if cur.get("id") and (cur.get("source") == "human" or not body.overwrite):
+            counts["kept"] += 1
+            items.append({"id": gid, "name": rec.get("name"), "decision": "kept", "entity": cur.get("id")})
+            continue
+        c = _record_candidates(name, rec, by_stem, fname, 3)
+        cands = c["candidates"]
+        best = cands[0] if cands else None
+        second = cands[1]["ranked"] if len(cands) > 1 else -1e9
+        if best and best["score"] >= body.accept_floor and best["ranked"] - second >= body.margin:
+            decision, ent = "same", best["id"]
+        elif body.mint_unmatched:
+            decision, ent = "new", None
+        else:
+            decision, ent = "unresolved", None
+        item = {"id": gid, "name": rec.get("name"), "decision": decision, "entity": ent,
+                "best": ({"id": best["id"], "name": best.get("name"), "score": best["score"],
+                          "boost_why": best.get("boost_why")} if best else None)}
+        if not body.dry_run and decision in ("same", "new"):
+            try:
+                res = _apply_resolution(name, rec, by_stem, ann, fname, sy, gid, decision, ent, None, None,
+                                        "auto", best["score"] if (best and decision == "same") else None)
+                item["entity"] = res["entity"]["id"]
+                # the file changed: later records must see the new entity
+                by_stem[head["stem"]] = json.loads((ann / f"{head['stem']}.json").read_text(encoding="utf-8"))
+            except HTTPException as e:
+                item["decision"], item["error"] = "error", e.detail
+        counts[decision] = counts.get(decision, 0) + 1
+        items.append(item)
+    return {"authority_file": fname, "source_year": sy, "dry_run": body.dry_run,
+            "n_records": len(coll["records"]), "counts": counts, "items": items}
 
 
 class ExtractRecordsRequest(BaseModel):

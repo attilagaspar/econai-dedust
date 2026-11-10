@@ -1,6 +1,6 @@
 # 13. Cross-source entity linkage — the firm authority as first instance
 
-**Status (2026-11-10): E1 + E1b BUILT** (schema additions, mint / slice / edge primitives, `firms_hu` file; record-level extraction batch op, §1b); next: E2 gold set (user) and E3 record-level resolve. Discussed and agreed with
+**Status (2026-11-10): E1 + E1b + E3 BUILT** (schema additions, mint / slice / edge primitives, `firms_hu` file; record-level extraction; record-level resolve with the three outcomes, the batch with bootstrap, the browser panel). Seat / founding-year / county / legal-form boosts came with E3; the sequence prior (E4) and the entity view (E5) are next, the gold set (E2) is the user's. Discussed and agreed with
 Attila on 2026-11-10. Builds on the authority system (05 §authority), the
 temporal authority schema (03: slices), the P12 entity index (07) and the
 Phase H records (09 §H5). First instance: firms across the Compass volumes.
@@ -162,11 +162,11 @@ export specialised to one authority.
 | temporal slices in the authority schema | built (03; places 1910 + 1930 slices) |
 | records with group_id, fragments, crops, record browser | built (09 §H5, §H8) |
 | structured extraction per annotation | built (05) |
-| **mint entity** from a record / worklist | endpoint built (E1); UI missing |
-| **succession edges** in the schema + resolver + view | schema + endpoint + resolver collapse built (E1); view missing |
+| **mint entity** from a record / worklist | built (E1 + E3: ＋ new entity in the record browser, bootstrap batch) |
+| **succession edges** in the schema + resolver + view | schema, endpoint, resolver collapse, → successor in the browser (E1 + E3); entity view missing (E5) |
 | **record-level extraction** (identity / content schema over a record's fragments) | built (E1b): batch op 🧩 Records: extract with a schema |
-| record-level `authority` (records.json + start shape mirror) | missing |
-| normalisation rules + blocking boosts + sequence prior | `normalize.strip_tokens` built (E1); boosts + sequence prior missing |
+| record-level `authority` (head fragment mark, shown by `/records`) | built (E3) |
+| normalisation rules + blocking boosts + sequence prior | `normalize.strip_tokens` (E1) + seat / founded / county / legal-form boosts (E3) built; sequence prior missing (E4) |
 | entity view across projects (P12 item 2) | missing |
 | coverage flag | missing |
 | entity × source-year export | missing (H6 not built either) |
@@ -178,8 +178,8 @@ export specialised to one authority.
 | E1 | authority schema additions (`lang` on aliases, `edges[]`, normalisation rules, id scheme); mint + slice + edge endpoints; `firms_hu` file created empty | **built 2026-11-10** |
 | E1b | record-level extraction: one batch op runs the identity (or content) schema over each record's fragments in reading order, stores the object on the record's head fragment | **built 2026-11-10** |
 | E2 | gold set: hand-link ~100 records 1877 ↔ 1882 in a throwaway sheet; matcher scorer script | user ½ day + ½ session |
-| E3 | record-level resolve: records.json `authority`, record browser column + candidate panel with *same/new/successor*, batch op, worklist for records, bootstrap op | 2 sessions |
-| E4 | matcher additions: normalisation rules, seat/year/legal-form boosts, sequence prior; measured against E2 | 1 session |
+| E3 | record-level resolve: head-fragment `authority`, record browser chip + candidate panel with *same/new/successor*, batch op with bootstrap, "unresolved only" filter | **built 2026-11-10** |
+| E4 | matcher additions: sequence prior (seat/year/legal-form boosts landed with E3); measured against E2 | ½ session |
 | E5 | entity view (P12 item 2) with slices, crops, edges | 1–2 sessions |
 | E6 | coverage flag + entity × source-year export + edges sheet | 1 session |
 

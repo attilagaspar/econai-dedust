@@ -307,6 +307,23 @@ only ever written by a person.
   resolver, ids are never rewritten). Authority-declared
   `normalize.strip_tokens` phrases (legal forms) are dropped wherever they
   occur. `firms_hu` authority exists, empty, minted from the sources.
+- **Record-level resolution** (plan 13 §2, E3, built 2026-11-10;
+  `app/record_resolve.py`): a project names the authority its records
+  resolve against (`record_authority`) and the year its source describes
+  (`source_year`). `GET …/records/candidates?gid=` ranks entities for one
+  record from its identity object (name_hu / name_de / other names as
+  queries; seat, founding year, county, legal form as soft boosts) or its
+  first line of text, with each candidate's facts, last slice and the crop
+  of the record it came from. `POST …/records/resolve` writes one decision:
+  **same** (slice + printed-name alias on the entity), **new** (mint),
+  **successor** (mint + typed edge from the predecessor), clear; the mark
+  sits on the record's head fragment as `authority` with `outcome` and
+  `source` human|auto. Batch op **🏛 Records: resolve to entities**
+  (`POST …/resolve-records`): unambiguous matches at/above a floor → same
+  (auto); **mint unmatched** bootstraps a first source; human decisions
+  never overwritten; dry run. Record browser: 🏛 chip per record, resolve
+  panel with candidates' crops and same / successor / new / clear buttons,
+  "unresolved only" filter, resolved count in the header.
 - **Cross-page reports** (report chassis, minimizable pill, click-to-jump,
   editable Human + authority per row): **duplicate** (same entity resolved
   in 2+ places), **unresolved** (grouped by folded text), **lookup** (by

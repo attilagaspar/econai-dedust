@@ -206,7 +206,7 @@ function onBatchOpChange() {
   const isDataset = op === 'dataset_diagnose';
   document.getElementById('batch-dataset-opts').style.display = isDataset ? '' : 'none';
   if (isDataset) _batchDatasetInit();
-  const isRecords = op === 'records_sweep' || op === 'records_browse' || op === 'records_derive' || op === 'records_extract';
+  const isRecords = op === 'records_sweep' || op === 'records_browse' || op === 'records_derive' || op === 'records_extract' || op === 'records_resolve';
   const recOpts = document.getElementById('batch-records-opts');
   if (recOpts) recOpts.style.display = isRecords ? 'flex' : 'none';
   if (isRecords) _batchRecordsInit(op);
@@ -256,13 +256,17 @@ async function _batchRecordsInit(op) {
   const dryWrap = document.getElementById('batch-rec-dry-wrap');
   const isDerive = op === 'records_derive';
   const isExtract = op === 'records_extract';
-  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive || isExtract) ? '' : 'none';
+  const isResolve = op === 'records_resolve';
+  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive || isExtract || isResolve) ? '' : 'none';
+  const recrOpts = document.getElementById('batch-recr-opts');
+  if (recrOpts) recrOpts.style.display = isResolve ? 'flex' : 'none';
+  if (isResolve && typeof _batchRecrInit === 'function') _batchRecrInit();
   const fragOpts = document.getElementById('batch-frag-opts');
   if (fragOpts) fragOpts.style.display = isDerive ? 'flex' : 'none';
   const recxOpts = document.getElementById('batch-recx-opts');
   if (recxOpts) recxOpts.style.display = isExtract ? 'flex' : 'none';
   const sweepHelp = document.getElementById('batch-rec-sweep-help');
-  if (sweepHelp) sweepHelp.style.display = (isDerive || isExtract) ? 'none' : '';
+  if (sweepHelp) sweepHelp.style.display = (isDerive || isExtract || isResolve) ? 'none' : '';
   if (isExtract && typeof _batchRecxInit === 'function') _batchRecxInit();
   if (typeof loadRecordsContext === 'function') await loadRecordsContext();
   const sel = document.getElementById('batch-rec-label');
@@ -290,7 +294,9 @@ async function _batchRecordsSetting(key, value) {
       body: JSON.stringify({[key]: value})});
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { showToast('Config error: ' + (d.detail || r.status), 5000); return; }
-    showToast(key === 'record_label' ? (value ? `Record label: ${value}` : 'Record label cleared') : `Layout columns: ${value}`);
+    showToast({record_label: value ? `Record label: ${value}` : 'Record label cleared',
+               record_authority: value ? `Record authority: ${value}` : 'Record authority cleared',
+               source_year: value ? `Source year: ${value}` : 'Source year cleared'}[key] || `Layout columns: ${value}`);
   } catch (e) { showToast('Config error: ' + (e?.message || e), 5000); return; }
   await _batchRecordsInit(document.getElementById('batch-op').value);
 }
@@ -691,6 +697,13 @@ async function runBatch() {
   if (op === 'records_extract') {
     const dry = !!document.getElementById('batch-rec-dry')?.checked;
     await runExtractRecords(sorted, {dryRun: dry});
+    return;
+  }
+
+  // Record-level entity resolution (same / new / successor), batch form.
+  if (op === 'records_resolve') {
+    const dry = !!document.getElementById('batch-rec-dry')?.checked;
+    await runResolveRecords(sorted, {dryRun: dry});
     return;
   }
 

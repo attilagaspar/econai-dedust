@@ -909,6 +909,7 @@
         <option value="records_sweep">⛓ Records: sweep (number records through the volume)</option>
         <option value="records_browse">⛓ Records: browser (chains, orphans, long spans)</option>
         <option value="records_extract">🧩 Records: extract with a schema (one object per record, all fragments in one call)</option>
+        <option value="records_resolve">🏛 Records: resolve to entities (same / new / successor; bootstrap a first source)</option>
         <option value="crops_derive">✂ Cut boxes of a label into a crop project (crops as pages)</option>
         <option value="crops_writeback">⤴ Write crop pages back to their source pages</option>
       </select>
@@ -986,6 +987,30 @@
           "Structured" sheet and the JSON export all pick it up). Records already carrying this schema are skipped unless "overwrite";
           a human-edited object is never replaced. The page range narrows the records by the page of their head fragment. A dry run
           lists the records and fragments that would be sent. Schemas live in the project's <code>schemas/</code> folder (LLM panel → JSON).</div>
+      </div>
+      <div id="batch-recr-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span>Authority</span>
+          <select id="batch-recr-auth" onchange="_batchRecordsSetting('record_authority', this.value)" style="flex:1;min-width:140px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 6px;font-size:12px;"></select>
+          <span title="The year this source describes — slices are keyed on it">source year</span>
+          <input id="batch-recr-year" type="number" min="1000" max="2100" onchange="_batchRecordsSetting('source_year', this.value)" style="width:64px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span title="Raw name similarity the best candidate needs to be accepted automatically">accept ≥</span>
+          <input id="batch-recr-floor" type="number" min="0" max="100" value="85" style="width:48px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+          <span title="The best candidate must lead the runner-up by this much (after boosts) to count as unambiguous">margin</span>
+          <input id="batch-recr-margin" type="number" min="0" max="100" value="5" style="width:44px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+          <label class="row" style="margin:0;" title="Bootstrap: every record without an acceptable candidate becomes a NEW entity (use for the first source of a family; otherwise leave unresolved records for the browser)">
+            <input type="checkbox" id="batch-recr-mint" style="accent-color:#e94560;width:13px;height:13px;"><span>mint unmatched (bootstrap)</span></label>
+          <label class="row" style="margin:0;" title="Re-decide records that an earlier batch resolved automatically; human decisions are never touched">
+            <input type="checkbox" id="batch-recr-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>overwrite auto</span></label>
+        </div>
+        <div style="font-size:10px;color:#555;">Each record is matched by its identity object (🧩 extraction: Hungarian and German names, other names; seat, founding year, county and
+          legal form rank candidates up) or, without one, by its first line of text. An unambiguous match at or above the floor becomes
+          <b>same</b> (a slice on the entity, the printed name as alias); with "mint unmatched" the rest become <b>new</b> entities; otherwise
+          they stay unresolved for the ⛓ record browser, where each record offers same / new / successor with the candidates' crops. The decision
+          sits on the record's head fragment (🏛 in the editor); the authority file receives entities, aliases, slices and edges only.
+          Human decisions are never overwritten. The page range narrows the records by their head page. Dry run reports the decisions.</div>
       </div>
       <label class="row" id="batch-rec-dry-wrap" title="Report what would change without writing anything">
         <input type="checkbox" id="batch-rec-dry" style="accent-color:#e94560;width:13px;height:13px;">

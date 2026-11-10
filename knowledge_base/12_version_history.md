@@ -394,3 +394,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 10 — sample identity schema** for directory records
   (`samples/schemas/directory_record_identity.json`), drafted from Compass
   1877/1882 crops: 14 nullable fields, strict-mode friendly. 13 §1b points to it.
+- **Nov 10 — record-level entity resolution (entity linkage E3)**:
+  `app/record_resolve.py`; config `record_authority` + `source_year`;
+  `GET …/records/candidates` (identity-object queries, seat / founded /
+  county / legal-form boosts, candidates' facts + last slice + crop),
+  `POST …/records/resolve` (same / new / successor / clear → authority file
+  + head-fragment mark), `POST …/resolve-records` (floor + margin auto-same,
+  mint-unmatched bootstrap, human marks kept); batch op 🏛 Records: resolve
+  to entities; record browser 🏛 chip, resolve panel, unresolved filter. 6
+  tests on a throwaway authority + `_smoke_` project. Not deployed.

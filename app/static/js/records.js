@@ -15,7 +15,7 @@
 // Reuses: _escHtml, _searchJump, _serializeWrite, showToast, replaceAllShapes,
 // pushUndo, reloadPageData, drawOverlay, updatePanel, _batchTakeSnapshot.
 
-let _recCtx = {project: null, record_label: null, layout_columns: 'auto', record_roles: {}, labels: []};
+let _recCtx = {project: null, record_label: null, layout_columns: 'auto', record_roles: {}, labels: [], record_authority: null, source_year: null};
 
 async function loadRecordsContext() {
   _recCtx = {project: null, record_label: null, layout_columns: 'auto', record_roles: {}, labels: []};
@@ -204,6 +204,7 @@ function _recOpenModal() {
     (d.n_orphans ? ` · <span style="color:#f87171;">⚠ ${d.n_orphans} orphan</span>` : '') +
     (d.n_long ? ` · <span style="color:#fbbf24;">${d.n_long} span &gt; ${d.max_pages} pages</span>` : '') +
     (d.n_unswept ? ` · <span style="color:#a78bfa;">${d.n_unswept} unswept</span>` : '') +
+    (d.record_authority ? ` · <span style="color:#86efac;">🏛 ${d.n_resolved}/${d.n_records} resolved</span>` : '') +
     (po.ok ? ' · page order ✓' : ` · <span style="color:#f87171;" title="${_escHtml(po.note || '')}">⚠ page order</span>`);
   m.innerHTML =
     '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #1a3a6e;flex-wrap:wrap;">' +
@@ -214,6 +215,8 @@ function _recOpenModal() {
         `<input type="number" id="rec-maxpages" value="${d.max_pages}" min="1" style="width:40px;" onchange="openRecordBrowser({maxPages: parseInt(this.value,10)||2})"> pages</label>` +
       '<label style="display:flex;gap:4px;align-items:center;color:#8a94a6;">' +
         `<input type="checkbox" ${_recFlaggedOnly ? 'checked' : ''} onchange="openRecordBrowser({flaggedOnly: this.checked})" style="accent-color:#e94560;">flagged only</label>` +
+      (d.record_authority ? '<label style="display:flex;gap:4px;align-items:center;color:#8a94a6;">' +
+        `<input type="checkbox" ${_recUnresolvedOnly ? 'checked' : ''} onchange="_recUnresolvedOnly = this.checked; _recRenderBody()" style="accent-color:#e94560;">unresolved only</label>` : '') +
       '<button class="nav-btn" onclick="runRecordSweep({dryRun:true})" title="Report what a full sweep would change, without writing">🔍 Dry run</button>' +
       '<button class="nav-btn" onclick="_recResweepAll()" title="Renumber every record through the whole volume (locked ids kept)">⟳ Resweep all</button>' +
       '<button class="nav-btn" id="rec-strip-btn" onclick="_recSetStrip(!_recStrip)" ' +
@@ -308,6 +311,7 @@ function _recRenderBody() {
   }
   let html = '';
   d.records.forEach(r => {
+    if (_recUnresolvedOnly && r.authority) return;
     const span = r.page_span[0] === r.page_span[1] ? pg(r.page_span[0]) : `${pg(r.page_span[0])}–${pg(r.page_span[1])}`;
     const flags = (r.flags || []).map(f => f === 'orphan'
       ? '<span style="color:#f87171;" title="the first fragment is marked as a continuation — its head is missing or lies on an earlier page">⚠ orphan</span>'
@@ -317,7 +321,7 @@ function _recRenderBody() {
       `<b style="color:#93c5fd;font-size:12px;">record ${r.id}</b>` +
       `<span style="color:#cde;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(r.name || '')}</span>` +
       `<span style="color:#667;">${r.n_fragments} fragment${r.n_fragments === 1 ? '' : 's'} · ${span}</span>` +
-      (flags ? `<span>${flags}</span>` : '') + _recStructChip(r) + `</div>`;
+      (flags ? `<span>${flags}</span>` : '') + _recStructChip(r) + _recAuthChip(r) + `</div>` + `<div id="rec-cand-${r.id}"></div>`;
     if (_recStrip) {
       r.fragments.forEach(f => { html += _recFragStrip(f, r.id); });
     } else {
@@ -441,6 +445,155 @@ function _fragPagesHtml(d) {
       _escHtml(empty.slice(0, 40).map(pg).join(', ')) + (empty.length > 40 ? ' …' : '') + '</div>'
     : '';
   return rows + emptyHtml;
+}
+
+// ── record-level entity resolution (13 §2, E3) ─────────────────────────────
+
+let _recUnresolvedOnly = false;
+
+function _recAuthChip(r) {
+  const d = _recData || {};
+  if (!d.record_authority) return '';
+  const a = r.authority;
+  if (!a) {
+    return `<button class="nav-btn" onclick="_recCandidates(${r.id})" title="Find entity candidates for this record">🏛 resolve…</button>`;
+  }
+  const tone = a.outcome === 'new' ? '#fbbf24' : (a.outcome === 'successor' ? '#f0abfc' : '#86efac');
+  const what = a.outcome === 'new' ? 'new entity' : (a.outcome === 'successor' ? `successor (${a.edge?.type || ''} of ${a.edge?.from || ''})` : 'same entity');
+  return `<span class="rs-clk" onclick="_recCandidates(${r.id})" style="color:${tone};cursor:pointer;white-space:nowrap;" ` +
+    `title="${_escHtml(`${what} · ${a.source}${a.score != null ? ' · score ' + a.score : ''} · ${a.ts || ''} · click to review`)}">` +
+    `🏛 ${_escHtml(a.id)} ${_escHtml(a.name || '')}${a.source === 'human' ? ' ✎' : ''}</span>`;
+}
+
+async function _recCandidates(gid) {
+  const box = document.getElementById(`rec-cand-${gid}`);
+  if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="padding:6px;color:#8a94a6;">Looking up candidates…</div>';
+  let c;
+  try {
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/records/candidates?gid=${gid}&k=8`);
+    c = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(c.detail || `HTTP ${r.status}`);
+  } catch (e) { box.innerHTML = `<div style="padding:6px;color:#f87171;">${_escHtml(e?.message || String(e))}</div>`; return; }
+  const id = c.identity || {};
+  const identTxt = Object.keys(id).length
+    ? ['name_hu', 'name_de', 'legal_form', 'seat', 'county', 'founded', 'capital_nominal'].filter(k => id[k] != null && id[k] !== '')
+        .map(k => `<span style="color:#667;">${k}</span> ${_escHtml(String(id[k]))}`).join(' · ')
+    : '<span style="color:#fbbf24;">no identity object — matching on the first line of text (run 🧩 extract first for better candidates)</span>';
+  const cur = c.current;
+  let html = `<div style="margin:2px 0 8px 14px;padding:6px 8px;border-left:3px solid #2a4a8e;background:#0d1b35;border-radius:0 4px 4px 0;">` +
+    `<div style="margin-bottom:4px;">${identTxt}</div>` +
+    `<div style="margin-bottom:4px;color:#8a94a6;">queries: ${(c.queries || []).map(q => _escHtml(q[0])).join(' | ') || '—'} · authority ${_escHtml(c.authority_file)} · year ${c.source_year ?? '<span style="color:#f87171;">not set</span>'}</div>`;
+  if (!(c.candidates || []).length) html += '<div style="color:#8a94a6;margin:4px 0;">no candidates in the authority</div>';
+  html += '<table class="rs-table" style="width:100%;"><tr><th>score</th><th>entity</th><th>facts</th><th>last seen</th><th></th><th></th></tr>';
+  (c.candidates || []).forEach((k, i) => {
+    const facts = Object.entries(k.facts || {}).map(([a, b]) => `${a} ${b}`).join(', ');
+    const ls = k.last_slice || {};
+    const crop = k.crop && k.crop.stem && k.crop.idx != null
+      ? `<img src="${API}/api/cell?folder=${encodeURIComponent(k.crop.folder)}&stem=${encodeURIComponent(k.crop.stem)}&idx=${k.crop.idx}" loading="lazy" onclick="_recShowCrop(this.src)" style="max-height:90px;max-width:300px;object-fit:contain;cursor:zoom-in;display:block;background:#fff;">`
+      : (k.crop && k.crop.stem ? `<span class="rs-clk" style="color:#93c5fd;cursor:pointer;" onclick="_recOpenOther('${_escHtml(k.crop.folder)}','${_escHtml(k.crop.stem)}')">${_escHtml(ls.source || '')} · ${_escHtml(k.crop.stem)}</span>` : '');
+    const isCur = cur && cur.id === k.id;
+    html += `<tr style="${isCur ? 'background:#12224a;' : ''}">` +
+      `<td style="white-space:nowrap;" title="raw similarity ${k.score}${k.boost ? ' + boost ' + k.boost + ' (' + (k.boost_why || []).join(', ') + ')' : ''} · via ${_escHtml(k.via || '')} “${_escHtml(k.matched || '')}”">` +
+        `${k.score}${k.boost ? `<span style="color:#86efac;">+${k.boost}</span>` : ''}${i === 0 && k.score >= (c.accept_floor || 70) ? ' ★' : ''}</td>` +
+      `<td><b style="color:#93c5fd;">${_escHtml(k.id)}</b> ${_escHtml(k.name || '')}` +
+        ((k.aliases || []).length ? `<div style="color:#667;font-size:10px;">${_escHtml(k.aliases.join(' · '))}</div>` : '') + `</td>` +
+      `<td style="color:#8a94a6;">${_escHtml(facts)}</td>` +
+      `<td style="white-space:nowrap;color:#8a94a6;">${ls.as_of ?? ''} ${_escHtml(ls.source || '')}${k.n_slices > 1 ? ` (${k.n_slices} slices)` : ''}<div>${crop}</div></td>` +
+      `<td style="white-space:nowrap;"><button class="nav-btn" onclick="_recDecide(${gid},'same','${_escHtml(k.id)}')" title="This record IS this entity: add a ${c.source_year ?? '?'} slice and the printed name as alias">= same</button></td>` +
+      `<td style="white-space:nowrap;"><select id="rec-edge-${gid}-${i}" style="font-size:10px;background:#0d1b35;color:#ccc;border:1px solid #333;"><option value="rename">rename</option><option value="merger">merger</option><option value="split">split</option><option value="legal_form">legal form</option><option value="successor">successor</option></select> ` +
+        `<button class="nav-btn" onclick="_recDecide(${gid},'successor','${_escHtml(k.id)}',document.getElementById('rec-edge-${gid}-${i}').value)" title="This record is a NEW entity that succeeds this one (typed edge from it)">→ successor</button></td>` +
+      `</tr>`;
+  });
+  html += '</table>' +
+    `<div style="display:flex;gap:8px;margin-top:6px;align-items:center;">` +
+      `<button class="nav-btn" onclick="_recDecide(${gid},'new')" title="None of these: mint a new entity from this record">＋ new entity</button>` +
+      (cur ? `<button class="nav-btn" onclick="_recDecide(${gid},'clear')" title="Drop the decision on this record (the authority file keeps what was written)">✕ clear decision</button>` : '') +
+      `<span style="color:#556;font-size:10px;">same = slice on the entity · new = mint · successor = mint + typed edge from the chosen entity. Decisions are stored on the record's head fragment as human.</span>` +
+    `</div></div>`;
+  box.innerHTML = html;
+}
+
+async function _recOpenOther(folderPath, stem) {
+  const u = new URL(location.href); u.searchParams.set('folder', folderPath); u.searchParams.set('stem', stem);
+  window.open(u.toString(), '_blank');
+}
+
+async function _recDecide(gid, outcome, entityId, edgeType) {
+  try {
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/records/resolve`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({gid, outcome, entity_id: entityId || null, edge_type: edgeType || null, source: 'human'})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    showToast(outcome === 'clear' ? `record ${gid}: decision cleared`
+      : `record ${gid} → ${outcome} ${d.entity?.id || ''} ${d.entity?.name || ''}`, 5000);
+    await openRecordBrowser();
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+  } catch (e) { showToast('Resolve error: ' + (e?.message || e), 7000); }
+}
+
+async function _batchRecrInit() {
+  const sel = document.getElementById('batch-recr-auth');
+  const yr = document.getElementById('batch-recr-year');
+  if (!sel) return;
+  try {
+    const r = await fetch(`${API}/api/authorities`); const d = await r.json();
+    const cur = _recCtx.record_authority || '';
+    sel.innerHTML = '<option value="">— none —</option>' + (d.authorities || []).filter(a => !a.error)
+      .map(a => `<option value="${_escHtml(a.file)}"${a.file === cur ? ' selected' : ''}>${_escHtml(a.authority || a.file)}${a.id_scheme ? '' : ' (no id scheme: cannot mint)'}</option>`).join('');
+  } catch (e) { sel.innerHTML = '<option value="">(authorities unavailable)</option>'; }
+  if (yr) yr.value = _recCtx.source_year ?? '';
+}
+
+async function runResolveRecords(sorted, {dryRun = false} = {}) {
+  if (!_recNeedProject()) return null;
+  if (!_recCtx.record_authority) { showToast('Pick the authority the records resolve against first'); return null; }
+  const body = {
+    pattern: typeof _cropsPatternFor === 'function' ? _cropsPatternFor(sorted) : null,
+    accept_floor: parseFloat(document.getElementById('batch-recr-floor')?.value) || 85,
+    margin: parseFloat(document.getElementById('batch-recr-margin')?.value) || 0,
+    mint_unmatched: !!document.getElementById('batch-recr-mint')?.checked,
+    overwrite: !!document.getElementById('batch-recr-overwrite')?.checked,
+    dry_run: true,
+  };
+  const prog = document.getElementById('batch-progress');
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/resolve-records`;
+  const post = async (b) => {
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    return d;
+  };
+  const fmt = (d) => `${d.counts.same || 0} same · ${d.counts.new || 0} new · ${d.counts.unresolved || 0} unresolved · ${d.counts.kept || 0} kept` +
+    (d.counts.error ? ` · ${d.counts.error} error(s)` : '') + ` (of ${d.n_records} records, ${_escHtml(d.authority_file)}, year ${d.source_year ?? 'not set'})`;
+  try {
+    if (prog) prog.textContent = 'Dry run…';
+    const plan = await post(body);
+    const head = `${dryRun ? 'Dry run' : 'Preview'}: ${fmt(plan)}`;
+    if (prog) prog.innerHTML = _escHtml(head) + '<div style="max-height:200px;overflow:auto;margin-top:4px;color:#8a94a6;">' +
+      plan.items.filter(i => i.decision !== 'kept').map(i => `record ${i.id} · ${_escHtml(i.name || '')} → <b>${i.decision}</b>` +
+        (i.best ? ` (best ${_escHtml(i.best.id)} ${_escHtml(i.best.name || '')} ${i.best.score}${(i.best.boost_why || []).length ? ' +' + i.best.boost_why.join(',') : ''})` : '')).join('<br>') + '</div>';
+    if (dryRun) { showToast(head, 8000); return plan; }
+    const todo = (plan.counts.same || 0) + (plan.counts.new || 0);
+    if (!todo) { showToast('Nothing to write: ' + fmt(plan), 6000); return plan; }
+    if (plan.source_year == null && !(await _batchConfirmInline('Source year is not set: slices will carry no year. Continue anyway?', '▶ Continue'))) return null;
+    if (!(await _batchConfirmInline(`Write ${todo} decision(s)? ${fmt(plan)}\n\nThe authority file gains slices${plan.counts.new ? ' and ' + plan.counts.new + ' new entit' + (plan.counts.new === 1 ? 'y' : 'ies') : ''}; each record's head fragment gets the mark (source auto). Human decisions are untouched.`, '▶ Resolve'))) return null;
+    if (prog) prog.textContent = 'Resolving…';
+    const d = await post({...body, dry_run: false});
+    const done = `✓ ${fmt(d)}`;
+    if (prog) prog.innerHTML = _escHtml(done) + (d.items.some(i => i.error) ? '<div style="color:#f87171;margin-top:4px;">' +
+      d.items.filter(i => i.error).map(i => `record ${i.id}: ${_escHtml(i.error)}`).join('<br>') + '</div>' : '');
+    showToast(done, 9000);
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    if (document.getElementById('rec-browser-modal')) await openRecordBrowser();
+    return d;
+  } catch (e) {
+    if (prog) prog.textContent = 'Error: ' + (e?.message || e);
+    showToast('Resolve records error: ' + (e?.message || e), 7000);
+    return null;
+  }
 }
 
 // ── record-level structured extraction (13 §1b) ─────────────────────────────
