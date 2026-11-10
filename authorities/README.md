@@ -19,7 +19,14 @@ One file per authority, named `<name>.authority.json` — e.g.
   live with the source data in
   `kuk-industry-policy/data-sources/firms_per_settlements_from_census/data_release1.0/`.
 
-Future: `firms.authority.json` (entity DB built from multiple sources).
+- `firms_hu.authority.json` — firms, **minted from the sources themselves**
+  (starts empty; `id_scheme` F000001…; `normalize.strip_tokens` = legal
+  forms; `edges[]` for renames / mergers / splits / duplicates). Plan and
+  the decisions that shape it: `knowledge_base/13_entity_linkage.md`.
+  Rule for RAs (13 §5.4): same entity + new slice when the printed name is
+  unchanged apart from the legal-form suffix; a `successor`-type edge
+  whenever the name itself changes; two ids that are one firm get a
+  `duplicate_of` edge, never a rewritten id.
 
 **The `*.authority.json` data files are tracked in the repo** so every clone
 resolves against the same canonical IDs. Builders live with their source data,
@@ -33,6 +40,14 @@ not here. (If a file grows very large or churns often, move it to Git LFS.)
   "version": "0.2",
   "entity_types": ["county", "district", "settlement"],
   "slices_present": [1910],            // source-years currently merged in
+  "id_scheme": {"prefix": "F", "width": 6},   // optional: lets Dedust mint ids (POST /api/authority/mint)
+  "normalize": {"strip_tokens": ["részvénytársaság", "A.-G."]},
+                                       // optional: phrases dropped WHEREVER they occur,
+                                       //   in queries and in entity names/aliases (legal forms)
+  "edges": [ {"from": "F000002", "to": "F000001", "type": "duplicate_of",
+              "as_of": null, "source": "econai", "note": "...", "ts": "..."} ],
+                                       // typed entity→entity links: rename | merger | split |
+                                       //   legal_form | successor | duplicate_of (collapses in the resolver)
   "query_strip": ["rtv", "tjv"],       // optional: trailing query tokens to drop
                                        //   before matching (admin-status suffixes
                                        //   like rendezett tanácsú / törvényhatósági
@@ -41,7 +56,7 @@ not here. (If a file grows very large or churns often, move it to Git LFS.)
     {
       "id": "M0101001",                // stable identity (here: GIStA IDTel1910)
       "name": "Albertfalu",            // current display name
-      "aliases": [{"name": "...", "source": "..."}],
+      "aliases": [{"name": "...", "source": "...", "lang": "de"}],   // lang optional
       "xref": {"idtel1910": "M0101001"},
       "attrs": {                       // TIMELESS facts only
         "lat": 45.41, "lon": 18.44, "region": "...",
@@ -51,7 +66,9 @@ not here. (If a file grows very large or churns often, move it to Git LFS.)
         { "as_of": 1910, "source": "GIStA",
           "type": "settlement", "parent": "M0101", "name": "Albertfalu",
           "attrs": {"county_name": "...", "district_name": "...",
-                    "county_seat": false, "district_seat": false} }
+                    "county_seat": false, "district_seat": false},
+          "provenance": {"project": "...", "stem": "...", "group_id": 3},  // optional: the record it came from
+          "seq": 3 }                                                        // optional: position in its source
       ]
     }
   ]

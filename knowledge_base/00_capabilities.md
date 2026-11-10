@@ -299,6 +299,14 @@ only ever written by a person.
   per string.
 - **➕ Alias learning**: human-confirmed unknown strings promoted into the
   authority file as `econai_confirmed` aliases.
+- **Write primitives** (plan 13, E1): `mint` (new entity with an opaque
+  sequential id from the file's `id_scheme`, aliases with `lang`, first
+  slice with provenance), `slice` (attach a source-year slice, idempotent),
+  `edge` (typed entity→entity link: rename / merger / split / legal_form /
+  successor / duplicate_of; duplicates collapse to the survivor in the
+  resolver, ids are never rewritten). Authority-declared
+  `normalize.strip_tokens` phrases (legal forms) are dropped wherever they
+  occur. `firms_hu` authority exists, empty, minted from the sources.
 - **Cross-page reports** (report chassis, minimizable pill, click-to-jump,
   editable Human + authority per row): **duplicate** (same entity resolved
   in 2+ places), **unresolved** (grouped by folded text), **lookup** (by

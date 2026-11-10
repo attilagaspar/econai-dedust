@@ -377,3 +377,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 10 — entity linkage: the four open questions decided** (opaque IDs,
   overrides on the record, duplicates via `duplicate_of` edge, same-vs-
   successor rule by printed name). `13_entity_linkage.md` §5.
+- **Nov 10 — authority write primitives (entity linkage E1)**: `POST
+  /api/authority/mint | slice | edge`, `GET /api/authority/edges`; schema
+  additions `id_scheme`, `normalize.strip_tokens` (phrases stripped anywhere,
+  both sides of the match), alias `lang`, `edges[]` with `duplicate_of`
+  collapsing to the survivor in the resolver; `firms_hu.authority.json`
+  (empty). 9 tests on a throwaway authority dir. Not deployed.

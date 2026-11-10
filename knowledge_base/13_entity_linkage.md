@@ -1,6 +1,6 @@
 # 13. Cross-source entity linkage — the firm authority as first instance
 
-**Status (2026-11-10): PLAN, nothing built.** Discussed and agreed with
+**Status (2026-11-10): E1 BUILT** (schema additions, mint / slice / edge primitives, `firms_hu` file, tests); record-level identity extraction (§1b below) is next, then E2 gold set, E3 record-level resolve. Discussed and agreed with
 Attila on 2026-11-10. Builds on the authority system (05 §authority), the
 temporal authority schema (03: slices), the P12 entity index (07) and the
 Phase H records (09 §H5). First instance: firms across the Compass volumes.
@@ -22,6 +22,26 @@ later volume's records are matched to it as they are extracted, before any
 field extraction or export. Later: officers, founding year, profits attach
 to the entity-year; balance sheets are a separate step that attaches to the
 same entity-year.
+
+## 1b. From boxes to objects (agreed 2026-11-10)
+
+The JSON comes from the existing schema-constrained extraction (05 §2), run
+at the **record** level (all fragments of one group id, images + OCR text in
+reading order) — the one missing piece of glue. Two schema layers, both
+hand-written per volume family and stored in the project's `schemas/`:
+
+- **identity schema**, thin and stable: name as printed, other-language
+  names, legal form, seat, founding year. Filled from the name box + first
+  text box. It is what resolution (§2) consumes — five structured fields,
+  not the OCR of a name line — so it is built **before E3**.
+- **content schema**, rich and versioned per volume: officers (role, name),
+  capital, profit, dividends, branches…; every field nullable plus a free
+  text spill. Tables stay tables (lattice, attached by group id; H6).
+
+Sequence per volume: derive → sweep → cut → detect name/table/text (exists);
+OCR (exists); record-level extraction with the identity schema (to build);
+resolve records (E3); same batch with the content schema; lattice on tables;
+export one row per entity × year (E6).
 
 ## 2. Design
 
@@ -138,10 +158,11 @@ export specialised to one authority.
 | temporal slices in the authority schema | built (03; places 1910 + 1930 slices) |
 | records with group_id, fragments, crops, record browser | built (09 §H5, §H8) |
 | structured extraction per annotation | built (05) |
-| **mint entity** from a record / worklist | missing |
-| **succession edges** in the schema + resolver + view | missing |
+| **mint entity** from a record / worklist | endpoint built (E1); UI missing |
+| **succession edges** in the schema + resolver + view | schema + endpoint + resolver collapse built (E1); view missing |
+| **record-level extraction** (identity / content schema over a record's fragments) | missing (E1b) |
 | record-level `authority` (records.json + start shape mirror) | missing |
-| normalisation rules + blocking boosts + sequence prior | missing (query_strip exists) |
+| normalisation rules + blocking boosts + sequence prior | `normalize.strip_tokens` built (E1); boosts + sequence prior missing |
 | entity view across projects (P12 item 2) | missing |
 | coverage flag | missing |
 | entity × source-year export | missing (H6 not built either) |
@@ -150,7 +171,8 @@ export specialised to one authority.
 
 | step | what | effort |
 |---|---|---|
-| E1 | authority schema additions (`lang` on aliases, `edges[]`, normalisation rules, id scheme); mint + edge endpoints; `firms_hu` file created empty | 1 session |
+| E1 | authority schema additions (`lang` on aliases, `edges[]`, normalisation rules, id scheme); mint + slice + edge endpoints; `firms_hu` file created empty | **built 2026-11-10** |
+| E1b | record-level extraction: one batch op runs the identity (or content) schema over each record's fragments in reading order, stores the object on the record | 1 session |
 | E2 | gold set: hand-link ~100 records 1877 ↔ 1882 in a throwaway sheet; matcher scorer script | user ½ day + ½ session |
 | E3 | record-level resolve: records.json `authority`, record browser column + candidate panel with *same/new/successor*, batch op, worklist for records, bootstrap op | 2 sessions |
 | E4 | matcher additions: normalisation rules, seat/year/legal-form boosts, sequence prior; measured against E2 | 1 session |

@@ -26,8 +26,8 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field
+from typing import Any, List
 
 from app.pipeline import (
     list_projects,
@@ -5584,15 +5584,26 @@ _AUTH_MIN_ACCEPT   = 70.0    # batch auto-accept floor: below this = no real str
 _AUTH_LOCK = threading.Lock()
 
 
-def _auth_strip_status(s: str, tokens: set) -> str:
-    """Drop trailing status tokens declared by the authority's `query_strip`
-    (e.g. for places_hu: 'Szombathely rtv' -> 'szombathely'). Authority-specific,
-    so it's read from the file, not hardcoded."""
-    if not tokens:
-        return s
+def _auth_strip_status(s: str, tokens: set, phrases: tuple = ()) -> str:
+    """Authority-declared query normalisation, read from the file, never
+    hardcoded. `tokens` = trailing single tokens to drop (`query_strip`, e.g.
+    places_hu 'Szombathely rtv' -> 'szombathely'); `phrases` = normalised
+    token tuples to drop WHEREVER they occur (`normalize.strip_tokens`, e.g.
+    legal forms for firms: 'Pesti Hengermalom Részvénytársaság' ->
+    'pesti hengermalom'). At least one token always survives."""
     toks = s.split()
-    while len(toks) > 1 and toks[-1] in tokens:
-        toks.pop()
+    if phrases and len(toks) > 1:
+        out, i = [], 0
+        while i < len(toks):
+            hit = next((ph for ph in phrases if tuple(toks[i:i + len(ph)]) == ph), None)
+            if hit and (len(out) + len(toks) - i - len(hit)) >= 1:
+                i += len(hit)
+            else:
+                out.append(toks[i]); i += 1
+        toks = out or toks
+    if tokens:
+        while len(toks) > 1 and toks[-1] in tokens:
+            toks.pop()
     return " ".join(toks) if toks else s
 
 
@@ -5698,10 +5709,53 @@ def _build_auth_index(data: dict) -> dict:
     # query before matching (e.g. admin-status suffixes "rtv"/"tjv" for places).
     strip = {(_auth_norm(t)) for t in (data.get("query_strip") or []) if str(t).strip()}
     strip.discard("")
+    # `normalize.strip_tokens`: phrases (one or more tokens) dropped wherever
+    # they occur in a query AND in every candidate key — legal forms, status
+    # words. Declared per authority file; the places file has none.
+    norm_cfg = data.get("normalize") or {}
+    phrases = tuple(sorted({tuple(_auth_norm(t).split())
+                            for t in (norm_cfg.get("strip_tokens") or []) if _auth_norm(t)},
+                           key=len, reverse=True))
+    fold_phrases = tuple(tuple(_auth_fold(" ".join(ph)).split()) for ph in phrases)
+    if phrases:
+        for pool in pools.values():
+            for c in pool:
+                c["norm"] = _auth_strip_status(c["norm"], set(), phrases)
+                c["fold"] = _auth_strip_status(c["fold"], set(), fold_phrases)
+        folds_by_type = {t: [c["fold"] for c in pool] for t, pool in pools.items()}
+        exact_by_type = {}
+        for t, pool in pools.items():
+            em = {}
+            for c in pool:
+                em.setdefault(c["norm"], []).append(c)
+            exact_by_type[t] = em
+        folds_all = [c["fold"] for c in pool_all]
+        exact_all = {}
+        for c in pool_all:
+            exact_all.setdefault(c["norm"], []).append(c)
+    # Edges (entity -> entity, typed): indexed both ways; `duplicate_of`
+    # chains collapse to the surviving entity (`canonical`).
+    edges_by_id: dict = {}
+    dup_of: dict = {}
+    for ed in (data.get("edges") or []):
+        a, b = ed.get("from"), ed.get("to")
+        if not a or not b:
+            continue
+        edges_by_id.setdefault(a, []).append(ed)
+        edges_by_id.setdefault(b, []).append(ed)
+        if ed.get("type") == "duplicate_of":
+            dup_of[a] = b
+    canonical: dict = {}
+    for a in dup_of:
+        cur, seen = a, set()
+        while cur in dup_of and cur not in seen:
+            seen.add(cur); cur = dup_of[cur]
+        canonical[a] = cur
     return {"by_id": by_id, "children": children, "pools": pools,
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
             "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
-            "strip": strip}
+            "strip": strip, "phrases": phrases, "fold_phrases": fold_phrases,
+            "edges_by_id": edges_by_id, "canonical": canonical}
 
 
 def _load_authority(name: Optional[str] = None) -> dict:
@@ -5742,6 +5796,9 @@ def _authority_meta(fname: str) -> dict:
         "entity_types":   data.get("entity_types") or [],
         "slices_present": data.get("slices_present") or [],
         "counts":         data.get("counts") or {},
+        "id_scheme":      data.get("id_scheme"),
+        "normalize":      data.get("normalize"),
+        "n_edges":        len(data.get("edges") or []),
     }
     _AUTH_META_CACHE[fname] = {"mtime": mtime, "meta": meta}
     return meta
@@ -5775,9 +5832,11 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
     index = _load_authority(name)
     by_id = index["by_id"]
     strip = index.get("strip") or set()
-    nq, fq = _auth_strip_status(_auth_norm(q), strip), _auth_strip_status(_auth_fold(q), strip)
+    nq = _auth_strip_status(_auth_norm(q), strip, index.get("phrases") or ())
+    fq = _auth_strip_status(_auth_fold(q), strip, index.get("fold_phrases") or ())
     if not nq:
         return []
+    canonical = index.get("canonical") or {}
     single = type in index["pools"]
     # Always search the full (cached) pool — `parent` is a SOFT preference
     # applied at ranking time, not a hard filter (see below).
@@ -5790,9 +5849,10 @@ def _authority_match(q: str, type: Optional[str] = None, parent: Optional[str] =
     best: dict = {}   # id -> {"score", "via", "matched"}  (score = raw similarity)
 
     def _add(c, score):
-        cur = best.get(c["id"])
+        cid = canonical.get(c["id"], c["id"])   # a duplicate resolves to its survivor
+        cur = best.get(cid)
         if not cur or score > cur["score"]:
-            best[c["id"]] = {"score": float(score), "via": c["via"], "matched": c["raw"]}
+            best[cid] = {"score": float(score), "via": c["via"], "matched": c["raw"]}
 
     for c in emap.get(nq, []):           # exact (accent-preserving), O(1)
         _add(c, 100.0)
@@ -5865,7 +5925,9 @@ def api_authority_entity(id: str = Query(...), name: Optional[str] = Query(None)
     v = index["by_id"].get(id)
     if not v:
         raise HTTPException(status_code=404, detail=f"Entity not found: {id}")
-    return v
+    canon = (index.get("canonical") or {}).get(id, id)
+    return {**v, "edges": (index.get("edges_by_id") or {}).get(id, []),
+            "canonical_id": canon}
 
 
 class AuthorityAssign(BaseModel):
@@ -6605,6 +6667,216 @@ def api_authority_promote_aliases(body: AuthorityPromote = ...):
             counts["aliases"] = counts["aliases"] + added
         _write_json(path, data)
     return {"ok": True, "added": added, "file": fname}
+
+
+# ── Write primitives: mint an entity, add a slice, add an edge ───────────────
+# The three operations the record-level resolve needs (knowledge_base/13 §2.2:
+# same → slice, new → mint, successor → mint + edge; duplicates → edge). All
+# three are read-modify-write of the git-tracked authority file under one
+# lock; the matcher picks the change up through its mtime cache.
+
+_AUTH_WRITE_LOCK = threading.Lock()
+AUTH_EDGE_TYPES = ("rename", "merger", "split", "legal_form", "successor", "duplicate_of")
+
+
+def _auth_file_update(fname: str, fn) -> dict:
+    """Apply `fn(data) -> result` to the authority file under the write lock,
+    refresh `counts` and `slices_present`, write atomically. Returns fn's result."""
+    path = AUTHORITIES_DIR / fname
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
+    with _AUTH_WRITE_LOCK:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        result = fn(data)
+        counts = data.setdefault("counts", {})
+        if isinstance(counts, dict):
+            counts["entities"] = len(data.get("entities") or [])
+            counts["aliases"] = sum(len(e.get("aliases") or []) for e in data.get("entities") or [])
+            counts["edges"] = len(data.get("edges") or [])
+        years = {sl.get("as_of") for e in data.get("entities") or []
+                 for sl in (e.get("slices") or []) if sl.get("as_of") is not None}
+        data["slices_present"] = sorted(years, key=lambda y: str(y))
+        _write_json(path, data)
+    return result
+
+
+def _auth_next_id(data: dict) -> str:
+    """Opaque sequential id from the file's `id_scheme` {prefix, width}
+    (decision 13 §5.1): one more than the largest numeric suffix in use."""
+    scheme = data.get("id_scheme") or {}
+    prefix, width = scheme.get("prefix"), int(scheme.get("width") or 6)
+    if not prefix:
+        raise HTTPException(status_code=400, detail=(
+            "This authority declares no id_scheme {prefix, width}; minting needs one."))
+    hi = 0
+    for e in data.get("entities") or []:
+        i = str(e.get("id") or "")
+        if i.startswith(prefix) and i[len(prefix):].isdigit():
+            hi = max(hi, int(i[len(prefix):]))
+    return f"{prefix}{hi + 1:0{width}d}"
+
+
+def _auth_clean_alias(a) -> Optional[dict]:
+    if isinstance(a, str):
+        a = {"name": a}
+    nm = (a.get("name") or "").strip() if isinstance(a, dict) else ""
+    if not nm:
+        return None
+    out = {"name": nm, "source": a.get("source") or "econai"}
+    if a.get("lang"):
+        out["lang"] = a["lang"]
+    return out
+
+
+def _auth_clean_slice(sl: dict, fallback_name: str, fallback_type) -> dict:
+    out = {"as_of": sl.get("as_of"), "source": sl.get("source") or "econai",
+           "type": sl.get("type") or fallback_type,
+           "parent": sl.get("parent"), "name": sl.get("name") or fallback_name,
+           "attrs": sl.get("attrs") or {}}
+    if sl.get("provenance"):
+        out["provenance"] = sl["provenance"]      # {project, stem, group_id | idx, row}
+    if sl.get("seq") is not None:
+        out["seq"] = sl["seq"]                    # position in its source (sequence prior)
+    return out
+
+
+class AuthorityMint(BaseModel):
+    name:   Optional[str] = None               # authority file
+    entity: dict                               # {name, type, aliases[], attrs, xref}
+    slice:  Optional[dict] = None              # first slice (as_of, source, provenance…)
+
+
+@app.post("/api/authority/mint")
+def api_authority_mint(body: AuthorityMint):
+    """Create a new entity (outcome "new"): opaque sequential id, display
+    name = the name given, optional aliases with `lang`, first slice with
+    provenance. Returns the entity plus `existing_exact`: ids whose
+    normalised name or alias equals the new name, so a caller can warn
+    before minting a duplicate (minting one is still allowed — it is fixed
+    later by a duplicate_of edge, never by rewriting ids)."""
+    fname = body.name or _AUTH_DEFAULT_FILE
+    nm = (body.entity.get("name") or "").strip()
+    if not nm:
+        raise HTTPException(status_code=400, detail="entity.name is required")
+
+    def _do(data):
+        types = data.get("entity_types") or []
+        et = body.entity.get("type") or (types[0] if len(types) == 1 else None)
+        if types and et not in types:
+            raise HTTPException(status_code=400, detail=f"entity.type must be one of {types}")
+        key = _auth_norm(nm)
+        existing = [e["id"] for e in data.get("entities") or []
+                    if _auth_norm(e.get("name") or "") == key
+                    or any(_auth_norm(a.get("name") or "") == key for a in (e.get("aliases") or []))]
+        ent = {"id": _auth_next_id(data), "name": nm,
+               "aliases": [x for x in (_auth_clean_alias(a) for a in (body.entity.get("aliases") or [])) if x],
+               "xref": body.entity.get("xref") or {},
+               "attrs": body.entity.get("attrs") or {},
+               "slices": [_auth_clean_slice(body.slice, nm, et)] if body.slice else []}
+        if et:
+            ent["type"] = et
+        data.setdefault("entities", []).append(ent)
+        return {"ok": True, "entity": ent, "existing_exact": existing, "file": fname}
+    return _auth_file_update(fname, _do)
+
+
+class AuthoritySlice(BaseModel):
+    name:  Optional[str] = None
+    id:    str
+    slice: dict
+    alias: Optional[dict] = None               # the name as printed, if it differs: {name, lang, source}
+
+
+@app.post("/api/authority/slice")
+def api_authority_slice(body: AuthoritySlice):
+    """Attach a source-year slice to an existing entity (outcome "same"), and
+    optionally the name as printed as a new alias. Idempotent on
+    (as_of, source, provenance): re-running a batch replaces, never stacks."""
+    fname = body.name or _AUTH_DEFAULT_FILE
+
+    def _do(data):
+        e = next((x for x in data.get("entities") or [] if x.get("id") == body.id), None)
+        if not e:
+            raise HTTPException(status_code=404, detail=f"Entity not found: {body.id}")
+        s0 = (e.get("slices") or [{}])[0]
+        sl = _auth_clean_slice(body.slice, e.get("name") or "", e.get("type") or s0.get("type"))
+        def _sig(x):
+            return (x.get("as_of"), x.get("source"), json.dumps(x.get("provenance"), sort_keys=True))
+        slices = e.setdefault("slices", [])
+        replaced = False
+        for i, old in enumerate(slices):
+            if _sig(old) == _sig(sl):
+                slices[i] = sl; replaced = True; break
+        if not replaced:
+            slices.append(sl)
+        added_alias = False
+        a = _auth_clean_alias(body.alias) if body.alias else None
+        if a:
+            known = {_auth_norm(e.get("name") or "")} | {_auth_norm(x.get("name") or "") for x in e.get("aliases") or []}
+            if _auth_norm(a["name"]) not in known:
+                e.setdefault("aliases", []).append(a); added_alias = True
+        return {"ok": True, "id": body.id, "replaced": replaced, "added_alias": added_alias,
+                "n_slices": len(slices), "file": fname}
+    return _auth_file_update(fname, _do)
+
+
+class AuthorityEdge(BaseModel):
+    name:    Optional[str] = None
+    from_id: str = Field(..., alias="from")
+    to_id:   str = Field(..., alias="to")
+    type:    str
+    as_of:   Optional[Any] = None
+    source:  Optional[str] = None
+    note:    Optional[str] = None
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/api/authority/edge")
+def api_authority_edge(body: AuthorityEdge):
+    """Typed entity→entity link: rename / merger / split / legal_form /
+    successor (outcome "successor") and duplicate_of (decision 13 §5.3: two
+    ids that are one entity are joined by an edge; ids are never rewritten).
+    Both ids must exist; an identical edge is not stacked; a duplicate_of
+    that would form a cycle is refused."""
+    fname = body.name or _AUTH_DEFAULT_FILE
+    if body.type not in AUTH_EDGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"type must be one of {AUTH_EDGE_TYPES}")
+    if body.from_id == body.to_id:
+        raise HTTPException(status_code=400, detail="from and to must differ")
+
+    def _do(data):
+        ids = {e.get("id") for e in data.get("entities") or []}
+        for i in (body.from_id, body.to_id):
+            if i not in ids:
+                raise HTTPException(status_code=404, detail=f"Entity not found: {i}")
+        edges = data.setdefault("edges", [])
+        if body.type == "duplicate_of":
+            dup = {ed["from"]: ed["to"] for ed in edges if ed.get("type") == "duplicate_of"}
+            cur, seen = body.to_id, set()
+            while cur in dup and cur not in seen:
+                seen.add(cur); cur = dup[cur]
+            if cur == body.from_id:
+                raise HTTPException(status_code=400, detail="duplicate_of would form a cycle")
+        ed = {"from": body.from_id, "to": body.to_id, "type": body.type,
+              "as_of": body.as_of, "source": body.source or "econai",
+              "note": body.note, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        for old in edges:
+            if all(old.get(k) == ed[k] for k in ("from", "to", "type", "as_of")):
+                return {"ok": True, "edge": old, "added": False, "file": fname}
+        edges.append(ed)
+        return {"ok": True, "edge": ed, "added": True, "file": fname}
+    return _auth_file_update(fname, _do)
+
+
+@app.get("/api/authority/edges")
+def api_authority_edges(id: str = Query(...), name: Optional[str] = Query(None)):
+    """Edges touching an entity, and the id it collapses to through
+    duplicate_of chains (itself when it is not a duplicate)."""
+    index = _load_authority(name)
+    if id not in index["by_id"]:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {id}")
+    return {"id": id, "canonical_id": (index.get("canonical") or {}).get(id, id),
+            "edges": (index.get("edges_by_id") or {}).get(id, [])}
 
 
 class AuthorityLlmPick(BaseModel):

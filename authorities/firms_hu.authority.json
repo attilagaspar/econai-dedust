@@ -1,0 +1,23 @@
+{
+  "authority": "firms_hu",
+  "version": "0.3",
+  "schema": "temporal: entity.slices[] = per-source-year {as_of, source, type, parent, name, attrs, provenance, seq}; edges[] = typed entity→entity links",
+  "spine": "opaque sequential ids minted by Dedust (id_scheme); entities are built from the sources themselves",
+  "entity_types": ["firm"],
+  "id_scheme": {"prefix": "F", "width": 6},
+  "normalize": {
+    "strip_tokens": [
+      "részvénytársaság", "részvény-társaság", "részvény társaság", "részvénytársulat",
+      "r.-t.", "r. t.", "rt.", "r.t.",
+      "szövetkezet", "egyesület", "társaság", "társulat",
+      "Actiengesellschaft", "Aktiengesellschaft", "Actien-Gesellschaft", "Aktien-Gesellschaft",
+      "A.-G.", "A. G.", "A.G.", "AG",
+      "Gesellschaft", "Genossenschaft", "Verein"
+    ],
+    "note": "legal-form and status words dropped wherever they occur, in queries and in entity names/aliases, before matching; edit here, never in code"
+  },
+  "slices_present": [],
+  "counts": {"entities": 0, "aliases": 0, "edges": 0},
+  "edges": [],
+  "entities": []
+}
