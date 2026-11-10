@@ -1678,8 +1678,11 @@ async function _batchOcrShape(stem, idx, engine, scope, cellHeight) {
 
 // ── Overnight (Batch API) jobs list ──────────────────────────────────────────
 async function _refreshOvernightJobs() {
-  const box = document.getElementById('batch-overnight-jobs');
-  if (!box) return;
+  // the same list is shown under 🌙 LLM — overnight batch and under
+  // 🧩 Records: extract (its batch jobs); fill whichever boxes exist
+  const boxes = ['batch-overnight-jobs', 'batch-recx-jobs'].map(id => document.getElementById(id)).filter(Boolean);
+  if (!boxes.length) return;
+  const box = {set innerHTML(h) { boxes.forEach(b => { b.innerHTML = h; }); }};
   box.innerHTML = '<div style="color:#555;font-size:11px;">Loading…</div>';
   try {
     const r = await fetch(`${API}/api/llm_batch/jobs?folder=${encodeURIComponent(folder)}`);

@@ -648,6 +648,7 @@ async function _batchRecxInit() {
   }
   try { if (typeof reloadSchemas === 'function') await reloadSchemas(); } catch (e) { /* no project schemas */ }
   _batchRecxFillSchemas();
+  if (typeof _refreshOvernightJobs === 'function') _refreshOvernightJobs();
 }
 
 async function _recxSubmitBatch(base, prog) {
@@ -674,9 +675,10 @@ async function _recxSubmitBatch(base, prog) {
   }
   if (err) throw new Error(err);
   const msg = `🌙 ${jobs.length} job(s) submitted: ${done ? done.cells : jobs.reduce((a, j) => a + j.cells, 0)} record(s). ` +
-    'When it completes, apply it from ⚙ Batch → 🌙 LLM — overnight batch → jobs (⬇ Apply results).';
+    'They are listed below; ⟳ refreshes their status and ⬇ Apply writes the answers when a job is completed.';
   if (prog) prog.textContent = msg;
   showToast(msg, 10000);
+  if (typeof _refreshOvernightJobs === 'function') _refreshOvernightJobs();
   return {jobs, done};
 }
 

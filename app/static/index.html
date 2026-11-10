@@ -989,8 +989,13 @@
           "Structured" sheet and the JSON export all pick it up). Records already carrying this schema are skipped unless "overwrite";
           a human-edited object is never replaced. The page range narrows the records by the page of their head fragment. A dry run
           lists the records and fragments that would be sent. Schemas live in the project's <code>schemas/</code> folder (LLM panel → JSON).
-          With <b>🌙 as a batch job</b> the requests go to the provider's batch service instead (half price; OpenAI / Azure models only) and
-          appear in the overnight op's job list, where ⬇ Apply writes the answers onto the records' head fragments.</div>
+          With <b>🌙 as a batch job</b> the requests go to the provider's batch service instead (half price; OpenAI / Azure models only);
+          the jobs are listed below and ⬇ Apply writes the answers onto the records' head fragments.</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#aaa;margin-top:4px;">
+          <span>Batch jobs of this project</span>
+          <button class="field-run-btn" onclick="_refreshOvernightJobs()" title="Refresh statuses from the provider">⟳</button>
+        </div>
+        <div id="batch-recx-jobs" style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;"></div>
       </div>
       <div id="batch-recr-opts" style="display:none;flex-direction:column;gap:6px;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">

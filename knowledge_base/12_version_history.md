@@ -410,3 +410,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   head fragments. The chunk / upload / manifest generator is now shared by
   the cell and record lanes (`_batch_submit_stream`); the overnight apply
   confirm is in-panel. 2 tests with a fake provider.
+- **Nov 10 — batch jobs listed in the extract panel**: the 🧩 Records: extract
+  panel shows the project's batch jobs with ⟳ / ⬇ Apply / cancel, so a record
+  job is applied where it was submitted; the renderer fills both lists.
