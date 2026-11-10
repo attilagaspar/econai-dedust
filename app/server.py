@@ -9151,6 +9151,33 @@ def _records_resolve_ctx(name: str):
     return cfg, label, mode, project_dir(name) / "annotations", fname, cfg.get("source_year")
 
 
+def _auth_whole_name_score(q: str, matched: str, index: dict) -> float:
+    """Whole-name similarity for record resolution: both strings folded and
+    stripped of the authority's phrases (legal forms), compared as whole
+    token bags. Unlike WRatio (built for place names inside longer cells)
+    it does not reward sharing a generic word."""
+    strip = index.get("strip") or set()
+    ph = index.get("fold_phrases") or ()
+    a = _auth_strip_status(_auth_fold(q), strip, ph)
+    b = _auth_strip_status(_auth_fold(matched), strip, ph)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 100.0
+    try:
+        from rapidfuzz import fuzz
+        return float(fuzz.token_sort_ratio(a, b))
+    except ImportError:
+        import difflib
+        return difflib.SequenceMatcher(None, " ".join(sorted(a.split())),
+                                       " ".join(sorted(b.split()))).ratio() * 100.0
+
+
+def _rr_own_gid(rec: dict):
+    """The record's own id (its slices on an entity are not 'another record')."""
+    return rec.get("gid")
+
+
 def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int) -> dict:
     """Candidates for one collected record: queries from its identity object
     (13 §1b) or its name text; union over the queries; blocking boosts."""
@@ -9161,8 +9188,10 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int) 
     ident = _rr.identity_of(head_shape.get("structured"))
     queries = _rr.queries_for(rec.get("name") or "", ident)
     index = _load_authority(fname)
-    per_query = [(q, lang, _authority_match(q, None, None, max(k, 8), fname)) for q, lang in queries]
-    cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k)
+    per_query = [(q, lang, _authority_match(q, None, None, max(k * 3, 24), fname)) for q, lang in queries]
+    cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k,
+                                 rescore=lambda q, m: _auth_whole_name_score(q, m, index),
+                                 exclude_source=name, own_gid=_rr_own_gid(rec))
     for c in cands:
         prov = (c.get("last_slice") or {}).get("provenance") or {}
         if prov.get("project") and prov.get("stem"):
@@ -9192,6 +9221,7 @@ def api_record_candidates(name: str, gid: int = Query(...), k: int = Query(8, ge
     rec = coll["records"].get(gid)
     if not rec:
         raise HTTPException(status_code=404, detail=f"Record {gid} not found")
+    rec["gid"] = gid
     out = _record_candidates(name, rec, by_stem, fname, k)
     out.update({"gid": gid, "name": rec.get("name"), "authority_file": fname, "source_year": sy,
                 "accept_floor": _AUTH_MIN_ACCEPT})
@@ -9357,6 +9387,7 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
             counts["kept"] += 1
             items.append({"id": gid, "name": rec.get("name"), "decision": "kept", "entity": cur.get("id")})
             continue
+        rec["gid"] = gid
         c = _record_candidates(name, rec, by_stem, fname, 3)
         cands = c["candidates"]
         best = cands[0] if cands else None

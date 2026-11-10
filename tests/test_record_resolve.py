@@ -53,7 +53,7 @@ def auth_dir(tmp_path, monkeypatch):
     (d / AUTH).write_text(json.dumps({
         "authority": "_smoke_firms", "version": "0.3", "entity_types": ["firm"],
         "id_scheme": {"prefix": "F", "width": 6},
-        "normalize": {"strip_tokens": ["részvénytársaság", "Actiengesellschaft"]},
+        "normalize": {"strip_tokens": ["részvénytársaság", "r.-t.", "Actiengesellschaft"]},
         "slices_present": [], "counts": {}, "edges": [], "entities": [
             {"id": "F000001", "name": "Galántai takarékpénztár", "type": "firm",
              "aliases": [{"name": "Galántaer Sparcassa", "lang": "de", "source": "compass_1877"}],
@@ -186,7 +186,7 @@ def test_batch_accepts_unambiguous_matches_and_bootstraps_the_rest(client, proje
     # candidate, but the name itself changed — exactly the case the floor must
     # leave to a human (13 §5.4: a name change is a successor edge, never auto-same)
     assert by[3]["decision"] == "unresolved" and by[3]["best"]["id"] == "F000003"
-    assert 80 <= by[3]["best"]["score"] < 95
+    assert by[3]["best"]["score"] < 95          # whole-name score: a different name, not a near-miss
     assert len(_auth(auth_dir)["entities"]) == 3                                     # dry run wrote nothing
     # a human decision first: record 3 is a successor; the batch must keep it
     client.post(f"/api/project/{project}/records/resolve",
@@ -231,3 +231,41 @@ def test_module_helpers():
     assert b == rr.BOOST_SEAT + rr.BOOST_FOUNDED and why == ["seat", "founded"]
     assert rr.boost_for(ent, {}) == (0.0, [])
     assert rr.display_name("txt", {"name_de": "D"}) == "D" and rr.display_name("txt", {}) == "txt"
+
+
+def test_bootstrap_never_matches_records_of_the_same_source(client, project, auth_dir):
+    """A directory lists a firm once: within one source every record is a new
+    entity, however similar the names — and the dry run says the same."""
+    # start from an empty authority, like a first volume
+    data = _auth(auth_dir); data["entities"] = []; data["slices_present"] = []
+    (auth_dir / AUTH).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    srv._AUTH_CACHE.clear()
+    ann = PROJECTS_ROOT / project / "annotations"
+    _page(ann, "p2", [   # two near-identical generic names on one more page
+        _sh("firm", 100, 100, 900, 300, group_id=4, structured=_structured(name_hu="Pesti magyar kereskedelmi bank", seat="Budapest")),
+        _sh("firm", 100, 350, 900, 600, group_id=5, structured=_structured(name_hu="Pesti magyar kereskedelmi bank", seat="Budapest")),
+    ])
+    dry = client.post(f"/api/project/{project}/resolve-records", json={"dry_run": True, "mint_unmatched": True, "accept_floor": 85}).json()
+    assert dry["counts"] == {"same": 0, "new": 5, "unresolved": 0, "kept": 0}
+    real = client.post(f"/api/project/{project}/resolve-records", json={"mint_unmatched": True, "accept_floor": 85}).json()
+    assert real["counts"] == dry["counts"]
+    assert len(_auth(auth_dir)["entities"]) == 5
+    # re-running with overwrite keeps every record on its own entity (its own slice is not "another record")
+    again = client.post(f"/api/project/{project}/resolve-records", json={"dry_run": True, "overwrite": True, "accept_floor": 85}).json()
+    assert again["counts"]["same"] == 5 and again["counts"]["new"] == 0
+    by = {i["id"]: i for i in again["items"]}
+    assert by[4]["best"]["id"] != by[5]["best"]["id"]
+
+
+def test_sharing_a_generic_word_is_not_a_match(client, project, auth_dir):
+    ann = PROJECTS_ROOT / project / "annotations"
+    _page(ann, "p2", [_sh("firm", 100, 100, 900, 300, group_id=4,
+                          structured=_structured(name_hu="Első magyar iparbank", name_de="Erste ungarische Gewerbebank"))])
+    data = _auth(auth_dir)
+    data["entities"].append({"id": "F000009", "name": "Pesti magyar kereskedelmi bank", "type": "firm",
+                             "aliases": [{"name": "Pester ungarische Commercial-Bank", "lang": "de"}], "xref": {}, "attrs": {}, "slices": []})
+    (auth_dir / AUTH).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8"); srv._AUTH_CACHE.clear()
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 4}).json()
+    bank = next((c for c in d["candidates"] if c["id"] == "F000009"), None)
+    assert bank is None or bank["score"] < 70, bank
+    assert srv._auth_whole_name_score("Galántai takarékpénztár r.-t.", "Galántai takarékpénztár", srv._load_authority(AUTH)) == 100.0

@@ -416,3 +416,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 10 — batch UI fixes**: the in-panel confirm bar floats above the modal
   (it was drawn under the pinned footer buttons, unclickable); applying a
   finished batch job no longer asks for confirmation.
+- **Nov 10 — record resolution: same-source exclusion + whole-name score**
+  (after the real 1877 bootstrap merged 298 records into just-minted
+  entities). A record never matches an entity holding a slice from its own
+  source; candidates are re-scored on the whole folded, legal-form-stripped
+  name (token-sort ratio). Dry run now equals the real run. 2 tests.

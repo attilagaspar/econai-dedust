@@ -190,6 +190,16 @@ the gold set (E2), then extend officers/profits via structured extraction on
 the resolved records — the identity layer does not change when fields are
 added.
 
+## 4b. Lessons from the first real bootstrap (2026-11-10)
+
+The 1877 bootstrap merged 298 of 805 records into entities minted moments
+earlier in the same run: the dry run could not show it (nothing is minted
+in a dry run) and the cell matcher's WRatio rated 'Első magyar iparbank' vs
+'Pesti magyar kereskedelmi bank' above the floor. Two general rules now hold:
+a record never resolves to an entity with a slice from the same source (one
+entry per firm per directory), and records are scored on the whole name.
+The faulty run was reset (authority restored, marks dropped) and redone.
+
 ## 5. Decisions (taken 2026-11-10)
 
 1. **ID scheme**: opaque sequential IDs (`F000123`); the first slice's

@@ -108,19 +108,45 @@ def boost_for(entity: dict, ident: dict) -> tuple:
     return b, why
 
 
-def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8) -> list:
-    """Union of the matcher's candidate lists (one per query), best raw score
-    per entity, blocking boosts applied for ranking; `score` stays the raw
-    string similarity so callers can judge the accept floor on it."""
+def has_slice_from(entity: dict, source: str, except_gid=None) -> bool:
+    """True when the entity already carries a slice from `source` (another
+    record of the same source), unless that slice is this very record's."""
+    for sl in entity.get("slices") or []:
+        if sl.get("source") != source:
+            continue
+        prov = sl.get("provenance") or {}
+        if except_gid is not None and prov.get("group_id") == except_gid:
+            continue
+        return True
+    return False
+
+
+def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
+                     rescore=None, exclude_source: str | None = None, own_gid=None) -> list:
+    """Union of the matcher's candidate lists (one per query), best score per
+    entity, blocking boosts applied for ranking; `score` is the string
+    similarity (re-scored by `rescore(query, matched)` when given — the
+    record lane compares WHOLE names, so sharing a generic word is not a
+    match) so callers can judge the accept floor on it.
+
+    A directory lists a firm once: an entity that already holds a slice
+    from `exclude_source` (another record of this same source) is never a
+    candidate — so a bootstrap mints every record, and a dry run says what
+    the real run does."""
     best: dict = {}
     for q, lang, cands in per_query:
         for c in cands:
             cid = c.get("id")
             if not cid:
                 continue
+            if exclude_source and has_slice_from(raw_by_id.get(cid) or {}, exclude_source, own_gid):
+                continue
+            score = c.get("score", 0)
+            if rescore is not None:
+                score = rescore(q, c.get("matched") or "")
             cur = best.get(cid)
-            if not cur or c.get("score", 0) > cur["score"]:
-                best[cid] = {**c, "query": q, "query_lang": lang}
+            if not cur or score > cur["score"]:
+                best[cid] = {**c, "score": float(score), "query": q, "query_lang": lang}
     out = []
     for cid, c in best.items():
         ent = raw_by_id.get(cid) or {}
