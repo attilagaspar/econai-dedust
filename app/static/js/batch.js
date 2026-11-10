@@ -224,13 +224,17 @@ function onBatchOpChange() {
 // or false.
 function _batchConfirmInline(msg, applyLabel = '▶ Apply') {
   return new Promise(resolve => {
-    const host = document.getElementById('batch-progress') || document.body;
+    // Floats at the bottom of the viewport above the modal (the modal's
+    // footer buttons are pinned over its content, so anything rendered
+    // inside the panel near the bottom ends up underneath them).
+    const host = document.body;
     const old = document.getElementById('batch-confirm-inline');
     if (old) old.remove();
     const box = document.createElement('div');
     box.id = 'batch-confirm-inline';
-    box.style.cssText = 'margin:6px 0;padding:8px 10px;border:1px solid #e94560;border-radius:5px;' +
-                        'background:#2a1020;color:#eee;font-size:12px;white-space:pre-wrap;';
+    box.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:3000;' +
+                        'width:min(720px,92vw);box-sizing:border-box;padding:10px 12px;border:1px solid #e94560;border-radius:6px;' +
+                        'background:#2a1020;color:#eee;font-size:12px;white-space:pre-wrap;box-shadow:0 8px 30px rgba(0,0,0,0.6);';
     const text = document.createElement('div');
     text.textContent = msg;
     const row = document.createElement('div');
@@ -245,7 +249,7 @@ function _batchConfirmInline(msg, applyLabel = '▶ Apply') {
     no.onclick = () => finish(false);
     row.appendChild(ok); row.appendChild(no);
     box.appendChild(text); box.appendChild(row);
-    host.prepend(box);
+    host.appendChild(box);
     ok.focus();
   });
 }
@@ -1728,7 +1732,6 @@ async function _refreshOvernightJobs() {
 }
 
 async function _ovApply(jobId, btn) {
-  if (!(await _batchConfirmInline(`Write ${jobId}'s results into the pages? Existing human edits are kept.`, '⬇ Apply'))) return;
   btn.disabled = true; btn.textContent = '…';
   try {
     const r = await fetch(`${API}/api/llm_batch/apply?folder=${encodeURIComponent(folder)}&job=${encodeURIComponent(jobId)}`,

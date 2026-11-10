@@ -413,3 +413,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 10 — batch jobs listed in the extract panel**: the 🧩 Records: extract
   panel shows the project's batch jobs with ⟳ / ⬇ Apply / cancel, so a record
   job is applied where it was submitted; the renderer fills both lists.
+- **Nov 10 — batch UI fixes**: the in-panel confirm bar floats above the modal
+  (it was drawn under the pinned footer buttons, unclickable); applying a
+  finished batch job no longer asks for confirmation.
