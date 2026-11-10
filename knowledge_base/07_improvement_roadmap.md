@@ -351,6 +351,12 @@ never hand-edited:
    (less explainable to referees, slower to review against a crop); revisit
    only if HB demonstrably misses error classes.
 
+**Firm instance planned 2026-11-10**: the record-level resolve (same / new /
+successor), mint + succession-edge primitives, sequence prior, entity view
+and entity × source-year export are phased in
+[13_entity_linkage.md](13_entity_linkage.md) (E1–E6); items 2–4 here are
+its E5/E6/E1.
+
 **Depends on**: dataset layer Phase 1 (shipped — records + keys exist),
 authority resolution (exists), temporal authority (planned, gates item 4).
 Absorbs the old dataset-layer "Later: cross-project joins by entity id" note.

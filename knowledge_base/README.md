@@ -18,6 +18,7 @@ Read `01_project_overview.md` first; the critique and roadmap are the actionable
 | [10_dataset_layer.md](10_dataset_layer.md) | Dataset declarations, join, and diagnostics: page-level column sequences, separator bands, record exclusion, batch diagnose report |
 | [11_learning_diagnostics.md](11_learning_diagnostics.md) | Plain-language explainer: frozen test sets, corrections-per-page, learning curves, error audits, transfer checks — how to know whether more annotation still helps (build items: roadmap P10) |
 | [12_version_history.md](12_version_history.md) | **Version history** — every commit gets a line; new months get a theme heading |
+| [13_entity_linkage.md](13_entity_linkage.md) | Plan: cross-source entity linkage — records resolve to a shared authority at annotation time (same / new / successor), succession edges, sequence prior, entity view, entity × source-year export; first instance: firms across Compass volumes |
 
 Conventions for AI assistants:
 - **Dedust is software, not a per-project tool**: never design or frame a

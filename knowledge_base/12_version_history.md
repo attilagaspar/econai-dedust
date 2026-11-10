@@ -368,3 +368,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   across labels; lattice cells untouched; best score kept, stale text
   dropped; undoable) — for verifying model predictions that stack several
   boxes on one object. Checked in the browser on a smoke page.
+- **Nov 10 — plan: cross-source entity linkage** (`13_entity_linkage.md`).
+  Records resolve to a shared authority at annotation time with three
+  outcomes (same / new / successor), succession edges beside slices,
+  authority-declared normalisation + blocking boosts + a sequence prior,
+  entity view (P12 item 2), coverage flag, entity × source-year export.
+  First instance: firms across Compass volumes. Docs only, nothing built.

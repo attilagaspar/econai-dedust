@@ -513,6 +513,11 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   parent label) exist; the clip-to-regions post filter and the records
   export (H6) do not.
 - **Phase B multi-user** (verified_by, page locks).
+- **Cross-source entity linkage** (plan, 2026-11-10) — records resolve to a
+  shared authority at annotation time (same / new / successor), succession
+  edges, sequence prior, entity view, entity × source-year export; first
+  instance: firms across Compass volumes. Plan:
+  [13_entity_linkage.md](13_entity_linkage.md).
 - **Temporal authority layer** — general infrastructure (slices for
   attribute change + succession edges for entity transformations, e.g.
   future firm mergers/renames); first instance is the 1933/1935 place
