@@ -206,7 +206,7 @@ function onBatchOpChange() {
   const isDataset = op === 'dataset_diagnose';
   document.getElementById('batch-dataset-opts').style.display = isDataset ? '' : 'none';
   if (isDataset) _batchDatasetInit();
-  const isRecords = op === 'records_sweep' || op === 'records_browse' || op === 'records_derive';
+  const isRecords = op === 'records_sweep' || op === 'records_browse' || op === 'records_derive' || op === 'records_extract';
   const recOpts = document.getElementById('batch-records-opts');
   if (recOpts) recOpts.style.display = isRecords ? 'flex' : 'none';
   if (isRecords) _batchRecordsInit(op);
@@ -255,11 +255,15 @@ async function _batchRecordsInit(op) {
   const info = document.getElementById('batch-rec-info');
   const dryWrap = document.getElementById('batch-rec-dry-wrap');
   const isDerive = op === 'records_derive';
-  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive) ? '' : 'none';
+  const isExtract = op === 'records_extract';
+  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive || isExtract) ? '' : 'none';
   const fragOpts = document.getElementById('batch-frag-opts');
   if (fragOpts) fragOpts.style.display = isDerive ? 'flex' : 'none';
+  const recxOpts = document.getElementById('batch-recx-opts');
+  if (recxOpts) recxOpts.style.display = isExtract ? 'flex' : 'none';
   const sweepHelp = document.getElementById('batch-rec-sweep-help');
-  if (sweepHelp) sweepHelp.style.display = isDerive ? 'none' : '';
+  if (sweepHelp) sweepHelp.style.display = (isDerive || isExtract) ? 'none' : '';
+  if (isExtract && typeof _batchRecxInit === 'function') _batchRecxInit();
   if (typeof loadRecordsContext === 'function') await loadRecordsContext();
   const sel = document.getElementById('batch-rec-label');
   const cols = document.getElementById('batch-rec-cols');
@@ -679,6 +683,14 @@ async function runBatch() {
   if (op === 'records_derive') {
     const dry = !!document.getElementById('batch-rec-dry')?.checked;
     await runDeriveFragments(sorted, {dryRun: dry});
+    return;
+  }
+
+  // Record-level structured extraction: one schema-constrained call per
+  // record (all fragments), chunked client-side so progress shows.
+  if (op === 'records_extract') {
+    const dry = !!document.getElementById('batch-rec-dry')?.checked;
+    await runExtractRecords(sorted, {dryRun: dry});
     return;
   }
 

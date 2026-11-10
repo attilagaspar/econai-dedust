@@ -908,6 +908,7 @@
         <option value="records_derive">⛓ Records: derive fragments from start / stop roles</option>
         <option value="records_sweep">⛓ Records: sweep (number records through the volume)</option>
         <option value="records_browse">⛓ Records: browser (chains, orphans, long spans)</option>
+        <option value="records_extract">🧩 Records: extract with a schema (one object per record, all fragments in one call)</option>
         <option value="crops_derive">✂ Cut boxes of a label into a crop project (crops as pages)</option>
         <option value="crops_writeback">⤴ Write crop pages back to their source pages</option>
       </select>
@@ -961,6 +962,30 @@
           column while a record is open (a record running over several pages needs no marks there) and nothing otherwise. Re-runs replace only
           untouched derived boxes (marker present, not moved, mark unchanged, no content, not 🔒); hand-drawn and edited boxes are kept and an
           overlapping new fragment is suppressed. The page range above narrows the pages. Batch undo restores the pages of the last run.</div>
+      </div>
+      <div id="batch-recx-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span>Schema</span>
+          <select id="batch-recx-schema" style="flex:1;min-width:140px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 6px;font-size:12px;"></select>
+          <button class="field-run-btn" onclick="reloadSchemas().then(_batchRecxFillSchemas)" title="Reload the project's schemas">⟳</button>
+          <span>Model</span>
+          <select id="batch-recx-model" style="min-width:120px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 6px;font-size:12px;"></select>
+        </div>
+        <textarea id="batch-recx-prompt" rows="2" placeholder="Prompt (optional — the built-in one explains fragments, continuations and attached text; add volume-specific hints here)"
+          style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <label class="row" style="margin:0;" title="Re-run records that already carry this schema (a human-edited object keeps its data; only the model's copy is refreshed)">
+            <input type="checkbox" id="batch-recx-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>overwrite existing</span></label>
+          <label class="row" style="margin:0;" title="Attach the text the pages hold for each fragment (OCR / LLM / human, and any shapes inside the fragment)">
+            <input type="checkbox" id="batch-recx-text" checked style="accent-color:#e94560;width:13px;height:13px;"><span>attach page text</span></label>
+          <span title="Images per record; later fragments of a very long record go in as text only">max images</span>
+          <input id="batch-recx-maxfrag" type="number" min="1" max="30" value="8" style="width:48px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+        </div>
+        <div style="font-size:10px;color:#555;">One call per <b>record</b>: every fragment of the chain (crop image + attached text) goes to the model in reading order with the
+          schema; the object lands on the record's head fragment as its 🧩 structured record (the editor's Structured group, the Excel
+          "Structured" sheet and the JSON export all pick it up). Records already carrying this schema are skipped unless "overwrite";
+          a human-edited object is never replaced. The page range narrows the records by the page of their head fragment. A dry run
+          lists the records and fragments that would be sent. Schemas live in the project's <code>schemas/</code> folder (LLM panel → JSON).</div>
       </div>
       <label class="row" id="batch-rec-dry-wrap" title="Report what would change without writing anything">
         <input type="checkbox" id="batch-rec-dry" style="accent-color:#e94560;width:13px;height:13px;">

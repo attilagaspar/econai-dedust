@@ -8984,10 +8984,12 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
                      flagged_only: bool = Query(False)):
     """The record browser's data: records as stored on the shapes
     (`group_id`), each with its fragments in reading order, first-fragment
-    text as the name, page span, and flags — `orphan` (first fragment is
-    marked continuation) and `long` (spans more than `max_pages` pages).
+    text as the name, page span, flags — `orphan` (first fragment is
+    marked continuation) and `long` (spans more than `max_pages` pages) —
+    and the head fragment's record-level `structured` object (13 §1b).
     Boxes without an id are returned under `unswept`. Read-only."""
     from app import records as _records
+    from app import record_extract as _record_extract
     try:
         cfg = load_config(name)
     except FileNotFoundError as e:
@@ -9007,9 +9009,14 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
             flags.append("long")
         if flagged_only and not flags:
             continue
+        head = r["fragments"][0]
+        head_shape = (dict(pages).get(head["stem"]) or {}).get("shapes", [])
+        structured = (head_shape[head["idx"]].get("structured")
+                      if 0 <= head["idx"] < len(head_shape) else None)
         items.append({"id": gid, "name": r["name"], "n_fragments": len(r["fragments"]),
                       "page_span": r["page_span"], "n_pages": r["n_pages"],
-                      "flags": flags, "fragments": r["fragments"]})
+                      "flags": flags, "fragments": r["fragments"],
+                      "structured": _record_extract.summary(structured)})
     n_orphan = sum(1 for r in coll["records"].values() if r["orphan"])
     n_long = sum(1 for r in coll["records"].values() if r["n_pages"] > max_pages)
     return {"record_label": label, "layout_columns": mode, "max_pages": max_pages,
@@ -9018,6 +9025,117 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
             "n_unswept": len(coll["unswept"]), "unswept": coll["unswept"],
             "page_order": _records.page_order_check([s for s, _ in pages]),
             "records": items}
+
+
+class ExtractRecordsRequest(BaseModel):
+    schema_name:   str                            # <project>/schemas/<name>.json
+    model:         str = "gpt-4o-mini"
+    prompt:        Optional[str] = None           # default: record_extract.DEFAULT_PROMPT
+    record_ids:    Optional[list[int]] = None     # default: every record (after `pattern`)
+    pattern:       Optional[str] = None           # regex on the HEAD fragment's stem
+    overwrite:     bool = False                   # re-run records that already have this schema
+    max_fragments: int = 8                        # images per call; later fragments text-only
+    with_text:     bool = True                    # attach the pages' text per fragment
+    cached:        bool = True                    # reuse identical past answers
+    dry_run:       bool = False                   # plan only: no LLM call, no write
+
+
+@app.post("/api/project/{name}/extract-records")
+def api_extract_records(name: str, body: ExtractRecordsRequest):
+    """Record-level structured extraction (13 §1b): for every selected record
+    (group_id), send ALL its fragments in reading order — crop image + the
+    text the pages hold for it — in ONE schema-constrained LLM call and
+    store the object on the record's head fragment as `structured` (with a
+    `record` key naming the fragments). Human-edited `data` survives a
+    re-run. Records already carrying this schema are skipped unless
+    `overwrite`. A dry run returns the plan (records, fragments, text yes/no)
+    without calling the model. Meant to be called in chunks (`record_ids`)
+    by the batch op, which shows progress."""
+    from app import records as _records
+    from app import record_extract as _rx
+    try:
+        cfg = load_config(name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    label, mode = _records_settings(cfg)
+    ann = project_dir(name) / "annotations"
+    sdir = ann.parent / "schemas"
+    sp = sdir / f"{_safe_schema_name(body.schema_name)}.json"
+    if not sp.exists():
+        raise HTTPException(status_code=404, detail=f"Schema not found: {body.schema_name} "
+                                                   f"(expected {sp})")
+    try:
+        schema = json.loads(sp.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Schema is not valid JSON: {e}")
+    try:
+        rx = re.compile(body.pattern) if body.pattern else None
+    except re.error as e:
+        raise HTTPException(status_code=400, detail=f"Bad pattern: {e}")
+    pages = _records_pages(ann)
+    by_stem = dict(pages)
+    stem_order = {s: i for i, (s, _) in enumerate(pages)}
+    coll = _records.collect_records(pages, label, mode, stem_order)
+    wanted = set(body.record_ids) if body.record_ids is not None else None
+    plan, skipped = [], []
+    for gid in sorted(coll["records"]):
+        r = coll["records"][gid]
+        head = r["fragments"][0]
+        if wanted is not None and gid not in wanted:
+            continue
+        if rx and not rx.search(head["stem"]):
+            continue
+        head_shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
+        prev = head_shapes[head["idx"]].get("structured") if 0 <= head["idx"] < len(head_shapes) else None
+        if (prev and not body.overwrite and prev.get("schema_name") == body.schema_name):
+            skipped.append({"id": gid, "reason": "has this schema"})
+            continue
+        if prev and prev.get("edited") and body.overwrite:
+            pass            # allowed: `data` (the human copy) survives, only `llm` is refreshed
+        plan.append((gid, r, head, prev))
+
+    items, failures = [], []
+    tokens_in = tokens_out = 0
+    n_cached = 0
+    client = None
+    for gid, r, head, prev in plan:
+        inputs = _rx.record_inputs(r, by_stem, ann, label,
+                                   max_fragments=max(1, body.max_fragments),
+                                   with_images=not body.dry_run, with_text=body.with_text)
+        item = {"id": gid, "name": r["name"], "stem": head["stem"], "idx": head["idx"],
+                "n_fragments": len(inputs),
+                "n_images": sum(1 for it in inputs if it["image_b64"] or (body.dry_run and not it["truncated"])),
+                "has_text": any(it["text"] for it in inputs)}
+        if body.dry_run:
+            items.append({**item, "ok": None}); continue
+        try:
+            if client is None:
+                client = _make_llm_client(body.model)
+            msgs = _rx.build_messages(body.prompt, inputs)
+            resp = _llm_complete_json(client, body.model, msgs, 4096, schema,
+                                      body.schema_name, use_cache=body.cached)
+            raw = (resp.choices[0].message.content or "").strip()
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError("the model returned a non-object")
+            u = getattr(resp, "usage", None)
+            tokens_in += getattr(u, "prompt_tokens", 0) or 0
+            tokens_out += getattr(u, "completion_tokens", 0) or 0
+            n_cached += 1 if getattr(resp, "cached", False) else 0
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            payload = _rx.structured_payload(parsed, body.schema_name, body.model, ts, r, gid, prev)
+            if not _merge_shape_fields(ann / f"{head['stem']}.json", head["idx"], {"structured": payload}):
+                raise RuntimeError("could not write the head fragment")
+            items.append({**item, "ok": True, "data": payload["data"]})
+        except Exception as e:
+            failures.append({"id": gid, "error": str(e)[:300]})
+            items.append({**item, "ok": False, "error": str(e)[:300]})
+    return {"record_label": label, "schema_name": body.schema_name, "model": body.model,
+            "dry_run": body.dry_run, "n_records": len(coll["records"]),
+            "n_planned": len(plan), "n_done": sum(1 for i in items if i.get("ok")),
+            "n_failed": len(failures), "n_skipped": len(skipped), "skipped": skipped,
+            "failures": failures, "tokens_in": tokens_in, "tokens_out": tokens_out,
+            "n_cached": n_cached, "items": items}
 
 
 # ---------------------------------------------------------------------------

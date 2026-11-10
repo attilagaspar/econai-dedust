@@ -317,7 +317,7 @@ function _recRenderBody() {
       `<b style="color:#93c5fd;font-size:12px;">record ${r.id}</b>` +
       `<span style="color:#cde;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(r.name || '')}</span>` +
       `<span style="color:#667;">${r.n_fragments} fragment${r.n_fragments === 1 ? '' : 's'} · ${span}</span>` +
-      (flags ? `<span>${flags}</span>` : '') + `</div>`;
+      (flags ? `<span>${flags}</span>` : '') + _recStructChip(r) + `</div>`;
     if (_recStrip) {
       r.fragments.forEach(f => { html += _recFragStrip(f, r.id); });
     } else {
@@ -441,6 +441,118 @@ function _fragPagesHtml(d) {
       _escHtml(empty.slice(0, 40).map(pg).join(', ')) + (empty.length > 40 ? ' …' : '') + '</div>'
     : '';
   return rows + emptyHtml;
+}
+
+// ── record-level structured extraction (13 §1b) ─────────────────────────────
+
+let _recStructCache = {};
+
+function _recStructChip(r) {
+  const st = r.structured;
+  if (!st) return '';
+  _recStructCache[r.id] = st;
+  const vals = st.data && typeof st.data === 'object'
+    ? Object.entries(st.data).filter(([, v]) => v !== null && v !== '' && typeof v !== 'object').slice(0, 3)
+        .map(([k, v]) => `${k}: ${String(v)}`).join(' · ')
+    : '';
+  return `<span class="rs-clk" onclick="_recShowStructured(${r.id})" style="color:#86efac;cursor:pointer;white-space:nowrap;" ` +
+    `title="${_escHtml((st.record ? 'whole record · ' : 'head fragment only · ') + (st.schema_name || '') + ' · ' + (st.model || '') + ' · ' + (st.ts || '') + (st.edited ? ' · edited by hand' : ''))}">` +
+    `🧩 ${_escHtml(st.schema_name || 'structured')}${st.edited ? ' ✎' : ''}</span>` +
+    (vals ? `<span style="color:#8a94a6;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(vals)}</span>` : '');
+}
+
+function _recShowStructured(gid) {
+  const st = _recStructCache[gid];
+  if (!st) return;
+  document.getElementById('rec-struct-pop')?.remove();
+  const d = document.createElement('div');
+  d.id = 'rec-struct-pop';
+  d.style.cssText = 'position:fixed;inset:0;z-index:1900;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;';
+  d.onclick = (e) => { if (e.target === d) d.remove(); };
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'max-width:80vw;max-height:80vh;overflow:auto;background:#0a1128;border:1px solid #2a4a8e;border-radius:8px;padding:14px 18px;color:#cde;font-size:12px;margin:0;';
+  pre.textContent = `record ${gid} · ${st.schema_name || ''} · ${st.model || ''} · ${st.ts || ''}${st.edited ? ' · edited by hand' : ''}\n` +
+    (st.record ? '' : '(head fragment only — not a record-level extraction)\n') + '\n' + JSON.stringify(st.data, null, 2);
+  d.appendChild(pre);
+  document.body.appendChild(d);
+}
+
+function _batchRecxFillSchemas() {
+  const sel = document.getElementById('batch-recx-schema');
+  if (!sel) return;
+  const cur = sel.value;
+  const list = (typeof _projSchemas !== 'undefined' ? _projSchemas : []) || [];
+  sel.innerHTML = '<option value="">— pick a schema —</option>' +
+    list.map(x => `<option value="${_escHtml(x.name)}"${x.name === cur ? ' selected' : ''}>${_escHtml(x.name)}</option>`).join('');
+}
+
+async function _batchRecxInit() {
+  const m = document.getElementById('batch-recx-model');
+  const src = document.getElementById('batch-llm-model');
+  if (m && src && !m.options.length) {
+    m.innerHTML = src.innerHTML;
+    m.value = src.value || m.value;
+  }
+  try { if (typeof reloadSchemas === 'function') await reloadSchemas(); } catch (e) { /* no project schemas */ }
+  _batchRecxFillSchemas();
+}
+
+async function runExtractRecords(sorted, {dryRun = false} = {}) {
+  if (!_recNeedProject()) return null;
+  const schema = document.getElementById('batch-recx-schema')?.value || '';
+  if (!schema) { showToast('Pick a schema first (project schemas/ folder; LLM panel → JSON to create one)'); return null; }
+  const base = {
+    schema_name: schema,
+    model: document.getElementById('batch-recx-model')?.value || 'gpt-4o-mini',
+    prompt: (document.getElementById('batch-recx-prompt')?.value || '').trim() || null,
+    pattern: typeof _cropsPatternFor === 'function' ? _cropsPatternFor(sorted) : null,
+    overwrite: !!document.getElementById('batch-recx-overwrite')?.checked,
+    with_text: document.getElementById('batch-recx-text')?.checked !== false,
+    max_fragments: parseInt(document.getElementById('batch-recx-maxfrag')?.value, 10) || 8,
+  };
+  const prog = document.getElementById('batch-progress');
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/extract-records`;
+  const post = async (body) => {
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    return d;
+  };
+  try {
+    if (prog) prog.textContent = 'Planning…';
+    const plan = await post({...base, dry_run: true});
+    const planTxt = `${plan.n_planned} record(s) to extract with "${schema}" (${base.model})` +
+      (plan.n_skipped ? `, ${plan.n_skipped} already have it` : '') +
+      ` · ${plan.items.reduce((a, i) => a + i.n_images, 0)} image(s), ${plan.items.filter(i => i.has_text).length} with attached text`;
+    if (dryRun) {
+      if (prog) prog.innerHTML = _escHtml(planTxt) + '<div style="max-height:200px;overflow:auto;margin-top:4px;color:#8a94a6;">' +
+        plan.items.map(i => `record ${i.id} · ${_escHtml(i.name || '')} · ${i.n_fragments} fragment(s), ${i.n_images} image(s)${i.has_text ? ', text' : ''}`).join('<br>') + '</div>';
+      showToast(planTxt, 8000); return plan;
+    }
+    if (!plan.n_planned) { showToast('Nothing to do: ' + planTxt, 6000); if (prog) prog.textContent = planTxt; return plan; }
+    if (!(await _batchConfirmInline(planTxt + '\n\nOne LLM call per record; the object lands on each record\'s head fragment. Human-edited objects are kept.', '▶ Extract'))) return null;
+    const ids = plan.items.map(i => i.id);
+    const CH = 3;
+    let done = 0, failed = 0, tin = 0, tout = 0;
+    const fails = [];
+    for (let k = 0; k < ids.length; k += CH) {
+      const chunk = ids.slice(k, k + CH);
+      if (prog) prog.textContent = `Extracting… ${done + failed}/${ids.length}` + (failed ? ` (${failed} failed)` : '');
+      const d = await post({...base, record_ids: chunk, dry_run: false});
+      done += d.n_done; failed += d.n_failed; tin += d.tokens_in; tout += d.tokens_out;
+      (d.failures || []).forEach(f => fails.push(`record ${f.id}: ${f.error}`));
+    }
+    const msg = `✓ ${done} record(s) extracted with "${schema}"` + (failed ? `, ${failed} failed` : '') + ` · tokens ${tin}→${tout}`;
+    if (prog) prog.innerHTML = _escHtml(msg) + (fails.length ? '<div style="color:#f87171;margin-top:4px;">' + fails.map(_escHtml).join('<br>') + '</div>' : '');
+    showToast(msg, 9000);
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    if (document.getElementById('rec-browser-modal')) await openRecordBrowser();
+    return {done, failed};
+  } catch (e) {
+    if (prog) prog.textContent = 'Error: ' + (e?.message || e);
+    showToast('Extract records error: ' + (e?.message || e), 7000);
+    return null;
+  }
 }
 
 async function runDeriveFragments(sorted, {dryRun = false} = {}) {

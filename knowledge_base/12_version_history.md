@@ -383,3 +383,11 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   both sides of the match), alias `lang`, `edges[]` with `duplicate_of`
   collapsing to the survivor in the resolver; `firms_hu.authority.json`
   (empty). 9 tests on a throwaway authority dir. Not deployed.
+- **Nov 10 — record-level structured extraction (entity linkage E1b)**:
+  `app/record_extract.py`, `POST /api/project/{name}/extract-records`, batch
+  op 🧩 Records: extract with a schema (schema / model / prompt / overwrite /
+  attach text / max images; dry run; chunked with progress); one call per
+  record with all fragments' crops + attached text in reading order; object
+  on the head fragment as `structured` + `record`; record browser 🧩 chip +
+  JSON popup; `/records` returns the summary. 6 tests, LLM stubbed. Not
+  deployed.

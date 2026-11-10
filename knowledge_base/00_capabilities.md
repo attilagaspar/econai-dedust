@@ -320,6 +320,18 @@ only ever written by a person.
 - Result in `shape.structured`; live-validated editor (JSON validity +
   schema conformance + tree view); `edited:true` protects human data from
   re-runs.
+- **Record-level extraction** (plan 13 §1b, built 2026-11-10;
+  `app/record_extract.py`, batch op **🧩 Records: extract with a schema**,
+  `POST /api/project/{name}/extract-records`): one schema-constrained call
+  per **record** (`group_id`) — every fragment's crop image plus the text
+  the pages hold for it (own layers + shapes inside the fragment), in
+  reading order, continuations marked — stored on the head fragment as
+  `structured` with a `record` key; human-edited data survives re-runs;
+  records already carrying the schema are skipped unless overwrite; image
+  cap per call (later fragments text-only); dry run plans without calling;
+  chunked client-side with progress. The record browser shows a 🧩 chip
+  per record (click = the object); Excel "Structured" sheet and JSON
+  export pick the objects up unchanged.
 - **JSON export** batch op: reading-order records; per-label modes
   export / ignore / **propagate forward** (e.g. country headers become a
   field on subsequent records); on newsflow pages propagation follows
