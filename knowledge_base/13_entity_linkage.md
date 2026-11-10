@@ -163,19 +163,20 @@ the gold set (E2), then extend officers/profits via structured extraction on
 the resolved records — the identity layer does not change when fields are
 added.
 
-## 5. Open questions (decide before E3)
+## 5. Decisions (taken 2026-11-10)
 
-1. **ID scheme** for minted entities: opaque sequential (`F000123`) vs
-   source-derived (`compass1877-0412`). Opaque is cleaner; source-derived is
-   citeable without a lookup. Suggest opaque ID + the first slice's
-   provenance printed next to it everywhere.
-2. **Where does the hand decision live** when it overrides the matcher —
-   on the record (like `shape.authority.source = human`) is consistent with
-   cells; the authority file only ever receives entities, aliases, edges.
-3. **Merging two entities minted by mistake**: a `duplicate_of` edge that the
-   index follows, rather than rewriting IDs already exported.
-4. **Granularity of "same"**: a firm that changes legal form (Kft → Rt) —
-   same entity with a new slice, or successor edge? Suggest: same entity
-   when the printed name is otherwise unchanged; edge when the name changes
-   too. Record the rule in the authority file's README so RAs apply it
-   consistently.
+1. **ID scheme**: opaque sequential IDs (`F000123`); the first slice's
+   provenance is printed next to the ID everywhere, so a citation is one
+   glance away without reading meaning into the ID.
+2. **Human overrides live on the record** (`authority.source = human`, as
+   cells do today). The authority file only ever receives entities, aliases
+   and edges — never per-page decisions — so it stays shareable.
+3. **Duplicates are fixed by a recorded edge, never by rewriting IDs**: a
+   `duplicate_of` edge from the losing entity to the surviving one; the
+   entity view, index and export follow it; both IDs keep resolving; old
+   exports stay interpretable; the merge is a dated, attributable fact.
+4. **Same vs successor**: same entity with a new slice when the printed name
+   is unchanged apart from the legal-form suffix; a successor edge whenever
+   the name itself changes (rename, merger, split), even if the people are
+   the same. An edge can be collapsed later; a missed split cannot be
+   recovered. The rule goes into the authority file's README.

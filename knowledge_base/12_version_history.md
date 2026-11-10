@@ -374,3 +374,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   authority-declared normalisation + blocking boosts + a sequence prior,
   entity view (P12 item 2), coverage flag, entity × source-year export.
   First instance: firms across Compass volumes. Docs only, nothing built.
+- **Nov 10 — entity linkage: the four open questions decided** (opaque IDs,
+  overrides on the record, duplicates via `duplicate_of` edge, same-vs-
+  successor rule by printed name). `13_entity_linkage.md` §5.
