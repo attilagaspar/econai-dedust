@@ -343,3 +343,21 @@ def test_decision_tiers():
     # a clear name is not clouded by a boosted runner-up (Székesfehérvár: 100 vs 84 on the name)
     assert rr.decide([c(100, False, False, ranked=107), {"id": "F2", "score": 84, "ranked": 103}])[0] == "open"  # both facts contradict
     assert rr.decide([c(100, True, None, ranked=112), {"id": "F2", "score": 84, "ranked": 109}])[0] == "same"
+
+
+def test_founded_after_the_candidate_was_seen_is_never_same(client, project, auth_dir):
+    """Kisbirtokosok országos földhitelintézete, founded 1879, against an
+    institute already listed in 1877: at most a successor, never 'same'."""
+    ann = PROJECTS_ROOT / project / "annotations"
+    _page(ann, "p2", [_sh("firm", 100, 100, 900, 300, group_id=4,
+                          structured=_structured(name_hu="Galántai takarékpénztár", seat="Galánta", founded=1879))])
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 4}).json()
+    top = d["candidates"][0]
+    assert top["id"] == "F000001" and top["score"] >= 95            # the name is a perfect match
+    assert top["first_seen"] == 1877 and top["founded_after_seen"] is True
+    assert d["auto"]["verdict"] == "open" and "founded after" in d["auto"]["reason"]
+    b = client.post(f"/api/project/{project}/resolve-records", json={"record_ids": [4], "dry_run": True}).json()
+    assert b["items"][0]["decision"] == "unresolved"
+    assert rr.founded_after_seen({"founded": 1879}, {"slices": [{"as_of": 1877}, {"as_of": 1882}]}) is True
+    assert rr.founded_after_seen({"founded": 1870}, {"slices": [{"as_of": 1877}]}) is False
+    assert rr.founded_after_seen({}, {"slices": [{"as_of": 1877}]}) is None

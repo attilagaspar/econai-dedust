@@ -33,7 +33,9 @@ CONVENTION = ("Convention: two entries are the SAME firm when the printed name i
               "the legal-form suffix, and the seat and founding year do not contradict. "
               "A changed name (rename, merger, re-foundation, split) is a SUCCESSOR, "
               "a new legal entity continuing the old one. Different towns usually mean "
-              "different firms even when the name type is the same.")
+              "different firms even when the name type is the same. A firm founded AFTER "
+              "the year a candidate was already listed cannot be the same firm as that "
+              "candidate: at most its successor, a re-foundation.")
 
 
 # ── stage 1: the decision model ─────────────────────────────────────────────
@@ -94,6 +96,10 @@ def _cand_brief(c: dict) -> dict:
     ls = c.get("last_slice") or {}
     if ls.get("as_of"):
         out["seen_in"] = ls["as_of"]
+    if c.get("first_seen"):
+        out["first_seen"] = c["first_seen"]
+    if c.get("founded_after_seen"):
+        out["note"] = "the record's founding year is later than this candidate's first listing"
     return out
 
 

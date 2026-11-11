@@ -159,6 +159,23 @@ def has_slice_from(entity: dict, source: str, except_gid=None) -> bool:
     return False
 
 
+def first_seen(entity: dict):
+    """The earliest source year an entity was observed in (its slices)."""
+    years = [_year(sl.get("as_of")) for sl in (entity.get("slices") or [])]
+    years = [y for y in years if y]
+    return min(years) if years else None
+
+
+def founded_after_seen(ident: dict, entity: dict):
+    """True when the record says the firm was founded AFTER the earliest year
+    the candidate entity was already observed in — then it cannot be the
+    same firm (at most a successor, a re-foundation). None when unknown."""
+    fy, seen = _year(ident.get("founded")), first_seen(entity)
+    if fy is None or seen is None:
+        return None
+    return fy > seen
+
+
 def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                      rescore=None, exclude_source: str | None = None, own_gid=None) -> list:
     """Union of the matcher's candidate lists (one per query), best score per
@@ -196,6 +213,8 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                     "facts": facts, "n_slices": len(slices),
                     "seat_agree": seats_agree(ident.get("seat"), facts.get("seat")),
                     "year_agree": years_agree(ident.get("founded"), facts.get("founded")),
+                    "first_seen": first_seen(ent),
+                    "founded_after_seen": founded_after_seen(ident, ent),
                     "last_slice": {"as_of": last.get("as_of"), "source": last.get("source"),
                                    "name": last.get("name"), "provenance": last.get("provenance"),
                                    "seq": last.get("seq")},
@@ -223,6 +242,9 @@ def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
     best = cands[0]
     sc = best.get("score", 0.0)
     sa, ya = best.get("seat_agree"), best.get("year_agree")
+    if best.get("founded_after_seen"):
+        # a firm founded after the candidate was already in print is not that firm
+        return "open", f"founded after the candidate was already seen in {best.get('first_seen')}"
     sure, weak = floor + (SURE_NAME - GOOD_NAME), floor - (GOOD_NAME - WEAK_NAME)
     if sc >= sure:
         if sa is False and ya is False:

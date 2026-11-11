@@ -466,3 +466,7 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 11 — entity links from the record browser**: the entity in a
   suggestion line, a resolved chip or the candidate table opens the entity
   browser in a new tab filtered to that id (`entities.html?authority=&q=`).
+- **Nov 11 — founded-after-seen rule + new from a suggestion**: a record
+  founded after the candidate's first listing is never auto-same (resolver,
+  candidate row flag, judge convention); the suggestion line in the record
+  browser gains ＋ new beside ✓ and ✕. Test.

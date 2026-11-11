@@ -469,7 +469,8 @@ function _recSugChip(r) {
   const what = s.verdict === 'unsure' ? 'unsure' : `${s.verdict} ` + (s.entity_id ? _recEntityLink(s.entity_id, s.entity_name, tone) : '');
   return `<span style="color:${tone};white-space:nowrap;" title="${_escHtml(`${s.stage} model ${s.model || ''} · ${s.reason || ''}`)}">🤖 ${what} ${s.confidence != null ? '(' + Number(s.confidence).toFixed(2) + ')' : ''}</span>` +
     (s.verdict !== 'unsure' ? `<button class="nav-btn" onclick="_recAcceptOne(${r.id})" title="Accept this suggestion as your decision">✓</button>` : '') +
-    `<button class="nav-btn" onclick="_recAcceptOne(${r.id}, true)" title="Dismiss this suggestion">✕</button>`;
+    (s.verdict !== 'new' ? `<button class="nav-btn" onclick="_recDecide(${r.id},'new')" title="No: this record is a NEW entity (mint it now)">＋ new</button>` : '') +
+    `<button class="nav-btn" onclick="_recAcceptOne(${r.id}, true)" title="Dismiss this suggestion and decide from the candidates">✕</button>`;
 }
 
 async function _recAcceptOne(gid, dismiss = false) {
@@ -618,7 +619,7 @@ async function _recCandidates(gid) {
         `${k.score}${k.boost ? `<span style="color:#86efac;">+${k.boost}</span>` : ''}${i === 0 && k.score >= (c.accept_floor || 70) ? ' ★' : ''}</td>` +
       `<td><b>${_recEntityLink(k.id, k.name)}</b>` +
         ((k.aliases || []).length ? `<div style="color:#667;font-size:10px;">${_escHtml(k.aliases.join(' · '))}</div>` : '') + `</td>` +
-      `<td style="color:#8a94a6;">${_escHtml(facts)}${k.seat_agree === false ? ' <span style="color:#f87171;" title="the record\'s seat differs">seat≠</span>' : ''}${k.year_agree === false ? ' <span style="color:#f87171;" title="the record\'s founding year differs">year≠</span>' : ''}</td>` +
+      `<td style="color:#8a94a6;">${_escHtml(facts)}${k.seat_agree === false ? ' <span style="color:#f87171;" title="the record\'s seat differs">seat≠</span>' : ''}${k.year_agree === false ? ' <span style="color:#f87171;" title="the record\'s founding year differs">year≠</span>' : ''}${k.founded_after_seen ? ` <span style="color:#f87171;font-weight:bold;" title="the record says it was founded after this candidate was already listed in ${k.first_seen}: cannot be the same firm">founded after ${k.first_seen}</span>` : ''}</td>` +
       `<td style="white-space:nowrap;color:#8a94a6;">${ls.as_of ?? ''} ${_escHtml(ls.source || '')}${k.n_slices > 1 ? ` (${k.n_slices} slices)` : ''}<div>${crop}</div></td>` +
       `<td style="white-space:nowrap;"><button class="nav-btn" onclick="_recDecide(${gid},'same','${_escHtml(k.id)}')" title="This record IS this entity: add a ${c.source_year ?? '?'} slice and the printed name as alias">= same</button></td>` +
       `<td style="white-space:nowrap;"><select id="rec-edge-${gid}-${i}" style="font-size:10px;background:#0d1b35;color:#ccc;border:1px solid #333;"><option value="rename">rename</option><option value="merger">merger</option><option value="split">split</option><option value="legal_form">legal form</option><option value="successor">successor</option></select> ` +

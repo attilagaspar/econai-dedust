@@ -194,6 +194,14 @@ added.
 
 Open records get a *suggestion*, never a decision. Stage 1: a decision model (bounded answers with probabilities; Microsoft-Decision-1 in the user's Foundry, System One protocol, text only — it rejects images) is asked which candidate the record is, or none, and whether same or successor; at or above a threshold that is the suggestion. Stage 2: a vision model sees the record's and the candidates' crops and answers the same question with a reason — only for what stage 1 left hedged, and the only stage that sees through a wrong extraction. The user accepts suggestions one by one in the record browser or all above a confidence; accepted ones are human decisions with the suggestion kept as provenance, so every accept and override scores the stages later. The question text carries the §5.4 convention. Probed on real pairs before building: clear facts → confident, murky pairs → hedged.
 
+## 2.8 Hard rules (added 2026-11-11)
+
+Beside the tiers, facts can make a match impossible rather than unlikely: a
+record founded after the year a candidate was already listed is not that
+firm (Kisbirtokosok országos földhitelintézete, founded 1879, against the
+1877 institute). The resolver refuses *same* for it and the candidate row
+says so; the judge's question carries the rule.
+
 ## 4b. Lessons from the first real bootstrap (2026-11-10)
 
 The 1877 bootstrap merged 298 of 805 records into entities minted moments
