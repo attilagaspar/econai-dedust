@@ -5905,6 +5905,7 @@ def _authority_meta(fname: str) -> dict:
         "id_scheme":      data.get("id_scheme"),
         "normalize":      data.get("normalize"),
         "n_edges":        len(data.get("edges") or []),
+        "n_entities":     len(data.get("entities") or []),
     }
     _AUTH_META_CACHE[fname] = {"mtime": mtime, "meta": meta}
     return meta
@@ -9461,6 +9462,96 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
         items.append(item)
     return {"authority_file": fname, "source_year": sy, "dry_run": body.dry_run,
             "n_records": len(coll["records"]), "counts": counts, "items": items}
+
+
+# ---------------------------------------------------------------------------
+# Routes — the entity view: linked projects per authority + the cross-source
+# table (app/entities.py, 13 §2.4 / P12 item 2)
+# ---------------------------------------------------------------------------
+
+def _linked_projects(fname: str) -> list:
+    """Projects whose records resolve against `fname`, with their year."""
+    out = []
+    for p in list_projects():
+        if p.get("record_authority") == fname:
+            out.append({"name": p["name"], "source_year": p.get("source_year"), "pages": p.get("pages")})
+    return out
+
+
+def _project_heads(name: str):
+    """(heads, label) for a linked project — record heads with their marks."""
+    from app import entities as _ent
+    cfg = load_config(name)
+    label, mode = _records_settings(cfg)
+    ann = project_dir(name) / "annotations"
+    pages = _records_pages(ann)
+    return _ent.record_heads(name, ann, pages, label, mode), label, ann
+
+
+@app.get("/api/entities/groups")
+def api_entity_groups():
+    """Every authority file with the projects linked to it (same
+    `record_authority`), each with its source year and how many records are
+    resolved / open. Authorities with no linked project are listed too, so
+    the dashboard can show them as empty groups."""
+    groups = []
+    for p in sorted(AUTHORITIES_DIR.glob("*.authority.json")):
+        try:
+            meta = _authority_meta(p.name)
+        except Exception as e:
+            groups.append({"file": p.name, "error": str(e), "projects": []}); continue
+        projs = []
+        for lp in _linked_projects(p.name):
+            try:
+                heads, label, ann = _project_heads(lp["name"])
+                n_res = sum(1 for h in heads.values() if (h.get("mark") or {}).get("id"))
+                projs.append({**lp, "record_label": label, "n_records": len(heads),
+                              "n_resolved": n_res, "n_open": len(heads) - n_res})
+            except HTTPException as e:
+                projs.append({**lp, "error": e.detail, "n_records": 0, "n_resolved": 0, "n_open": 0})
+        from app import entities as _ent
+        groups.append({"file": p.name, "authority": meta.get("authority"),
+                       "entity_types": meta.get("entity_types"),
+                       "n_entities": meta.get("n_entities"),
+                       "n_edges": meta.get("n_edges"), "slices_present": meta.get("slices_present"),
+                       "projects": _ent.columns_for(projs)})
+    return {"groups": groups}
+
+
+@app.get("/api/entities/table")
+def api_entity_table(authority: str = Query(...), q: Optional[str] = Query(None),
+                     filter: Optional[str] = Query(None), offset: int = Query(0, ge=0),
+                     limit: int = Query(200, ge=1, le=2000)):
+    """The cross-source table of one authority: columns = linked projects by
+    year, rows = entities with a cell per project they have a record in
+    (page stem + head index to open the editor), edges, and the open
+    (unresolved) records of each project. `q` filters by name / alias / id;
+    `filter` = missing | chain | dup | single."""
+    from app import entities as _ent
+    path = AUTHORITIES_DIR / authority
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Authority file not found: {authority}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    index = _load_authority(authority)
+    linked = _ent.columns_for(_linked_projects(authority))
+    heads_by_project, unresolved, columns = {}, {}, []
+    for lp in linked:
+        try:
+            heads, label, ann = _project_heads(lp["name"])
+        except HTTPException as e:
+            columns.append({**lp, "error": e.detail, "folder": None}); continue
+        heads_by_project[lp["name"]] = heads
+        unresolved[lp["name"]] = _ent.unresolved_for(heads)
+        columns.append({**lp, "record_label": label, "folder": str(ann),
+                        "n_records": len(heads), "n_open": len(unresolved[lp["name"]])})
+    rows = _ent.entity_rows(data.get("entities") or [], data.get("edges") or [],
+                            heads_by_project, index.get("canonical") or {})
+    total_all = len(rows)
+    rows = _ent.filter_rows(rows, q, filter, len(heads_by_project))
+    return {"authority": data.get("authority"), "file": authority, "columns": columns,
+            "n_entities": total_all, "n_rows": len(rows), "offset": offset, "limit": limit,
+            "rows": rows[offset:offset + limit], "unresolved": unresolved,
+            "editor": "/static/index.html"}
 
 
 class ExtractRecordsRequest(BaseModel):

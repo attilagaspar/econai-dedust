@@ -32,6 +32,15 @@ header span { color: #888; font-size: 0.85rem; }
   border-bottom: 1px solid #0f3460;
 }
 .sidebar-header h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+.sv-tab { cursor: pointer; color: #666; padding-bottom: 2px; border-bottom: 2px solid transparent; }
+.sv-tab.on { color: #ddd; border-bottom-color: #e94560; }
+.auth-group { padding: 8px 12px 6px; border-bottom: 1px solid #1a3a6e; }
+.auth-group .auth-head { display: flex; align-items: center; gap: 8px; }
+.auth-group .auth-name { font-weight: 700; color: #e0e0e0; }
+.auth-group .auth-meta { font-size: 0.75rem; color: #888; }
+.auth-group .auth-open { margin-left: auto; background: #1b4d2e; border: 1px solid #2e7d4f; color: #e0e0e0; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; cursor: pointer; white-space: nowrap; }
+.auth-group .auth-empty { font-size: 0.75rem; color: #556; padding: 4px 0 0; }
+.proj-link-meta { font-size: 0.72rem; color: #8a94a6; }
 #btn-new-project {
   background: #e94560; color: #fff; border: none; border-radius: 4px;
   padding: 5px 11px; font-size: 0.8rem; cursor: pointer; font-weight: 600;
@@ -218,7 +227,10 @@ header span { color: #888; font-size: 0.85rem; }
   <!-- ── LEFT: project list ── -->
   <div class="sidebar">
     <div class="sidebar-header">
-      <h2>Projects</h2>
+      <h2 id="sidebar-title" style="display:flex;gap:10px;align-items:center;">
+        <span id="sv-projects" class="sv-tab on" onclick="setSidebarView('projects')" title="All projects">Projects</span>
+        <span id="sv-entities" class="sv-tab" onclick="setSidebarView('entities')" title="Projects linked through a shared authority, with the entity browser">Entities</span>
+      </h2>
       <button id="btn-new-project" onclick="openNewProjectModal()">+ New</button>
       <button id="btn-inbox" onclick="openInboxModal()" style="display:none;background:#1a5c38;border:none;color:#eee;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;position:relative;"
               title="Bulk import: pick a folder of PDFs from the storage inbox and render it into a project">📥 Inbox<span id="inbox-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#f0c040;animation:pulse 1.2s infinite;"></span></button>
@@ -759,6 +771,9 @@ async function loadProjects(selectName = null) {
   const res  = await fetch('/api/projects');
   const data = await res.json();
   projects   = data.projects || [];
+  _entityGroups = null;                       // linkage may have changed
+  document.getElementById('sv-projects')?.classList.toggle('on', sidebarView === 'projects');
+  document.getElementById('sv-entities')?.classList.toggle('on', sidebarView === 'entities');
   renderProjectList();
   // Explicit selection (e.g. a just-created project) beats the auto-restore —
   // the old fire-and-forget restore raced the caller's selectProject and the
@@ -824,8 +839,46 @@ function projectRowHtml(p) {
       </div>`;
 }
 
+// Sidebar view: "projects" (all, grouped by name) or "entities" (projects
+// linked through a shared record authority, with the entity browser).
+let sidebarView = localStorage.getItem('sidebarView') || 'projects';
+function setSidebarView(v) {
+  sidebarView = v; localStorage.setItem('sidebarView', v);
+  document.getElementById('sv-projects').classList.toggle('on', v === 'projects');
+  document.getElementById('sv-entities').classList.toggle('on', v === 'entities');
+  renderProjectList();
+}
+let _entityGroups = null;
+async function renderEntityGroups() {
+  const el = document.getElementById('project-list');
+  if (!_entityGroups) {
+    el.innerHTML = '<div class="empty"><div class="big">🏛</div>Loading…</div>';
+    try { const r = await fetch('/api/entities/groups'); _entityGroups = (await r.json()).groups || []; }
+    catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+  }
+  if (!_entityGroups.length) { el.innerHTML = '<div class="empty"><div class="big">🏛</div>No authority files.</div>'; return; }
+  el.innerHTML = _entityGroups.map(g => {
+    const linked = (g.projects || []).map(lp => {
+      const p = projects.find(x => x.name === lp.name);
+      const row = p ? projectRowHtml(p) : `<div class="project-row"><div class="proj-name">${escHtml(lp.name)}</div></div>`;
+      const meta = lp.error ? `<span style="color:#f87171;">${escHtml(lp.error)}</span>`
+        : `year ${lp.source_year ?? '<span style="color:#f87171;">not set</span>'} · ${lp.n_records} records · ${lp.n_resolved} resolved` + (lp.n_open ? `, <span style="color:#fbbf24;">${lp.n_open} open</span>` : '');
+      return row + `<div class="proj-link-meta" style="padding:0 12px 8px 18px;margin-top:-4px;">${meta}</div>`;
+    }).join('');
+    return `<div class="auth-group">
+      <div class="auth-head">
+        <span class="auth-name">🏛 ${escHtml(g.authority || g.file)}</span>
+        <span class="auth-meta">${g.n_entities ?? '?'} entities${g.n_edges ? ` · ${g.n_edges} edges` : ''}${(g.slices_present || []).length ? ` · ${g.slices_present.join(', ')}` : ''}</span>
+        <a class="auth-open" href="/static/entities.html?authority=${encodeURIComponent(g.file)}" target="_blank" title="One row per entity, one column per linked year; click an observation to open it in the editor">Open browser ↗</a>
+      </div>
+      ${linked || '<div class="auth-empty">no project resolves against this authority yet — set the record authority in ⚙ Batch → 🏛 Records: resolve of a project</div>'}
+    </div>`;
+  }).join('');
+}
+
 function renderProjectList() {
   const el = document.getElementById('project-list');
+  if (sidebarView === 'entities') { renderEntityGroups(); return; }
   if (!projects.length) {
     el.innerHTML = `<div class="empty"><div class="big">📂</div>No projects yet.<br>Click <b>+ New</b> to create one.</div>`;
     return;

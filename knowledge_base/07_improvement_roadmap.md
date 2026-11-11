@@ -320,7 +320,7 @@ never hand-edited:
    records → `authorities/<authority>/entity_index.json` (or sqlite if it
    grows): authority ID → list of (project, dataset, record ref). Rebuild is
    idempotent; staleness is shown, never silently wrong.
-2. **Entity view**: look up an authority element → everything known about it,
+2. **Entity view** — **BUILT 2026-11-11** as the dashboard Entities tab + `entities.html` (13 §2.4): look up an authority element → everything known about it,
    grouped by project/dataset, each record with full provenance (project,
    page, row — paper-grade citeability is non-negotiable).
 3. **Cross-project tidy export**: pick N datasets + an authority → one wide

@@ -300,6 +300,8 @@ def list_projects() -> list[dict]:
                 "pages": n_pages,
                 "updated": state.get("updated", ""),
                 "tags": cfg.get("tags") or [],
+                "record_authority": cfg.get("record_authority"),
+                "source_year": cfg.get("source_year"),
             })
         except Exception:
             pass

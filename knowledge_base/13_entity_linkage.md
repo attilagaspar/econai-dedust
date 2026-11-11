@@ -1,6 +1,6 @@
 # 13. Cross-source entity linkage — the firm authority as first instance
 
-**Status (2026-11-10): E1 + E1b + E3 BUILT** (schema additions, mint / slice / edge primitives, `firms_hu` file; record-level extraction; record-level resolve with the three outcomes, the batch with bootstrap, the browser panel). Seat / founding-year / county / legal-form boosts came with E3; the sequence prior (E4) and the entity view (E5) are next, the gold set (E2) is the user's. Discussed and agreed with
+**Status (2026-11-11): E1, E1b, E1c, E3, E4 (scorer + tiers), E5 BUILT.** Live on the Compass instance: 805 entities minted from 1877, 1882 resolved against them. Next: the model judge for open records (§2.3, decision model + vision model, suggestions to confirm), the sequence prior, E6 export. The gold set (E2) accrues from the user's decisions in the browser. Discussed and agreed with
 Attila on 2026-11-10. Builds on the authority system (05 §authority), the
 temporal authority schema (03: slices), the P12 entity index (07) and the
 Phase H records (09 §H5). First instance: firms across the Compass volumes.
@@ -167,7 +167,7 @@ export specialised to one authority.
 | **record-level extraction** (identity / content schema over a record's fragments) | built (E1b): batch op 🧩 Records: extract with a schema |
 | record-level `authority` (head fragment mark, shown by `/records`) | built (E3) |
 | normalisation rules + blocking boosts + sequence prior | `normalize.strip_tokens` (E1) + seat / founded / county / legal-form boosts (E3) built; sequence prior missing (E4) |
-| entity view across projects (P12 item 2) | missing |
+| entity view across projects (P12 item 2) | built (E5) |
 | coverage flag | missing |
 | entity × source-year export | missing (H6 not built either) |
 
@@ -181,7 +181,7 @@ export specialised to one authority.
 | E2 | gold set: hand-link ~100 records 1877 ↔ 1882 in a throwaway sheet; matcher scorer script | user ½ day + ½ session |
 | E3 | record-level resolve: head-fragment `authority`, record browser chip + candidate panel with *same/new/successor*, batch op with bootstrap, "unresolved only" filter | **built 2026-11-10** |
 | E4 | matcher additions: sequence prior (seat/year/legal-form boosts landed with E3); measured against E2 | ½ session |
-| E5 | entity view (P12 item 2) with slices, crops, edges | 1–2 sessions |
+| E5 | entity view (P12 item 2): dashboard Entities tab (projects grouped by shared authority) + entity browser (rows = entities, columns = linked years, cells open the editor; edges, filters, open records) | **built 2026-11-11** |
 | E6 | coverage flag + entity × source-year export + edges sheet | 1 session |
 
 Order of use on the research side: bootstrap from the first verified volume

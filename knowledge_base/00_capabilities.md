@@ -324,6 +324,21 @@ only ever written by a person.
   never overwritten; dry run. Record browser: 🏛 chip per record, resolve
   panel with candidates' crops and same / successor / new / clear buttons,
   "unresolved only" filter, resolved count in the header.
+- **Entity view** (plan 13 §2.4 / P12 item 2, built 2026-11-11;
+  `app/entities.py`, `app/static/entities.html`): the dashboard sidebar has
+  a **Projects | Entities** toggle; Entities lists every authority file
+  with the projects linked to it (same `record_authority`), each with its
+  source year and resolved / open counts, and an **Open browser** link.
+  The browser (`GET /api/entities/table`) is one row per entity, one
+  column per linked project ordered by year; a cell is the record of that
+  year (name as printed, coloured same / new / successor, dashed when
+  decided automatically) and opens the editor on that page with the head
+  fragment selected; rows show aliases, facts and typed edges (click =
+  jump to the other entity); search by name / alias / id; filters missing
+  in a year, seen once, with a chain, marked duplicate; the open records of
+  each linked project are listed under the table with the same
+  click-through. Derived from the authority's slices and the live marks;
+  nothing stored.
 - **Cross-page reports** (report chassis, minimizable pill, click-to-jump,
   editable Human + authority per row): **duplicate** (same entity resolved
   in 2+ places), **unresolved** (grouped by folded text), **lookup** (by
@@ -546,8 +561,9 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 ## 15. Known not-built / planned (pointers)
 
 - **Tidy dataset export** (Phase 3) — next on the dataset layer.
-- **P12 entity index** — cross-project linkage browser on authority IDs;
-  Hidiroglou–Berthelot year-to-year checks ride on it.
+- **P12 entity index** — the cross-project entity view exists (§7, Entities
+  tab + browser); the cross-project tidy export (item 3) and the
+  Hidiroglou–Berthelot year-to-year checks (item 5) do not.
 - **Phase H grouping** (Compass records): region layer foundation (H1),
   the nested detection scope (H8) with the crop round trip (crops as
   pages + write-back) and the record-chaining sweep + browser (H5, one

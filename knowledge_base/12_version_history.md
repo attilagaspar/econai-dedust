@@ -434,3 +434,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   when the runner-up is close on the name AND after boosts, and only for a
   match the tiers would accept. Simulated on a local copy of 1882: 599 of
   825 auto-same with sound reasons. 3 tests on the real failure pairs.
+- **Nov 11 — entity view (entity linkage E5 / P12 item 2)**: dashboard
+  sidebar Projects | Entities toggle (authorities with their linked projects,
+  years, resolved / open counts, Open browser); `app/static/entities.html` +
+  `GET /api/entities/groups|table` (`app/entities.py`): one row per entity,
+  one column per linked project by year, cells open the editor on the head
+  fragment (`?folder=&stem=&idx=`), edges, facts, aliases, search, filters,
+  open records per project; record heads cached on the folder signature.
+  Project summaries carry `record_authority` + `source_year`. 4 tests;
+  checked in the browser on smoke projects. Not deployed.

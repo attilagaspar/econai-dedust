@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dedust · Entities</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0a1128; color: #ccc; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 13px; }
+  a { color: #93c5fd; }
+  header { position: sticky; top: 0; z-index: 5; background: #0d1b35; border-bottom: 1px solid #1a3a6e; padding: 10px 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; color: #e0e0e0; }
+  header .meta { color: #8a94a6; }
+  header input[type=search] { background: #0a1128; border: 1px solid #0f3460; color: #e0e0e0; border-radius: 4px; padding: 5px 8px; min-width: 260px; }
+  header select { background: #0a1128; border: 1px solid #0f3460; color: #e0e0e0; border-radius: 4px; padding: 5px 8px; }
+  header a.back { margin-left: auto; color: #8a94a6; text-decoration: none; }
+  main { padding: 10px 16px 40px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { position: sticky; top: 47px; background: #12224a; color: #cde; text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a4a8e; font-weight: 600; z-index: 4; }
+  th.year { text-align: center; }
+  th .sub { display: block; color: #8a94a6; font-weight: 400; font-size: 11px; }
+  td { padding: 4px 8px; border-bottom: 1px solid #14223f; vertical-align: top; }
+  tr:hover td { background: #0f1c3a; }
+  td.id { color: #93c5fd; white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  td.name { max-width: 380px; }
+  td.name .aliases { color: #667; font-size: 11px; }
+  td.name .facts { color: #8a94a6; font-size: 11px; }
+  td.cell { text-align: center; }
+  .obs { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border-radius: 4px; cursor: pointer; border: 1px solid transparent; font-size: 12px; }
+  .obs.same { background: #0f3b2a; border-color: #1f6b48; color: #bbf7d0; }
+  .obs.new { background: #3a2f10; border-color: #7a6220; color: #fde68a; }
+  .obs.successor { background: #3a1a3a; border-color: #7a3a7a; color: #f5d0fe; }
+  .obs.auto { border-style: dashed; }
+  .obs:hover { filter: brightness(1.25); }
+  .gap { color: #334; }
+  .edge { display: inline-block; margin: 2px 4px 0 0; padding: 1px 6px; border-radius: 3px; background: #1a2740; color: #c4b5fd; font-size: 11px; cursor: pointer; }
+  .dup { background: #4a1a1a; color: #fca5a5; }
+  .block { margin-top: 26px; }
+  .block h2 { font-size: 13px; color: #fbbf24; margin: 0 0 6px; }
+  .open-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .open-list .obs { background: #1a2740; border-color: #2a4a8e; color: #cde; max-width: 320px; }
+  .empty { color: #667; padding: 30px; text-align: center; }
+  .pager { display: flex; gap: 10px; align-items: center; margin: 10px 0; color: #8a94a6; }
+  .pager button { background: #0f3460; border: 1px solid #1a3a6e; color: #e0e0e0; border-radius: 4px; padding: 3px 10px; cursor: pointer; }
+  .pager button:disabled { opacity: 0.4; cursor: default; }
+  .hint { color: #556; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Entities</h1>
+  <span class="meta" id="meta"></span>
+  <input type="search" id="q" placeholder="search name, alias or id…" oninput="_debounced()">
+  <select id="filter" onchange="load()">
+    <option value="">all entities</option>
+    <option value="missing">missing in some year</option>
+    <option value="single">seen in one year only</option>
+    <option value="chain">with a successor / rename edge</option>
+    <option value="dup">marked duplicate</option>
+  </select>
+  <a class="back" href="/static/dashboard.html">← dashboard</a>
+</header>
+<main>
+  <div class="pager" id="pager-top"></div>
+  <table id="tbl"><thead id="thead"></thead><tbody id="tbody"></tbody></table>
+  <div class="pager" id="pager-bottom"></div>
+  <div id="open"></div>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+const AUTH = params.get('authority') || '';
+let offset = 0, LIMIT = 200, data = null, timer = null;
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function _debounced() { clearTimeout(timer); timer = setTimeout(() => { offset = 0; load(); }, 250); }
+
+function editorUrl(col, stem, idx) {
+  const u = new URL(data.editor, location.origin);
+  u.searchParams.set('folder', col.folder);
+  u.searchParams.set('stem', stem);
+  if (idx != null && idx >= 0) u.searchParams.set('idx', String(idx));
+  return u.toString();
+}
+function openObs(colName, stem, idx) {
+  const col = data.columns.find(c => c.name === colName);
+  if (!col || !col.folder) return;
+  window.open(editorUrl(col, stem, idx), 'dedust-editor-' + colName);
+}
+function jumpTo(id) { document.getElementById('q').value = id; offset = 0; load(); }
+
+async function load() {
+  if (!AUTH) { document.getElementById('tbody').innerHTML = '<tr><td class="empty">No authority given. Open this page from the dashboard\'s Entities view.</td></tr>'; return; }
+  const q = document.getElementById('q').value.trim();
+  const f = document.getElementById('filter').value;
+  const u = `/api/entities/table?authority=${encodeURIComponent(AUTH)}&offset=${offset}&limit=${LIMIT}` +
+    (q ? `&q=${encodeURIComponent(q)}` : '') + (f ? `&filter=${encodeURIComponent(f)}` : '');
+  let r, d;
+  try { r = await fetch(u); d = await r.json(); if (!r.ok) throw new Error(d.detail || r.status); }
+  catch (e) { document.getElementById('tbody').innerHTML = `<tr><td class="empty">${esc(e.message || e)}</td></tr>`; return; }
+  data = d;
+  document.title = `Dedust · ${d.authority || AUTH}`;
+  document.getElementById('title').textContent = `🏛 ${d.authority || AUTH}`;
+  document.getElementById('meta').textContent = `${d.n_entities} entities · ${d.columns.length} linked project(s)` +
+    (d.n_rows !== d.n_entities ? ` · ${d.n_rows} shown` : '');
+  const cols = d.columns;
+  document.getElementById('thead').innerHTML = '<tr><th>id</th><th>entity</th>' +
+    cols.map(c => `<th class="year" title="${esc(c.name)}">${c.source_year ?? '?'}<span class="sub">${esc(c.name)} · ${c.n_records ?? '?'} records${c.n_open ? `, <span style="color:#fbbf24">${c.n_open} open</span>` : ''}</span></th>`).join('') + '</tr>';
+  const rows = d.rows.map(row => {
+    const aliases = row.aliases.filter(a => a !== row.name).slice(0, 4);
+    const facts = Object.entries(row.facts || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+    const edges = row.edges.map(ed => {
+      const other = ed.from === row.id ? ed.to : ed.from;
+      const dir = ed.from === row.id ? '→' : '←';
+      return `<span class="edge ${ed.type === 'duplicate_of' ? 'dup' : ''}" onclick="jumpTo('${esc(other)}')" title="${esc(ed.type)} ${ed.as_of ?? ''}: ${esc(ed.other_name || '')}">${esc(ed.type)} ${dir} ${esc(other)}</span>`;
+    }).join('');
+    const cells = cols.map(c => {
+      const obs = (row.cells[c.name] || []);
+      if (!obs.length) return '<td class="cell"><span class="gap">—</span></td>';
+      return '<td class="cell">' + obs.map(o => {
+        const cls = `obs ${o.outcome || 'same'} ${o.source === 'auto' ? 'auto' : ''}`;
+        const tip = `${esc(o.name || '')}\nrecord ${o.group_id} · ${o.outcome || ''} · ${o.source || ''}${o.seq != null ? ` · no. ${o.seq}` : ''}\nclick: open in the editor`;
+        return `<span class="${cls}" title="${tip}" onclick="openObs('${esc(c.name)}','${esc(o.stem)}',${o.idx ?? -1})">${esc(o.name || ('record ' + o.group_id))}</span>`;
+      }).join('<br>') + '</td>';
+    }).join('');
+    return `<tr><td class="id">${esc(row.id)}${row.canonical !== row.id ? `<br><span class="hint">= ${esc(row.canonical)}</span>` : ''}</td>` +
+      `<td class="name">${esc(row.name)}${aliases.length ? `<div class="aliases">${esc(aliases.join(' · '))}</div>` : ''}${facts ? `<div class="facts">${esc(facts)}</div>` : ''}${edges ? `<div>${edges}</div>` : ''}</td>` + cells + '</tr>';
+  });
+  document.getElementById('tbody').innerHTML = rows.join('') || '<tr><td class="empty" colspan="99">No entity matches.</td></tr>';
+  const pager = (id) => {
+    const el = document.getElementById(id);
+    const last = Math.min(d.n_rows, offset + LIMIT);
+    el.innerHTML = d.n_rows > LIMIT ? `<button onclick="offset=Math.max(0,offset-LIMIT);load()" ${offset ? '' : 'disabled'}>◀</button>` +
+      `<span>${offset + 1}–${last} of ${d.n_rows}</span><button onclick="offset+=LIMIT;load()" ${last >= d.n_rows ? 'disabled' : ''}>▶</button>` : '';
+  };
+  pager('pager-top'); pager('pager-bottom');
+  // open (unresolved) records per linked project
+  const openHtml = cols.map(c => {
+    const lst = d.unresolved[c.name] || [];
+    if (!lst.length) return '';
+    return `<div class="block"><h2>${c.source_year ?? '?'} · ${esc(c.name)} — ${lst.length} record(s) not resolved to any entity</h2>` +
+      `<div class="hint" style="margin-bottom:6px;">click a record to open it in the editor; resolve it there from the record browser (⚙ Batch → ⛓ Records: browser → 🏛 resolve…)</div>` +
+      `<div class="open-list">${lst.map(o => `<span class="obs" title="record ${o.group_id} · ${o.n_fragments} fragment(s)" onclick="openObs('${esc(c.name)}','${esc(o.stem)}',${o.idx ?? -1})">${esc(o.name || ('record ' + o.group_id))}</span>`).join('')}</div></div>`;
+  }).join('');
+  document.getElementById('open').innerHTML = openHtml;
+}
+load();
+</script>
+</body>
+</html>
