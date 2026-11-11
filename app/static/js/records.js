@@ -453,12 +453,21 @@ let _recUnresolvedOnly = false;
 
 // ── the model judge: suggestions on open records (13 §2.3) ─────────────────
 
+function _recEntityLink(id, name, tone) {
+  // the entity in the cross-year browser, filtered to this one id
+  const d = _recData || {};
+  if (!id) return _escHtml(name || '');
+  const href = `/static/entities.html?authority=${encodeURIComponent(d.record_authority || '')}&q=${encodeURIComponent(id)}`;
+  return `<a href="${href}" target="_blank" style="color:${tone || '#93c5fd'};text-decoration:underline dotted;" onclick="event.stopPropagation()" ` +
+    `title="Open ${_escHtml(id)} in the entity browser: every year it is linked to">${_escHtml(id)}${name ? ' ' + _escHtml(name) : ''}</a>`;
+}
+
 function _recSugChip(r) {
   const s = r.suggestion;
   if (!s || (r.authority && r.authority.id)) return '';
   const tone = s.verdict === 'unsure' ? '#8a94a6' : '#c4b5fd';
-  const what = s.verdict === 'unsure' ? 'unsure' : `${s.verdict}${s.entity_id ? ' ' + s.entity_id : ''}${s.entity_name ? ' ' + s.entity_name : ''}`;
-  return `<span style="color:${tone};white-space:nowrap;" title="${_escHtml(`${s.stage} model ${s.model || ''} · ${s.reason || ''}`)}">🤖 ${_escHtml(what)} ${s.confidence != null ? '(' + Number(s.confidence).toFixed(2) + ')' : ''}</span>` +
+  const what = s.verdict === 'unsure' ? 'unsure' : `${s.verdict} ` + (s.entity_id ? _recEntityLink(s.entity_id, s.entity_name, tone) : '');
+  return `<span style="color:${tone};white-space:nowrap;" title="${_escHtml(`${s.stage} model ${s.model || ''} · ${s.reason || ''}`)}">🤖 ${what} ${s.confidence != null ? '(' + Number(s.confidence).toFixed(2) + ')' : ''}</span>` +
     (s.verdict !== 'unsure' ? `<button class="nav-btn" onclick="_recAcceptOne(${r.id})" title="Accept this suggestion as your decision">✓</button>` : '') +
     `<button class="nav-btn" onclick="_recAcceptOne(${r.id}, true)" title="Dismiss this suggestion">✕</button>`;
 }
@@ -571,7 +580,7 @@ function _recAuthChip(r) {
   const what = a.outcome === 'new' ? 'new entity' : (a.outcome === 'successor' ? `successor (${a.edge?.type || ''} of ${a.edge?.from || ''})` : 'same entity');
   return `<span class="rs-clk" onclick="_recCandidates(${r.id})" style="color:${tone};cursor:pointer;white-space:nowrap;" ` +
     `title="${_escHtml(`${what} · ${a.source}${a.score != null ? ' · score ' + a.score : ''} · ${a.ts || ''} · click to review`)}">` +
-    `🏛 ${_escHtml(a.id)} ${_escHtml(a.name || '')}${a.source === 'human' ? ' ✎' : ''}</span>`;
+    `🏛 ${_recEntityLink(a.id, a.name, tone)}${a.source === 'human' ? ' ✎' : ''}</span>`;
 }
 
 async function _recCandidates(gid) {
@@ -607,7 +616,7 @@ async function _recCandidates(gid) {
     html += `<tr style="${isCur ? 'background:#12224a;' : ''}">` +
       `<td style="white-space:nowrap;" title="raw similarity ${k.score}${k.boost ? ' + boost ' + k.boost + ' (' + (k.boost_why || []).join(', ') + ')' : ''} · via ${_escHtml(k.via || '')} “${_escHtml(k.matched || '')}”">` +
         `${k.score}${k.boost ? `<span style="color:#86efac;">+${k.boost}</span>` : ''}${i === 0 && k.score >= (c.accept_floor || 70) ? ' ★' : ''}</td>` +
-      `<td><b style="color:#93c5fd;">${_escHtml(k.id)}</b> ${_escHtml(k.name || '')}` +
+      `<td><b>${_recEntityLink(k.id, k.name)}</b>` +
         ((k.aliases || []).length ? `<div style="color:#667;font-size:10px;">${_escHtml(k.aliases.join(' · '))}</div>` : '') + `</td>` +
       `<td style="color:#8a94a6;">${_escHtml(facts)}${k.seat_agree === false ? ' <span style="color:#f87171;" title="the record\'s seat differs">seat≠</span>' : ''}${k.year_agree === false ? ' <span style="color:#f87171;" title="the record\'s founding year differs">year≠</span>' : ''}</td>` +
       `<td style="white-space:nowrap;color:#8a94a6;">${ls.as_of ?? ''} ${_escHtml(ls.source || '')}${k.n_slices > 1 ? ` (${k.n_slices} slices)` : ''}<div>${crop}</div></td>` +

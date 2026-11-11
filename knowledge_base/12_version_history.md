@@ -463,3 +463,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   (stage rules, 0.7) without a call — the decision model needs two options
   (7 of 229 errored on the real 1882 run); its error text is the message
   only. Test.
+- **Nov 11 — entity links from the record browser**: the entity in a
+  suggestion line, a resolved chip or the candidate table opens the entity
+  browser in a new tab filtered to that id (`entities.html?authority=&q=`).

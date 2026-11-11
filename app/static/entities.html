@@ -147,6 +147,7 @@ async function load() {
   }).join('');
   document.getElementById('open').innerHTML = openHtml;
 }
+if (params.get('q')) document.getElementById('q').value = params.get('q');
 load();
 </script>
 </body>
