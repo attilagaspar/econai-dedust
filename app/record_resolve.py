@@ -177,7 +177,15 @@ def aliases_from(ident: dict, source: str) -> list:
 
 
 def display_name(record_name: str, ident: dict) -> str:
-    return str(ident.get("name_hu") or ident.get("name_de") or record_name or "").strip()
+    """Hungarian name, else German, else the first other-language name (a
+    firm printed only in Romanian, Serbian, Italian…), else the record's
+    own text."""
+    for o in ([ident.get("name_hu"), ident.get("name_de")]
+              + [(x.get("name") if isinstance(x, dict) else x) for x in (ident.get("other_names") or [])]
+              + [record_name]):
+        if isinstance(o, str) and o.strip():
+            return o.strip()
+    return ""
 
 
 def slice_from(ident: dict, record_name: str, project: str, stem: str, gid, seq,

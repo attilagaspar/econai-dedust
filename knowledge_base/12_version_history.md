@@ -421,3 +421,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   entities). A record never matches an entity holding a slice from its own
   source; candidates are re-scored on the whole folded, legal-form-stripped
   name (token-sort ratio). Dry run now equals the real run. 2 tests.
+- **Nov 11 — record resolution: a record named only in a third language**
+  (other_names, e.g. Romanian) can be minted; its first other name is the
+  display name. Found on the real 1877 bootstrap (1 of 805).

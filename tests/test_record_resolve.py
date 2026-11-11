@@ -231,6 +231,10 @@ def test_module_helpers():
     assert b == rr.BOOST_SEAT + rr.BOOST_FOUNDED and why == ["seat", "founded"]
     assert rr.boost_for(ent, {}) == (0.0, [])
     assert rr.display_name("txt", {"name_de": "D"}) == "D" and rr.display_name("txt", {}) == "txt"
+    # a firm printed only in a third language (the 1877 "Aurora" in Naszód, Romanian)
+    assert rr.display_name("", {"name_hu": None, "name_de": None,
+                                "other_names": [{"name": "„Aurora“ societa de imprumutul", "lang": "ro"}]}) == "„Aurora“ societa de imprumutul"
+    assert rr.display_name("", {"other_names": ["plain"]}) == "plain"
 
 
 def test_bootstrap_never_matches_records_of_the_same_source(client, project, auth_dir):
