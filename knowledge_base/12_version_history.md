@@ -424,3 +424,13 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 11 — record resolution: a record named only in a third language**
   (other_names, e.g. Romanian) can be minted; its first other name is the
   display name. Found on the real 1877 bootstrap (1 of 805).
+- **Nov 11 — record resolution: rarity-weighted name score + decision tiers**
+  (the real 1882 run accepted 'Adonyi' ~ 'Baáni takarékpénztár' at 88). Index
+  idf per token; `_auth_whole_name_score` matches tokens fuzzily and weights
+  them; `decide()` tiers sure / good / weak against lenient seat and year
+  agreement; batch items and the resolve panel show the reason and seat≠ /
+  year≠ flags. Tokens may match an adjacent pair joined (Marmarosszigeti /
+  Marmaros-Szigeti), each side scored in its own weights; ambiguity only
+  when the runner-up is close on the name AND after boosts, and only for a
+  match the tiers would accept. Simulated on a local copy of 1882: 599 of
+  825 auto-same with sound reasons. 3 tests on the real failure pairs.

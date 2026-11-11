@@ -5825,6 +5825,19 @@ def _build_auth_index(data: dict) -> dict:
         exact_all = {}
         for c in pool_all:
             exact_all.setdefault(c["norm"], []).append(c)
+    # Token rarity over every candidate key (names + aliases, folded and
+    # stripped): the record lane weights name tokens by it, so a generic
+    # word shared by hundreds of names ("takarékpénztár") counts for little
+    # and the distinguishing token (the town adjective) for a lot.
+    import math as _math
+    df: dict = {}
+    n_keys = 0
+    for c in pool_all:
+        n_keys += 1
+        for t in set(c["fold"].split()):
+            df[t] = df.get(t, 0) + 1
+    idf = {t: _math.log((n_keys + 1) / (d + 1)) + 1.0 for t, d in df.items()}
+    idf_unknown = _math.log(n_keys + 1) + 1.0 if n_keys else 1.0
     # Edges (entity -> entity, typed): indexed both ways; `duplicate_of`
     # chains collapse to the surviving entity (`canonical`).
     edges_by_id: dict = {}
@@ -5847,7 +5860,8 @@ def _build_auth_index(data: dict) -> dict:
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
             "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
             "strip": strip, "phrases": phrases, "fold_phrases": fold_phrases,
-            "edges_by_id": edges_by_id, "canonical": canonical, "raw_by_id": raw_by_id}
+            "edges_by_id": edges_by_id, "canonical": canonical, "raw_by_id": raw_by_id,
+            "idf": idf, "idf_unknown": idf_unknown}
 
 
 def _load_authority(name: Optional[str] = None) -> dict:
@@ -9152,25 +9166,53 @@ def _records_resolve_ctx(name: str):
 
 
 def _auth_whole_name_score(q: str, matched: str, index: dict) -> float:
-    """Whole-name similarity for record resolution: both strings folded and
-    stripped of the authority's phrases (legal forms), compared as whole
-    token bags. Unlike WRatio (built for place names inside longer cells)
-    it does not reward sharing a generic word."""
+    """Whole-name similarity for record resolution, weighted by token
+    rarity: both strings folded and stripped of the authority's phrases
+    (legal forms); each token of the shorter side is matched to its most
+    similar token on the other side (fuzzy, so Bartfai ~ Bártfai), and the
+    score is the matched weight over the mean total weight, weights = idf
+    from the index. "Adonyi takarékpénztár" vs "Baáni takarékpénztár" ≈ 20;
+    "Deési takarékpénztár" vs "Déési takarékpénztár" = 100."""
     strip = index.get("strip") or set()
     ph = index.get("fold_phrases") or ()
-    a = _auth_strip_status(_auth_fold(q), strip, ph)
-    b = _auth_strip_status(_auth_fold(matched), strip, ph)
+    a = _auth_strip_status(_auth_fold(q), strip, ph).split()
+    b = _auth_strip_status(_auth_fold(matched), strip, ph).split()
     if not a or not b:
         return 0.0
     if a == b:
         return 100.0
+    idf, unk = index.get("idf") or {}, index.get("idf_unknown") or 1.0
+    w = lambda t: idf.get(t, unk)
     try:
         from rapidfuzz import fuzz
-        return float(fuzz.token_sort_ratio(a, b))
+        sim = lambda x, y: fuzz.ratio(x, y) / 100.0
     except ImportError:
         import difflib
-        return difflib.SequenceMatcher(None, " ".join(sorted(a.split())),
-                                       " ".join(sorted(b.split()))).ratio() * 100.0
+        sim = lambda x, y: difflib.SequenceMatcher(None, x, y).ratio()
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    # units on the long side: single tokens, and adjacent pairs joined —
+    # Hungarian writes compounds together or apart ("Marmarosszigeti" /
+    # "Marmaros-Szigeti"); a joined pair carries both tokens' weight
+    units = [((j,), long_[j], w(long_[j])) for j in range(len(long_))]
+    units += [((j, j + 1), long_[j] + long_[j + 1], w(long_[j]) + w(long_[j + 1]))
+              for j in range(len(long_) - 1)]
+    used, m_short, m_long = set(), 0.0, 0.0
+    for t in short:
+        best, bu = 0.0, None
+        for idxs, u, wu in units:
+            if any(j in used for j in idxs):
+                continue
+            r = 1.0 if t == u else sim(t, u)
+            if r > best:
+                best, bu = r, (idxs, wu)
+        if bu is not None and best >= 0.8:
+            used.update(bu[0])
+            m_short += w(t) * best          # matched weight, each side in its own weights
+            m_long += bu[1] * best
+    t_short, t_long = sum(w(t) for t in short), sum(w(t) for t in long_)
+    if not t_short or not t_long:
+        return 0.0
+    return round(100.0 * (m_short / t_short + m_long / t_long) / 2.0, 1)
 
 
 def _rr_own_gid(rec: dict):
@@ -9223,8 +9265,10 @@ def api_record_candidates(name: str, gid: int = Query(...), k: int = Query(8, ge
         raise HTTPException(status_code=404, detail=f"Record {gid} not found")
     rec["gid"] = gid
     out = _record_candidates(name, rec, by_stem, fname, k)
+    from app import record_resolve as _rr
+    verdict, reason = _rr.decide(out["candidates"], _rr.GOOD_NAME, 5.0)
     out.update({"gid": gid, "name": rec.get("name"), "authority_file": fname, "source_year": sy,
-                "accept_floor": _AUTH_MIN_ACCEPT})
+                "accept_floor": _rr.GOOD_NAME, "auto": {"verdict": verdict, "reason": reason}})
     return out
 
 
@@ -9352,7 +9396,7 @@ def api_resolve_record(name: str, body: ResolveRecordRequest):
 class ResolveRecordsBatch(BaseModel):
     record_ids:     Optional[list[int]] = None
     pattern:        Optional[str] = None     # regex on the head fragment's stem
-    accept_floor:   float = _AUTH_MIN_ACCEPT # raw similarity needed to auto-accept the best candidate
+    accept_floor:   float = 85.0             # the GOOD tier (record_resolve.decide); sure = +10, weak = -15
     margin:         float = 5.0              # best must lead the runner-up by this (ranked score) to be unambiguous
     mint_unmatched: bool = False             # bootstrap: records with no acceptable candidate become new entities
     overwrite:      bool = False             # re-decide records already marked by auto (human marks are never touched)
@@ -9366,6 +9410,7 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
     when `mint_unmatched` (the bootstrap of a first source), else left for
     the browser. Human decisions are never overwritten; auto ones only with
     `overwrite`. Dry run reports the decisions without writing."""
+    from app import record_resolve as _rr
     cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
     try:
         rx = re.compile(body.pattern) if body.pattern else None
@@ -9391,16 +9436,18 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
         c = _record_candidates(name, rec, by_stem, fname, 3)
         cands = c["candidates"]
         best = cands[0] if cands else None
-        second = cands[1]["ranked"] if len(cands) > 1 else -1e9
-        if best and best["score"] >= body.accept_floor and best["ranked"] - second >= body.margin:
+        verdict, reason = _rr.decide(cands, body.accept_floor, body.margin)
+        if verdict == "same":
             decision, ent = "same", best["id"]
         elif body.mint_unmatched:
             decision, ent = "new", None
         else:
             decision, ent = "unresolved", None
-        item = {"id": gid, "name": rec.get("name"), "decision": decision, "entity": ent,
+        item = {"id": gid, "name": rec.get("name") or _rr.display_name("", c.get("identity") or {}),
+                "decision": decision, "entity": ent, "reason": reason,
                 "best": ({"id": best["id"], "name": best.get("name"), "score": best["score"],
-                          "boost_why": best.get("boost_why")} if best else None)}
+                          "boost_why": best.get("boost_why"), "seat_agree": best.get("seat_agree"),
+                          "year_agree": best.get("year_agree")} if best else None)}
         if not body.dry_run and decision in ("same", "new"):
             try:
                 res = _apply_resolution(name, rec, by_stem, ann, fname, sy, gid, decision, ent, None, None,

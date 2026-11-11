@@ -200,6 +200,8 @@ a record never resolves to an entity with a slice from the same source (one
 entry per firm per directory), and records are scored on the whole name.
 The faulty run was reset (authority restored, marks dropped) and redone.
 
+The first 1882 run then showed the second flaw: a plain whole-name ratio still rated 'Adonyi takarékpénztár' against 'Baáni takarékpénztár' at 88, since the shared generic word dominates the characters. Names are now scored with tokens weighted by rarity across the authority, and the decision is tiered: sure / good / weak name against seat and founding-year agreement (the corroboration rule of §2.3). The 1882 run was undone and redone.
+
 ## 5. Decisions (taken 2026-11-10)
 
 1. **ID scheme**: opaque sequential IDs (`F000123`); the first slice's

@@ -78,6 +78,45 @@ def _year(v):
         return None
 
 
+def _fold(s) -> str:
+    try:
+        from unidecode import unidecode
+        s = unidecode(str(s or ""))
+    except ImportError:
+        s = str(s or "")
+    return _norm(s)
+
+
+def seats_agree(a, b):
+    """True / False / None (unknown). Tolerates spelling and accents
+    (Bártfa ~ Bartfa, Deés ~ Déés), an abbreviated first part (B.-Csaba ~
+    Békés-Csaba), and one name containing the other (Gyergyó-Szent-Miklós
+    ~ Gyergyó); different towns disagree."""
+    if not a or not b:
+        return None
+    fa, fb = _fold(a), _fold(b)
+    if not fa or not fb:
+        return None
+    if fa == fb or fa in fb or fb in fa:
+        return True
+    ta, tb = fa.split(), fb.split()
+    if ta and tb and ta[-1] == tb[-1]:               # same last part: B.-Csaba / Békés-Csaba
+        return True
+    try:
+        from rapidfuzz import fuzz
+        return fuzz.ratio(fa, fb) >= 85
+    except ImportError:
+        import difflib
+        return difflib.SequenceMatcher(None, fa, fb).ratio() * 100 >= 85
+
+
+def years_agree(a, b):
+    ya, yb = _year(a), _year(b)
+    if ya is None or yb is None:
+        return None
+    return ya == yb
+
+
 def entity_facts(entity: dict) -> dict:
     """seat / county / founded / legal_form of an entity, from its latest
     slice's attrs (falling back through earlier slices and top-level attrs)."""
@@ -96,10 +135,9 @@ def boost_for(entity: dict, ident: dict) -> tuple:
         return 0.0, []
     f = entity_facts(entity)
     b, why = 0.0, []
-    if ident.get("seat") and f.get("seat") and _norm(ident["seat"]) == _norm(f["seat"]):
+    if seats_agree(ident.get("seat"), f.get("seat")):
         b += BOOST_SEAT; why.append("seat")
-    fy, ey = _year(ident.get("founded")), _year(f.get("founded"))
-    if fy and ey and fy == ey:
+    if years_agree(ident.get("founded"), f.get("founded")):
         b += BOOST_FOUNDED; why.append("founded")
     if ident.get("county") and f.get("county") and _norm(ident["county"]) == _norm(f["county"]):
         b += BOOST_COUNTY; why.append("county")
@@ -156,12 +194,56 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
         last = slices[-1] if slices else {}
         out.append({**c, "boost": b, "boost_why": why, "ranked": c["score"] + b,
                     "facts": facts, "n_slices": len(slices),
+                    "seat_agree": seats_agree(ident.get("seat"), facts.get("seat")),
+                    "year_agree": years_agree(ident.get("founded"), facts.get("founded")),
                     "last_slice": {"as_of": last.get("as_of"), "source": last.get("source"),
                                    "name": last.get("name"), "provenance": last.get("provenance"),
                                    "seq": last.get("seq")},
                     "aliases": [a.get("name") for a in (ent.get("aliases") or []) if a.get("name")][:6]})
     out.sort(key=lambda c: (-c["ranked"], c.get("id") or ""))
     return out[:k]
+
+
+# Decision tiers (13 §2.3). `score` is the rarity-weighted whole-name
+# similarity; facts are the record's identity vs the entity's.
+SURE_NAME   = 95.0   # accept unless BOTH seat and year contradict
+GOOD_NAME   = 85.0   # accept when no known fact contradicts
+WEAK_NAME   = 70.0   # accept only when seat AND year agree (corroboration)
+
+
+def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
+    """(decision, reason) for the ranked candidates of one record:
+    decision 'same' (cands[0]) or 'open'. `floor` is the GOOD tier; the
+    SURE and WEAK tiers sit at fixed distances above / below it. A match
+    the tiers would accept is still held back when the runner-up is close
+    both on the name and after the boosts (a boosted wrong candidate must
+    not cloud a clear name)."""
+    if not cands:
+        return "open", "no candidate"
+    best = cands[0]
+    sc = best.get("score", 0.0)
+    sa, ya = best.get("seat_agree"), best.get("year_agree")
+    sure, weak = floor + (SURE_NAME - GOOD_NAME), floor - (GOOD_NAME - WEAK_NAME)
+    if sc >= sure:
+        if sa is False and ya is False:
+            return "open", "sure name but seat and year both contradict"
+        verdict, reason = "same", "sure name"
+    elif sc >= floor:
+        if sa is False or ya is False:
+            return "open", "good name but a fact contradicts"
+        verdict, reason = "same", "good name, no fact contradicts"
+    elif sc >= weak:
+        if not (sa and ya):
+            return "open", "weak name, not corroborated"
+        verdict, reason = "same", "weak name corroborated by seat and year"
+    else:
+        return "open", "name too different"
+    if len(cands) > 1:
+        gap_raw = sc - cands[1].get("score", 0.0)
+        gap_ranked = best.get("ranked", sc) - cands[1].get("ranked", cands[1].get("score", 0.0))
+        if gap_raw < margin and gap_ranked < margin:
+            return "open", f"ambiguous: runner-up within {margin}"
+    return verdict, reason
 
 
 def aliases_from(ident: dict, source: str) -> list:

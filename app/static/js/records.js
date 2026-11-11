@@ -484,7 +484,8 @@ async function _recCandidates(gid) {
   const cur = c.current;
   let html = `<div style="margin:2px 0 8px 14px;padding:6px 8px;border-left:3px solid #2a4a8e;background:#0d1b35;border-radius:0 4px 4px 0;">` +
     `<div style="margin-bottom:4px;">${identTxt}</div>` +
-    `<div style="margin-bottom:4px;color:#8a94a6;">queries: ${(c.queries || []).map(q => _escHtml(q[0])).join(' | ') || '—'} · authority ${_escHtml(c.authority_file)} · year ${c.source_year ?? '<span style="color:#f87171;">not set</span>'}</div>`;
+    `<div style="margin-bottom:4px;color:#8a94a6;">queries: ${(c.queries || []).map(q => _escHtml(q[0])).join(' | ') || '—'} · authority ${_escHtml(c.authority_file)} · year ${c.source_year ?? '<span style="color:#f87171;">not set</span>'}` +
+    (c.auto ? ` · batch would say <b style="color:${c.auto.verdict === 'same' ? '#86efac' : '#fbbf24'};">${_escHtml(c.auto.verdict)}</b> <span style="color:#667;">(${_escHtml(c.auto.reason)})</span>` : '') + `</div>`;
   if (!(c.candidates || []).length) html += '<div style="color:#8a94a6;margin:4px 0;">no candidates in the authority</div>';
   html += '<table class="rs-table" style="width:100%;"><tr><th>score</th><th>entity</th><th>facts</th><th>last seen</th><th></th><th></th></tr>';
   (c.candidates || []).forEach((k, i) => {
@@ -499,7 +500,7 @@ async function _recCandidates(gid) {
         `${k.score}${k.boost ? `<span style="color:#86efac;">+${k.boost}</span>` : ''}${i === 0 && k.score >= (c.accept_floor || 70) ? ' ★' : ''}</td>` +
       `<td><b style="color:#93c5fd;">${_escHtml(k.id)}</b> ${_escHtml(k.name || '')}` +
         ((k.aliases || []).length ? `<div style="color:#667;font-size:10px;">${_escHtml(k.aliases.join(' · '))}</div>` : '') + `</td>` +
-      `<td style="color:#8a94a6;">${_escHtml(facts)}</td>` +
+      `<td style="color:#8a94a6;">${_escHtml(facts)}${k.seat_agree === false ? ' <span style="color:#f87171;" title="the record\'s seat differs">seat≠</span>' : ''}${k.year_agree === false ? ' <span style="color:#f87171;" title="the record\'s founding year differs">year≠</span>' : ''}</td>` +
       `<td style="white-space:nowrap;color:#8a94a6;">${ls.as_of ?? ''} ${_escHtml(ls.source || '')}${k.n_slices > 1 ? ` (${k.n_slices} slices)` : ''}<div>${crop}</div></td>` +
       `<td style="white-space:nowrap;"><button class="nav-btn" onclick="_recDecide(${gid},'same','${_escHtml(k.id)}')" title="This record IS this entity: add a ${c.source_year ?? '?'} slice and the printed name as alias">= same</button></td>` +
       `<td style="white-space:nowrap;"><select id="rec-edge-${gid}-${i}" style="font-size:10px;background:#0d1b35;color:#ccc;border:1px solid #333;"><option value="rename">rename</option><option value="merger">merger</option><option value="split">split</option><option value="legal_form">legal form</option><option value="successor">successor</option></select> ` +
@@ -574,7 +575,8 @@ async function runResolveRecords(sorted, {dryRun = false} = {}) {
     const head = `${dryRun ? 'Dry run' : 'Preview'}: ${fmt(plan)}`;
     if (prog) prog.innerHTML = _escHtml(head) + '<div style="max-height:200px;overflow:auto;margin-top:4px;color:#8a94a6;">' +
       plan.items.filter(i => i.decision !== 'kept').map(i => `record ${i.id} · ${_escHtml(i.name || '')} → <b>${i.decision}</b>` +
-        (i.best ? ` (best ${_escHtml(i.best.id)} ${_escHtml(i.best.name || '')} ${i.best.score}${(i.best.boost_why || []).length ? ' +' + i.best.boost_why.join(',') : ''})` : '')).join('<br>') + '</div>';
+        (i.best ? ` (best ${_escHtml(i.best.id)} ${_escHtml(i.best.name || '')} ${i.best.score}${(i.best.boost_why || []).length ? ' +' + i.best.boost_why.join(',') : ''})` : '') +
+        (i.reason ? ` <span style="color:#667;">${_escHtml(i.reason)}</span>` : '')).join('<br>') + '</div>';
     if (dryRun) { showToast(head, 8000); return plan; }
     const todo = (plan.counts.same || 0) + (plan.counts.new || 0);
     if (!todo) { showToast('Nothing to write: ' + fmt(plan), 6000); return plan; }

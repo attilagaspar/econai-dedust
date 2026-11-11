@@ -273,3 +273,73 @@ def test_sharing_a_generic_word_is_not_a_match(client, project, auth_dir):
     bank = next((c for c in d["candidates"] if c["id"] == "F000009"), None)
     assert bank is None or bank["score"] < 70, bank
     assert srv._auth_whole_name_score("Galántai takarékpénztár r.-t.", "Galántai takarékpénztár", srv._load_authority(AUTH)) == 100.0
+
+
+# ── the rarity-weighted name score and the decision tiers (E4) ──────────────
+
+def _idx_with(names):
+    """A throwaway index whose idf comes from `names` (as the real index does)."""
+    import math
+    df = {}
+    keys = [srv._auth_fold(n) for n in names]
+    for k in keys:
+        for t in set(k.split()):
+            df[t] = df.get(t, 0) + 1
+    n = len(keys)
+    return {"strip": set(), "fold_phrases": (("reszvenytarsasag",), ("r", "t")),
+            "idf": {t: math.log((n + 1) / (d + 1)) + 1.0 for t, d in df.items()},
+            "idf_unknown": math.log(n + 1) + 1.0}
+
+
+def test_weighted_name_score_on_the_real_failure_pairs():
+    # 40 savings banks named "<town>i takarékpénztár": the generic word is worth little
+    towns = ["Adonyi", "Baáni", "Paksi", "Krassói", "Sárvári", "Győri", "Gyergyói", "Deési", "Bártfai",
+             "Esztergomi", "Érsekujvári"] + [f"T{i}i" for i in range(30)]
+    idx = _idx_with([f"{t} takarékpénztár" for t in towns] + ["Esztergomi takarék- és hitelintézet",
+                                                               "Érsekujvári takarék- és hitelintézet"])
+    sc = lambda a, b: srv._auth_whole_name_score(a, b, idx)
+    assert sc("Adonyi takarékpénztár részvénytársaság", "Baáni takarékpénztár részvénytársaság") < 40
+    assert sc("Krassói takarékpénztár", "Paksi takarékpénztár") < 40
+    assert sc("Gyergyói első takarékpénztár", "Győri első takarékpénztár") < 60
+    # the two towns differ, the three other words are common in the real
+    # authority; in this small synthetic index they are rarer, so the score
+    # only has to fall below the GOOD tier — the seat then decides (Budapest
+    # vs Érsekujvár → open)
+    assert sc("Esztergomi takarék- és hitelintézet", "Érsekujvári takarék- és hitelintézet") < 85
+    # spelling / accent variants of the same town stay near-certain
+    assert sc("Bartfai takarékpénztár", "Bártfai takarékpénztár") == 100
+    assert sc("Déési takarékpénztár", "Deési takarékpénztár") == 100
+    assert sc("Cscaczai takarékpénztár", "Csaczai takarékpénztár") >= 85
+    assert sc("Adonyi takarékpénztár r.-t.", "Adonyi takarékpénztár") == 100
+    # compounds written together or apart
+    assert sc("Marmarosszigeti takarékpénztár", "Marmaros-Szigeti takarékpénztár") >= 95
+    assert sc("Krasznamegyei takarékpénztár", "Kraszna megyei takarékpénztár") >= 95
+
+
+def test_seat_and_year_agreement_are_lenient_but_not_blind():
+    assert rr.seats_agree("Bártfa", "Bartfa") is True
+    assert rr.seats_agree("B.-Csaba", "Békés-Csaba") is True
+    assert rr.seats_agree("Gyergyó-Szent-Miklós", "Gyergyó") is True
+    assert rr.seats_agree("Budapest", "Érsekujvár") is False
+    assert rr.seats_agree("Győr", "Gyergyó-Szent-Miklós") is False
+    assert rr.seats_agree(None, "Győr") is None
+    assert rr.years_agree(1873, "1873") is True and rr.years_agree(1873, 1874) is False and rr.years_agree(None, 1) is None
+
+
+def test_decision_tiers():
+    def c(score, seat, year, ranked=None):
+        return {"id": "F1", "score": score, "ranked": ranked if ranked is not None else score,
+                "seat_agree": seat, "year_agree": year}
+    assert rr.decide([])[0] == "open"
+    assert rr.decide([c(100, False, False)])[0] == "open"          # sure name, both facts contradict
+    assert rr.decide([c(100, False, None)])[0] == "same"           # sure name, one fact unknown
+    assert rr.decide([c(88, True, True)])[0] == "same"             # good name, nothing contradicts
+    assert rr.decide([c(88, False, True)])[0] == "open"            # good name, seat contradicts
+    assert rr.decide([c(78, True, True)])[0] == "same"             # weak name corroborated
+    assert rr.decide([c(78, True, None)])[0] == "open"             # weak name, year unknown
+    assert rr.decide([c(60, True, True)])[0] == "open"             # too different
+    assert rr.decide([c(40, False, False), {"id": "F2", "score": 39, "ranked": 39}])[1] == "name too different"  # not "ambiguous"
+    assert rr.decide([c(90, True, True, ranked=112), {"id": "F2", "score": 89, "ranked": 110}])[0] == "open"   # ambiguous
+    # a clear name is not clouded by a boosted runner-up (Székesfehérvár: 100 vs 84 on the name)
+    assert rr.decide([c(100, False, False, ranked=107), {"id": "F2", "score": 84, "ranked": 103}])[0] == "open"  # both facts contradict
+    assert rr.decide([c(100, True, None, ranked=112), {"id": "F2", "score": 84, "ranked": 109}])[0] == "same"
