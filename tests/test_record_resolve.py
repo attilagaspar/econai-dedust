@@ -345,9 +345,10 @@ def test_decision_tiers():
     assert rr.decide([c(100, True, None, ranked=112), {"id": "F2", "score": 84, "ranked": 109}])[0] == "same"
 
 
-def test_founded_after_the_candidate_was_seen_is_never_same(client, project, auth_dir):
-    """Kisbirtokosok országos földhitelintézete, founded 1879, against an
-    institute already listed in 1877: at most a successor, never 'same'."""
+def test_founded_after_the_candidate_was_seen_is_flagged_not_vetoed(client, project, auth_dir):
+    """A founding year later than the candidate's first listing is shown
+    (re-foundation or legal-form change) but is evidence, not a veto: with
+    the name unchanged the tiers may still say same (13 §5.4)."""
     ann = PROJECTS_ROOT / project / "annotations"
     _page(ann, "p2", [_sh("firm", 100, 100, 900, 300, group_id=4,
                           structured=_structured(name_hu="Galántai takarékpénztár", seat="Galánta", founded=1879))])
@@ -355,9 +356,10 @@ def test_founded_after_the_candidate_was_seen_is_never_same(client, project, aut
     top = d["candidates"][0]
     assert top["id"] == "F000001" and top["score"] >= 95            # the name is a perfect match
     assert top["first_seen"] == 1877 and top["founded_after_seen"] is True
-    assert d["auto"]["verdict"] == "open" and "founded after" in d["auto"]["reason"]
+    assert top["year_agree"] is False and top["seat_agree"] is True
+    assert d["auto"]["verdict"] == "same"                             # sure name, one fact contradicts: still same
     b = client.post(f"/api/project/{project}/resolve-records", json={"record_ids": [4], "dry_run": True}).json()
-    assert b["items"][0]["decision"] == "unresolved"
+    assert b["items"][0]["decision"] == "same"
     assert rr.founded_after_seen({"founded": 1879}, {"slices": [{"as_of": 1877}, {"as_of": 1882}]}) is True
     assert rr.founded_after_seen({"founded": 1870}, {"slices": [{"as_of": 1877}]}) is False
     assert rr.founded_after_seen({}, {"slices": [{"as_of": 1877}]}) is None

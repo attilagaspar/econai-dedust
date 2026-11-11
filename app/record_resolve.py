@@ -167,9 +167,10 @@ def first_seen(entity: dict):
 
 
 def founded_after_seen(ident: dict, entity: dict):
-    """True when the record says the firm was founded AFTER the earliest year
-    the candidate entity was already observed in — then it cannot be the
-    same firm (at most a successor, a re-foundation). None when unknown."""
+    """True when the record's founding year is LATER than the earliest year
+    the candidate entity was already observed in. Shown to the user and the
+    judge, not a veto: the printed year is often the re-foundation or the
+    change of legal form of the same firm (13 §5.4). None when unknown."""
     fy, seen = _year(ident.get("founded")), first_seen(entity)
     if fy is None or seen is None:
         return None
@@ -242,9 +243,6 @@ def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
     best = cands[0]
     sc = best.get("score", 0.0)
     sa, ya = best.get("seat_agree"), best.get("year_agree")
-    if best.get("founded_after_seen"):
-        # a firm founded after the candidate was already in print is not that firm
-        return "open", f"founded after the candidate was already seen in {best.get('first_seen')}"
     sure, weak = floor + (SURE_NAME - GOOD_NAME), floor - (GOOD_NAME - WEAK_NAME)
     if sc >= sure:
         if sa is False and ya is False:

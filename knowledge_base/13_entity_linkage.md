@@ -196,11 +196,14 @@ Open records get a *suggestion*, never a decision. Stage 1: a decision model (bo
 
 ## 2.8 Hard rules (added 2026-11-11)
 
-Beside the tiers, facts can make a match impossible rather than unlikely: a
-record founded after the year a candidate was already listed is not that
-firm (Kisbirtokosok országos földhitelintézete, founded 1879, against the
-1877 institute). The resolver refuses *same* for it and the candidate row
-says so; the judge's question carries the rule.
+A founding year later than a candidate's first listing looked like a veto
+(Kisbirtokosok országos földhitelintézete, 1879, against the 1877 institute)
+and was briefly one — wrongly: the Cservenka credit union of 1877 reappears
+in 1882 "mint részvénytársaság" with the conversion year printed as its
+founding, same seat, same people, the same firm under §5.4. So the fact is
+shown on the candidate row and told to the judge as a likely re-foundation
+or legal-form change, and weighs like any other year disagreement; the
+Kisbirtokosok case stays open because its name changed.
 
 ## 4b. Lessons from the first real bootstrap (2026-11-10)
 

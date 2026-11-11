@@ -470,3 +470,7 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   founded after the candidate's first listing is never auto-same (resolver,
   candidate row flag, judge convention); the suggestion line in the record
   browser gains ＋ new beside ✓ and ✕. Test.
+- **Nov 11 — founded-after-seen is evidence, not a veto** (user: a credit
+  union re-listed "mint részvénytársaság" with the conversion year as its
+  founding is the same firm). The flag stays on the candidate row and in the
+  judge's text as a likely re-foundation / legal-form change; the tiers decide.
