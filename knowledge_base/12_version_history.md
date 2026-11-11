@@ -456,3 +456,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   the modal's Run button, no inline buttons; the resolve-only settings row
   shows only for the resolve operation; the vision model defaults to an
   Azure one; the authority picker fills after the context loads.
+- **Nov 11 — batch messages panel + judge fix**: every batch operation's
+  progress, results and verbose log live in a Messages panel beside the
+  modal (shows itself when written, ✕ clears; the card shifts left), never
+  over the buttons. Judge: a record with no candidate is suggested `new`
+  (stage rules, 0.7) without a call — the decision model needs two options
+  (7 of 229 errored on the real 1882 run); its error text is the message
+  only. Test.

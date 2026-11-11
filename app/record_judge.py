@@ -67,8 +67,20 @@ def systemone(cfg: dict, state, questions: dict, timeout: float = 60.0) -> dict:
     r = requests.post(cfg["endpoint"] + SYSTEMONE_PATH, headers=headers, timeout=timeout,
                       json={"model": cfg["model"], "state": state, "questions": questions})
     if r.status_code != 200:
-        raise RuntimeError(f"decision model HTTP {r.status_code}: {r.text[:300]}")
+        msg = r.text[:300]
+        try:
+            msg = (r.json().get("error") or {}).get("message") or msg
+        except Exception:
+            pass
+        raise RuntimeError(f"decision model HTTP {r.status_code}: {msg}")
     return r.json()
+
+
+def no_candidate_verdict() -> dict:
+    """A record whose name resembles nothing in the authority: suggest a new
+    entity without asking any model (a choice question needs two options)."""
+    return {"verdict": "new", "entity_id": None, "edge_type": None, "confidence": 0.7,
+            "reason": "no candidate in the authority: the name resembles no known entity"}
 
 
 def _cand_brief(c: dict) -> dict:

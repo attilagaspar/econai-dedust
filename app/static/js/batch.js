@@ -175,6 +175,33 @@ function closeBatchModal() {
   document.getElementById('batch-modal').classList.remove('show');
 }
 
+// The message panel beside the modal shows itself whenever a batch writes
+// progress or results, and hides when cleared.
+function _batchSideClear() {
+  const p = document.getElementById('batch-progress'); if (p) p.innerHTML = '';
+  const l = document.getElementById('batch-verbose-log'); if (l) { l.textContent = ''; l.style.display = 'none'; }
+  const bar = document.getElementById('batch-progress-bar-wrap'); if (bar) bar.style.display = 'none';
+  _batchSideSync();
+}
+function _batchSideSync() {
+  const side = document.getElementById('batch-side'); if (!side) return;
+  const p = document.getElementById('batch-progress'), l = document.getElementById('batch-verbose-log'), bar = document.getElementById('batch-progress-bar-wrap');
+  const has = (p && p.textContent.trim()) || (l && l.style.display !== 'none' && l.textContent.trim()) || (bar && bar.style.display !== 'none');
+  side.classList.toggle('show', !!has);
+  document.getElementById('batch-modal')?.classList.toggle('with-side', !!has);
+}
+(function () {
+  const start = () => {
+    const side = document.getElementById('batch-side'); if (!side) return;
+    const obs = new MutationObserver(_batchSideSync);
+    for (const id of ['batch-progress', 'batch-verbose-log', 'batch-progress-bar-wrap']) {
+      const el = document.getElementById(id);
+      if (el) obs.observe(el, {childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['style']});
+    }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();
+
 function onBatchOpChange() {
   const op = document.getElementById('batch-op').value;
   document.getElementById('batch-status-opts').style.display    = op === 'set_status' ? '' : 'none';

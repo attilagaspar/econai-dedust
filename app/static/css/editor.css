@@ -548,8 +548,19 @@
     #batch-label-checks input[type=checkbox] { accent-color: #e94560; width:13px; height:13px; }
     .help-tip { font-size: 10px; color: #667; cursor: help; margin-left: auto; white-space: nowrap; border-bottom: 1px dotted #445; }
     .help-tip:hover { color: #aaa; }
+    #batch-side {
+      display: none; position: fixed; right: 2vw; top: 8vh; width: min(480px, 42vw); max-height: 84vh;
+      overflow: auto; background: #0d1b35; border: 1px solid #2a4a8e; border-radius: 8px;
+      padding: 8px 12px 12px; z-index: 1001; box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    #batch-side.show { display: block; }
+    /* with the panel open the modal card moves left so the two sit side by side */
+    #batch-modal.with-side > div:not(#batch-side) { margin-right: calc(min(480px, 42vw) + 4vw); }
+    #batch-side-head { display: flex; align-items: center; justify-content: space-between; color: #8a94a6; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+    #batch-side-head button { background: none; border: none; color: #667; cursor: pointer; font-size: 12px; }
+    #batch-side-head button:hover { color: #ccc; }
     #batch-progress {
-      font-size: 11px; color: #888; min-height: 16px; text-align: center;
+      font-size: 11px; color: #bbb; min-height: 16px; text-align: left; white-space: pre-wrap; word-break: break-word;
     }
     #batch-progress-bar-wrap {
       height: 4px; background: #0d1b35; border-radius: 2px; display: none;

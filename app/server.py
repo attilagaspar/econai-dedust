@@ -9649,7 +9649,9 @@ def api_judge_records(name: str, body: JudgeRecordsRequest):
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         verdict, stage, model_used = None, None, None
         try:
-            if body.stage1:
+            if not cands:
+                verdict, stage, model_used = _rj.no_candidate_verdict(), "rules", "none"
+            if verdict is None and body.stage1:
                 state, questions = _rj.decision_request(ident, rec.get("name") or "", cands, sy)
                 ans = _rj.systemone(dcfg, state, questions)
                 v1 = _rj.stage1_verdict(ans, body.threshold)

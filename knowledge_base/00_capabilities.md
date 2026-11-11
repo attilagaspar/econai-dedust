@@ -99,6 +99,8 @@ one LabelMe-style JSON per page as the single source of truth.
   no human); authority corner dots (green resolved / amber partial).
 - The record operations' explanations sit behind an ⓘ hover tip in each
   panel (2026-11-11), not as running text.
+- Every batch operation writes its progress, results and verbose log to a
+  **Messages panel beside the modal** (2026-11-11), never over the buttons.
 - **Record chaining** (⛓, §H5 of
   [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)
   applied to one parent label): per-project `record_label` (+

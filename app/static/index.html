@@ -870,6 +870,14 @@
 
 <!-- Batch process modal -->
 <div id="batch-modal">
+  <!-- Messages of every batch operation: progress, results, errors — in a
+       panel beside the modal, never over its buttons. Shown while it has content. -->
+  <div id="batch-side">
+    <div id="batch-side-head"><span>Messages</span><button onclick="_batchSideClear()" title="Clear">✕</button></div>
+    <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
+    <div id="batch-progress"></div>
+    <pre id="batch-verbose-log" style="display:none;background:#060f20;border:1px solid #0f3460;border-radius:4px;padding:8px;font-size:11px;color:#7ec8a0;font-family:monospace;min-height:120px;max-height:50vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:6px 0 0;resize:vertical;"></pre>
+  </div>
   <div id="batch-modal-body">
     <h3>⚙ Batch Process</h3>
     <div style="display:flex;gap:6px;align-items:center;">
@@ -1508,9 +1516,6 @@
       <span style="font-size:12px;color:#aaa;">Verbose — show API responses</span>
     </label>
 
-    <div id="batch-progress-bar-wrap"><div id="batch-progress-bar"></div></div>
-    <div id="batch-progress"></div>
-    <pre id="batch-verbose-log" style="display:none;background:#060f20;border:1px solid #0f3460;border-radius:4px;padding:8px;font-size:11px;color:#7ec8a0;font-family:monospace;min-height:200px;max-height:50vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin:0;resize:vertical;"></pre>
 
     <div id="batch-modal-btns">
       <button id="batch-undo-btn" onclick="undoLastBatch()" title="Restore the pages to their state before the last batch run" style="margin-right:auto;">↩ Undo last batch</button>

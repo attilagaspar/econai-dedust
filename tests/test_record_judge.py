@@ -195,3 +195,20 @@ def test_judge_refuses_without_the_decision_endpoint(client, project, monkeypatc
     r = client.post(f"/api/project/{project}/judge-records", json={"stage1": True})
     assert r.status_code == 400 and "DEDUST_DECISION_ENDPOINT" in r.text
     assert client.post(f"/api/project/{project}/judge-records", json={"stage1": True, "dry_run": True}).status_code == 200
+
+
+def test_record_without_candidates_is_suggested_new_without_a_call(client, project, monkeypatch):
+    monkeypatch.setenv("DEDUST_DECISION_ENDPOINT", "https://example.invalid")
+    monkeypatch.setenv("DEDUST_DECISION_KEY", "k")
+    import requests
+    calls = []
+    def boom(*a, **k):
+        calls.append(1); raise AssertionError("the decision model must not be called without candidates")
+    monkeypatch.setattr(requests, "post", boom)
+    monkeypatch.setattr(srv, "_make_llm_client", lambda m: object())
+    ann = PROJECTS_ROOT / project / "annotations"
+    _page(ann, "c", [_sh(100, 100, 900, 300, group_id=9, structured=_st(name_hu="Zzzz Qqqq Wwww", seat="Nowhere"))])
+    d = client.post(f"/api/project/{project}/judge-records", json={"record_ids": [9], "stage2": False}).json()
+    assert d["counts"]["suggested"] == 1 and d["counts"]["error"] == 0 and calls == []
+    sug = d["items"][0]["suggestion"]
+    assert sug["verdict"] == "new" and sug["stage"] == "rules" and sug["confidence"] == 0.7
