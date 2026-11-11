@@ -1,6 +1,6 @@
 # 13. Cross-source entity linkage — the firm authority as first instance
 
-**Status (2026-11-11): E1, E1b, E1c, E3, E4 (scorer + tiers), E5 BUILT.** Live on the Compass instance: 805 entities minted from 1877, 1882 resolved against them. Next: the model judge for open records (§2.3, decision model + vision model, suggestions to confirm), the sequence prior, E6 export. The gold set (E2) accrues from the user's decisions in the browser. Discussed and agreed with
+**Status (2026-11-11): E1, E1b, E1c, E3, E4 (scorer + tiers), E5 BUILT.** Live on the Compass instance: 805 entities minted from 1877, 1882 resolved against them. The model judge (§2.3) is built: decision model (Microsoft-Decision-1 via System One) on facts, vision model on crops for the hedged rest, suggestions confirmed in the record browser. Next: the sequence prior, E6 export. The gold set (E2) accrues from the user's decisions in the browser. Discussed and agreed with
 Attila on 2026-11-10. Builds on the authority system (05 §authority), the
 temporal authority schema (03: slices), the P12 entity index (07) and the
 Phase H records (09 §H5). First instance: firms across the Compass volumes.
@@ -189,6 +189,10 @@ Order of use on the research side: bootstrap from the first verified volume
 the gold set (E2), then extend officers/profits via structured extraction on
 the resolved records — the identity layer does not change when fields are
 added.
+
+## 2.7 The model judge (built 2026-11-11)
+
+Open records get a *suggestion*, never a decision. Stage 1: a decision model (bounded answers with probabilities; Microsoft-Decision-1 in the user's Foundry, System One protocol, text only — it rejects images) is asked which candidate the record is, or none, and whether same or successor; at or above a threshold that is the suggestion. Stage 2: a vision model sees the record's and the candidates' crops and answers the same question with a reason — only for what stage 1 left hedged, and the only stage that sees through a wrong extraction. The user accepts suggestions one by one in the record browser or all above a confidence; accepted ones are human decisions with the suggestion kept as provenance, so every accept and override scores the stages later. The question text carries the §5.4 convention. Probed on real pairs before building: clear facts → confident, murky pairs → hedged.
 
 ## 4b. Lessons from the first real bootstrap (2026-11-10)
 

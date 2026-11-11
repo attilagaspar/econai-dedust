@@ -123,7 +123,7 @@ def test_table_rows_cells_edges_and_open_records(client, linked):
     assert p82 not in rows["F000002"]["cells"] and p77 not in rows["F000003"]["cells"]
     # the open record of 1882
     assert d["unresolved"][p77] == []
-    assert d["unresolved"][p82] == [{"group_id": 3, "stem": "b", "idx": 2, "name": "Delta new firm", "n_fragments": 1}]
+    assert d["unresolved"][p82] == [{"group_id": 3, "stem": "b", "idx": 2, "name": "Delta new firm", "n_fragments": 1, "suggestion": None}]
 
 
 def test_table_filters_and_search(client, linked):
@@ -147,6 +147,10 @@ def test_heads_cache_follows_the_folder(client, linked):
     jf = PROJECTS_ROOT / p82 / "annotations" / "b.json"
     doc = json.loads(jf.read_text(encoding="utf-8"))
     doc["shapes"][2]["authority"] = _mark("F000004", "same", "human")
-    time.sleep(0.05); jf.write_text(json.dumps(doc), encoding="utf-8")
+    for _ in range(20):                       # Dropbox may hold the file for a moment
+        try:
+            time.sleep(0.05); jf.write_text(json.dumps(doc), encoding="utf-8"); break
+        except OSError:
+            time.sleep(0.2)
     d2 = client.get("/api/entities/table", params={"authority": AUTH}).json()
     assert d2["unresolved"][p82] == [] and d2["columns"][1]["n_open"] == 0

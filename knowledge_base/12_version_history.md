@@ -443,3 +443,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   open records per project; record heads cached on the folder signature.
   Project summaries carry `record_authority` + `source_year`. 4 tests;
   checked in the browser on smoke projects. Not deployed.
+- **Nov 11 — model judge for open records (13 §2.3)**: `app/record_judge.py`;
+  stage 1 decision model (System One / Microsoft-Decision-1; env
+  `DEDUST_DECISION_*`), stage 2 vision model on crops; `POST …/judge-records`,
+  `POST …/records/accept-suggestions` (accept ≥ p / dismiss);
+  `authority_suggestion` on the head fragment; batch panel 🤖 Judge / ✓ Accept /
+  ✕ Dismiss, record browser chip with ✓ ✕, suggestions in the entity browser.
+  compose passes the three env vars. 3 tests with both models stubbed.

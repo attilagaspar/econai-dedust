@@ -339,6 +339,22 @@ only ever written by a person.
   each linked project are listed under the table with the same
   click-through. Derived from the authority's slices and the live marks;
   nothing stored.
+- **Model judge for open records** (plan 13 §2.3, built 2026-11-11;
+  `app/record_judge.py`): suggestions, never decisions. Stage 1 asks a
+  **decision model** (System One protocol, e.g. Microsoft-Decision-1 in
+  Foundry; `DEDUST_DECISION_ENDPOINT` / `_MODEL` / `_KEY`, or the VM's
+  managed identity) one bounded question on the extracted facts: which
+  candidate, or none, plus same / successor and a certainty score;
+  probabilities at or above a threshold make a suggestion. What it leaves
+  unsure goes to stage 2, a **vision model** (chat completions, JSON
+  schema) that sees the record's crop and each candidate's crop. The
+  suggestion sits on the head fragment as `authority_suggestion` (verdict,
+  entity, edge type, confidence, reason, stage, model). Batch panel: 🤖
+  Judge (stages, threshold, vision model, re-judge, dry run), ✓ Accept
+  suggestions ≥ p (they become human decisions with the suggestion kept
+  under `judge`), ✕ Dismiss; record browser chip with ✓ / ✕ per record;
+  entity browser shows suggestions on open records. The question text
+  states the user's convention (a changed name is a successor).
 - **Cross-page reports** (report chassis, minimizable pill, click-to-jump,
   editable Human + authority per row): **duplicate** (same entity resolved
   in 2+ places), **unresolved** (grouped by folded text), **lookup** (by

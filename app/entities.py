@@ -71,10 +71,13 @@ def record_heads(name: str, ann: Path, pages: list, record_label: str, mode) -> 
         printed = None
         if isinstance(obj, dict):
             printed = obj.get("name_hu") or obj.get("name_de") or None
+        sug = sh.get("authority_suggestion") if isinstance(sh.get("authority_suggestion"), dict) else None
         heads[gid] = {"stem": h["stem"], "idx": h["idx"],
                       "name": printed or rec.get("name") or "",
                       "n_fragments": len(rec["fragments"]),
-                      "mark": sh.get("authority") if isinstance(sh.get("authority"), dict) else None}
+                      "mark": sh.get("authority") if isinstance(sh.get("authority"), dict) else None,
+                      "suggestion": ({k: sug.get(k) for k in ("verdict", "entity_id", "entity_name", "confidence", "stage")}
+                                     if sug else None)}
     with _CACHE_LOCK:
         _CACHE[name] = {"sig": sig, "heads": heads}
     return heads
@@ -132,7 +135,7 @@ def entity_rows(entities: list, edges: list, heads_by_project: dict, canonical: 
 
 def unresolved_for(heads: dict) -> list:
     return [{"group_id": gid, "stem": h["stem"], "idx": h["idx"], "name": h["name"],
-             "n_fragments": h["n_fragments"]}
+             "n_fragments": h["n_fragments"], "suggestion": h.get("suggestion")}
             for gid, h in sorted(heads.items()) if not (h.get("mark") or {}).get("id")]
 
 

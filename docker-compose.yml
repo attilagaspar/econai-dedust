@@ -28,6 +28,11 @@ services:
       AZURE_OPENAI_API_KEY_US: ${AZURE_OPENAI_API_KEY_US:-}
       AZURE_OPENAI_ENDPOINT_US: ${AZURE_OPENAI_ENDPOINT_US:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-}
+      # Decision model for the record judge (Foundry resource URL, deployment
+      # name, api-key; no key = Entra bearer via the VM's managed identity).
+      DEDUST_DECISION_ENDPOINT: ${DEDUST_DECISION_ENDPOINT:-}
+      DEDUST_DECISION_MODEL: ${DEDUST_DECISION_MODEL:-decision-1}
+      DEDUST_DECISION_KEY: ${DEDUST_DECISION_KEY:-}
       # Blob container for the dashboard's 📥 Inbox (bulk PDF import).
       # Unset = the Inbox button doesn't render. Auth = managed identity.
       DEDUST_INBOX_URL: ${DEDUST_INBOX_URL:-}

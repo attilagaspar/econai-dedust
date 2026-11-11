@@ -9101,6 +9101,7 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
     from app import records as _records
     from app import record_extract as _record_extract
     from app import record_resolve as _record_resolve
+    from app import record_judge as _record_judge
     try:
         cfg = load_config(name)
     except FileNotFoundError as e:
@@ -9130,7 +9131,9 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
                       "page_span": r["page_span"], "n_pages": r["n_pages"],
                       "flags": flags, "fragments": r["fragments"],
                       "structured": _record_extract.summary(structured),
-                      "authority": _record_resolve.summary(authority)})
+                      "authority": _record_resolve.summary(authority),
+                      "suggestion": _record_judge.summary(head_shape[head["idx"]].get("authority_suggestion")
+                                                          if 0 <= head["idx"] < len(head_shape) else None)})
     n_orphan = sum(1 for r in coll["records"].values() if r["orphan"])
     n_long = sum(1 for r in coll["records"].values() if r["n_pages"] > max_pages)
     n_resolved = sum(1 for i in items if i["authority"])
@@ -9552,6 +9555,197 @@ def api_entity_table(authority: str = Query(...), q: Optional[str] = Query(None)
             "n_entities": total_all, "n_rows": len(rows), "offset": offset, "limit": limit,
             "rows": rows[offset:offset + limit], "unresolved": unresolved,
             "editor": "/static/index.html"}
+
+
+# ---------------------------------------------------------------------------
+# Routes — the model judge for open records (app/record_judge.py, 13 §2.3)
+# ---------------------------------------------------------------------------
+
+class JudgeRecordsRequest(BaseModel):
+    record_ids:     Optional[list[int]] = None
+    pattern:        Optional[str] = None
+    stage1:         bool = True              # decision model on facts
+    stage2:         bool = True              # vision model on crops for what stage 1 left unsure
+    threshold:      float = 0.85             # stage-1 confidence that makes a suggestion
+    vision_model:   str = "gpt-4.1-mini"
+    max_candidates: int = 3
+    overwrite:      bool = False             # re-judge records that already carry a suggestion
+    dry_run:        bool = False
+
+
+def _candidate_crop_b64(cand: dict) -> Optional[str]:
+    """The crop of the record a candidate entity was last seen in (its last
+    slice's provenance), via that project's record heads."""
+    from app import record_extract as _rx
+    prov = (cand.get("last_slice") or {}).get("provenance") or {}
+    proj, gid = prov.get("project"), prov.get("group_id")
+    if not proj or gid is None:
+        return None
+    try:
+        heads, label, ann = _project_heads(proj)
+    except Exception:
+        return None
+    h = heads.get(gid)
+    if not h:
+        return None
+    try:
+        data = json.loads((ann / f"{h['stem']}.json").read_text(encoding="utf-8"))
+        sh = data["shapes"][h["idx"]]
+        from app import crops as _crops
+        bb = _rx._box(sh)
+        return _rx.fragment_image_b64(_crops.find_image(ann, data, h["stem"]), bb) if bb else None
+    except Exception:
+        return None
+
+
+@app.post("/api/project/{name}/judge-records")
+def api_judge_records(name: str, body: JudgeRecordsRequest):
+    """Suggest a verdict for open records (13 §2.3): stage 1 asks the
+    decision model (facts only); what it leaves unsure goes to stage 2, a
+    vision model that sees the record's and the candidates' crops. The
+    suggestion is stored on the head fragment as `authority_suggestion`;
+    nothing is written to the authority file. Meant to be called in chunks
+    (`record_ids`) by the batch op. Dry run lists the open records and the
+    candidates each would be judged against."""
+    from app import record_resolve as _rr
+    from app import record_judge as _rj
+    from app import record_extract as _rx
+    cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
+    try:
+        rx = re.compile(body.pattern) if body.pattern else None
+    except re.error as e:
+        raise HTTPException(status_code=400, detail=f"Bad pattern: {e}")
+    coll, by_stem = _collect_for(name, label, mode)
+    wanted = set(body.record_ids) if body.record_ids is not None else None
+    dcfg = _rj.decision_config()
+    if body.stage1 and not body.dry_run and not dcfg["endpoint"]:
+        raise HTTPException(status_code=400, detail=(
+            "Stage 1 needs the decision model: set DEDUST_DECISION_ENDPOINT (and DEDUST_DECISION_KEY "
+            "or a managed identity with the Cognitive Services User role) on the server."))
+    vision_client = None
+    items, counts = [], {"suggested": 0, "unsure": 0, "kept": 0, "skipped": 0, "error": 0}
+    tokens_in = tokens_out = 0
+    for gid in sorted(coll["records"]):
+        rec = coll["records"][gid]
+        head = rec["fragments"][0]
+        if wanted is not None and gid not in wanted:
+            continue
+        if rx and not rx.search(head["stem"]):
+            continue
+        shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
+        hs = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
+        if (hs.get("authority") or {}).get("id"):
+            counts["skipped"] += 1; continue                     # resolved: nothing to judge
+        if hs.get("authority_suggestion") and not body.overwrite:
+            counts["kept"] += 1; continue
+        rec["gid"] = gid
+        c = _record_candidates(name, rec, by_stem, fname, max(1, body.max_candidates))
+        cands = c["candidates"][:max(1, body.max_candidates)]
+        ident = c["identity"]
+        item = {"id": gid, "name": rec.get("name") or _rr.display_name("", ident),
+                "n_candidates": len(cands), "candidates": [{"id": x["id"], "name": x.get("name"), "score": x["score"]} for x in cands]}
+        if body.dry_run:
+            items.append(item); continue
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        verdict, stage, model_used = None, None, None
+        try:
+            if body.stage1:
+                state, questions = _rj.decision_request(ident, rec.get("name") or "", cands, sy)
+                ans = _rj.systemone(dcfg, state, questions)
+                v1 = _rj.stage1_verdict(ans, body.threshold)
+                item["stage1"] = {k: v1.get(k) for k in ("verdict", "entity_id", "confidence", "reason")}
+                if v1["verdict"] != "unsure":
+                    verdict, stage, model_used = v1, "decision", dcfg["model"]
+            if verdict is None and body.stage2:
+                inputs = _rx.record_inputs(rec, by_stem, ann, label, max_fragments=2, with_images=True, with_text=False)
+                rec_imgs = [it["image_b64"] for it in inputs if it.get("image_b64")]
+                cand_imgs = {x["id"]: _candidate_crop_b64(x) for x in cands}
+                msgs = _rj.vision_messages(rec_imgs, rec.get("name") or "", ident, cands, cand_imgs, sy)
+                if vision_client is None:
+                    vision_client = _make_llm_client(body.vision_model)
+                resp = _llm_complete_json(vision_client, body.vision_model, msgs, 1024, _rj.VERDICT_SCHEMA, "verdict", use_cache=True)
+                u = getattr(resp, "usage", None)
+                tokens_in += getattr(u, "prompt_tokens", 0) or 0
+                tokens_out += getattr(u, "completion_tokens", 0) or 0
+                parsed = json.loads((resp.choices[0].message.content or "").strip())
+                v2 = _rj.stage2_verdict(parsed, cands)
+                item["stage2"] = v2
+                verdict, stage, model_used = v2, "vision", body.vision_model
+            if verdict is None:
+                verdict, stage, model_used = (item.get("stage1") or {"verdict": "unsure", "entity_id": None, "confidence": 0, "reason": "no stage ran"}), "decision", dcfg["model"]
+            ename = next((x.get("name") for x in cands if x["id"] == verdict.get("entity_id")), None)
+            sug = _rj.suggestion(verdict, stage, model_used, ts, ename)
+            if not _merge_shape_fields(ann / f"{head['stem']}.json", head["idx"], {"authority_suggestion": sug}):
+                raise RuntimeError("could not write the head fragment")
+            item["suggestion"] = sug
+            counts["suggested" if sug["verdict"] != "unsure" else "unsure"] += 1
+        except Exception as e:
+            item["error"] = str(e)[:300]; counts["error"] += 1
+        items.append(item)
+    return {"authority_file": fname, "source_year": sy, "dry_run": body.dry_run, "threshold": body.threshold,
+            "counts": counts, "tokens_in": tokens_in, "tokens_out": tokens_out, "items": items}
+
+
+class AcceptSuggestionsRequest(BaseModel):
+    record_ids:     Optional[list[int]] = None   # default: every record with a suggestion
+    min_confidence: float = 0.0
+    verdicts:       Optional[list[str]] = None   # default: same, successor, new (never unsure)
+    dismiss:        bool = False                 # drop the suggestions instead of applying them
+    dry_run:        bool = False
+
+
+@app.post("/api/project/{name}/records/accept-suggestions")
+def api_accept_suggestions(name: str, body: AcceptSuggestionsRequest):
+    """Turn model suggestions into decisions (source human, with the
+    suggestion kept under `judge` for provenance) — same / successor / new
+    at or above `min_confidence` — or dismiss them. Records already resolved
+    are left alone."""
+    cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
+    coll, by_stem = _collect_for(name, label, mode)
+    wanted = set(body.record_ids) if body.record_ids is not None else None
+    allowed = set(body.verdicts or ["same", "successor", "new"]) - {"unsure"}
+    items, counts = [], {"accepted": 0, "dismissed": 0, "below": 0, "skipped": 0, "error": 0}
+    for gid in sorted(coll["records"]):
+        rec = coll["records"][gid]
+        head = rec["fragments"][0]
+        if wanted is not None and gid not in wanted:
+            continue
+        jf = ann / f"{head['stem']}.json"
+        shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
+        hs = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
+        sug = hs.get("authority_suggestion")
+        if not sug:
+            continue
+        if (hs.get("authority") or {}).get("id"):
+            counts["skipped"] += 1; continue
+        if body.dismiss:
+            if not body.dry_run:
+                with _SHAPE_MERGE_LOCK:
+                    data = json.loads(jf.read_text(encoding="utf-8"))
+                    data["shapes"][head["idx"]].pop("authority_suggestion", None)
+                    _write_json(jf, data)
+            counts["dismissed"] += 1; items.append({"id": gid, "action": "dismissed"}); continue
+        if sug.get("verdict") not in allowed or (sug.get("confidence") or 0) < body.min_confidence:
+            counts["below"] += 1; continue
+        item = {"id": gid, "action": "accept", "verdict": sug["verdict"], "entity_id": sug.get("entity_id")}
+        if not body.dry_run:
+            try:
+                res = _apply_resolution(name, rec, by_stem, ann, fname, sy, gid, sug["verdict"], sug.get("entity_id"),
+                                        sug.get("edge_type") or ("successor" if sug["verdict"] == "successor" else None),
+                                        sug.get("reason"), "human", sug.get("confidence"))
+                with _SHAPE_MERGE_LOCK:
+                    data = json.loads(jf.read_text(encoding="utf-8"))
+                    sh = data["shapes"][head["idx"]]
+                    sh.pop("authority_suggestion", None)
+                    if isinstance(sh.get("authority"), dict):
+                        sh["authority"]["judge"] = {k: sug.get(k) for k in ("verdict", "confidence", "stage", "model", "reason")}
+                    _write_json(jf, data)
+                by_stem[head["stem"]] = json.loads(jf.read_text(encoding="utf-8"))
+                item["entity_id"] = res["entity"]["id"]
+            except HTTPException as e:
+                item["action"], item["error"] = "error", e.detail; counts["error"] += 1; items.append(item); continue
+        counts["accepted"] += 1; items.append(item)
+    return {"dry_run": body.dry_run, "counts": counts, "items": items}
 
 
 class ExtractRecordsRequest(BaseModel):

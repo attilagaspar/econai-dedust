@@ -1014,6 +1014,23 @@
           <label class="row" style="margin:0;" title="Re-decide records that an earlier batch resolved automatically; human decisions are never touched">
             <input type="checkbox" id="batch-recr-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>overwrite auto</span></label>
         </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;border-top:1px solid #1a3a6e;padding-top:6px;margin-top:2px;">
+          <b style="color:#c4b5fd;">🤖 Judge open records</b>
+          <label class="row" style="margin:0;" title="Stage 1: the decision model on the extracted facts (needs DEDUST_DECISION_ENDPOINT on the server)">
+            <input type="checkbox" id="batch-judge-s1" checked style="accent-color:#e94560;width:13px;height:13px;"><span>decision model</span></label>
+          <span title="Stage-1 confidence that makes a suggestion; below it the record goes to stage 2">&ge;</span>
+          <input id="batch-judge-thr" type="number" min="0.5" max="1" step="0.05" value="0.85" style="width:56px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+          <label class="row" style="margin:0;" title="Stage 2: a vision model sees the record's and the candidates' crops; only for what stage 1 left unsure">
+            <input type="checkbox" id="batch-judge-s2" checked style="accent-color:#e94560;width:13px;height:13px;"><span>vision model</span></label>
+          <select id="batch-judge-model" style="min-width:110px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:3px 6px;font-size:11px;"></select>
+          <label class="row" style="margin:0;" title="Re-judge records that already carry a suggestion"><input type="checkbox" id="batch-judge-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>re-judge</span></label>
+          <button class="nav-btn" onclick="runJudgeRecords(_batchSortedPages(), {dryRun: !!document.getElementById('batch-rec-dry')?.checked})" title="Suggest a verdict for every open record in the page range (dry run lists them)">🤖 Judge</button>
+          <span style="color:#556;">·</span>
+          <span title="Turn suggestions into decisions">accept suggestions &ge;</span>
+          <input id="batch-judge-accept-thr" type="number" min="0" max="1" step="0.05" value="0.9" style="width:56px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+          <button class="nav-btn" onclick="runAcceptSuggestions({dryRun: !!document.getElementById('batch-rec-dry')?.checked})" title="Accept every same / successor / new suggestion at or above the confidence (never unsure); they become your decisions, the suggestion kept as provenance">✓ Accept</button>
+          <button class="nav-btn" onclick="runAcceptSuggestions({dismiss: true, dryRun: !!document.getElementById('batch-rec-dry')?.checked})" title="Drop all suggestions in the page range">✕ Dismiss</button>
+        </div>
         <div style="font-size:10px;color:#555;">Each record is matched by its identity object (🧩 extraction: Hungarian and German names, other names; seat, founding year, county and
           legal form rank candidates up) or, without one, by its first line of text. An unambiguous match at or above the floor becomes
           <b>same</b> (a slice on the entity, the printed name as alias); with "mint unmatched" the rest become <b>new</b> entities; otherwise

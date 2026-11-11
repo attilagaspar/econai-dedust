@@ -140,7 +140,10 @@ async function load() {
     if (!lst.length) return '';
     return `<div class="block"><h2>${c.source_year ?? '?'} · ${esc(c.name)} — ${lst.length} record(s) not resolved to any entity</h2>` +
       `<div class="hint" style="margin-bottom:6px;">click a record to open it in the editor; resolve it there from the record browser (⚙ Batch → ⛓ Records: browser → 🏛 resolve…)</div>` +
-      `<div class="open-list">${lst.map(o => `<span class="obs" title="record ${o.group_id} · ${o.n_fragments} fragment(s)" onclick="openObs('${esc(c.name)}','${esc(o.stem)}',${o.idx ?? -1})">${esc(o.name || ('record ' + o.group_id))}</span>`).join('')}</div></div>`;
+      `<div class="open-list">${lst.map(o => {
+        const sg = o.suggestion && o.suggestion.verdict !== 'unsure' ? ` <span style="color:#c4b5fd;">🤖 ${esc(o.suggestion.verdict)}${o.suggestion.entity_id ? ' ' + esc(o.suggestion.entity_id) : ''} ${o.suggestion.confidence != null ? Number(o.suggestion.confidence).toFixed(2) : ''}</span>` : '';
+        return `<span class="obs" title="record ${o.group_id} · ${o.n_fragments} fragment(s)${o.suggestion ? ' · suggestion: ' + esc(o.suggestion.verdict) + (o.suggestion.entity_name ? ' ' + esc(o.suggestion.entity_name) : '') : ''}" onclick="openObs('${esc(c.name)}','${esc(o.stem)}',${o.idx ?? -1})">${esc(o.name || ('record ' + o.group_id))}${sg}</span>`;
+      }).join('')}</div></div>`;
   }).join('');
   document.getElementById('open').innerHTML = openHtml;
 }

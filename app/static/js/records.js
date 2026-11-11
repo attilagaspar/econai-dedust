@@ -451,12 +451,121 @@ function _fragPagesHtml(d) {
 
 let _recUnresolvedOnly = false;
 
+// ── the model judge: suggestions on open records (13 §2.3) ─────────────────
+
+function _recSugChip(r) {
+  const s = r.suggestion;
+  if (!s || (r.authority && r.authority.id)) return '';
+  const tone = s.verdict === 'unsure' ? '#8a94a6' : '#c4b5fd';
+  const what = s.verdict === 'unsure' ? 'unsure' : `${s.verdict}${s.entity_id ? ' ' + s.entity_id : ''}${s.entity_name ? ' ' + s.entity_name : ''}`;
+  return `<span style="color:${tone};white-space:nowrap;" title="${_escHtml(`${s.stage} model ${s.model || ''} · ${s.reason || ''}`)}">🤖 ${_escHtml(what)} ${s.confidence != null ? '(' + Number(s.confidence).toFixed(2) + ')' : ''}</span>` +
+    (s.verdict !== 'unsure' ? `<button class="nav-btn" onclick="_recAcceptOne(${r.id})" title="Accept this suggestion as your decision">✓</button>` : '') +
+    `<button class="nav-btn" onclick="_recAcceptOne(${r.id}, true)" title="Dismiss this suggestion">✕</button>`;
+}
+
+async function _recAcceptOne(gid, dismiss = false) {
+  try {
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/records/accept-suggestions`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({record_ids: [gid], dismiss, min_confidence: 0})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    const it = (d.items || [])[0];
+    if (it && it.error) throw new Error(it.error);
+    showToast(dismiss ? `record ${gid}: suggestion dismissed` : `record ${gid} → ${it?.verdict || ''} ${it?.entity_id || ''}`, 5000);
+    await openRecordBrowser();
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+  } catch (e) { showToast('Suggestion error: ' + (e?.message || e), 7000); }
+}
+
+async function runJudgeRecords(sorted, {dryRun = false} = {}) {
+  if (!_recNeedProject()) return null;
+  if (!_recCtx.record_authority) { showToast('Pick the authority the records resolve against first'); return null; }
+  const base = {
+    pattern: typeof _cropsPatternFor === 'function' ? _cropsPatternFor(sorted) : null,
+    stage1: document.getElementById('batch-judge-s1')?.checked !== false,
+    stage2: document.getElementById('batch-judge-s2')?.checked !== false,
+    threshold: parseFloat(document.getElementById('batch-judge-thr')?.value) || 0.85,
+    vision_model: document.getElementById('batch-judge-model')?.value || 'gpt-4.1-mini',
+    overwrite: !!document.getElementById('batch-judge-overwrite')?.checked,
+  };
+  if (!base.stage1 && !base.stage2) { showToast('Tick at least one stage'); return null; }
+  const prog = document.getElementById('batch-progress');
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/judge-records`;
+  const post = async (b) => {
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    return d;
+  };
+  try {
+    if (prog) prog.textContent = 'Listing open records…';
+    const plan = await post({...base, dry_run: true});
+    const n = plan.items.length;
+    const head = `${n} open record(s) to judge (${plan.counts.kept} already suggested, ${plan.counts.skipped} resolved)` +
+      ` · stage 1 ${base.stage1 ? 'on (≥ ' + base.threshold + ')' : 'off'} · stage 2 ${base.stage2 ? base.vision_model : 'off'}`;
+    if (dryRun) {
+      if (prog) prog.innerHTML = _escHtml(head) + '<div style="max-height:200px;overflow:auto;margin-top:4px;color:#8a94a6;">' +
+        plan.items.map(i => `record ${i.id} · ${_escHtml(i.name || '')} · candidates: ${i.candidates.map(c => `${_escHtml(c.id)} ${c.score}`).join(', ') || 'none'}`).join('<br>') + '</div>';
+      showToast(head, 8000); return plan;
+    }
+    if (!n) { showToast('Nothing to judge: ' + head, 6000); if (prog) prog.textContent = head; return plan; }
+    if (!(await _batchConfirmInline(head + '\n\nSuggestions only — nothing is written to the authority file until you accept them.', '🤖 Judge'))) return null;
+    const ids = plan.items.map(i => i.id);
+    const CH = 3; let sug = 0, uns = 0, err = 0, tin = 0, tout = 0; const errs = [];
+    for (let k = 0; k < ids.length; k += CH) {
+      if (prog) prog.textContent = `Judging… ${k}/${ids.length} · ${sug} suggested, ${uns} unsure${err ? ', ' + err + ' error(s)' : ''}`;
+      const d = await post({...base, record_ids: ids.slice(k, k + CH), dry_run: false});
+      sug += d.counts.suggested; uns += d.counts.unsure; err += d.counts.error; tin += d.tokens_in; tout += d.tokens_out;
+      (d.items || []).filter(i => i.error).forEach(i => errs.push(`record ${i.id}: ${i.error}`));
+    }
+    const msg = `✓ judged ${ids.length}: ${sug} suggested, ${uns} unsure${err ? ', ' + err + ' error(s)' : ''}` + (tin ? ` · vision tokens ${tin}→${tout}` : '');
+    if (prog) prog.innerHTML = _escHtml(msg) + (errs.length ? '<div style="color:#f87171;margin-top:4px;">' + errs.slice(0, 10).map(_escHtml).join('<br>') + '</div>' : '');
+    showToast(msg, 9000);
+    if (document.getElementById('rec-browser-modal')) await openRecordBrowser();
+    return {sug, uns, err};
+  } catch (e) {
+    if (prog) prog.textContent = 'Error: ' + (e?.message || e);
+    showToast('Judge error: ' + (e?.message || e), 7000);
+    return null;
+  }
+}
+
+async function runAcceptSuggestions({dismiss = false, dryRun = false} = {}) {
+  if (!_recNeedProject()) return null;
+  const body = {dismiss, min_confidence: parseFloat(document.getElementById('batch-judge-accept-thr')?.value) || 0, dry_run: true};
+  const prog = document.getElementById('batch-progress');
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/records/accept-suggestions`;
+  const post = async (b) => {
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    return d;
+  };
+  const fmt = (d) => dismiss ? `${d.counts.dismissed} suggestion(s) dismissed` :
+    `${d.counts.accepted} suggestion(s) accepted ≥ ${body.min_confidence}, ${d.counts.below} below / unsure, ${d.counts.skipped} already resolved` + (d.counts.error ? `, ${d.counts.error} error(s)` : '');
+  try {
+    const plan = await post(body);
+    if (dryRun) { if (prog) prog.textContent = 'Dry run: ' + fmt(plan); showToast(fmt(plan), 7000); return plan; }
+    const todo = dismiss ? plan.counts.dismissed : plan.counts.accepted;
+    if (!todo) { showToast('Nothing to do: ' + fmt(plan), 6000); return plan; }
+    if (!(await _batchConfirmInline((dismiss ? 'Dismiss ' : 'Accept ') + todo + ' suggestion(s)? ' + (dismiss ? '' : 'They become your decisions: slices, aliases, new entities and edges are written to the authority file.'), dismiss ? '✕ Dismiss' : '✓ Accept'))) return null;
+    const d = await post({...body, dry_run: false});
+    if (prog) prog.textContent = '✓ ' + fmt(d);
+    showToast('✓ ' + fmt(d), 9000);
+    if (document.getElementById('rec-browser-modal')) await openRecordBrowser();
+    if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
+    return d;
+  } catch (e) { showToast('Accept error: ' + (e?.message || e), 7000); return null; }
+}
+
+
 function _recAuthChip(r) {
   const d = _recData || {};
   if (!d.record_authority) return '';
   const a = r.authority;
   if (!a) {
-    return `<button class="nav-btn" onclick="_recCandidates(${r.id})" title="Find entity candidates for this record">🏛 resolve…</button>`;
+    return _recSugChip(r) + `<button class="nav-btn" onclick="_recCandidates(${r.id})" title="Find entity candidates for this record">🏛 resolve…</button>`;
   }
   const tone = a.outcome === 'new' ? '#fbbf24' : (a.outcome === 'successor' ? '#f0abfc' : '#86efac');
   const what = a.outcome === 'new' ? 'new entity' : (a.outcome === 'successor' ? `successor (${a.edge?.type || ''} of ${a.edge?.from || ''})` : 'same entity');
@@ -535,9 +644,18 @@ async function _recDecide(gid, outcome, entityId, edgeType) {
   } catch (e) { showToast('Resolve error: ' + (e?.message || e), 7000); }
 }
 
+function _batchSortedPages() {
+  // the batch modal's page range when a helper exposes it; else every page
+  try { if (typeof _batchSelectedIndices === 'function') return [..._batchSelectedIndices()].sort((a, b) => a - b); } catch (e) { /* fall through */ }
+  return pages.map((_, i) => i);
+}
+
 async function _batchRecrInit() {
   const sel = document.getElementById('batch-recr-auth');
   const yr = document.getElementById('batch-recr-year');
+  const vm = document.getElementById('batch-judge-model');
+  const src = document.getElementById('batch-llm-model');
+  if (vm && src && !vm.options.length) { vm.innerHTML = src.innerHTML; vm.value = 'gpt-4.1-mini'; if (!vm.value) vm.selectedIndex = 0; }
   if (!sel) return;
   try {
     const r = await fetch(`${API}/api/authorities`); const d = await r.json();
