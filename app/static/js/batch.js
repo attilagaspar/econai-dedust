@@ -206,7 +206,7 @@ function onBatchOpChange() {
   const isDataset = op === 'dataset_diagnose';
   document.getElementById('batch-dataset-opts').style.display = isDataset ? '' : 'none';
   if (isDataset) _batchDatasetInit();
-  const isRecords = op === 'records_sweep' || op === 'records_browse' || op === 'records_derive' || op === 'records_extract' || op === 'records_resolve';
+  const isRecords = ['records_sweep', 'records_browse', 'records_derive', 'records_extract', 'records_resolve', 'records_judge', 'records_accept'].includes(op);
   const recOpts = document.getElementById('batch-records-opts');
   if (recOpts) recOpts.style.display = isRecords ? 'flex' : 'none';
   if (isRecords) _batchRecordsInit(op);
@@ -261,18 +261,25 @@ async function _batchRecordsInit(op) {
   const isDerive = op === 'records_derive';
   const isExtract = op === 'records_extract';
   const isResolve = op === 'records_resolve';
-  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive || isExtract || isResolve) ? '' : 'none';
+  const isJudge = op === 'records_judge', isAccept = op === 'records_accept';
+  if (dryWrap) dryWrap.style.display = (op === 'records_sweep' || isDerive || isExtract || isResolve || isJudge || isAccept) ? '' : 'none';
   const recrOpts = document.getElementById('batch-recr-opts');
-  if (recrOpts) recrOpts.style.display = isResolve ? 'flex' : 'none';
-  if (isResolve && typeof _batchRecrInit === 'function') _batchRecrInit();
+  if (recrOpts) recrOpts.style.display = (isResolve || isJudge || isAccept) ? 'flex' : 'none';
+  const judgeOpts = document.getElementById('batch-judge-opts');
+  if (judgeOpts) judgeOpts.style.display = isJudge ? 'flex' : 'none';
+  const acceptOpts = document.getElementById('batch-accept-opts');
+  if (acceptOpts) acceptOpts.style.display = isAccept ? 'flex' : 'none';
+  const batchRow = document.getElementById('batch-recr-batchrow');
+  if (batchRow) batchRow.style.display = isResolve ? 'flex' : 'none';
   const fragOpts = document.getElementById('batch-frag-opts');
   if (fragOpts) fragOpts.style.display = isDerive ? 'flex' : 'none';
   const recxOpts = document.getElementById('batch-recx-opts');
   if (recxOpts) recxOpts.style.display = isExtract ? 'flex' : 'none';
   const sweepHelp = document.getElementById('batch-rec-sweep-help');
-  if (sweepHelp) sweepHelp.style.display = (isDerive || isExtract || isResolve) ? 'none' : '';
+  if (sweepHelp) sweepHelp.style.display = (isDerive || isExtract || isResolve || isJudge || isAccept) ? 'none' : '';
   if (isExtract && typeof _batchRecxInit === 'function') _batchRecxInit();
   if (typeof loadRecordsContext === 'function') await loadRecordsContext();
+  if ((isResolve || isJudge || isAccept) && typeof _batchRecrInit === 'function') await _batchRecrInit();   // after the context is loaded
   const sel = document.getElementById('batch-rec-label');
   const cols = document.getElementById('batch-rec-cols');
   if (!_recCtx.project) {
@@ -708,6 +715,14 @@ async function runBatch() {
   if (op === 'records_resolve') {
     const dry = !!document.getElementById('batch-rec-dry')?.checked;
     await runResolveRecords(sorted, {dryRun: dry});
+    return;
+  }
+
+  // The model judge: suggestions for open records / accept or dismiss them.
+  if (op === 'records_judge' || op === 'records_accept') {
+    const dry = !!document.getElementById('batch-rec-dry')?.checked;
+    if (op === 'records_judge') await runJudgeRecords(sorted, {dryRun: dry});
+    else await runAcceptSuggestions({dryRun: dry, dismiss: !!document.getElementById('batch-accept-dismiss')?.checked});
     return;
   }
 

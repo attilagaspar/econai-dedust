@@ -655,7 +655,12 @@ async function _batchRecrInit() {
   const yr = document.getElementById('batch-recr-year');
   const vm = document.getElementById('batch-judge-model');
   const src = document.getElementById('batch-llm-model');
-  if (vm && src && !vm.options.length) { vm.innerHTML = src.innerHTML; vm.value = 'gpt-4.1-mini'; if (!vm.value) vm.selectedIndex = 0; }
+  if (vm && src && !vm.options.length) {
+    vm.innerHTML = src.innerHTML;
+    // prefer an Azure vision model (the server may hold Azure keys only)
+    const pref = [...vm.options].find(o => o.value.startsWith('azure:')) || [...vm.options].find(o => o.value === 'gpt-4.1-mini') || vm.options[0];
+    if (pref) vm.value = pref.value;
+  }
   if (!sel) return;
   try {
     const r = await fetch(`${API}/api/authorities`); const d = await r.json();

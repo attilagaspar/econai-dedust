@@ -910,6 +910,8 @@
         <option value="records_browse">⛓ Records: browser (chains, orphans, long spans)</option>
         <option value="records_extract">🧩 Records: extract with a schema (one object per record, all fragments in one call)</option>
         <option value="records_resolve">🏛 Records: resolve to entities (same / new / successor; bootstrap a first source)</option>
+        <option value="records_judge">🤖 Records: judge open records (model suggestions)</option>
+        <option value="records_accept">✓ Records: accept / dismiss suggestions</option>
         <option value="crops_derive">✂ Cut boxes of a label into a crop project (crops as pages)</option>
         <option value="crops_writeback">⤴ Write crop pages back to their source pages</option>
       </select>
@@ -955,14 +957,7 @@
           <label class="row" style="margin:0;" title="Run the record sweep over the whole volume right after the fragments are written (ids into group_id)">
             <input type="checkbox" id="batch-frag-sweep" checked style="accent-color:#e94560;width:13px;height:13px;"><span>then sweep</span></label>
         </div>
-        <div style="font-size:10px;color:#555;">The detector learns small, consistent objects — where a record <b>starts</b> (a name line) and what <b>stops</b> it (a section heading,
-          an advertisement); the fragment boxes of the record label are derived from them, per page and column: column top → first start/stop is a
-          ⛓ continuation while a record is open, start → next start or stop, last start → column bottom; a stop closes the record; <b>ignore</b> boxes
-          are skipped and masked out of the ink. Every fragment is trimmed to the ink of the page image (+ margin) and dropped when empty. The open /
-          closed state flows from page to page through every non-skip page, so a page with <b>no starts and no stops</b> yields one continuation per
-          column while a record is open (a record running over several pages needs no marks there) and nothing otherwise. Re-runs replace only
-          untouched derived boxes (marker present, not moved, mark unchanged, no content, not 🔒); hand-drawn and edited boxes are kept and an
-          overlapping new fragment is suppressed. The page range above narrows the pages. Batch undo restores the pages of the last run.</div>
+        <span class="help-tip"  title="The detector learns small, consistent objects — where a record starts (a name line) and what stops it (a section heading, an advertisement); the fragment boxes of the record label are derived from them, per page and column: column top → first start/stop is a ⛓ continuation while a record is open, start → next start or stop, last start → column bottom; a stop closes the record; ignore boxes are skipped and masked out of the ink. Every fragment is trimmed to the ink of the page image (+ margin) and dropped when empty. The open / closed state flows from page to page through every non-skip page, so a page with no starts and no stops yields one continuation per column while a record is open (a record running over several pages needs no marks there) and nothing otherwise. Re-runs replace only untouched derived boxes (marker present, not moved, mark unchanged, no content, not 🔒); hand-drawn and edited boxes are kept and an overlapping new fragment is suppressed. The page range above narrows the pages. Batch undo restores the pages of the last run.">ⓘ what does this do?</span>
       </div>
       <div id="batch-recx-opts" style="display:none;flex-direction:column;gap:6px;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
@@ -984,13 +979,7 @@
           <label class="row" style="margin:0;color:#9fd;" title="Package the same requests into the provider's batch service (half price; usually minutes, at most 24 h) instead of calling live. Needs an OpenAI / Azure model. Apply the answers from 🌙 LLM — overnight batch → jobs.">
             <input type="checkbox" id="batch-recx-overnight" style="accent-color:#22c55e;width:13px;height:13px;"><span>🌙 as a batch job (half price)</span></label>
         </div>
-        <div style="font-size:10px;color:#555;">One call per <b>record</b>: every fragment of the chain (crop image + attached text) goes to the model in reading order with the
-          schema; the object lands on the record's head fragment as its 🧩 structured record (the editor's Structured group, the Excel
-          "Structured" sheet and the JSON export all pick it up). Records already carrying this schema are skipped unless "overwrite";
-          a human-edited object is never replaced. The page range narrows the records by the page of their head fragment. A dry run
-          lists the records and fragments that would be sent. Schemas live in the project's <code>schemas/</code> folder (LLM panel → JSON).
-          With <b>🌙 as a batch job</b> the requests go to the provider's batch service instead (half price; OpenAI / Azure models only);
-          the jobs are listed below and ⬇ Apply writes the answers onto the records' head fragments.</div>
+        <span class="help-tip"  title="One call per record: every fragment of the chain (crop image + attached text) goes to the model in reading order with the schema; the object lands on the record's head fragment as its 🧩 structured record (the editor's Structured group, the Excel &quot;Structured&quot; sheet and the JSON export all pick it up). Records already carrying this schema are skipped unless &quot;overwrite&quot;; a human-edited object is never replaced. The page range narrows the records by the page of their head fragment. A dry run lists the records and fragments that would be sent. Schemas live in the project's schemas/ folder (LLM panel → JSON). With 🌙 as a batch job the requests go to the provider's batch service instead (half price; OpenAI / Azure models only); the jobs are listed below and ⬇ Apply writes the answers onto the records' head fragments.">ⓘ what does this do?</span>
         <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#aaa;margin-top:4px;">
           <span>Batch jobs of this project</span>
           <button class="field-run-btn" onclick="_refreshOvernightJobs()" title="Refresh statuses from the provider">⟳</button>
@@ -1004,7 +993,7 @@
           <span title="The year this source describes — slices are keyed on it">source year</span>
           <input id="batch-recr-year" type="number" min="1000" max="2100" onchange="_batchRecordsSetting('source_year', this.value)" style="width:64px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
         </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+        <div id="batch-recr-batchrow" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
           <span title="Raw name similarity the best candidate needs to be accepted automatically">accept ≥</span>
           <input id="batch-recr-floor" type="number" min="0" max="100" value="85" style="width:48px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
           <span title="The best candidate must lead the runner-up by this much (after boosts) to count as unambiguous">margin</span>
@@ -1014,41 +1003,35 @@
           <label class="row" style="margin:0;" title="Re-decide records that an earlier batch resolved automatically; human decisions are never touched">
             <input type="checkbox" id="batch-recr-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>overwrite auto</span></label>
         </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;border-top:1px solid #1a3a6e;padding-top:6px;margin-top:2px;">
-          <b style="color:#c4b5fd;">🤖 Judge open records</b>
+        
+        <span class="help-tip"  title="Each record is matched by its identity object (🧩 extraction: Hungarian and German names, other names; seat, founding year, county and legal form rank candidates up) or, without one, by its first line of text. An unambiguous match at or above the floor becomes same (a slice on the entity, the printed name as alias); with &quot;mint unmatched&quot; the rest become new entities; otherwise they stay unresolved for the ⛓ record browser, where each record offers same / new / successor with the candidates' crops. The decision sits on the record's head fragment (🏛 in the editor); the authority file receives entities, aliases, slices and edges only. Human decisions are never overwritten. The page range narrows the records by their head page. Dry run reports the decisions.">ⓘ what does this do?</span>
+      </div>
+      <div id="batch-judge-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
           <label class="row" style="margin:0;" title="Stage 1: the decision model on the extracted facts (needs DEDUST_DECISION_ENDPOINT on the server)">
             <input type="checkbox" id="batch-judge-s1" checked style="accent-color:#e94560;width:13px;height:13px;"><span>decision model</span></label>
-          <span title="Stage-1 confidence that makes a suggestion; below it the record goes to stage 2">&ge;</span>
+          <span title="Stage-1 confidence that makes a suggestion; below it the record goes to stage 2">suggest at &ge;</span>
           <input id="batch-judge-thr" type="number" min="0.5" max="1" step="0.05" value="0.85" style="width:56px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
           <label class="row" style="margin:0;" title="Stage 2: a vision model sees the record's and the candidates' crops; only for what stage 1 left unsure">
             <input type="checkbox" id="batch-judge-s2" checked style="accent-color:#e94560;width:13px;height:13px;"><span>vision model</span></label>
-          <select id="batch-judge-model" style="min-width:110px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:3px 6px;font-size:11px;"></select>
+          <select id="batch-judge-model" style="min-width:140px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:3px 6px;font-size:11px;"></select>
           <label class="row" style="margin:0;" title="Re-judge records that already carry a suggestion"><input type="checkbox" id="batch-judge-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>re-judge</span></label>
-          <button class="nav-btn" onclick="runJudgeRecords(_batchSortedPages(), {dryRun: !!document.getElementById('batch-rec-dry')?.checked})" title="Suggest a verdict for every open record in the page range (dry run lists them)">🤖 Judge</button>
-          <span style="color:#556;">·</span>
-          <span title="Turn suggestions into decisions">accept suggestions &ge;</span>
-          <input id="batch-judge-accept-thr" type="number" min="0" max="1" step="0.05" value="0.9" style="width:56px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
-          <button class="nav-btn" onclick="runAcceptSuggestions({dryRun: !!document.getElementById('batch-rec-dry')?.checked})" title="Accept every same / successor / new suggestion at or above the confidence (never unsure); they become your decisions, the suggestion kept as provenance">✓ Accept</button>
-          <button class="nav-btn" onclick="runAcceptSuggestions({dismiss: true, dryRun: !!document.getElementById('batch-rec-dry')?.checked})" title="Drop all suggestions in the page range">✕ Dismiss</button>
+          <span class="help-tip" title="Suggestions, never decisions. Stage 1 asks the decision model one bounded question on the extracted facts: which earlier firm, if any, is this record, and is it the same firm or a successor; at or above the confidence that is the suggestion. What it leaves unsure goes to stage 2, a vision model that sees the record's crop and each candidate's crop and answers with a reason. Suggestions show in the ⛓ record browser (🤖) with ✓ accept / ✕ dismiss per record, and in the entity browser; the operation ✓ Records: accept suggestions takes them in bulk. Nothing is written to the authority file until a suggestion is accepted. The page range narrows the records by their head page; dry run lists the open records and their candidates.">ⓘ what does this do?</span>
         </div>
-        <div style="font-size:10px;color:#555;">Each record is matched by its identity object (🧩 extraction: Hungarian and German names, other names; seat, founding year, county and
-          legal form rank candidates up) or, without one, by its first line of text. An unambiguous match at or above the floor becomes
-          <b>same</b> (a slice on the entity, the printed name as alias); with "mint unmatched" the rest become <b>new</b> entities; otherwise
-          they stay unresolved for the ⛓ record browser, where each record offers same / new / successor with the candidates' crops. The decision
-          sits on the record's head fragment (🏛 in the editor); the authority file receives entities, aliases, slices and edges only.
-          Human decisions are never overwritten. The page range narrows the records by their head page. Dry run reports the decisions.</div>
+      </div>
+      <div id="batch-accept-opts" style="display:none;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:#aaa;">
+          <span title="Accept every same / successor / new suggestion at or above this confidence; unsure ones never">accept suggestions at &ge;</span>
+          <input id="batch-judge-accept-thr" type="number" min="0" max="1" step="0.05" value="0.9" style="width:56px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
+          <label class="row" style="margin:0;" title="Drop the suggestions in the page range instead of accepting them"><input type="checkbox" id="batch-accept-dismiss" style="accent-color:#e94560;width:13px;height:13px;"><span>dismiss instead</span></label>
+          <span class="help-tip" title="Accepted suggestions become your decisions, exactly as if you had clicked same / successor / new in the record browser: slices, aliases, new entities and edges are written to the authority file, the record's head fragment gets the mark with the suggestion kept as provenance. Records already resolved are left alone. Dry run counts what would be accepted.">ⓘ what does this do?</span>
+        </div>
       </div>
       <label class="row" id="batch-rec-dry-wrap" title="Report what would change without writing anything">
         <input type="checkbox" id="batch-rec-dry" style="accent-color:#e94560;width:13px;height:13px;">
         <span>dry run (report only, no writes)</span>
       </label>
-      <div id="batch-rec-sweep-help" style="font-size:10px;color:#555;">A <b>record</b> is one entry of the record label; an entry that runs across a column or
-        page break is several boxes, the later ones marked <b>⛓ continuation</b> (C in the editor). The sweep walks every non-skip page
-        in order, reads the boxes column by column (a box wider than 70% of the page resets the column flow), and numbers records
-        through the whole volume into <b>group_id</b>; a continuation joins the previous box's record, 🔒 locked ids are kept and
-        continued from. Re-running with the same marks gives the same ids. The browser lists the chains with flags for orphans
-        (a record whose first fragment is a continuation) and long spans; ⛓ and ⟳▶ fix them in place. Settings are saved in the
-        project config; batch undo restores the ids of the last sweep.</div>
+      <span class="help-tip" id="batch-rec-sweep-help" title="A record is one entry of the record label; an entry that runs across a column or page break is several boxes, the later ones marked ⛓ continuation (C in the editor). The sweep walks every non-skip page in order, reads the boxes column by column (a box wider than 70% of the page resets the column flow), and numbers records through the whole volume into group_id; a continuation joins the previous box's record, 🔒 locked ids are kept and continued from. Re-running with the same marks gives the same ids. The browser lists the chains with flags for orphans (a record whose first fragment is a continuation) and long spans; ⛓ and ⟳▶ fix them in place. Settings are saved in the project config; batch undo restores the ids of the last sweep.">ⓘ what does this do?</span>
       <div id="batch-rec-info" style="font-size:10px;color:#f87171;"></div>
     </div>
     <div id="batch-crops-opts" style="display:none;flex-direction:column;gap:8px;">

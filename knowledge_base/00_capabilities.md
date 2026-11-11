@@ -97,6 +97,8 @@ one LabelMe-style JSON per page as the single source of truth.
 - **Diagnostic highlight dropdown**: presence/agreement coloring, rule
   violations, row-count mismatches; amber disagreement borders (OCR≠LLM,
   no human); authority corner dots (green resolved / amber partial).
+- The record operations' explanations sit behind an ⓘ hover tip in each
+  panel (2026-11-11), not as running text.
 - **Record chaining** (⛓, §H5 of
   [09_hierarchical_layout_compass.md](09_hierarchical_layout_compass.md)
   applied to one parent label): per-project `record_label` (+
@@ -349,10 +351,12 @@ only ever written by a person.
   unsure goes to stage 2, a **vision model** (chat completions, JSON
   schema) that sees the record's crop and each candidate's crop. The
   suggestion sits on the head fragment as `authority_suggestion` (verdict,
-  entity, edge type, confidence, reason, stage, model). Batch panel: 🤖
-  Judge (stages, threshold, vision model, re-judge, dry run), ✓ Accept
-  suggestions ≥ p (they become human decisions with the suggestion kept
-  under `judge`), ✕ Dismiss; record browser chip with ✓ / ✕ per record;
+  entity, edge type, confidence, reason, stage, model). Two batch
+  operations: **🤖 Records: judge open records** (stages, threshold,
+  vision model, re-judge) and **✓ Records: accept / dismiss suggestions**
+  (accept ≥ p — they become human decisions with the suggestion kept
+  under `judge` — or dismiss), both driven by the modal's Run button with
+  dry run; record browser chip with ✓ / ✕ per record;
   entity browser shows suggestions on open records. The question text
   states the user's convention (a changed name is a successor).
 - **Cross-page reports** (report chassis, minimizable pill, click-to-jump,

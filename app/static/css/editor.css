@@ -546,6 +546,8 @@
     #batch-label-checks { display: flex; flex-direction: column; gap: 6px; }
     #batch-label-checks label { display: flex; align-items: center; gap: 8px; color: #ddd; font-size: 13px; cursor: pointer; }
     #batch-label-checks input[type=checkbox] { accent-color: #e94560; width:13px; height:13px; }
+    .help-tip { font-size: 10px; color: #667; cursor: help; margin-left: auto; white-space: nowrap; border-bottom: 1px dotted #445; }
+    .help-tip:hover { color: #aaa; }
     #batch-progress {
       font-size: 11px; color: #888; min-height: 16px; text-align: center;
     }

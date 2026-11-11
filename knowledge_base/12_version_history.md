@@ -450,3 +450,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   `authority_suggestion` on the head fragment; batch panel 🤖 Judge / ✓ Accept /
   ✕ Dismiss, record browser chip with ✓ ✕, suggestions in the entity browser.
   compose passes the three env vars. 3 tests with both models stubbed.
+- **Nov 11 — batch panel tidy-up** (user: too much text, too many buttons): the
+  record panels' explanations are ⓘ hover tips; the judge is two operations
+  in the list (🤖 judge open records, ✓ accept / dismiss suggestions) run by
+  the modal's Run button, no inline buttons; the resolve-only settings row
+  shows only for the resolve operation; the vision model defaults to an
+  Azure one; the authority picker fills after the context loads.
