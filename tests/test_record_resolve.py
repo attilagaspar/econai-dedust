@@ -124,6 +124,24 @@ def test_candidates_use_the_identity_object_and_boost_on_facts(client, project):
     assert d2["identity"] == {} and d2["queries"] == [["Promontori önsegélyző-egylet", None]]
 
 
+def test_a_keyword_searches_the_authority_instead_of_the_records_names(client, project):
+    # record 2 has nothing to do with Galánta; the panel's search box still
+    # lists the Galánta banks for it, with the same facts and crops
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 2, "q": "Galánta"}).json()
+    assert d["search"] == "Galánta" and d["queries"] == [["Galánta", "search"]]
+    assert d["auto"] is None                       # no batch verdict against a keyword
+    ids = [c["id"] for c in d["candidates"]]
+    assert "F000001" in ids and "F000002" in ids
+    top = next(c for c in d["candidates"] if c["id"] == "F000001")
+    assert top["facts"]["seat"] == "Galánta" and top["crop"]["stem"] == "x1"
+    # an entity id typed verbatim is found too
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 2, "q": "F000002"}).json()
+    assert [c["id"] for c in d["candidates"]][:1] == ["F000002"]
+    # a blank keyword is the ordinary panel
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 2, "q": "  "}).json()
+    assert d["search"] is None and d["auto"] is not None
+
+
 def test_same_writes_a_slice_and_the_printed_alias(client, project, auth_dir):
     r = client.post(f"/api/project/{project}/records/resolve",
                     json={"gid": 1, "outcome": "same", "entity_id": "F000001", "source": "human", "score": 95})

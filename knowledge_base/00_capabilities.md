@@ -328,7 +328,11 @@ only ever written by a person.
   (auto); **mint unmatched** bootstraps a first source; human decisions
   never overwritten; dry run. Record browser: 🏛 chip per record, resolve
   panel with candidates' crops and same / successor / new / clear buttons,
-  "unresolved only" filter, resolved count in the header.
+  a **search box** (`…/records/candidates?gid=&q=`: a name, alias, seat or
+  entity id lists matching entities with the same buttons — for the firm
+  the ranking missed), "unresolved only" filter, resolved count in the
+  header; after any decision, chain mark or resweep the browser reloads
+  positioned on the **next** record, not at the top.
 - **Entity view** (plan 13 §2.4 / P12 item 2, built 2026-11-11;
   `app/entities.py`, `app/static/entities.html`): the dashboard sidebar has
   a **Projects | Entities** toggle; Entities lists every authority file

@@ -232,6 +232,7 @@ function _recOpenModal() {
     '<div id="rec-browser-body" style="flex:1;overflow-y:auto;padding:8px 12px;"></div>';
   document.body.appendChild(m);
   _recRenderBody();
+  _recScrollToFocus();
 }
 
 function _recPageNo() {
@@ -318,7 +319,7 @@ function _recRenderBody() {
     const flags = (r.flags || []).map(f => f === 'orphan'
       ? '<span style="color:#f87171;" title="the first fragment is marked as a continuation — its head is missing or lies on an earlier page">⚠ orphan</span>'
       : `<span style="color:#fbbf24;" title="spans more than ${d.max_pages} pages — check for a missed record start">long span</span>`).join(' ');
-    html += `<div style="margin:10px 0 4px;padding:4px 6px;background:#12224a;border-radius:4px;display:flex;gap:10px;align-items:baseline;">` +
+    html += `<div id="rec-head-${r.id}" style="margin:10px 0 4px;padding:4px 6px;background:#12224a;border-radius:4px;display:flex;gap:10px;align-items:baseline;">` +
       `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${recordColor(r.id)};align-self:center;"></span>` +
       `<b style="color:#93c5fd;font-size:12px;">record ${r.id}</b>` +
       `<span style="color:#cde;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(r.name || '')}</span>` +
@@ -370,11 +371,13 @@ async function _recToggleFrag(stem, idx, cur) {
   showToast((!cur ? `⛓ ${stem} #${idx} now continues the previous record` : `⛓ ${stem} #${idx} starts its own record again`) +
     (d ? ` · renumbered from ${stem}: ${d.records} record(s)` : ' · renumbering failed — press ⟳▶'), 6000);
   await _recSyncEditor(stem);
+  _recFocus = {stem};
   await openRecordBrowser();
 }
 
 async function _recResweepFrom(stem) {
   const d = await runRecordSweep({fromStem: stem});
+  _recFocus = {stem};
   if (d) await openRecordBrowser();
 }
 
@@ -456,6 +459,29 @@ function _fragPagesHtml(d) {
 // ── record-level entity resolution (13 §2, E3) ─────────────────────────────
 
 let _recUnresolvedOnly = false;
+// Where the browser positions itself after a reload: {id} = the first record
+// listed with id >= id, {stem} = the first record starting on/after that page.
+// Set by every action that changes the list, consumed by _recOpenModal.
+let _recFocus = null;
+function _recScrollToFocus() {
+  const f = _recFocus; _recFocus = null;
+  if (!f || !_recData) return;
+  const pg = _recPageNo();
+  const pno = s => parseInt(String(pg(s)).replace(/^p/, ''), 10) || 0;
+  const want = f.stem != null ? pno(f.stem) : null;
+  let target = null, last = null;
+  for (const r of _recData.records) {
+    const el = document.getElementById(`rec-head-${r.id}`);
+    if (!el) continue;
+    last = el;
+    if ((f.id != null && r.id >= f.id) || (want != null && pno(r.page_span[0]) >= want)) { target = el; break; }
+  }
+  const el = target || last;
+  if (!el) return;
+  el.scrollIntoView({block: 'start'});
+  el.style.outline = '1px solid #e94560';
+  setTimeout(() => { el.style.outline = ''; }, 1800);
+}
 
 // ── the model judge: suggestions on open records (13 §2.3) ─────────────────
 
@@ -489,6 +515,7 @@ async function _recAcceptOne(gid, dismiss = false) {
     const it = (d.items || [])[0];
     if (it && it.error) throw new Error(it.error);
     showToast(dismiss ? `record ${gid}: suggestion dismissed` : `record ${gid} → ${it?.verdict || ''} ${it?.entity_id || ''}`, 5000);
+    _recFocus = {id: gid + 1};
     await openRecordBrowser();
     if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
   } catch (e) { showToast('Suggestion error: ' + (e?.message || e), 7000); }
@@ -590,14 +617,18 @@ function _recAuthChip(r) {
     `🏛 ${_recEntityLink(a.id, a.name, tone)}${a.source === 'human' ? ' ✎' : ''}</span>`;
 }
 
-async function _recCandidates(gid) {
+async function _recCandidates(gid, q) {
+  // q == null: toggle the panel (the record's own candidates);
+  // q = '…': search the authority by keyword, in the same panel;
+  // q = '':  back to the record's own candidates.
   const box = document.getElementById(`rec-cand-${gid}`);
   if (!box) return;
-  if (box.innerHTML) { box.innerHTML = ''; return; }
+  if (box.innerHTML && q == null) { box.innerHTML = ''; return; }
   box.innerHTML = '<div style="padding:6px;color:#8a94a6;">Looking up candidates…</div>';
   let c;
   try {
-    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/records/candidates?gid=${gid}&k=8`);
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/records/candidates?gid=${gid}&k=8` +
+                          (q ? `&q=${encodeURIComponent(q)}` : ''));
     c = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(c.detail || `HTTP ${r.status}`);
   } catch (e) { box.innerHTML = `<div style="padding:6px;color:#f87171;">${_escHtml(e?.message || String(e))}</div>`; return; }
@@ -607,11 +638,19 @@ async function _recCandidates(gid) {
         .map(k => `<span style="color:#667;">${k}</span> ${_escHtml(String(id[k]))}`).join(' · ')
     : '<span style="color:#fbbf24;">no identity object — matching on the first line of text (run 🧩 extract first for better candidates)</span>';
   const cur = c.current;
+  const sq = c.search || '';
   let html = `<div style="margin:2px 0 8px 14px;padding:6px 8px;border-left:3px solid #2a4a8e;background:#0d1b35;border-radius:0 4px 4px 0;">` +
     `<div style="margin-bottom:4px;">${identTxt}</div>` +
-    `<div style="margin-bottom:4px;color:#8a94a6;">queries: ${(c.queries || []).map(q => _escHtml(q[0])).join(' | ') || '—'} · authority ${_escHtml(c.authority_file)} · year ${c.source_year ?? '<span style="color:#f87171;">not set</span>'}` +
-    (c.auto ? ` · batch would say <b style="color:${c.auto.verdict === 'same' ? '#86efac' : '#fbbf24'};">${_escHtml(c.auto.verdict)}</b> <span style="color:#667;">(${_escHtml(c.auto.reason)})</span>` : '') + `</div>`;
-  if (!(c.candidates || []).length) html += '<div style="color:#8a94a6;margin:4px 0;">no candidates in the authority</div>';
+    `<div style="margin-bottom:4px;color:#8a94a6;">${sq ? `search: <b style="color:#cde;">${_escHtml(sq)}</b>` : `queries: ${(c.queries || []).map(q => _escHtml(q[0])).join(' | ') || '—'}`} · authority ${_escHtml(c.authority_file)} · year ${c.source_year ?? '<span style="color:#f87171;">not set</span>'}` +
+    (c.auto ? ` · batch would say <b style="color:${c.auto.verdict === 'same' ? '#86efac' : '#fbbf24'};">${_escHtml(c.auto.verdict)}</b> <span style="color:#667;">(${_escHtml(c.auto.reason)})</span>` : '') + `</div>` +
+    `<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">` +
+      `<input id="rec-candq-${gid}" value="${_escHtml(sq)}" placeholder="search the authority: a name, an alias, a seat or an entity id…" ` +
+        `style="flex:1;max-width:380px;font-size:11px;background:#0a1128;color:#ddd;border:1px solid #2a4a8e;border-radius:3px;padding:3px 6px;" ` +
+        `onkeydown="if (event.key === 'Enter') _recCandidates(${gid}, this.value.trim())">` +
+      `<button class="nav-btn" onclick="_recCandidates(${gid}, document.getElementById('rec-candq-${gid}').value.trim())" title="List the entities matching the keyword, with the same buttons">🔍 search</button>` +
+      (sq ? `<button class="nav-btn" onclick="_recCandidates(${gid}, '')" title="Back to the record's own candidates">✕ back</button>` : '') +
+    `</div>`;
+  if (!(c.candidates || []).length) html += `<div style="color:#8a94a6;margin:4px 0;">${sq ? 'nothing in the authority matches the keyword' : 'no candidates in the authority'}</div>`;
   html += '<table class="rs-table" style="width:100%;"><tr><th>score</th><th>entity</th><th>facts</th><th>last seen</th><th></th><th></th></tr>';
   (c.candidates || []).forEach((k, i) => {
     const facts = Object.entries(k.facts || {}).map(([a, b]) => `${a} ${b}`).join(', ');
@@ -639,6 +678,7 @@ async function _recCandidates(gid) {
       `<span style="color:#556;font-size:10px;">same = slice on the entity · new = mint · successor = mint + typed edge from the chosen entity. Decisions are stored on the record's head fragment as human.</span>` +
     `</div></div>`;
   box.innerHTML = html;
+  if (q) { const inp = document.getElementById(`rec-candq-${gid}`); if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } }
 }
 
 async function _recOpenOther(folderPath, stem) {
@@ -655,6 +695,7 @@ async function _recDecide(gid, outcome, entityId, edgeType) {
     if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
     showToast(outcome === 'clear' ? `record ${gid}: decision cleared`
       : `record ${gid} → ${outcome} ${d.entity?.id || ''} ${d.entity?.name || ''}`, 5000);
+    _recFocus = {id: gid + 1};
     await openRecordBrowser();
     if (pageData) { await reloadPageData(); drawOverlay(); updatePanel(); }
   } catch (e) { showToast('Resolve error: ' + (e?.message || e), 7000); }

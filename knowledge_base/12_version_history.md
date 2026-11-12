@@ -482,3 +482,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   flagged. Test: cells survive a renumbering.
 - **Nov 12 — ⛓ Records toolbar button** in the editor opens the record browser
   directly (shown when the project has a record label); the batch op stays.
+- **Nov 12 — Record browser: keyword search in the resolve panel** (`q` on
+  `…/records/candidates`: name / alias / seat / entity id, same table and
+  buttons, no batch verdict against a keyword) and the browser reloads
+  positioned on the next record after a decision, suggestion, chain mark or
+  resweep (previously it jumped back to the top). Test: keyword candidates.

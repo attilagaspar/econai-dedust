@@ -9224,17 +9224,27 @@ def _rr_own_gid(rec: dict):
     return rec.get("gid")
 
 
-def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int) -> dict:
+def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
+                       q: str | None = None) -> dict:
     """Candidates for one collected record: queries from its identity object
-    (13 §1b) or its name text; union over the queries; blocking boosts."""
+    (13 §1b) or its name text; union over the queries; blocking boosts.
+    A keyword `q` (the panel's search box) replaces the record's own names:
+    the same ranking, facts and crops for whatever the user types — a name
+    fragment, an alias, a seat, or an entity id."""
     from app import record_resolve as _rr
     head = rec["fragments"][0]
     shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
     head_shape = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
     ident = _rr.identity_of(head_shape.get("structured"))
-    queries = _rr.queries_for(rec.get("name") or "", ident)
+    q = (q or "").strip()
+    queries = [(q, "search")] if q else _rr.queries_for(rec.get("name") or "", ident)
     index = _load_authority(fname)
-    per_query = [(q, lang, _authority_match(q, None, None, max(k * 3, 24), fname)) for q, lang in queries]
+    per_query = [(qq, lang, _authority_match(qq, None, None, max(k * 3, 24), fname)) for qq, lang in queries]
+    if q:
+        raw = index.get("raw_by_id") or {}
+        ent = raw.get(q) or raw.get(q.upper())
+        if ent:   # an entity id typed verbatim
+            per_query.append((q, "id", [{"id": ent.get("id"), "score": 100.0, "via": "id", "raw": ent.get("name") or q}]))
     cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k,
                                  rescore=lambda q, m: _auth_whole_name_score(q, m, index),
                                  exclude_source=name, own_gid=_rr_own_gid(rec))
@@ -9252,7 +9262,7 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int) 
         except Exception:
             pass
         c["crop"] = crop
-    return {"queries": queries, "identity": ident, "candidates": cands,
+    return {"queries": queries, "identity": ident, "candidates": cands, "search": q or None,
             "head": {"stem": head["stem"], "idx": head["idx"]},
             "current": _rr.summary(head_shape.get("authority"))}
 
@@ -9267,21 +9277,27 @@ def _collect_for(name: str, label: str, mode: str):
 
 
 @app.get("/api/project/{name}/records/candidates")
-def api_record_candidates(name: str, gid: int = Query(...), k: int = Query(8, ge=1, le=30)):
+def api_record_candidates(name: str, gid: int = Query(...), k: int = Query(8, ge=1, le=30),
+                          q: Optional[str] = Query(None)):
     """Ranked entity candidates for one record, with each candidate's facts
     (seat, founded…), its last slice (year, source, provenance → crop of
-    the record it came from) and why it was boosted. Read-only."""
+    the record it came from) and why it was boosted. `q` searches the
+    authority by keyword instead of the record's names (no batch verdict
+    then — the scores are against the keyword). Read-only."""
     cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
     coll, by_stem = _collect_for(name, label, mode)
     rec = coll["records"].get(gid)
     if not rec:
         raise HTTPException(status_code=404, detail=f"Record {gid} not found")
     rec["gid"] = gid
-    out = _record_candidates(name, rec, by_stem, fname, k)
+    out = _record_candidates(name, rec, by_stem, fname, k, q=q)
     from app import record_resolve as _rr
-    verdict, reason = _rr.decide(out["candidates"], _rr.GOOD_NAME, 5.0)
+    auto = None
+    if not out.get("search"):
+        verdict, reason = _rr.decide(out["candidates"], _rr.GOOD_NAME, 5.0)
+        auto = {"verdict": verdict, "reason": reason}
     out.update({"gid": gid, "name": rec.get("name"), "authority_file": fname, "source_year": sy,
-                "accept_floor": _rr.GOOD_NAME, "auto": {"verdict": verdict, "reason": reason}})
+                "accept_floor": _rr.GOOD_NAME, "auto": auto})
     return out
 
 
