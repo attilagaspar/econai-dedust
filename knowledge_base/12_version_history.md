@@ -487,3 +487,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   buttons, no batch verdict against a keyword) and the browser reloads
   positioned on the next record after a decision, suggestion, chain mark or
   resweep (previously it jumped back to the top). Test: keyword candidates.
+- **Nov 12 — Roadmap P14: early-stopping training monitor** added to
+  `07_improvement_roadmap.md` (periodic test-AP evaluation, surviving
+  checkpoints, automatic/manual stop, dashboard curve). Plan only.

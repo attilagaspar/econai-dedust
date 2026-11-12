@@ -433,6 +433,48 @@ per-project page counts.
    with verified / test counts and label compatibility; held-out checkbox),
    `eval_projects`, "📏 Score per project".
 
+## P14. Early-stopping training monitor (added 2026-11-12)
+
+*Status: NOT BUILT — on the build list.*
+
+Motivation: every run sets `MAX_ITER` blind (rule of thumb 12–15 iterations
+per training page) and keeps only the final weights; the loss curves of the
+runs so far flatten at roughly 60–70 % of the iterations set, so about a
+third of each run's GPU time buys nothing, and nobody can tell whether a
+longer run would have helped.
+
+**Facts found while planning** (code as of 935f122):
+- The GPU side runs layout-parser's `train_net.py` with the generated
+  config (`app/coco_convert.py` writes `train.sh`; the fine-tune script in
+  `app/server.py` is a sibling). `SOLVER.CHECKPOINT_PERIOD` is 10000 and
+  `TEST.EVAL_PERIOD` is 0: no intermediate checkpoints, no periodic
+  evaluation, so a stopped run leaves nothing.
+- detectron2 writes `metrics.json` every 20 iterations (loss, lr, eta);
+  `_reconcile_running_ledger_rows` already reads that file over SSH, and
+  the train log is streamed live to the dashboard.
+- A detached job is probed by pid file + cmdline (`_job_running_cmd`); the
+  train container self-stops on a sentinel file.
+- Training loss is the wrong stopping signal (it keeps falling while the
+  model memorises); the honest one is the score on the frozen test pages.
+
+**Design**:
+1. **Checkpoints that survive a stop** — `CHECKPOINT_PERIOD` a few hundred
+   iterations, old checkpoints pruned (330 MB each), `model_final.pth`
+   always the best or the last one.
+2. **Periodic evaluation** — `TEST.EVAL_PERIOD` 500–1000 (≈30 s per
+   evaluation on 40 test pages); per-evaluation AP rows land in
+   `metrics.json`, the ledger row keeps the curve (`eval_curve`).
+3. **Automatic stop** — a detectron2 hook: stop when test AP has not
+   improved for N evaluations (patience, default 2), keep the best
+   checkpoint, run the final evaluation on it so the ledger row closes as
+   today. `MAX_ITER` becomes a ceiling, not the plan.
+4. **Dashboard** — a small loss + test-AP curve polled from `metrics.json`
+   every minute next to the streamed log, with a **Stop** button (manual
+   early stop = the same hook's exit path). Ledger shows "stopped at
+   iteration k of n (best at j)".
+5. Generic: applies to Train and Fine-tune of any project, page or
+   within-scope, single or several sources.
+
 ---
 
 ## Suggested sequencing
