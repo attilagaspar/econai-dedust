@@ -194,6 +194,15 @@ added.
 
 Open records get a *suggestion*, never a decision. Stage 1: a decision model (bounded answers with probabilities; Microsoft-Decision-1 in the user's Foundry, System One protocol, text only — it rejects images) is asked which candidate the record is, or none, and whether same or successor; at or above a threshold that is the suggestion. Stage 2: a vision model sees the record's and the candidates' crops and answers the same question with a reason — only for what stage 1 left hedged, and the only stage that sees through a wrong extraction. The user accepts suggestions one by one in the record browser or all above a confidence; accepted ones are human decisions with the suggestion kept as provenance, so every accept and override scores the stages later. The question text carries the §5.4 convention. Probed on real pairs before building: clear facts → confident, murky pairs → hedged.
 
+## 2.9 Record numbers vs marks (2026-11-12)
+
+Found while merging a missed continuation in the browser: the chain button
+only stored the mark, the merge happened at the next resweep, and a resweep
+renumbers every later record. Now the chain button resweeps from its page,
+and nothing joins on the record number: the live join is the `authority`
+mark on the head fragment (entity table cells, candidate crops); the slice's
+provenance number is history.
+
 ## 2.8 Hard rules (added 2026-11-11)
 
 A founding year later than a candidate's first listing looked like a veto

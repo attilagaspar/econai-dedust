@@ -92,34 +92,58 @@ def columns_for(linked: list) -> list:
     return sorted(linked, key=key)
 
 
-def entity_rows(entities: list, edges: list, heads_by_project: dict, canonical: dict) -> list:
-    """One row per entity with a cell per linked project it has a record in."""
+def heads_by_entity(heads: dict) -> dict:
+    """{entity id: [(gid, head)]} from a project's record heads' marks — the
+    live join: a resweep renumbers records, the mark on the head stays."""
+    out: dict = {}
+    for gid, h in heads.items():
+        eid = (h.get("mark") or {}).get("id")
+        if eid:
+            out.setdefault(eid, []).append((gid, h))
+    return out
+
+
+def entity_rows(entities: list, edges: list, heads_by_project: dict, canonical: dict,
+                years: dict | None = None) -> list:
+    """One row per entity with a cell per linked project it has a record in.
+    Cells come from the projects' LIVE marks (head fragment → entity); the
+    entity's slices only add `seq` / the printed name, and a slice whose
+    record no longer points at the entity is reported as stale."""
     by_id = {e.get("id"): e for e in entities if e.get("id")}
+    years = years or {}
     edges_by = {}
     for ed in edges or []:
         for k in (ed.get("from"), ed.get("to")):
             if k:
                 edges_by.setdefault(k, []).append(ed)
+    live = {proj: heads_by_entity(heads) for proj, heads in heads_by_project.items()}
     rows = []
     for e in entities:
         eid = e.get("id")
         if not eid:
             continue
-        cells = {}
+        slices_by_proj: dict = {}
         for sl in e.get("slices") or []:
             prov = sl.get("provenance") or {}
-            proj, gid = prov.get("project"), prov.get("group_id")
-            if not proj or proj not in heads_by_project:
-                continue
-            head = heads_by_project[proj].get(gid) if gid is not None else None
-            cell = {"group_id": gid, "as_of": sl.get("as_of"), "name": sl.get("name"),
-                    "stem": (head or {}).get("stem") or prov.get("stem"),
-                    "idx": (head or {}).get("idx"),
-                    "live": bool(head and (head.get("mark") or {}).get("id") in (eid, None)),
-                    "outcome": ((head or {}).get("mark") or {}).get("outcome"),
-                    "source": ((head or {}).get("mark") or {}).get("source"),
-                    "seq": sl.get("seq")}
-            cells.setdefault(proj, []).append(cell)
+            if prov.get("project"):
+                slices_by_proj.setdefault(prov["project"], []).append(sl)
+        cells = {}
+        for proj in heads_by_project:
+            for gid, head in live.get(proj, {}).get(eid, []):
+                sl = next((x for x in slices_by_proj.get(proj, []) if (x.get("provenance") or {}).get("group_id") == gid), None) \
+                     or (slices_by_proj.get(proj) or [None])[0]
+                mark = head.get("mark") or {}
+                cells.setdefault(proj, []).append({
+                    "group_id": gid, "as_of": (sl or {}).get("as_of", years.get(proj)),
+                    "name": head.get("name") or (sl or {}).get("name"),
+                    "stem": head["stem"], "idx": head["idx"], "live": True,
+                    "outcome": mark.get("outcome"), "source": mark.get("source"),
+                    "seq": (sl or {}).get("seq")})
+            if proj not in cells and slices_by_proj.get(proj):
+                sl = slices_by_proj[proj][0]; prov = sl.get("provenance") or {}
+                cells[proj] = [{"group_id": prov.get("group_id"), "as_of": sl.get("as_of"), "name": sl.get("name"),
+                                "stem": prov.get("stem"), "idx": None, "live": False, "stale": True,
+                                "outcome": None, "source": None, "seq": sl.get("seq")}]
         rows.append({"id": eid, "name": e.get("name"), "type": e.get("type"),
                      "aliases": [a.get("name") for a in (e.get("aliases") or []) if a.get("name")],
                      "facts": {k: (e.get("attrs") or {}).get(k) for k in ("seat", "founded", "legal_form")

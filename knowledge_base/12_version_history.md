@@ -474,3 +474,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   union re-listed "mint részvénytársaság" with the conversion year as its
   founding is the same firm). The flag stays on the candidate row and in the
   judge's text as a likely re-foundation / legal-form change; the tiers decide.
+- **Nov 12 — chain button resweeps; joins via head marks** (user: a fragment
+  marked as continuation stayed a separate unresolved record). The ⛓ toggle
+  in the record browser renumbers from its page right away; the entity table
+  and the candidate crops locate a record through the head fragment's
+  `authority` mark instead of the (renumbered) group id; stale slices are
+  flagged. Test: cells survive a renumbering.

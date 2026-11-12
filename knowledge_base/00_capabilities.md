@@ -115,7 +115,8 @@ one LabelMe-style JSON per page as the single source of truth.
   **⛓ Records: browser** (report chassis: one block per record with name =
   best text of the first fragment, fragment count, page span, flags
   *orphan* / *long span* > N pages, unswept boxes; click-to-jump; ⛓ toggle
-  and ⟳▶ resweep-forward per fragment; dry run / resweep all; page-order
+  per fragment (stores the mark AND renumbers from that page, 2026-11-12)
+  and ⟳▶ resweep-forward; dry run / resweep all; page-order
   sanity check in the header; **📖 strip view** = every fragment as a
   full-width crop one under the other in record order, for reading a
   volume continuously; list view with enlargeable thumbnails kept). The sweep reads boxes per page column by

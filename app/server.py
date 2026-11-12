@@ -9240,9 +9240,18 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int) 
                                  exclude_source=name, own_gid=_rr_own_gid(rec))
     for c in cands:
         prov = (c.get("last_slice") or {}).get("provenance") or {}
-        if prov.get("project") and prov.get("stem"):
-            c["crop"] = {"folder": str(PROJECTS_ROOT / prov["project"] / "annotations"),
-                         "stem": prov["stem"], "idx": prov.get("idx"), "group_id": prov.get("group_id")}
+        if not prov.get("project"):
+            continue
+        crop = {"folder": str(PROJECTS_ROOT / prov["project"] / "annotations"),
+                "stem": prov.get("stem"), "idx": prov.get("idx"), "group_id": prov.get("group_id")}
+        try:
+            heads, _l, _a = _project_heads(prov["project"])
+            h = next((x for x in heads.values() if (x.get("mark") or {}).get("id") == c.get("id")), None)
+            if h:
+                crop.update({"stem": h["stem"], "idx": h["idx"]})
+        except Exception:
+            pass
+        c["crop"] = crop
     return {"queries": queries, "identity": ident, "candidates": cands,
             "head": {"stem": head["stem"], "idx": head["idx"]},
             "current": _rr.summary(head_shape.get("authority"))}
@@ -9548,7 +9557,8 @@ def api_entity_table(authority: str = Query(...), q: Optional[str] = Query(None)
         columns.append({**lp, "record_label": label, "folder": str(ann),
                         "n_records": len(heads), "n_open": len(unresolved[lp["name"]])})
     rows = _ent.entity_rows(data.get("entities") or [], data.get("edges") or [],
-                            heads_by_project, index.get("canonical") or {})
+                            heads_by_project, index.get("canonical") or {},
+                            {c["name"]: c.get("source_year") for c in columns})
     total_all = len(rows)
     rows = _ent.filter_rows(rows, q, filter, len(heads_by_project))
     return {"authority": data.get("authority"), "file": authority, "columns": columns,
@@ -9579,13 +9589,15 @@ def _candidate_crop_b64(cand: dict) -> Optional[str]:
     from app import record_extract as _rx
     prov = (cand.get("last_slice") or {}).get("provenance") or {}
     proj, gid = prov.get("project"), prov.get("group_id")
-    if not proj or gid is None:
+    if not proj:
         return None
     try:
         heads, label, ann = _project_heads(proj)
     except Exception:
         return None
-    h = heads.get(gid)
+    # the live mark first (records get renumbered by resweeps), the slice's number second
+    h = next((x for x in heads.values() if (x.get("mark") or {}).get("id") == cand.get("id")), None) \
+        or (heads.get(gid) if gid is not None else None)
     if not h:
         return None
     try:

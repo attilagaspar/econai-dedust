@@ -362,7 +362,11 @@ async function _recToggleFrag(stem, idx, cur) {
     } catch (e) { return false; }
   });
   if (!ok) { showToast('Save failed — the mark was NOT stored'); return; }
-  showToast(!cur ? `⛓ marked as continuation → ${stem} #${idx} — ⟳▶ to renumber` : `Continuation mark removed → ${stem} #${idx} — ⟳▶ to renumber`);
+  // The mark alone changes nothing visible: records are the sweep's numbering.
+  // Renumber from this page onward right away (earlier pages keep their ids).
+  const d = await runRecordSweep({fromStem: stem, quiet: true});
+  showToast((!cur ? `⛓ ${stem} #${idx} now continues the previous record` : `⛓ ${stem} #${idx} starts its own record again`) +
+    (d ? ` · renumbered from ${stem}: ${d.records} record(s)` : ' · renumbering failed — press ⟳▶'), 6000);
   await _recSyncEditor(stem);
   await openRecordBrowser();
 }

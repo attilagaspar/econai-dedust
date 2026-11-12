@@ -154,3 +154,25 @@ def test_heads_cache_follows_the_folder(client, linked):
             time.sleep(0.2)
     d2 = client.get("/api/entities/table", params={"authority": AUTH}).json()
     assert d2["unresolved"][p82] == [] and d2["columns"][1]["n_open"] == 0
+
+
+def test_cells_survive_a_resweep_that_renumbers_records(client, linked):
+    """A resweep renumbers records; the entity's slice still says group 1 but
+    the head fragment's mark is the live join, so the cell is still found."""
+    p77, p82, _ = linked
+    jf = PROJECTS_ROOT / p82 / "annotations" / "b.json"
+    doc = json.loads(jf.read_text(encoding="utf-8"))
+    for sh in doc["shapes"]:
+        sh["group_id"] = sh["group_id"] + 10            # 1→11, 2→12, 3→13
+    for _ in range(20):
+        try:
+            time.sleep(0.05); jf.write_text(json.dumps(doc), encoding="utf-8"); break
+        except OSError:
+            time.sleep(0.2)
+    d = client.get("/api/entities/table", params={"authority": AUTH}).json()
+    rows = {r["id"]: r for r in d["rows"]}
+    c82 = rows["F000001"]["cells"][p82][0]
+    assert c82["group_id"] == 11 and c82["stem"] == "b" and c82["idx"] == 0 and c82["live"] is True
+    assert c82["as_of"] == 1882 and c82["outcome"] == "same"
+    assert rows["F000003"]["cells"][p82][0]["group_id"] == 12
+    assert d["unresolved"][p82][0]["group_id"] == 13
