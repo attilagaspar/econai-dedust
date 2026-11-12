@@ -25,6 +25,8 @@ async function loadRecordsContext() {
     if (r.ok) _recCtx = await r.json();
   } catch (e) { /* outside a project: record tools stay off */ }
   updateRecordBtn();
+  const rb = document.getElementById('records-btn');
+  if (rb) rb.style.display = _recCtx.record_label ? '' : 'none';   // the toolbar's way into the record browser
   if (pageData) drawOverlay();
 }
 

@@ -480,3 +480,5 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   and the candidate crops locate a record through the head fragment's
   `authority` mark instead of the (renumbered) group id; stale slices are
   flagged. Test: cells survive a renumbering.
+- **Nov 12 — ⛓ Records toolbar button** in the editor opens the record browser
+  directly (shown when the project has a record label); the batch op stays.
