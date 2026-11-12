@@ -638,6 +638,7 @@ async function _recCandidates(gid, q) {
         .map(k => `<span style="color:#667;">${k}</span> ${_escHtml(String(id[k]))}`).join(' · ')
     : '<span style="color:#fbbf24;">no identity object — matching on the first line of text (run 🧩 extract first for better candidates)</span>';
   const cur = c.current;
+  const curCanon = cur ? (cur.canonical_id || cur.id) : null;
   const sq = c.search || '';
   let html = `<div style="margin:2px 0 8px 14px;padding:6px 8px;border-left:3px solid #2a4a8e;background:#0d1b35;border-radius:0 4px 4px 0;">` +
     `<div style="margin-bottom:4px;">${identTxt}</div>` +
@@ -658,15 +659,18 @@ async function _recCandidates(gid, q) {
     const crop = k.crop && k.crop.stem && k.crop.idx != null
       ? `<img src="${API}/api/cell?folder=${encodeURIComponent(k.crop.folder)}&stem=${encodeURIComponent(k.crop.stem)}&idx=${k.crop.idx}" loading="lazy" onclick="_recShowCrop(this.src)" style="max-height:90px;max-width:300px;object-fit:contain;cursor:zoom-in;display:block;background:#fff;">`
       : (k.crop && k.crop.stem ? `<span class="rs-clk" style="color:#93c5fd;cursor:pointer;" onclick="_recOpenOther('${_escHtml(k.crop.folder)}','${_escHtml(k.crop.stem)}')">${_escHtml(ls.source || '')} · ${_escHtml(k.crop.stem)}</span>` : '');
-    const isCur = cur && cur.id === k.id;
+    const isCur = cur && curCanon === k.id;
+    const mergeBtn = cur && !isCur
+      ? ` <button class="nav-btn" onclick="_recMerge(${gid},'${_escHtml(curCanon)}','${_escHtml(k.id)}')" title="This record's entity ${_escHtml(curCanon)} and ${_escHtml(k.id)} are ONE firm: the lower id survives, the other is marked duplicate_of it (its slices and names fold into the survivor; undo in the entity browser)">⊕ merge</button>`
+      : '';
     html += `<tr style="${isCur ? 'background:#12224a;' : ''}">` +
       `<td style="white-space:nowrap;" title="raw similarity ${k.score}${k.boost ? ' + boost ' + k.boost + ' (' + (k.boost_why || []).join(', ') + ')' : ''} · via ${_escHtml(k.via || '')} “${_escHtml(k.matched || '')}”">` +
         `${k.score}${k.boost ? `<span style="color:#86efac;">+${k.boost}</span>` : ''}${i === 0 && k.score >= (c.accept_floor || 70) ? ' ★' : ''}</td>` +
-      `<td><b>${_recEntityLink(k.id, k.name)}</b>` +
+      `<td><b>${_recEntityLink(k.id, k.name)}</b>${(k.merged_from || []).length ? ` <span style="color:#fca5a5;font-size:10px;" title="entities merged into this one">= ${_escHtml(k.merged_from.join(', '))}</span>` : ''}` +
         ((k.aliases || []).length ? `<div style="color:#667;font-size:10px;">${_escHtml(k.aliases.join(' · '))}</div>` : '') + `</td>` +
       `<td style="color:#8a94a6;">${_escHtml(facts)}${k.seat_agree === false ? ' <span style="color:#f87171;" title="the record\'s seat differs">seat≠</span>' : ''}${k.year_agree === false ? ' <span style="color:#f87171;" title="the record\'s founding year differs">year≠</span>' : ''}${k.founded_after_seen ? ` <span style="color:#fbbf24;" title="the record says it was founded after this candidate was already listed in ${k.first_seen}: a re-foundation or a change of legal form, or a different firm">founded after ${k.first_seen}</span>` : ''}</td>` +
       `<td style="white-space:nowrap;color:#8a94a6;">${ls.as_of ?? ''} ${_escHtml(ls.source || '')}${k.n_slices > 1 ? ` (${k.n_slices} slices)` : ''}<div>${crop}</div></td>` +
-      `<td style="white-space:nowrap;"><button class="nav-btn" onclick="_recDecide(${gid},'same','${_escHtml(k.id)}')" title="This record IS this entity: add a ${c.source_year ?? '?'} slice and the printed name as alias">= same</button></td>` +
+      `<td style="white-space:nowrap;"><button class="nav-btn" onclick="_recDecide(${gid},'same','${_escHtml(k.id)}')" title="This record IS this entity: add a ${c.source_year ?? '?'} slice and the printed name as alias">= same</button>${mergeBtn}</td>` +
       `<td style="white-space:nowrap;"><select id="rec-edge-${gid}-${i}" style="font-size:10px;background:#0d1b35;color:#ccc;border:1px solid #333;"><option value="rename">rename</option><option value="merger">merger</option><option value="split">split</option><option value="legal_form">legal form</option><option value="successor">successor</option></select> ` +
         `<button class="nav-btn" onclick="_recDecide(${gid},'successor','${_escHtml(k.id)}',document.getElementById('rec-edge-${gid}-${i}').value)" title="This record is a NEW entity that succeeds this one (typed edge from it)">→ successor</button></td>` +
       `</tr>`;
@@ -675,10 +679,28 @@ async function _recCandidates(gid, q) {
     `<div style="display:flex;gap:8px;margin-top:6px;align-items:center;">` +
       `<button class="nav-btn" onclick="_recDecide(${gid},'new')" title="None of these: mint a new entity from this record">＋ new entity</button>` +
       (cur ? `<button class="nav-btn" onclick="_recDecide(${gid},'clear')" title="Drop the decision on this record (the authority file keeps what was written)">✕ clear decision</button>` : '') +
-      `<span style="color:#556;font-size:10px;">same = slice on the entity · new = mint · successor = mint + typed edge from the chosen entity. Decisions are stored on the record's head fragment as human.</span>` +
+      `<span style="color:#556;font-size:10px;">same = slice on the entity · new = mint · successor = mint + typed edge from the chosen entity${cur ? ' · merge = this record\'s entity and the candidate are one firm (duplicate_of edge)' : ''}. Decisions are stored on the record's head fragment as human.</span>` +
     `</div></div>`;
   box.innerHTML = html;
   if (q) { const inp = document.getElementById(`rec-candq-${gid}`); if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } }
+}
+
+async function _recMerge(gid, a, b) {
+  // two entities are one firm: duplicate_of edge, lower id survives (13 §5.3)
+  try {
+    const r = await fetch(`${API}/api/authority/merge`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: _recCtx.record_authority, ids: [a, b], source: 'human'})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    if (!d.added) { showToast(`${a} and ${b} are already one entity (${d.survivor})`, 5000); return; }
+    const warn = (d.conflicts || []).length
+      ? ` · ⚠ both were listed in ${d.conflicts.map(x => x.as_of ?? x.source).join(', ')}: check that they are one firm (the entity browser flags the row; unmerge there)`
+      : '';
+    showToast(`merged ${d.loser} ${d.loser_name || ''} into ${d.survivor} ${d.survivor_name || ''}${warn}`, warn ? 12000 : 6000);
+    _recFocus = {id: gid};
+    await openRecordBrowser();
+  } catch (e) { showToast('Merge error: ' + (e?.message || e), 7000); }
 }
 
 async function _recOpenOther(folderPath, stem) {

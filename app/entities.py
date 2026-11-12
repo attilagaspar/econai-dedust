@@ -153,8 +153,49 @@ def entity_rows(entities: list, edges: list, heads_by_project: dict, canonical: 
                                 "as_of": ed.get("as_of"),
                                 "other_name": (by_id.get(ed.get("to") if ed.get("from") == eid else ed.get("from")) or {}).get("name")}
                                for ed in edges_by.get(eid, [])],
-                     "canonical": canonical.get(eid, eid)})
-    return rows
+                     "canonical": canonical.get(eid, eid), "merged_from": [], "conflicts": []})
+    return group_by_survivor(rows)
+
+
+def group_by_survivor(rows: list) -> list:
+    """Fold the entities merged by duplicate_of edges (13 §5.3) into their
+    survivor's row: one row per firm. The survivor keeps its id and name;
+    the merged entities' names become aliases, their cells join the
+    survivor's (each tagged with the entity it came through), their other
+    edges are carried over, and the duplicate_of edges inside the group
+    are replaced by `merged_from`. `conflicts` lists the projects in which
+    cells came through two different entities of the group — the same
+    year listing both halves, which is evidence they are two firms or that
+    one year lists the firm twice (shown, never blocking)."""
+    by_row = {r["id"]: r for r in rows}
+    out = []
+    for r in rows:
+        c = r.get("canonical") or r["id"]
+        s = by_row.get(c)
+        if c == r["id"] or s is None:
+            out.append(r); continue
+        s["merged_from"].append({"id": r["id"], "name": r["name"]})
+        for proj, cl in r["cells"].items():
+            for cell in cl:
+                cell["entity"] = r["id"]
+            s["cells"].setdefault(proj, []).extend(cl)
+        for a in [r["name"]] + list(r["aliases"]):
+            if a and a != s["name"] and a not in s["aliases"]:
+                s["aliases"].append(a)
+        for k, v in (r.get("facts") or {}).items():
+            s["facts"].setdefault(k, v)
+        for ed in r["edges"]:
+            if ed not in s["edges"]:
+                s["edges"].append(ed)
+    for s in out:
+        if not s["merged_from"]:
+            continue
+        group = {s["id"], *(m["id"] for m in s["merged_from"])}
+        s["edges"] = [ed for ed in s["edges"]
+                      if not (ed["type"] == "duplicate_of" and ed["from"] in group and ed["to"] in group)]
+        s["conflicts"] = [proj for proj, cl in s["cells"].items()
+                          if len({cell.get("entity") or s["id"] for cell in cl}) > 1]
+    return out
 
 
 def unresolved_for(heads: dict) -> list:
@@ -167,13 +208,13 @@ def filter_rows(rows: list, q: str | None, mode: str | None, n_columns: int) -> 
     if q:
         fq = _fold(q)
         rows = [r for r in rows if fq in _fold(r["name"]) or any(fq in _fold(a) for a in r["aliases"])
-                or fq == _fold(r["id"])]
+                or fq == _fold(r["id"]) or any(fq == _fold(m["id"]) for m in r.get("merged_from") or [])]
     if mode == "missing":
         rows = [r for r in rows if len(r["cells"]) < n_columns]
     elif mode == "chain":
         rows = [r for r in rows if r["edges"]]
     elif mode == "dup":
-        rows = [r for r in rows if any(ed["type"] == "duplicate_of" for ed in r["edges"])]
+        rows = [r for r in rows if r.get("merged_from") or any(ed["type"] == "duplicate_of" for ed in r["edges"])]
     elif mode == "single":
         rows = [r for r in rows if len(r["cells"]) == 1]
     return rows

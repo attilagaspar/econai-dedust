@@ -146,6 +146,43 @@ def boost_for(entity: dict, ident: dict) -> tuple:
     return b, why
 
 
+def merged_entity(raw_by_id: dict, members: dict | None, cid: str) -> dict:
+    """The entity as the duplicate_of edges make it (13 §5.3): the survivor's
+    own record with the slices and aliases of the entities merged into it
+    folded in (`members` = {survivor: [merged ids]}, from the authority
+    index) and its missing facts filled from them. Derived, never stored:
+    the ids stay, the edge is the only fact written."""
+    ent = raw_by_id.get(cid) or {}
+    losers = [raw_by_id.get(x) for x in (members or {}).get(cid) or []]
+    losers = [x for x in losers if x]
+    if not losers:
+        return ent
+    out = dict(ent)
+    slices = list(ent.get("slices") or [])
+    for l in losers:
+        slices.extend(l.get("slices") or [])
+    out["slices"] = sorted(slices, key=lambda sl: str(sl.get("as_of") if sl.get("as_of") is not None else ""))
+    seen = {_norm(ent.get("name") or "")}
+    aliases = []
+    for a in ent.get("aliases") or []:
+        if a.get("name") and _norm(a["name"]) not in seen:
+            seen.add(_norm(a["name"])); aliases.append(a)
+    for l in losers:
+        for a in [{"name": l.get("name"), "source": "duplicate_of"}] + list(l.get("aliases") or []):
+            if a.get("name") and _norm(a["name"]) not in seen:
+                seen.add(_norm(a["name"])); aliases.append(a)
+    out["aliases"] = aliases
+    attrs = {}
+    for l in losers:
+        for k, v in (l.get("attrs") or {}).items():
+            if v not in (None, ""):
+                attrs.setdefault(k, v)
+    attrs.update({k: v for k, v in (ent.get("attrs") or {}).items() if v not in (None, "")})
+    out["attrs"] = attrs
+    out["merged_from"] = [l.get("id") for l in losers]
+    return out
+
+
 def has_slice_from(entity: dict, source: str, except_gid=None) -> bool:
     """True when the entity already carries a slice from `source` (another
     record of the same source), unless that slice is this very record's."""
@@ -178,7 +215,8 @@ def founded_after_seen(ident: dict, entity: dict):
 
 
 def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
-                     rescore=None, exclude_source: str | None = None, own_gid=None) -> list:
+                     rescore=None, exclude_source: str | None = None, own_gid=None,
+                     members: dict | None = None) -> list:
     """Union of the matcher's candidate lists (one per query), best score per
     entity, blocking boosts applied for ranking; `score` is the string
     similarity (re-scored by `rescore(query, matched)` when given — the
@@ -188,14 +226,16 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
     A directory lists a firm once: an entity that already holds a slice
     from `exclude_source` (another record of this same source) is never a
     candidate — so a bootstrap mints every record, and a dry run says what
-    the real run does."""
+    the real run does. Candidates are survivors (the matcher collapses
+    duplicates), so the slices and facts looked at are the merged group's
+    (`members`, see `merged_entity`)."""
     best: dict = {}
     for q, lang, cands in per_query:
         for c in cands:
             cid = c.get("id")
             if not cid:
                 continue
-            if exclude_source and has_slice_from(raw_by_id.get(cid) or {}, exclude_source, own_gid):
+            if exclude_source and has_slice_from(merged_entity(raw_by_id, members, cid), exclude_source, own_gid):
                 continue
             score = c.get("score", 0)
             if rescore is not None:
@@ -205,7 +245,7 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                 best[cid] = {**c, "score": float(score), "query": q, "query_lang": lang}
     out = []
     for cid, c in best.items():
-        ent = raw_by_id.get(cid) or {}
+        ent = merged_entity(raw_by_id, members, cid)
         b, why = boost_for(ent, ident)
         facts = entity_facts(ent)
         slices = ent.get("slices") or []
@@ -219,7 +259,8 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                     "last_slice": {"as_of": last.get("as_of"), "source": last.get("source"),
                                    "name": last.get("name"), "provenance": last.get("provenance"),
                                    "seq": last.get("seq")},
-                    "aliases": [a.get("name") for a in (ent.get("aliases") or []) if a.get("name")][:6]})
+                    "aliases": [a.get("name") for a in (ent.get("aliases") or []) if a.get("name")][:6],
+                    "merged_from": ent.get("merged_from") or []})
     out.sort(key=lambda c: (-c["ranked"], c.get("id") or ""))
     return out[:k]
 

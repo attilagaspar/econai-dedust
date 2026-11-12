@@ -238,6 +238,10 @@ The first 1882 run then showed the second flaw: a plain whole-name ratio still r
    `duplicate_of` edge from the losing entity to the surviving one; the
    entity view, index and export follow it; both IDs keep resolving; old
    exports stay interpretable; the merge is a dated, attributable fact.
+   *Built 2026-11-12*: merge / unmerge endpoints, the lower id survives,
+   the entity browser shows one row per firm with a same-year conflict
+   flag, the matcher treats the group as one candidate (00_capabilities
+   "Entity merge"). The export (E6) is still to follow it.
 4. **Same vs successor**: same entity with a new slice when the printed name
    is unchanged apart from the legal-form suffix; a successor edge whenever
    the name itself changes (rename, merger, split), even if the people are

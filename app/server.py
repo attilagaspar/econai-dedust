@@ -5851,12 +5851,14 @@ def _build_auth_index(data: dict) -> dict:
         if ed.get("type") == "duplicate_of":
             dup_of[a] = b
     canonical: dict = {}
+    members: dict = {}        # survivor -> the ids merged into it (13 §5.3)
     for a in dup_of:
         cur, seen = a, set()
         while cur in dup_of and cur not in seen:
             seen.add(cur); cur = dup_of[cur]
         canonical[a] = cur
-    return {"by_id": by_id, "children": children, "pools": pools,
+        members.setdefault(cur, []).append(a)
+    return {"by_id": by_id, "children": children, "pools": pools, "members": members,
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
             "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
             "strip": strip, "phrases": phrases, "fold_phrases": fold_phrases,
@@ -6972,6 +6974,94 @@ def api_authority_edge(body: AuthorityEdge):
                 return {"ok": True, "edge": old, "added": False, "file": fname}
         edges.append(ed)
         return {"ok": True, "edge": ed, "added": True, "file": fname}
+    return _auth_file_update(fname, _do)
+
+
+class AuthorityMerge(BaseModel):
+    name:   Optional[str] = None
+    ids:    List[str]
+    source: Optional[str] = None
+    note:   Optional[str] = None
+
+
+def _auth_dup_groups(data: dict) -> tuple:
+    """(canonical, members) from the file's duplicate_of edges, as the index
+    computes them, for use inside a file update."""
+    dup = {ed["from"]: ed["to"] for ed in data.get("edges") or []
+           if ed.get("type") == "duplicate_of" and ed.get("from") and ed.get("to")}
+    canonical, members = {}, {}
+    for a in dup:
+        cur, seen = a, set()
+        while cur in dup and cur not in seen:
+            seen.add(cur); cur = dup[cur]
+        canonical[a] = cur
+        members.setdefault(cur, []).append(a)
+    return canonical, members
+
+
+@app.post("/api/authority/merge")
+def api_authority_merge(body: AuthorityMerge):
+    """Two entities are one (13 §5.3): a duplicate_of edge from the loser to
+    the survivor; ids are never rewritten and both keep resolving. The
+    survivor is the LOWER id of the two groups' survivors (the first
+    minted, so a chain keeps its oldest name); an entity already merged is
+    taken by its survivor. Returns the same-year conflicts: years (sources)
+    in which BOTH groups hold a slice — evidence that they are two firms,
+    or that one year lists the firm twice — shown, not blocking."""
+    fname = body.name or _AUTH_DEFAULT_FILE
+    ids = [str(x).strip() for x in body.ids if str(x).strip()]
+    if len(ids) != 2 or ids[0] == ids[1]:
+        raise HTTPException(status_code=400, detail="ids must be two different entity ids")
+
+    def _do(data):
+        by_id = {e.get("id"): e for e in data.get("entities") or [] if e.get("id")}
+        for i in ids:
+            if i not in by_id:
+                raise HTTPException(status_code=404, detail=f"Entity not found: {i}")
+        canonical, members = _auth_dup_groups(data)
+        a, b = (canonical.get(i, i) for i in ids)
+        if a == b:
+            return {"ok": True, "survivor": a, "loser": None, "added": False, "conflicts": [], "file": fname}
+        survivor, loser = min(a, b), max(a, b)
+        groups = {x: [x] + members.get(x, []) for x in (a, b)}
+
+        def _years(x):
+            out = {}
+            for m in groups[x]:
+                for sl in (by_id.get(m) or {}).get("slices") or []:
+                    out.setdefault((sl.get("as_of"), sl.get("source")), []).append(sl.get("name") or by_id[m].get("name"))
+            return out
+        ya, yb = _years(survivor), _years(loser)
+        conflicts = [{"as_of": k[0], "source": k[1], "survivor_names": ya[k], "loser_names": yb[k]}
+                     for k in sorted(set(ya) & set(yb), key=lambda k: (str(k[0]), str(k[1])))]
+        ed = {"from": loser, "to": survivor, "type": "duplicate_of", "as_of": None,
+              "source": body.source or "econai", "note": body.note,
+              "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        data.setdefault("edges", []).append(ed)
+        return {"ok": True, "survivor": survivor, "loser": loser, "edge": ed, "added": True,
+                "survivor_name": by_id[survivor].get("name"), "loser_name": by_id[loser].get("name"),
+                "conflicts": conflicts, "file": fname}
+    return _auth_file_update(fname, _do)
+
+
+class AuthorityUnmerge(BaseModel):
+    name: Optional[str] = None
+    id:   str
+
+
+@app.post("/api/authority/unmerge")
+def api_authority_unmerge(body: AuthorityUnmerge):
+    """Undo a merge: drop every duplicate_of edge FROM `id` (the loser), so
+    it is its own entity again with the slices it always kept."""
+    fname = body.name or _AUTH_DEFAULT_FILE
+
+    def _do(data):
+        edges = data.get("edges") or []
+        keep = [ed for ed in edges if not (ed.get("type") == "duplicate_of" and ed.get("from") == body.id)]
+        if len(keep) == len(edges):
+            raise HTTPException(status_code=404, detail=f"{body.id} is not merged into anything")
+        data["edges"] = keep
+        return {"ok": True, "id": body.id, "removed": len(edges) - len(keep), "file": fname}
     return _auth_file_update(fname, _do)
 
 
@@ -9247,7 +9337,8 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
             per_query.append((q, "id", [{"id": ent.get("id"), "score": 100.0, "via": "id", "raw": ent.get("name") or q}]))
     cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k,
                                  rescore=lambda q, m: _auth_whole_name_score(q, m, index),
-                                 exclude_source=name, own_gid=_rr_own_gid(rec))
+                                 exclude_source=name, own_gid=_rr_own_gid(rec),
+                                 members=index.get("members"))
     for c in cands:
         prov = (c.get("last_slice") or {}).get("provenance") or {}
         if not prov.get("project"):
@@ -9262,9 +9353,11 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
         except Exception:
             pass
         c["crop"] = crop
+    cur = _rr.summary(head_shape.get("authority"))
+    if cur:   # the mark may name an id since merged into a survivor
+        cur["canonical_id"] = (index.get("canonical") or {}).get(cur["id"], cur["id"])
     return {"queries": queries, "identity": ident, "candidates": cands, "search": q or None,
-            "head": {"stem": head["stem"], "idx": head["idx"]},
-            "current": _rr.summary(head_shape.get("authority"))}
+            "head": {"stem": head["stem"], "idx": head["idx"]}, "current": cur}
 
 
 def _collect_for(name: str, label: str, mode: str):
@@ -9575,7 +9668,7 @@ def api_entity_table(authority: str = Query(...), q: Optional[str] = Query(None)
     rows = _ent.entity_rows(data.get("entities") or [], data.get("edges") or [],
                             heads_by_project, index.get("canonical") or {},
                             {c["name"]: c.get("source_year") for c in columns})
-    total_all = len(rows)
+    total_all = len([e for e in data.get("entities") or [] if e.get("id")])   # entities, not grouped rows
     rows = _ent.filter_rows(rows, q, filter, len(heads_by_project))
     return {"authority": data.get("authority"), "file": authority, "columns": columns,
             "n_entities": total_all, "n_rows": len(rows), "offset": offset, "limit": limit,

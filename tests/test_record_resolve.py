@@ -363,6 +363,46 @@ def test_decision_tiers():
     assert rr.decide([c(100, True, None, ranked=112), {"id": "F2", "score": 84, "ranked": 109}])[0] == "same"
 
 
+def test_a_merged_group_is_one_candidate_with_the_slices_of_both(client, project, auth_dir):
+    """duplicate_of (13 §5.3): the survivor is offered once with the merged
+    entity's slices, names and facts folded in; and a slice from this
+    source on EITHER half excludes the survivor (a directory lists a firm
+    once), so a record cannot be matched to the other half of a merge."""
+    auth = _auth(auth_dir)
+    auth["entities"].append({"id": "F000004", "name": "Galánta és vidéke takarékpénztár", "type": "firm",
+                             "aliases": [{"name": "Galanthaer Sparkasse", "lang": "de"}], "xref": {},
+                             "attrs": {"seat": "Galánta", "legal_form": "részvénytársaság"},
+                             "slices": [{"as_of": 1880, "source": "compass_1880", "type": "firm", "name": "Galánta és vidéke takarékpénztár",
+                                         "provenance": {"project": "compass_1880", "stem": "y", "group_id": 5}}]})
+    auth["edges"].append({"from": "F000004", "to": "F000001", "type": "duplicate_of", "as_of": None, "source": "human"})
+    (auth_dir / AUTH).write_text(json.dumps(auth, ensure_ascii=False), encoding="utf-8")
+    srv._AUTH_CACHE.clear()
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 1}).json()
+    ids = [c["id"] for c in d["candidates"]]
+    assert "F000001" in ids and "F000004" not in ids                      # once, as the survivor
+    top = next(c for c in d["candidates"] if c["id"] == "F000001")
+    assert top["merged_from"] == ["F000004"] and top["n_slices"] == 2
+    assert top["last_slice"]["as_of"] == 1880 and top["first_seen"] == 1877
+    assert "Galánta és vidéke takarékpénztár" in top["aliases"] and "Galanthaer Sparkasse" in top["aliases"]
+    assert top["facts"].get("legal_form") == "részvénytársaság"            # filled from the merged half
+    assert rr.merged_entity({"a": {"id": "a", "name": "A", "slices": []}}, {}, "a") == {"id": "a", "name": "A", "slices": []}
+    # the merged half holds a slice from THIS source: the survivor is excluded for another record
+    auth = _auth(auth_dir)
+    auth["entities"][3]["slices"].append({"as_of": 1882, "source": project, "type": "firm", "name": "x",
+                                          "provenance": {"project": project, "stem": "p1", "group_id": 99}})
+    (auth_dir / AUTH).write_text(json.dumps(auth, ensure_ascii=False), encoding="utf-8")
+    srv._AUTH_CACHE.clear()
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 1}).json()
+    assert "F000001" not in [c["id"] for c in d["candidates"]]
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 1, "q": "Galánta"}).json()
+    assert [c["id"] for c in d["candidates"]] == ["F000002"]
+    # a record marked with the merged id reports the survivor as its canonical entity
+    client.post(f"/api/project/{project}/records/resolve", json={"gid": 2, "outcome": "same", "entity_id": "F000004", "source": "human"})
+    assert _head(project, 1)["authority"]["id"] == "F000001"               # same resolves to the survivor on write
+    d = client.get(f"/api/project/{project}/records/candidates", params={"gid": 2}).json()
+    assert d["current"]["id"] == "F000001" and d["current"]["canonical_id"] == "F000001"
+
+
 def test_founded_after_the_candidate_was_seen_is_flagged_not_vetoed(client, project, auth_dir):
     """A founding year later than the candidate's first listing is shown
     (re-foundation or legal-form change) but is evidence, not a veto: with

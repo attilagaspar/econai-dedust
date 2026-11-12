@@ -36,6 +36,17 @@
   .gap { color: #334; }
   .edge { display: inline-block; margin: 2px 4px 0 0; padding: 1px 6px; border-radius: 3px; background: #1a2740; color: #c4b5fd; font-size: 11px; cursor: pointer; }
   .dup { background: #4a1a1a; color: #fca5a5; }
+  .dup .x { margin-left: 4px; color: #fca5a5; opacity: 0.7; }
+  .dup .x:hover { opacity: 1; color: #fff; }
+  .warn { display: inline-block; margin: 2px 4px 0 0; padding: 1px 6px; border-radius: 3px; background: #3a2f10; color: #fde68a; font-size: 11px; }
+  .via { color: #fca5a5; font-size: 10px; }
+  .mbtn { background: none; border: 1px solid #2a4a8e; color: #8a94a6; border-radius: 3px; font-size: 10px; padding: 0 5px; cursor: pointer; margin-left: 6px; vertical-align: middle; }
+  .mbtn:hover { color: #e0e0e0; border-color: #93c5fd; }
+  .mbox { margin-top: 4px; padding: 4px 6px; border-left: 2px solid #7a3a3a; background: #0d1b35; }
+  .mbox input { background: #0a1128; border: 1px solid #2a4a8e; color: #e0e0e0; border-radius: 3px; padding: 2px 6px; font-size: 11px; min-width: 240px; }
+  .mbox .hit { display: inline-block; margin: 3px 4px 0 0; padding: 1px 6px; border-radius: 3px; background: #1a2740; border: 1px solid #2a4a8e; color: #cde; cursor: pointer; font-size: 11px; }
+  .mbox .hit:hover { border-color: #93c5fd; }
+  #msg { color: #fde68a; }
   .block { margin-top: 26px; }
   .block h2 { font-size: 13px; color: #fbbf24; margin: 0 0 6px; }
   .open-list { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -57,8 +68,9 @@
     <option value="missing">missing in some year</option>
     <option value="single">seen in one year only</option>
     <option value="chain">with a successor / rename edge</option>
-    <option value="dup">marked duplicate</option>
+    <option value="dup">merged (duplicate_of)</option>
   </select>
+  <span id="msg"></span>
   <a class="back" href="/static/dashboard.html">← dashboard</a>
 </header>
 <main>
@@ -88,6 +100,55 @@ function openObs(colName, stem, idx) {
   window.open(editorUrl(col, stem, idx), 'dedust-editor-' + colName);
 }
 function jumpTo(id) { document.getElementById('q').value = id; offset = 0; load(); }
+function say(t, ms = 6000) { const m = document.getElementById('msg'); m.textContent = t; clearTimeout(say._t); say._t = setTimeout(() => { m.textContent = ''; }, ms); }
+const yearOf = (proj) => { const c = (data?.columns || []).find(x => x.name === proj); return c ? (c.source_year ?? proj) : proj; };
+
+async function _post(url, body) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+  return d;
+}
+function mergeBox(id) {
+  // toggle the "merge with…" box under an entity: type an id or a name, pick the hit
+  const el = document.getElementById(`mbox-${id}`);
+  if (!el) return;
+  if (el.innerHTML) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="mbox"><input id="mq-${id}" placeholder="merge with: an entity id or a name…" onkeydown="if (event.key === 'Enter') mergeSearch('${esc(id)}', this.value.trim())">` +
+    ` <button class="mbtn" onclick="mergeSearch('${esc(id)}', document.getElementById('mq-${id}').value.trim())">🔍</button>` +
+    ` <span class="hint">the two become one firm: the lower id survives, the other is marked duplicate_of it (undo: ✕ on the chip)</span><div id="mhits-${id}"></div></div>`;
+  document.getElementById(`mq-${id}`).focus();
+}
+async function mergeSearch(id, q) {
+  const hits = document.getElementById(`mhits-${id}`);
+  if (!q || !hits) return;
+  hits.innerHTML = '<span class="hint">searching…</span>';
+  try {
+    const r = await fetch(`/api/entities/table?authority=${encodeURIComponent(AUTH)}&q=${encodeURIComponent(q)}&limit=8`);
+    const d = await r.json(); if (!r.ok) throw new Error(d.detail || r.status);
+    const rows = d.rows.filter(x => x.id !== id);
+    hits.innerHTML = rows.length ? rows.map(x => {
+      const yrs = Object.keys(x.cells).map(yearOf).join(', ');
+      return `<span class="hit" onclick="doMerge('${esc(id)}','${esc(x.id)}')" title="merge ${esc(id)} with ${esc(x.id)}">${esc(x.id)} ${esc(x.name)}${yrs ? ` <span class="hint">(${esc(yrs)})</span>` : ''}</span>`;
+    }).join('') : '<span class="hint">no other entity matches</span>';
+  } catch (e) { hits.innerHTML = `<span style="color:#f87171">${esc(e.message || e)}</span>`; }
+}
+async function doMerge(a, b) {
+  try {
+    const d = await _post('/api/authority/merge', {name: AUTH, ids: [a, b], source: 'human'});
+    if (!d.added) { say(`${a} and ${b} are already one entity (${d.survivor})`); return; }
+    const warn = (d.conflicts || []).length ? ` · ⚠ both were listed in ${d.conflicts.map(x => x.as_of ?? x.source).join(', ')}: check that they are one firm` : '';
+    say(`merged ${d.loser} ${d.loser_name || ''} into ${d.survivor} ${d.survivor_name || ''}${warn}`, warn ? 15000 : 6000);
+    await load();
+  } catch (e) { say('merge error: ' + (e.message || e), 10000); }
+}
+async function doUnmerge(id) {
+  try {
+    const d = await _post('/api/authority/unmerge', {name: AUTH, id});
+    say(`${id} is its own entity again (${d.removed} edge(s) removed)`);
+    await load();
+  } catch (e) { say('unmerge error: ' + (e.message || e), 10000); }
+}
 
 async function load() {
   if (!AUTH) { document.getElementById('tbody').innerHTML = '<tr><td class="empty">No authority given. Open this page from the dashboard\'s Entities view.</td></tr>'; return; }
@@ -113,18 +174,21 @@ async function load() {
       const other = ed.from === row.id ? ed.to : ed.from;
       const dir = ed.from === row.id ? '→' : '←';
       return `<span class="edge ${ed.type === 'duplicate_of' ? 'dup' : ''}" onclick="jumpTo('${esc(other)}')" title="${esc(ed.type)} ${ed.as_of ?? ''}: ${esc(ed.other_name || '')}">${esc(ed.type)} ${dir} ${esc(other)}</span>`;
-    }).join('');
+    }).join('') + (row.merged_from || []).map(m =>
+      `<span class="edge dup" title="${esc(m.id)} ${esc(m.name || '')} was merged into this entity (duplicate_of edge): its slices and names count here. ✕ = unmerge">= ${esc(m.id)} ${esc(m.name || '')}<span class="x" onclick="doUnmerge('${esc(m.id)}')" title="unmerge ${esc(m.id)}: make it its own entity again">✕</span></span>`).join('') +
+      (row.conflicts || []).map(p =>
+      `<span class="warn" title="in ${esc(p)} both halves of the merge have a record: either two firms were merged, or that year lists the firm twice (chain the records instead)">⚠ both listed in ${esc(yearOf(p))}</span>`).join('');
     const cells = cols.map(c => {
       const obs = (row.cells[c.name] || []);
       if (!obs.length) return '<td class="cell"><span class="gap">—</span></td>';
       return '<td class="cell">' + obs.map(o => {
         const cls = `obs ${o.outcome || 'same'} ${o.source === 'auto' ? 'auto' : ''}`;
-        const tip = `${esc(o.name || '')}\nrecord ${o.group_id} · ${o.outcome || ''} · ${o.source || ''}${o.seq != null ? ` · no. ${o.seq}` : ''}\nclick: open in the editor`;
-        return `<span class="${cls}" title="${tip}" onclick="openObs('${esc(c.name)}','${esc(o.stem)}',${o.idx ?? -1})">${esc(o.name || ('record ' + o.group_id))}</span>`;
+        const tip = `${esc(o.name || '')}\nrecord ${o.group_id} · ${o.outcome || ''} · ${o.source || ''}${o.seq != null ? ` · no. ${o.seq}` : ''}${o.entity ? `\nthrough ${esc(o.entity)} (merged)` : ''}\nclick: open in the editor`;
+        return `<span class="${cls}" title="${tip}" onclick="openObs('${esc(c.name)}','${esc(o.stem)}',${o.idx ?? -1})">${esc(o.name || ('record ' + o.group_id))}</span>${o.entity ? `<span class="via" title="through the merged entity ${esc(o.entity)}"> ${esc(o.entity)}</span>` : ''}`;
       }).join('<br>') + '</td>';
     }).join('');
     return `<tr><td class="id">${esc(row.id)}${row.canonical !== row.id ? `<br><span class="hint">= ${esc(row.canonical)}</span>` : ''}</td>` +
-      `<td class="name">${esc(row.name)}${aliases.length ? `<div class="aliases">${esc(aliases.join(' · '))}</div>` : ''}${facts ? `<div class="facts">${esc(facts)}</div>` : ''}${edges ? `<div>${edges}</div>` : ''}</td>` + cells + '</tr>';
+      `<td class="name">${esc(row.name)}<button class="mbtn" onclick="mergeBox('${esc(row.id)}')" title="merge this entity with another one (they are one firm)">⊕ merge</button>${aliases.length ? `<div class="aliases">${esc(aliases.join(' · '))}</div>` : ''}${facts ? `<div class="facts">${esc(facts)}</div>` : ''}${edges ? `<div>${edges}</div>` : ''}<div class="mbox-wrap" id="mbox-${esc(row.id)}"></div></td>` + cells + '</tr>';
   });
   document.getElementById('tbody').innerHTML = rows.join('') || '<tr><td class="empty" colspan="99">No entity matches.</td></tr>';
   const pager = (id) => {

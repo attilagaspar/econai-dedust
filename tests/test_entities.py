@@ -106,17 +106,18 @@ def test_table_rows_cells_edges_and_open_records(client, linked):
     d = client.get("/api/entities/table", params={"authority": AUTH}).json()
     assert [c["name"] for c in d["columns"]] == [p77, p82]
     assert d["columns"][0]["folder"].endswith("annotations") and d["columns"][1]["n_open"] == 1
-    assert d["n_entities"] == 4 and d["n_rows"] == 4
+    assert d["n_entities"] == 4 and d["n_rows"] == 3             # the duplicate is folded into its survivor
     rows = {r["id"]: r for r in d["rows"]}
     alpha = rows["F000001"]
-    assert alpha["aliases"] == ["Alfa-Bank"] and alpha["facts"] == {"seat": "Pest", "founded": 1870}
+    assert alpha["aliases"] == ["Alfa-Bank", "Alpha bank (dup)"] and alpha["facts"] == {"seat": "Pest", "founded": 1870}
     c77, c82 = alpha["cells"][p77][0], alpha["cells"][p82][0]
     assert (c77["stem"], c77["idx"], c77["group_id"], c77["outcome"], c77["source"]) == ("a", 0, 1, "new", "auto")
     assert (c82["stem"], c82["idx"], c82["name"], c82["outcome"], c82["source"], c82["seq"]) == ("b", 0, "Alpha bank r.-t.", "same", "human", 3)
     assert alpha["canonical"] == "F000001"
-    # the duplicate collapses to Alpha and carries the edge
-    assert rows["F000004"]["canonical"] == "F000001"
-    assert rows["F000004"]["edges"][0]["type"] == "duplicate_of" and rows["F000004"]["edges"][0]["other_name"] == "Alpha bank"
+    # the duplicate is one row with Alpha: a merged_from chip, no dup edge, no conflict (it has no cell)
+    assert "F000004" not in rows
+    assert alpha["merged_from"] == [{"id": "F000004", "name": "Alpha bank (dup)"}]
+    assert alpha["edges"] == [] and alpha["conflicts"] == []
     # the rename chain shows on both ends
     assert rows["F000002"]["edges"][0] == {"from": "F000002", "to": "F000003", "type": "rename", "as_of": 1882, "other_name": "Gamma mill"}
     assert rows["F000003"]["edges"][0]["other_name"] == "Beta mill"
@@ -129,15 +130,58 @@ def test_table_rows_cells_edges_and_open_records(client, linked):
 def test_table_filters_and_search(client, linked):
     p77, p82, _ = linked
     get = lambda **kw: [r["id"] for r in client.get("/api/entities/table", params={"authority": AUTH, **kw}).json()["rows"]]
-    assert get(q="alpha") == ["F000001", "F000004"]
+    assert get(q="alpha") == ["F000001"]
     assert get(q="ALFA bank") == ["F000001"]               # alias, folded (hyphen dropped)
     assert get(q="F000003") == ["F000003"]
-    assert get(filter="missing") == ["F000002", "F000003", "F000004"]
+    assert get(q="F000004") == ["F000001"]                  # a merged id finds its survivor
+    assert get(filter="missing") == ["F000002", "F000003"]
     assert get(filter="single") == ["F000002", "F000003"]
-    assert get(filter="chain") == ["F000001", "F000002", "F000003", "F000004"]
-    assert get(filter="dup") == ["F000001", "F000004"]
+    assert get(filter="chain") == ["F000002", "F000003"]
+    assert get(filter="dup") == ["F000001"]
     assert get(limit=1) == ["F000001"] and get(limit=1, offset=1) == ["F000002"]
     assert client.get("/api/entities/table", params={"authority": "nope.authority.json"}).status_code == 404
+
+
+def test_merge_folds_rows_flags_same_year_conflicts_and_unmerge_undoes(client, linked):
+    """Merging two entities (13 §5.3) is one duplicate_of edge from the
+    higher id to the lower; the table shows one row with the other's cells
+    tagged by the entity they came through, and flags the years in which
+    both halves had a record. Unmerging drops the edge and nothing else."""
+    p77, p82, _ = linked
+    r = client.post("/api/authority/merge", json={"name": AUTH, "ids": ["F000003", "F000001"], "source": "human"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert (d["survivor"], d["loser"], d["added"]) == ("F000001", "F000003", True)
+    assert d["edge"]["from"] == "F000003" and d["edge"]["to"] == "F000001" and d["edge"]["source"] == "human"
+    assert [(c["as_of"], c["source"]) for c in d["conflicts"]] == [(1882, p82)]     # both listed in 1882
+    assert d["conflicts"][0]["survivor_names"] == ["Alpha bank r.-t."] and d["conflicts"][0]["loser_names"] == ["Gamma mill"]
+    t = client.get("/api/entities/table", params={"authority": AUTH}).json()
+    rows = {x["id"]: x for x in t["rows"]}
+    assert set(rows) == {"F000001", "F000002"} and t["n_rows"] == 2
+    alpha = rows["F000001"]
+    assert sorted(m["id"] for m in alpha["merged_from"]) == ["F000003", "F000004"]
+    assert "Gamma mill" in alpha["aliases"] and alpha["conflicts"] == [p82]
+    c82 = alpha["cells"][p82]
+    assert [(c["group_id"], c.get("entity")) for c in c82] == [(1, None), (2, "F000003")]
+    # Gamma's rename edge is carried over; seen from the merged row its other end is Beta
+    assert alpha["edges"] == [{"from": "F000002", "to": "F000003", "type": "rename", "as_of": 1882, "other_name": "Beta mill"}]
+    # idempotent: the same pair again adds nothing; an entity already merged is taken by its survivor
+    again = client.post("/api/authority/merge", json={"name": AUTH, "ids": ["F000004", "F000003"]}).json()
+    assert again["added"] is False and again["survivor"] == "F000001"
+    assert client.post("/api/authority/merge", json={"name": AUTH, "ids": ["F000001", "F000001"]}).status_code == 400
+    assert client.post("/api/authority/merge", json={"name": AUTH, "ids": ["F000001", "F999999"]}).status_code == 404
+    # the candidate matcher sees the merged group: Gamma's slice now counts for F000001
+    idx = srv._load_authority(AUTH)
+    assert idx["members"]["F000001"] == ["F000004", "F000003"]
+    # unmerge
+    u = client.post("/api/authority/unmerge", json={"name": AUTH, "id": "F000003"}).json()
+    assert u["removed"] == 1
+    t = client.get("/api/entities/table", params={"authority": AUTH}).json()
+    assert {x["id"] for x in t["rows"]} == {"F000001", "F000002", "F000003"}
+    assert {x["id"]: x["conflicts"] for x in t["rows"]}["F000001"] == []
+    assert client.post("/api/authority/unmerge", json={"name": AUTH, "id": "F000003"}).status_code == 404
+    auth = json.loads((srv.AUTHORITIES_DIR / AUTH).read_text(encoding="utf-8"))
+    assert len(auth["edges"]) == 2 and auth["counts"]["edges"] == 2        # the original two edges, untouched
 
 
 def test_heads_cache_follows_the_folder(client, linked):

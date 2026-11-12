@@ -490,3 +490,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 12 — Roadmap P14: early-stopping training monitor** added to
   `07_improvement_roadmap.md` (periodic test-AP evaluation, surviving
   checkpoints, automatic/manual stop, dashboard curve). Plan only.
+- **Nov 12 — Entity merge (plan 13 §5.3)**: `POST /api/authority/merge`
+  (duplicate_of edge, lower id survives, returns the same-year conflicts)
+  and `/unmerge`; the entity table groups rows by survivor
+  (`entities.group_by_survivor`: merged names as aliases, cells tagged with
+  the entity they came through, `merged_from`, `conflicts`); the candidate
+  matcher folds a merged group into one candidate (`merged_entity`) and
+  excludes the whole group on a same-source slice; ⊕ merge in the entity
+  browser (search box) and in the record browser's candidates panel; ✕
+  unmerge on the chip. Tests: merge/unmerge/conflicts, merged candidates.

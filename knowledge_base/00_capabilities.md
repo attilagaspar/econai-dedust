@@ -344,10 +344,25 @@ only ever written by a person.
   decided automatically) and opens the editor on that page with the head
   fragment selected; rows show aliases, facts and typed edges (click =
   jump to the other entity); search by name / alias / id; filters missing
-  in a year, seen once, with a chain, marked duplicate; the open records of
+  in a year, seen once, with a chain, merged; the open records of
   each linked project are listed under the table with the same
   click-through. Derived from the authority's slices and the live marks;
   nothing stored.
+- **Entity merge** (plan 13 §5.3, built 2026-11-12): two entities that are
+  one firm are joined by a `duplicate_of` edge from the higher id to the
+  lower (`POST /api/authority/merge {ids:[a,b]}`; ids are never rewritten,
+  both keep resolving; `POST /api/authority/unmerge {id}` drops the edge).
+  The entity browser shows **one row per firm**: the merged entity's name
+  becomes an alias, its cells join the survivor's (tagged with the id they
+  came through), a "= F000123 ✕" chip names it and unmerges it, and a
+  **⚠ both listed in <year>** flag marks a year in which both halves had a
+  record (evidence of two firms, or of a year listing the firm twice —
+  shown, never blocking). The row's **⊕ merge** box searches by id or name
+  and merges on a click; the record browser's candidates panel has
+  **⊕ merge** next to each candidate when the record already has an
+  entity. The candidate matcher sees the merged group: one candidate with
+  the slices, aliases and facts of both halves, and the same-source
+  exclusion applies to the whole group.
 - **Model judge for open records** (plan 13 §2.3, built 2026-11-11;
   `app/record_judge.py`): suggestions, never decisions. Stage 1 asks a
   **decision model** (System One protocol, e.g. Microsoft-Decision-1 in
