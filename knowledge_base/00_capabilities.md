@@ -455,7 +455,11 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 
 - **Declarations** (`projects/<p>/datasets/<name>.dataset.json`): scope
   (labels + cyclic page pattern → slots + page range + tables — lattice
-  cells only by construction; several datasets per project coexist), record
+  cells only by construction; several datasets per project coexist; or
+  **by header**: `scope.header` `{column: pattern}` picks, on every page,
+  the tables whose header row matches, for books with several table types
+  per page; a header-less first table inherits the previous page's type;
+  `GET /api/datasets/coverage` lists uncovered / doubly covered tables), record
   spec (internal_row / lattice_row; **join**: positional by page-level
   column sequence, or keyed by the identifier column; `exclude_keys` regexes
   for printed total/header rows), position → named **variables**

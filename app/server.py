@@ -11615,6 +11615,17 @@ class DatasetScope(BaseModel):
     pattern: str = "1"                 # cyclic 1/0 page pattern; k-th "1" = slot k
     pages:   Optional[str] = None      # optional 1-indexed page-range restriction
     tables:  List[int] = [0]           # lattice (table) ids on the page
+    # Table type by header (2026-11-13): {column: regex}, each tested against
+    # the folded, de-spaced text of that column's header cell (the cells
+    # labelled `header_labels` on the table's lowest header row). When set,
+    # the tables in scope on a page are those whose header matches EVERY
+    # pattern — a table id is a position on the page, not a type — and
+    # `tables` is ignored. A page's first table without any header cell
+    # inherits the previous page's last verdict when `header_carry` is on
+    # (a table continued over the page break), reported as a finding.
+    header: Optional[dict] = None
+    header_labels: List[str] = ["table_header"]
+    header_carry: bool = True
 
 
 class DatasetKey(BaseModel):
@@ -11724,6 +11735,21 @@ def _ds_pattern_bits(decl: DatasetDecl) -> List[int]:
 def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
     """Human-readable declaration errors beyond what pydantic types enforce."""
     probs = []
+    if decl.scope.header is not None:
+        if not isinstance(decl.scope.header, dict) or not decl.scope.header:
+            probs.append("scope.header must be a non-empty {column: pattern} object")
+        else:
+            for c, pat in decl.scope.header.items():
+                try:
+                    int(c)
+                except (TypeError, ValueError):
+                    probs.append(f"scope.header: column {c!r} is not a number")
+                try:
+                    re.compile(str(pat))
+                except re.error as e:
+                    probs.append(f"scope.header: column {c}: bad pattern {pat!r} ({e})")
+        if not decl.scope.header_labels:
+            probs.append("scope.header_labels must name the header cells' label(s)")
     if decl.record.identity:
         from app import record_resolve as _rr
         if decl.record.unit != "lattice_row":
@@ -11829,6 +11855,63 @@ def api_list_datasets(folder: str = Query(...)):
     return {"datasets": out}
 
 
+@app.get("/api/datasets/coverage")
+def api_datasets_coverage(folder: str = Query(...), limit: int = Query(300, ge=1, le=5000)):
+    """Which declaration covers which lattice table: for every page and
+    table, the declarations whose scope takes it (by header or by table
+    id; `name*` = taken by header inheritance). The lists to act on are
+    the tables no declaration covers and the tables two cover; each entry
+    carries the table's column and row counts and its header text."""
+    d = _resolve_folder(folder)
+    ddir = _datasets_dir(folder)
+    decls = []
+    for f in (sorted(ddir.glob("*.dataset.json")) if ddir.exists() else []):
+        try:
+            decls.append(DatasetDecl(**json.loads(f.read_text(encoding="utf-8"))))
+        except Exception:
+            continue
+    carry = {dc.name: False for dc in decls}
+    per_decl = {dc.name: 0 for dc in decls}
+    hdr_labels = sorted({l for dc in decls for l in (dc.scope.header_labels or [])}) or ["table_header"]
+    unmatched, multi, n_tables, n_pages = [], [], 0, 0
+    for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if (data.get("flags") or {}).get("status") == "skip":
+            continue
+        n_pages += 1
+        shapes = data.get("shapes") or []
+        present = sorted({sh.get("table") or 0 for sh in shapes if sh.get("super_row") is not None})
+        if not present:
+            carry = {k: False for k in carry}
+            continue
+        heads = _ds_table_headers(data, hdr_labels)
+        cover = {tb: [] for tb in present}
+        for dc in decls:
+            tabs, info = _ds_tables_in_scope(data, dc, carry[dc.name])
+            for tb in tabs:
+                cover[tb].append(dc.name + ("*" if info.get(tb) == "inherited" else ""))
+            carry[dc.name] = present[-1] in tabs
+            per_decl[dc.name] += len(tabs)
+        for tb in present:
+            n_tables += 1
+            cells = [sh for sh in shapes if sh.get("super_row") is not None and (sh.get("table") or 0) == tb]
+            entry = {"stem": jf.stem, "table": tb,
+                     "columns": len({sh.get("super_column") for sh in cells}),
+                     "rows": len({sh.get("super_row") for sh in cells}),
+                     "header": {c: t[:40] for c, t in sorted((heads.get(tb) or {}).items())},
+                     "declarations": cover[tb]}
+            if not cover[tb]:
+                unmatched.append(entry)
+            elif len(cover[tb]) > 1:
+                multi.append(entry)
+    return {"pages": n_pages, "tables": n_tables, "declarations": [dc.name for dc in decls],
+            "per_declaration": per_decl, "n_unmatched": len(unmatched), "n_multi": len(multi),
+            "unmatched": unmatched[:limit], "multi": multi[:limit]}
+
+
 # ── Value parsing (Hungarian print conventions) ────────────────────────────
 
 def _ds_parse_value(text: str, dtype: str, conv: DatasetParseConv):
@@ -11890,12 +11973,75 @@ def _ds_cell_units(idx: int, sh: dict, flat_only: bool) -> List[dict]:
              "layers": _ds_cell_layers(sh)}]
 
 
-def _ds_page_struct(data: dict, decl: DatasetDecl):
+def _ds_table_headers(data: dict, header_labels) -> dict:
+    """{table: {column: folded header text}} from the header-labelled cells
+    of every lattice table on the page (its lowest header row); a table
+    without header cells is absent. Letter-spaced print is collapsed first."""
+    from app import record_resolve as _rr
+    hl = set(header_labels or ["table_header"])
+    rows: dict = {}
+    for sh in data.get("shapes") or []:
+        if sh.get("super_row") is None or sh.get("super_column") is None or sh.get("label") not in hl:
+            continue
+        rows.setdefault(sh.get("table") or 0, {}).setdefault(int(sh["super_row"]), {})[int(sh["super_column"])] = sh
+    out = {}
+    for tb, by_row in rows.items():
+        r0 = min(by_row)
+        out[tb] = {c: _auth_fold(_rr.unspace(_ds_best(_ds_cell_layers(sh))[1]))
+                   for c, sh in by_row[r0].items()}
+    return out
+
+
+def _ds_header_patterns(decl: DatasetDecl) -> dict:
+    """{column: compiled regex} from scope.header; patterns are matched
+    case-insensitively against folded text, so they are written without
+    accents ("birtokos", "jogviszony", "csod")."""
+    out = {}
+    for c, pat in (decl.scope.header or {}).items():
+        try:
+            pat_f = _unidecode(str(pat)) if _unidecode is not None else str(pat)
+            out[int(c)] = re.compile(pat_f, re.IGNORECASE)
+        except (TypeError, ValueError, re.error):
+            continue                                  # reported by decl validation
+    return out
+
+
+def _ds_tables_in_scope(data: dict, decl: DatasetDecl, carry_prev: bool = False):
+    """(tables, info) — the lattice tables of a page this declaration covers:
+    by header when scope.header is set (every pattern must match its
+    column's header text), else scope.tables. info = {table: "matched" |
+    "inherited" | "unmatched" | "no_header"} for every table present;
+    `carry_prev` says whether the previous page's last table was in scope
+    (a page's first table without header cells then inherits it)."""
+    present = sorted({sh.get("table") or 0 for sh in data.get("shapes") or [] if sh.get("super_row") is not None})
+    pats = _ds_header_patterns(decl)
+    if not pats:
+        want = list(decl.scope.tables or [0])
+        return want, {tb: ("matched" if tb in want else "unmatched") for tb in present}
+    heads = _ds_table_headers(data, decl.scope.header_labels)
+    tables, info = [], {}
+    for tb in present:
+        h = heads.get(tb)
+        if not h:
+            if decl.scope.header_carry and carry_prev and tb == present[0]:
+                tables.append(tb); info[tb] = "inherited"
+            else:
+                info[tb] = "no_header"
+            continue
+        ok = all(rx.search(h.get(c) or "") for c, rx in pats.items())
+        if ok:
+            tables.append(tb)
+        info[tb] = "matched" if ok else "unmatched"
+    return tables, info
+
+
+def _ds_page_struct(data: dict, decl: DatasetDecl, tables=None):
     """Per table: ordered lattice rows, each a {super_column: (idx, shape)} map.
     → ({table: {"rows": [(super_row, {col: (idx, sh)})...], "cols": set}}, dups)
-    where dups lists duplicate (table, row, col) cells (annotation errors)."""
+    where dups lists duplicate (table, row, col) cells (annotation errors).
+    `tables` overrides scope.tables (the header matcher's choice for the page)."""
     labels = set(decl.scope.labels or [])
-    tables = set(decl.scope.tables or [0])
+    tables = set(tables if tables is not None else (decl.scope.tables or [0]))
     grid: dict = {}
     dups = []
     for i, sh in enumerate(data.get("shapes") or []):
@@ -11987,6 +12133,7 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
     # ── Sweep the book: cycle → slot → page struct ──────────────────────────
     cycles: dict = {}                                 # cycle → {slot: pagemeta}
     n_pages_used = 0
+    carry_prev = False                                # header inheritance across pages
     for i, jf in enumerate(jfiles):
         pos = i % len(bits)
         if pos not in slot_of_pos or not (in_decl_range(i) and in_extra_range(i)):
@@ -12003,14 +12150,21 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                              "detail": f"slot-{slot} page is marked clutter (skip) — "
                                        "the cycle loses this slot's variables"})
             continue
-        struct, dups = _ds_page_struct(data, decl)
+        page_tables, tinfo = _ds_tables_in_scope(data, decl, carry_prev)
+        carry_prev = bool(tinfo) and max(tinfo) in page_tables
+        for tb, st in tinfo.items():
+            if st == "inherited":
+                findings.append({"check": "structure", "stem": jf.stem,
+                                 "detail": f"table {tb}: no header row — its type is inherited "
+                                           "from the previous page's last table"})
+        struct, dups = _ds_page_struct(data, decl, page_tables)
         for du in dups:
             idx = du["idx"]
             findings.append({"check": "structure", "stem": jf.stem, "idx": idx,
                              "detail": f"duplicate lattice cell at table {du['table']} "
                                        f"r{du['super_row']}c{du['super_col']}"})
-        # column presence vs the declaration (per page, per declared table)
-        for tb in decl.scope.tables:
+        # column presence vs the declaration (per page, per table in scope)
+        for tb in page_tables:
             cols = struct.get(tb, {}).get("cols", set())
             if not cols:
                 findings.append({"check": "structure", "stem": jf.stem,
@@ -12027,7 +12181,7 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                 findings.append({"check": "structure", "stem": jf.stem,
                                  "detail": f"slot {slot} table {tb}: undeclared column(s) "
                                            f"{extra} present (layout drift?)"})
-        cycles.setdefault(cycle, {})[slot] = {"stem": jf.stem, "struct": struct}
+        cycles.setdefault(cycle, {})[slot] = {"stem": jf.stem, "struct": struct, "tables": page_tables}
         n_pages_used += 1
 
     # ── Records: join per column SEQUENCE, not per lattice band ─────────────
@@ -12088,7 +12242,7 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                              "detail": f"cycle {cycle}: the key page (slot {key.slot}) "
                                        "is missing — no records from this cycle"})
             continue
-        for tb in decl.scope.tables:
+        for tb in key_page.get("tables", decl.scope.tables):
             key_seq = _col_seq(key_page, tb, key.column)
             n = len(key_seq)
             if not n:

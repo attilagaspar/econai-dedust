@@ -511,3 +511,13 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 13 — `L` hotkey** opens the 🔲 Lattice modal (same guard as the
   other letter keys: not inside a text field, only when the button is
   enabled); listed in the `?` cheatsheet.
+- **Nov 13 — Table type by header** (`scope.header`, `header_labels`,
+  `header_carry` on dataset declarations): `_ds_tables_in_scope` picks a
+  page's tables by matching folded header text per column instead of by
+  table id; inheritance over page breaks with a finding; the builder's two
+  table loops follow it; `GET /api/datasets/coverage` (per table: columns,
+  rows, header text, covering declarations; uncovered / multi lists);
+  header field in the 📋 Dataset window. Survey of gazette_1876 behind it:
+  1123 tables, 7-col registers + 4-col bankruptcies, 7 unsplit 8-col
+  tables, 11 header-less continuations. Tests:
+  `tests/test_dataset_header_scope.py`.

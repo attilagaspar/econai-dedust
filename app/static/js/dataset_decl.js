@@ -197,6 +197,9 @@ function _ddPagesSection() {
         <option value="keyed" ${rec.join === 'keyed' ? 'selected' : ''}>by the key column</option></select>
       tables <input style="${_ddInput}width:60px;" value="${_escHtml((_dd.decl.scope.tables || [0]).join(','))}"
         onchange="_dd.decl.scope.tables=this.value.split(',').map(s=>parseInt(s,10)).filter(n=>!isNaN(n))">
+      <span title="Table type by header: {column: pattern}, each pattern (no accents, regex allowed) must match the header text of that column — then the table id is ignored and every table on every page whose header matches is in scope (books with several table types per page: sole traders / companies / bankruptcies). Empty = by table id.">
+        or by header <input style="${_ddInput}width:220px;" placeholder='{"5": "birtokos"}' value="${_escHtml(JSON.stringify(_dd.decl.scope.header || {}))}"
+        onchange="try { const v = JSON.parse(this.value || '{}'); _dd.decl.scope.header = Object.keys(v).length ? v : null; } catch (e) { showToast('header must be JSON like {&quot;5&quot;: &quot;birtokos&quot;}', 4000); }"></span>
     </div></details>`;
   return html;
 }

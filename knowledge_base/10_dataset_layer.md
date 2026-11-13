@@ -106,6 +106,20 @@ Notes:
   whose lattice disagrees with the declaration (missing/extra columns) are
   *findable* — that is itself the first diagnostic (would have caught the
   page_39 missing column and the page_29 stale row bands before export).
+- **`scope.header`** (added 2026-11-13): table type by header row. A book
+  that prints several table types (the Gazette: sole traders, companies,
+  bankruptcies, each with its own column count, often two on one page)
+  cannot be scoped by table id, which is a position on the page. The
+  declaration instead names `{column: pattern}`; every pattern (written
+  without accents, regex allowed: `{"5": "birtokos"}`) must match the
+  folded, de-spaced text of that column's header cell (label
+  `header_labels`, default `table_header`, the table's lowest header
+  row), and every table on every page whose header matches is in scope.
+  A page's first table without header cells inherits the previous page's
+  last verdict (`header_carry`, a table continued over the break) with a
+  structure finding. `GET /api/datasets/coverage?folder=` reports, per
+  table, which declarations cover it — the uncovered and doubly covered
+  tables are the lists to act on.
 - **`record.identity`** (added 2026-11-13, plan 13 §6) turns a
   `lattice_row` declaration into a *record source*: when the project's
   config lists the declaration in `record_datasets`, each row is a record
