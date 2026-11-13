@@ -151,6 +151,41 @@ let _recData = null;
 function _recSweepTools() { return !_recData || _recData.record_source !== 'dataset'; }
 let _recMaxPages = 2;
 let _recFlaggedOnly = false;
+// The browser renders one page of records at a time: a ledger volume has
+// tens of thousands of rows, each with several cell crops — all at once
+// would freeze the tab. A text filter narrows the list (name, cell values,
+// page number "p12"); the current page follows the focused record.
+const _REC_PER_PAGE = 150;
+let _recPage = 0;
+let _recFilter = '';
+function _recSetFilter(v) { _recFilter = (v || '').trim().toLowerCase(); _recPage = 0; _recRenderBody(); }
+function _recGoPage(n) { _recPage = Math.max(0, n); _recRenderBody(); }
+function _recVisible(d) {
+  const pg = _recPageNo();
+  const q = _recFilter;
+  return d.records.filter(r => {
+    if (_recUnresolvedOnly && r.authority) return false;
+    if (!q) return true;
+    if ((r.name || '').toLowerCase().includes(q)) return true;
+    if (pg(r.page_span[0]).toLowerCase() === q || String(r.id) === q) return true;
+    if (r.values && Object.values(r.values).some(v => String(v || '').toLowerCase().includes(q))) return true;
+    if (r.authority && ((r.authority.id || '').toLowerCase() === q || (r.authority.name || '').toLowerCase().includes(q))) return true;
+    return false;
+  });
+}
+function _recFocusIndex(list) {
+  // the index in `list` of the record the browser should show first after a
+  // decision / chain mark / resweep (see _recFocus), or -1
+  const f = _recFocus;
+  if (!f || !list.length) return -1;
+  const pno = s => { const m = /^p(\d+)$/.exec(_recPageNo()(s)); return m ? parseInt(m[1], 10) : 0; };
+  const want = f.stem ? pno(f.stem) : null;
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i];
+    if ((f.id != null && r.id >= f.id) || (want != null && pno(r.page_span[0]) >= want)) return i;
+  }
+  return list.length - 1;
+}
 // Strip view: every fragment as a full-width crop, one under the other in
 // record order, so a volume reads continuously (the list view's thumbnails
 // cannot show a whole entry). Remembered per browser.
@@ -232,8 +267,12 @@ function _recOpenModal() {
         `<input type="checkbox" ${_recFlaggedOnly ? 'checked' : ''} onchange="openRecordBrowser({flaggedOnly: this.checked})" style="accent-color:#e94560;">flagged only</label>` +
       (d.record_authority ? '<label style="display:flex;gap:4px;align-items:center;color:#8a94a6;">' +
         `<input type="checkbox" ${_recUnresolvedOnly ? 'checked' : ''} onchange="_recUnresolvedOnly = this.checked; _recRenderBody()" style="accent-color:#e94560;">unresolved only</label>` : '') +
+      `<input id="rec-filter" value="${_escHtml(_recFilter)}" placeholder="filter: name, cell text, entity, p12…" ` +
+        `style="width:200px;font-size:11px;background:#0a1128;color:#ddd;border:1px solid #2a4a8e;border-radius:3px;padding:3px 6px;" ` +
+        `oninput="clearTimeout(window._recFilterT); window._recFilterT = setTimeout(() => _recSetFilter(this.value), 250)">` +
+      (d.record_source === 'dataset' ? '' :
       '<button class="nav-btn" onclick="runRecordSweep({dryRun:true})" title="Report what a full sweep would change, without writing">🔍 Dry run</button>' +
-      '<button class="nav-btn" onclick="_recResweepAll()" title="Renumber every record through the whole volume (locked ids kept)">⟳ Resweep all</button>' +
+      '<button class="nav-btn" onclick="_recResweepAll()" title="Renumber every record through the whole volume (locked ids kept)">⟳ Resweep all</button>') +
       '<button class="nav-btn" id="rec-strip-btn" onclick="_recSetStrip(!_recStrip)" ' +
         'title="Strip: every fragment as a full-width crop, one under the other in record order. List: compact rows.">' +
         (_recStrip ? '☰ List view' : '📖 Strip view') + '</button>' +
@@ -326,8 +365,21 @@ function _recRenderBody() {
     return;
   }
   let html = '';
-  d.records.forEach(r => {
-    if (_recUnresolvedOnly && r.authority) return;
+  const list = _recVisible(d);
+  const fi = _recFocusIndex(list);
+  if (fi >= 0) _recPage = Math.floor(fi / _REC_PER_PAGE);
+  const nPages = Math.max(1, Math.ceil(list.length / _REC_PER_PAGE));
+  if (_recPage >= nPages) _recPage = nPages - 1;
+  const from = _recPage * _REC_PER_PAGE, to = Math.min(list.length, from + _REC_PER_PAGE);
+  const pager = list.length > _REC_PER_PAGE || _recFilter || _recUnresolvedOnly
+    ? `<div style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;color:#8a94a6;">` +
+        `<button class="nav-btn" onclick="_recGoPage(${_recPage - 1})" ${_recPage ? '' : 'disabled'}>◀</button>` +
+        `<span>${list.length ? `${from + 1}–${to} of ${list.length}` : 'no record matches'}${list.length !== d.records.length ? ` (of ${d.records.length})` : ''}</span>` +
+        `<button class="nav-btn" onclick="_recGoPage(${_recPage + 1})" ${to < list.length ? '' : 'disabled'}>▶</button>` +
+        `<input type="number" min="1" max="${nPages}" value="${_recPage + 1}" style="width:54px;" onchange="_recGoPage(parseInt(this.value,10) - 1 || 0)"> / ${nPages}</div>`
+    : '';
+  html += pager;
+  list.slice(from, to).forEach(r => {
     const span = r.page_span[0] === r.page_span[1] ? pg(r.page_span[0]) : `${pg(r.page_span[0])}–${pg(r.page_span[1])}`;
     const flags = (r.flags || []).map(f => f === 'orphan'
       ? '<span style="color:#f87171;" title="the first fragment is marked as a continuation — its head is missing or lies on an earlier page">⚠ orphan</span>'
@@ -350,9 +402,10 @@ function _recRenderBody() {
       html += '</table>';
     }
   });
+  html += pager;
   const btn = document.getElementById('rec-strip-btn');
   if (btn) btn.textContent = _recStrip ? '☰ List view' : '📖 Strip view';
-  if (d.unswept.length && !_recFlaggedOnly) {
+  if (d.unswept.length && !_recFlaggedOnly && to >= list.length) {
     html += `<div style="margin:14px 0 4px;padding:4px 6px;background:#2a1a3a;border-radius:4px;">` +
       `<b style="color:#a78bfa;font-size:12px;">unswept</b> <span style="color:#667;">${d.unswept.length} box(es) without a record id — run the sweep</span></div>`;
     html += '<table class="rs-table" style="width:100%;"><tr><th style="white-space:nowrap;">where</th><th></th><th>text</th><th></th></tr>';

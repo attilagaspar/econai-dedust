@@ -333,7 +333,9 @@ only ever written by a person.
   entity id lists matching entities with the same buttons — for the firm
   the ranking missed), "unresolved only" filter, resolved count in the
   header; after any decision, chain mark or resweep the browser reloads
-  positioned on the **next** record, not at the top.
+  positioned on the **next** record, not at the top; **150 records per
+  page** with a pager and a **filter box** (name, cell text, entity,
+  `p12`), so a ledger volume of tens of thousands of rows opens at once.
 - **Entity view** (plan 13 §2.4 / P12 item 2, built 2026-11-11;
   `app/entities.py`, `app/static/entities.html`): the dashboard sidebar has
   a **Projects | Entities** toggle; Entities lists every authority file
@@ -459,7 +461,9 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   **by header**: `scope.header` `{column: pattern}` picks, on every page,
   the tables whose header row matches, for books with several table types
   per page; a header-less first table inherits the previous page's type;
-  `GET /api/datasets/coverage` lists uncovered / doubly covered tables), record
+  `GET /api/datasets/coverage` lists uncovered / doubly covered tables —
+  the 📋 Dataset window's **🗂 Coverage** button shows them with a page
+  jump and the header texts), record
   spec (internal_row / lattice_row; **join**: positional by page-level
   column sequence, or keyed by the identifier column; `exclude_keys` regexes
   for printed total/header rows), position → named **variables**

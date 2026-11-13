@@ -536,3 +536,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   editor's project guard accepted only a record label ("No record label
   set…" on gazette_1876); it now accepts `record_datasets` too, and only
   the sweep and fragment derivation still demand a label.
+- **Nov 13 — Record browser paging + 🗂 Coverage**: the browser renders
+  150 records per page (pager, page number box, filter on name / cell
+  values / entity / `pNN`; the focused record picks the page) — gazette_1876's
+  18,736 rows made the tab crawl when rendered at once; dataset-sourced
+  projects hide the sweep buttons. The 📋 Dataset window gets **🗂
+  Coverage**: per-declaration counts, the tables no declaration covers and
+  those two cover, with header texts and a click-to-page.

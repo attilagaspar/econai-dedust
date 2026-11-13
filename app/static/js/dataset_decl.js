@@ -116,7 +116,7 @@ function _ddRender() {
   const b = document.getElementById('dd-body');
   if (!b) return;
   b.innerHTML = _ddPagesSection() + _ddVarsSection() + _ddRowsSection() +
-                _ddSumsSection() + _ddFormatSection() + _ddResultsSection();
+                _ddSumsSection() + _ddFormatSection() + _ddResultsSection() + _ddCoverageSection();
 }
 
 function _ddRenderHead() {
@@ -131,6 +131,7 @@ function _ddRenderHead() {
     (_dd.isNew ? `<input id="dd-name" placeholder="name, e.g. machines_main" value="${_escHtml(_dd.decl.name || '')}" ` +
                  `onchange="_dd.decl.name=this.value.trim()" style="${_ddInput}width:170px;">` : '') +
     '<div style="flex:1"></div>' +
+    '<button class="nav-btn" onclick="_ddCoverage()" title="Which declaration covers which table: every lattice table of the book with the declarations whose scope takes it (by header or table id); the lists to act on are the tables no declaration covers and the tables two cover">🗂 Coverage</button>' +
     '<button class="nav-btn" onclick="_ddTest()" title="Build the dataset from the pages with these settings — nothing is saved">▶ Test</button>' +
     '<button class="nav-btn" onclick="_ddSave()" style="color:#86efac;">💾 Save</button>' +
     (!_dd.isNew ? '<button class="nav-btn" onclick="_ddOpenQuality()" title="Open the data-quality page for this dataset">📈 Quality</button>' : '') +
@@ -609,6 +610,44 @@ function _ddResultsSection() {
       `onclick="_searchJump({stem:'${_escHtml(f.stem)}',idx:-1})">${_escHtml(f.stem.slice(-18))}</span> ${_escHtml(f.detail)}</div>`;
   });
   html += '<div style="color:#8a94a6;margin-top:4px;">Per-variable read counts are shown in the table above (✓ read / ✗ unreadable; hover ✗ for examples).</div>';
+  return html + '</div>';
+}
+
+async function _ddCoverage() {
+  _dd.coverage = {loading: true}; _ddRender();
+  try {
+    const r = await fetch(`${API}/api/datasets/coverage?folder=${encodeURIComponent(folder)}&limit=500`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    _dd.coverage = d;
+  } catch (e) { _dd.coverage = {error: e?.message || String(e)}; }
+  _ddRender();
+  document.getElementById('dd-coverage')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function _ddCoverageSection() {
+  const c = _dd.coverage;
+  if (!c) return '';
+  let html = '<div id="dd-coverage">' + _ddH('Coverage', 'every lattice table of the book, and which declaration takes it');
+  if (c.loading) return html + '<div style="color:#8a94a6;">reading the book…</div></div>';
+  if (c.error) return html + `<div style="color:#f87171;">⚠ ${_escHtml(c.error)}</div></div>`;
+  const per = Object.entries(c.per_declaration || {}).map(([k, v]) => `${_escHtml(k)} ${v}`).join(' · ');
+  html += `<div><b style="color:#e0e0e0;">${c.tables}</b> tables on ${c.pages} pages · ${per || 'no declarations'}</div>`;
+  const row = (t, why) => {
+    const hdr = Object.entries(t.header || {}).map(([col, txt]) => `<span style="color:#667;">${col}</span> ${_escHtml(txt)}`).join(' · ');
+    return `<div style="color:#8a94a6;font-size:11px;margin-left:10px;">` +
+      `<span style="color:#93c5fd;cursor:pointer;" onclick="_searchJump({stem:'${_escHtml(t.stem)}',idx:-1})" title="open this page">${_escHtml(t.stem.slice(-18))}</span>` +
+      ` table ${t.table} · ${t.columns} col · ${t.rows} rows${why ? ` · <span style="color:#fbbf24;">${why}</span>` : ''}` +
+      (hdr ? `<div style="margin-left:14px;color:#556;">${hdr}</div>` : '<div style="margin-left:14px;color:#556;">no header cells</div>') + `</div>`;
+  };
+  html += `<div style="margin-top:4px;color:${c.n_unmatched ? '#fbbf24' : '#86efac'};">${c.n_unmatched} table(s) no declaration covers` +
+    (c.n_unmatched ? ' — fix the header cells (or the split) on these pages, or widen a declaration\'s header patterns:' : ' 🎉') + '</div>';
+  (c.unmatched || []).forEach(t => { html += row(t, ''); });
+  html += `<div style="margin-top:6px;color:${c.n_multi ? '#f87171' : '#86efac'};">${c.n_multi} table(s) covered by more than one declaration` +
+    (c.n_multi ? ' — their patterns overlap:' : '') + '</div>';
+  (c.multi || []).forEach(t => { html += row(t, (t.declarations || []).join(' + ')); });
+  if ((c.unmatched || []).length < c.n_unmatched || (c.multi || []).length < c.n_multi)
+    html += '<div style="color:#667;">(list cut at 500)</div>';
   return html + '</div>';
 }
 
