@@ -532,3 +532,7 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   tables (egyéni 716, társas 368, csőd 28); 11 left for the editor (3
   ghost-column tables, 3 header prints beyond fuzzy reach, 5 header-less
   stubs). Three declarations written to gazette_1876 on Azure.
+- **Nov 13 — Record browser opens for dataset-sourced projects**: the
+  editor's project guard accepted only a record label ("No record label
+  set…" on gazette_1876); it now accepts `record_datasets` too, and only
+  the sweep and fragment derivation still demand a label.

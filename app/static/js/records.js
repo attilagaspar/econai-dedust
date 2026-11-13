@@ -97,9 +97,20 @@ function updateRecordBtn() {
 }
 
 // ── Sweep ───────────────────────────────────────────────────────────────────
-function _recNeedProject() {
+function _recFromDatasets() { return !!(_recCtx.record_datasets || []).length; }
+
+// needSweep: the operation renumbers record-label boxes (sweep, fragment
+// derivation) — a project whose records are dataset rows (13 §6) has none.
+function _recNeedProject(needSweep = false) {
   if (!_recCtx.project) { showToast('Record tools need a project annotations folder'); return false; }
-  if (!_recCtx.record_label) { showToast('No record label set for this project (dashboard → Records)'); return false; }
+  if (needSweep && !_recCtx.record_label) {
+    showToast(_recFromDatasets() ? 'The records of this project are the rows of its dataset declarations: there is nothing to sweep'
+                                 : 'No record label set for this project (dashboard → Records)');
+    return false;
+  }
+  if (!_recCtx.record_label && !_recFromDatasets()) {
+    showToast('No record label or record datasets set for this project (dashboard → Records)'); return false;
+  }
   return true;
 }
 
@@ -111,7 +122,7 @@ function _recOrderNote(po) {
 }
 
 async function runRecordSweep(opts = {}) {
-  if (!_recNeedProject()) return null;
+  if (!_recNeedProject(true)) return null;
   const body = {dry_run: !!opts.dryRun, from_stem: opts.fromStem || null};
   if (!opts.dryRun) {
     const stems = pages.map(p => p.stem);
@@ -956,7 +967,7 @@ async function runExtractRecords(sorted, {dryRun = false} = {}) {
 }
 
 async function runDeriveFragments(sorted, {dryRun = false} = {}) {
-  if (!_recNeedProject()) return null;
+  if (!_recNeedProject(true)) return null;
   const roles = _recCtx.record_roles || {};
   if (!Object.values(roles).includes('start')) { showToast('Give at least one label the start role first'); return null; }
   const statuses = [...document.querySelectorAll('#batch-frag-opts input[data-frag-status]')]
