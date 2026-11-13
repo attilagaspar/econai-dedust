@@ -11626,6 +11626,10 @@ class DatasetScope(BaseModel):
     header: Optional[dict] = None
     header_labels: List[str] = ["table_header"]
     header_carry: bool = True
+    # A plain pattern (no regex metacharacters) also matches fuzzily: the
+    # header print is OCR'd ("biétokoa" for "birtokosa"), so a partial
+    # similarity of at least `header_fuzzy` (0 = exact regex only) counts.
+    header_fuzzy: int = 75
 
 
 class DatasetKey(BaseModel):
@@ -11973,37 +11977,75 @@ def _ds_cell_units(idx: int, sh: dict, flat_only: bool) -> List[dict]:
              "layers": _ds_cell_layers(sh)}]
 
 
+def _ds_col_shift(data: dict) -> dict:
+    """{table: shift} so that every table's columns count from 1: detection
+    numbers columns from 1, but tables split off in the editor before
+    2026-11-13 count from 0 — their declaration columns would be off by one."""
+    mins: dict = {}
+    for sh in data.get("shapes") or []:
+        if sh.get("super_row") is None or sh.get("super_column") is None:
+            continue
+        tb = sh.get("table") or 0
+        c = int(sh["super_column"])
+        mins[tb] = c if tb not in mins else min(mins[tb], c)
+    return {tb: (1 - m if m < 1 else 0) for tb, m in mins.items()}
+
+
 def _ds_table_headers(data: dict, header_labels) -> dict:
-    """{table: {column: folded header text}} from the header-labelled cells
-    of every lattice table on the page (its lowest header row); a table
-    without header cells is absent. Letter-spaced print is collapsed first."""
+    """{table: {column: folded header text}} for every lattice table on the
+    page that has header-labelled cells: its header row is the lowest row
+    holding such a cell, and EVERY cell of that row counts (a header cell
+    the annotator left labelled as a data cell is still the header).
+    Letter-spaced print is collapsed; columns count from 1."""
     from app import record_resolve as _rr
     hl = set(header_labels or ["table_header"])
-    rows: dict = {}
+    shift = _ds_col_shift(data)
+    hdr_rows: dict = {}
     for sh in data.get("shapes") or []:
         if sh.get("super_row") is None or sh.get("super_column") is None or sh.get("label") not in hl:
             continue
-        rows.setdefault(sh.get("table") or 0, {}).setdefault(int(sh["super_row"]), {})[int(sh["super_column"])] = sh
-    out = {}
-    for tb, by_row in rows.items():
-        r0 = min(by_row)
-        out[tb] = {c: _auth_fold(_rr.unspace(_ds_best(_ds_cell_layers(sh))[1]))
-                   for c, sh in by_row[r0].items()}
+        tb = sh.get("table") or 0
+        hdr_rows[tb] = min(hdr_rows.get(tb, 10**9), int(sh["super_row"]))
+    out: dict = {tb: {} for tb in hdr_rows}
+    for sh in data.get("shapes") or []:
+        if sh.get("super_row") is None or sh.get("super_column") is None:
+            continue
+        tb = sh.get("table") or 0
+        if tb in hdr_rows and int(sh["super_row"]) == hdr_rows[tb]:
+            out[tb][int(sh["super_column"]) + shift.get(tb, 0)] = \
+                _auth_fold(_rr.unspace(_ds_best(_ds_cell_layers(sh))[1]))
     return out
 
 
+_RX_META = set(".^$*+?{}[]\\|()")
+
+
 def _ds_header_patterns(decl: DatasetDecl) -> dict:
-    """{column: compiled regex} from scope.header; patterns are matched
-    case-insensitively against folded text, so they are written without
-    accents ("birtokos", "jogviszony", "csod")."""
+    """{column: (compiled regex, plain folded text or None)} from
+    scope.header. Patterns are matched case-insensitively against folded
+    text, so they are written without accents ("birtokos", "jogviszony",
+    "csod"); a plain pattern also matches fuzzily (scope.header_fuzzy)."""
     out = {}
     for c, pat in (decl.scope.header or {}).items():
         try:
             pat_f = _unidecode(str(pat)) if _unidecode is not None else str(pat)
-            out[int(c)] = re.compile(pat_f, re.IGNORECASE)
+            plain = pat_f.lower() if not (_RX_META & set(pat_f)) and len(pat_f) >= 5 else None
+            out[int(c)] = (re.compile(pat_f, re.IGNORECASE), plain)
         except (TypeError, ValueError, re.error):
             continue                                  # reported by decl validation
     return out
+
+
+def _ds_header_hit(text: str, rx, plain, fuzzy: int) -> bool:
+    if rx.search(text or ""):
+        return True
+    if plain and fuzzy > 0 and text:
+        try:
+            from rapidfuzz import fuzz
+            return fuzz.partial_ratio(plain, text) >= fuzzy
+        except ImportError:
+            return False
+    return False
 
 
 def _ds_tables_in_scope(data: dict, decl: DatasetDecl, carry_prev: bool = False):
@@ -12028,7 +12070,8 @@ def _ds_tables_in_scope(data: dict, decl: DatasetDecl, carry_prev: bool = False)
             else:
                 info[tb] = "no_header"
             continue
-        ok = all(rx.search(h.get(c) or "") for c, rx in pats.items())
+        ok = all(_ds_header_hit(h.get(c) or "", rx, plain, decl.scope.header_fuzzy)
+                 for c, (rx, plain) in pats.items())
         if ok:
             tables.append(tb)
         info[tb] = "matched" if ok else "unmatched"
@@ -12042,6 +12085,7 @@ def _ds_page_struct(data: dict, decl: DatasetDecl, tables=None):
     `tables` overrides scope.tables (the header matcher's choice for the page)."""
     labels = set(decl.scope.labels or [])
     tables = set(tables if tables is not None else (decl.scope.tables or [0]))
+    shift = _ds_col_shift(data)
     grid: dict = {}
     dups = []
     for i, sh in enumerate(data.get("shapes") or []):
@@ -12054,7 +12098,7 @@ def _ds_page_struct(data: dict, decl: DatasetDecl, tables=None):
         if labels and sh.get("label") not in labels:
             continue
         t = grid.setdefault(tb, {})
-        key = (int(sr), int(sc))
+        key = (int(sr), int(sc) + shift.get(tb, 0))
         if key in t:
             dups.append({"table": tb, "super_row": int(sr), "super_col": int(sc),
                          "idx": i})
@@ -12146,9 +12190,10 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                              "detail": f"page JSON unreadable: {e}"})
             continue
         if ((data.get("flags") or {}).get("status")) == "skip":
-            findings.append({"check": "structure", "stem": jf.stem,
-                             "detail": f"slot-{slot} page is marked clutter (skip) — "
-                                       "the cycle loses this slot's variables"})
+            if n_slots > 1:                 # a single-slot book loses nothing on a skip page
+                findings.append({"check": "structure", "stem": jf.stem,
+                                 "detail": f"slot-{slot} page is marked clutter (skip) — "
+                                           "the cycle loses this slot's variables"})
             continue
         page_tables, tinfo = _ds_tables_in_scope(data, decl, carry_prev)
         carry_prev = bool(tinfo) and max(tinfo) in page_tables

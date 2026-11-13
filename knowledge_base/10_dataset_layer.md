@@ -114,7 +114,12 @@ Notes:
   without accents, regex allowed: `{"5": "birtokos"}`) must match the
   folded, de-spaced text of that column's header cell (label
   `header_labels`, default `table_header`, the table's lowest header
-  row), and every table on every page whose header matches is in scope.
+  row — every cell of that row counts, whatever its label), and every
+  table on every page whose header matches is in scope. A plain pattern
+  also matches fuzzily (`header_fuzzy`, default 75, partial similarity:
+  the header print is OCR'd, "biétokoa" for "birtokosa"). Columns count
+  from 1 per table (a table split off in the editor before 2026-11-13
+  counted from 0; the builder shifts it).
   A page's first table without header cells inherits the previous page's
   last verdict (`header_carry`, a table continued over the break) with a
   structure finding. `GET /api/datasets/coverage?folder=` reports, per

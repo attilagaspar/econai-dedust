@@ -521,3 +521,14 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   1123 tables, 7-col registers + 4-col bankruptcies, 7 unsplit 8-col
   tables, 11 header-less continuations. Tests:
   `tests/test_dataset_header_scope.py`.
+- **Nov 13 — Header scope hardened on the real gazette_1876** (1123
+  tables): the header row takes every cell of the row (a header cell left
+  labelled `table_cell` no longer hides the type); plain patterns match
+  fuzzily (`header_fuzzy`); split-off tables that count columns from 0
+  are shifted to 1 (`_ds_col_shift`) and the editor's ✂ Split now
+  numbers from 1 like detection; `record_resolve.unspace` joins only runs
+  of single-character tokens ("Wessely S a l a m o n"); the skip-page
+  finding is dropped for single-slot books. Coverage after: 1112 of 1123
+  tables (egyéni 716, társas 368, csőd 28); 11 left for the editor (3
+  ghost-column tables, 3 header prints beyond fuzzy reach, 5 header-less
+  stubs). Three declarations written to gazette_1876 on Azure.

@@ -18,16 +18,18 @@ def _cell(sr, sc, text, table=0, label="table_cell"):
     return sh
 
 
-def _table(table, headers, rows):
-    """headers: [text per column]; rows: [[text per column], ...]; header row 1."""
-    out = [_cell(1, c + 1, h, table, "table_header") for c, h in enumerate(headers)]
+def _table(table, headers, rows, base=1, header_labels=None):
+    """headers: [text per column]; rows: [[text per column], ...]; header row 1.
+    base = the first column number (a table split off in the editor before
+    the fix counts from 0); header_labels overrides the label per header cell."""
+    out = [_cell(1, c + base, h, table, (header_labels or {}).get(c, "table_header")) for c, h in enumerate(headers)]
     for r, vals in enumerate(rows, start=2):
-        out += [_cell(r, c + 1, v, table) for c, v in enumerate(vals)]
+        out += [_cell(r, c + base, v, table) for c, v in enumerate(vals)]
     return out
 
 
 H_EGYENI = ["Királyi törvényszék", "A bejegyzést rendelő végzés kelte", "A czég szószerinti szövege",
-            "A főtelep", "A c z é g  b i r t o k o s a", "Czégvezetők", "Jegyzet"]
+            "A főtelep", "h |A |o z é g |b i é t o k o a", "C a é g v e a e t é", "Jegyzet"]
 H_TARSAS = ["Királyi törvényszék", "A bejegyzést rendelő végzés kelte", "A czég szószerinti szövege",
             "A főtelep", "Czégvezetők és felszámoló czégvezetők", "A társaság jogviszonyai", "Jegyzet"]
 H_CSOD = ["Neve, állása és lakása a bukónak", "Csődbiróság", "Perügyelő és tömeggondnok", "Bejelentési határidő"]
@@ -53,8 +55,11 @@ def book(tmp_path):
                                    ["„", "1876. jun. 2.", "Glück Sámuel", "Tokaj", "Glück S.", "", ""]])
             + _table(1, H_TARSAS, [["Pesti tvsz", "1876. jun. 3.", "Első pesti gőzmalom", "Pest", "", "Részvénytársaság", ""]]),
         # p2: bankruptcies first (table 0), then companies (table 1) — the SAME type as p1's table 1 sits at another id
-        "p2": _table(0, H_CSOD, [["Kis János, Pest", "Pesti tvsz", "Nagy Pál", "1876. aug. 1."]])
-            + _table(1, H_TARSAS, [["Szegedi tvsz", "1876. jun. 9.", "Szegedi takarékpénztár", "Szeged", "", "Alapszabály", ""]]),
+        # the bankruptcy table was split off in the editor: its columns count from 0;
+        # the company table's "jogviszonyai" header cell was left labelled as a data cell
+        "p2": _table(0, H_CSOD, [["Kis János, Pest", "Pesti tvsz", "Nagy Pál", "1876. aug. 1."]], base=0)
+            + _table(1, H_TARSAS, [["Szegedi tvsz", "1876. jun. 9.", "Szegedi takarékpénztár", "Szeged", "", "Alapszabály", ""]],
+                     header_labels={5: "table_cell"}),
         # p3: a table continued over the page break: no header cells at all
         "p3": [_cell(2, c + 1, v, 0) for c, v in enumerate(["Szegedi tvsz", "1876. jun. 10.", "Tisza malom", "Szeged", "", "Közkereseti", ""])],
         # p4: a table of a type no declaration knows
@@ -83,7 +88,7 @@ def test_tables_are_chosen_by_header_not_by_id(client, book):
     assert _names(client, book, "egyeni") == [("p1", 0, "Zinner Móritz"), ("p1", 0, "Glück Sámuel")]
     # companies: p1 table 1, p2 table 1, and p3 table 0 by inheritance (no header, previous page ended in a company table)
     assert _names(client, book, "tarsas") == [("p1", 1, "Első pesti gőzmalom"), ("p2", 1, "Szegedi takarékpénztár"), ("p3", 0, "Tisza malom")]
-    assert _names(client, book, "csod", "debtor") == [("p2", 0, "Kis János, Pest")]
+    assert _names(client, book, "csod", "debtor") == [("p2", 0, "Kis János, Pest")]   # 0-based half, columns shifted to 1
     # the inheritance is a finding, pages without a matching table are not
     decl = srv._ds_load_decl(str(book), "tarsas")
     _recs, findings, stats = srv._ds_build(book, decl)
@@ -116,6 +121,10 @@ def test_header_scope_is_validated_and_table_ids_still_work_without_it(client, b
     probs = srv._ds_decl_problems(bad)
     assert any("'x'" in p for p in probs) and any("bad pattern" in p for p in probs)
     assert srv._ds_decl_problems(srv.DatasetDecl(**_decl("ok", {"5": "birtokos"}, 3, [("name", 3)]))) == []
+    # the garbled sole-trader header matches only fuzzily: with header_fuzzy 0 it is unmatched
+    strict = _decl("strict", {"5": "birtokos"}, 3, [("name", 3)]); strict["scope"]["header_fuzzy"] = 0
+    (book.parent / "datasets" / "strict.dataset.json").write_text(json.dumps(strict), encoding="utf-8")
+    assert _names(client, book, "strict") == []
     # no header: scope.tables as before — table 0 on every page, whatever it is
     (book.parent / "datasets" / "byid.dataset.json").write_text(json.dumps(
         _decl("byid", None, 3, [("name", 3)])), encoding="utf-8")

@@ -172,6 +172,9 @@ def test_declaration_identity_is_validated_and_unspace_only_touches_spaced_print
     assert srv._ds_decl_problems(srv.DatasetDecl(**DECL)) == []
     assert rr.unspace("Z i n n e r  M ó r i t z") == "Zinner Móritz"
     assert rr.unspace("K u s n i t z k y  O s k á r\nO s k a r  K u s n i t z k y") == "Kusnitzky Oskár Oskar Kusnitzky"
+    assert rr.unspace("Wessely S a l a m o n") == "Wessely Salamon"      # a spaced run after a plain word
+    assert rr.unspace("R . P a t r i a r c h") == "R.Patriarch"
+    assert rr.unspace("A B") == "A B"                                      # two initials are not a run
     assert rr.unspace("1876. jun. 26.") == "1876. jun. 26."
     assert rr.unspace("Buch Ágost E.") == "Buch Ágost E."
     assert rr.unspace("  Glück   Sámuel ") == "Glück Sámuel"

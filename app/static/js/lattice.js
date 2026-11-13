@@ -289,7 +289,9 @@ function toggleLatticeSplitMode() {
 
 // Split the active table at an interior grid line into two independent tables.
 // Vertical line between cols (colLeft|colRight): cols >= colRight become a new
-// table (super_column renumbered from 0). Horizontal is the row analogue.
+// table (super_column renumbered from 1, as detection numbers them — a
+// 0-based half would not line up with a dataset declaration's columns).
+// Horizontal is the row analogue.
 async function _latticeSplitVert(colLeft, colRight) {
   const AT = _activeTable();
   const newT = _latticeTableIds().reduce((m, t) => Math.max(m, t), -1) + 1;
@@ -297,7 +299,7 @@ async function _latticeSplitVert(colLeft, colRight) {
   let moved = 0;
   pageData.shapes.forEach(s => {
     if (_tableOf(s) !== AT) return;
-    if (s.super_column >= colRight) { s.table = newT; s.super_column -= colRight; moved++; }
+    if (s.super_column >= colRight) { s.table = newT; s.super_column -= (colRight - 1); moved++; }
   });
   if (!moved) { undoStack.pop(); showToast('Nothing to split there'); return; }
   latticeSplitMode = false; _updateLatticeSepBtns();
@@ -312,7 +314,7 @@ async function _latticeSplitHoriz(rowAbove, rowBelow) {
   let moved = 0;
   pageData.shapes.forEach(s => {
     if (_tableOf(s) !== AT) return;
-    if (s.super_row >= rowBelow) { s.table = newT; s.super_row -= rowBelow; moved++; }
+    if (s.super_row >= rowBelow) { s.table = newT; s.super_row -= (rowBelow - 1); moved++; }
   });
   if (!moved) { undoStack.pop(); showToast('Nothing to split there'); return; }
   latticeSplitMode = false; _updateLatticeSepBtns();
