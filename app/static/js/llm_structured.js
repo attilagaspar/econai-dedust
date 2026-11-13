@@ -37,12 +37,58 @@ async function reloadSchemas() {
   const cur = sel.value;
   sel.innerHTML = `<option value="">— select schema —</option>`
     + _projSchemas.map(s => `<option value="${_escHtml(s.name)}">${_escHtml(s.name)}</option>`).join('')
-    + `<option value="__new__">+ new schema…</option>`;
+    + `<option value="__new__">+ new schema…</option>`
+    + `<option value="__copy__">⇩ copy from another project…</option>`;
   if ([..._projSchemas.map(s => s.name), ''].includes(cur)) sel.value = cur;
+}
+
+// "⇩ copy from another project…": an inline chooser under the picker lists
+// every other project's schemas (GET /api/schemas/catalog); one click copies
+// the chosen one into this project (POST /api/schemas/copy, never
+// overwriting) and `done(name)` selects it. Shared by the LLM panel's picker
+// and the batch panel's (records: extract with a schema).
+async function schemaCopyChooser(anchorSel, done) {
+  document.getElementById('schema-copy-box')?.remove();
+  let all = [];
+  try { const r = await fetch(`${API}/api/schemas/catalog`); all = (await r.json()).schemas || []; }
+  catch (e) { showToast('Could not list the projects\' schemas'); return; }
+  const here = (typeof _recCtx !== 'undefined' && _recCtx?.project) || null;
+  const list = all.filter(x => x.project !== here);
+  if (!list.length) { showToast('No other project has a schema to copy'); return; }
+  const box = document.createElement('div');
+  box.id = 'schema-copy-box';
+  box.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0;padding:4px 6px;' +
+    'border-left:3px solid #e94560;background:#0d1b35;font-size:11px;color:#aaa;width:100%;';
+  box.innerHTML = `<span>copy</span><select id="schema-copy-pick" style="flex:1;min-width:160px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px;">` +
+    list.map((x, i) => `<option value="${i}">${_escHtml(x.project)} · ${_escHtml(x.name)}</option>`).join('') + `</select>` +
+    `<span>as</span><input id="schema-copy-as" value="${_escHtml(list[0].name)}" style="width:110px;background:#0f3460;border:1px solid #1a3a6e;border-radius:3px;color:#ccc;font-size:11px;padding:2px;">` +
+    `<button class="field-run-btn" id="schema-copy-go">⇩ Copy</button><button class="field-run-btn" id="schema-copy-x">✕</button>`;
+  anchorSel.insertAdjacentElement('afterend', box);
+  const pick = box.querySelector('#schema-copy-pick'), as = box.querySelector('#schema-copy-as');
+  pick.onchange = () => { as.value = list[+pick.value].name; };
+  box.querySelector('#schema-copy-x').onclick = () => box.remove();
+  box.querySelector('#schema-copy-go').onclick = async () => {
+    const x = list[+pick.value];
+    try {
+      const r = await fetch(`${API}/api/schemas/copy?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({from_project: x.project, name: x.name, as_name: as.value.trim() || x.name})});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      box.remove();
+      showToast(`Schema "${d.name}" copied from ${x.project}`);
+      if (done) await done(d.name);
+    } catch (e) { showToast('Copy failed: ' + (e?.message || e), 6000); }
+  };
 }
 
 function onSchemaSelect() {
   const sel = document.getElementById('llm-schema-select');
+  if (sel.value === '__copy__') {
+    sel.value = '';
+    schemaCopyChooser(sel, async name => { await reloadSchemas(); sel.value = name; onSchemaSelect(); });
+    return;
+  }
   const v = sel.value;
   const ed = document.getElementById('llm-schema-editor');
   const nm = document.getElementById('llm-schema-name');

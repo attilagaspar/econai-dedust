@@ -955,7 +955,14 @@ function _batchRecxFillSchemas() {
   const cur = sel.value;
   const list = (typeof _projSchemas !== 'undefined' ? _projSchemas : []) || [];
   sel.innerHTML = '<option value="">— pick a schema —</option>' +
-    list.map(x => `<option value="${_escHtml(x.name)}"${x.name === cur ? ' selected' : ''}>${_escHtml(x.name)}</option>`).join('');
+    list.map(x => `<option value="${_escHtml(x.name)}"${x.name === cur ? ' selected' : ''}>${_escHtml(x.name)}</option>`).join('') +
+    '<option value="__copy__">⇩ copy from another project…</option>';
+  sel.onchange = () => {
+    if (sel.value !== '__copy__') return;
+    sel.value = '';
+    if (typeof schemaCopyChooser === 'function')
+      schemaCopyChooser(sel, async name => { await reloadSchemas(); _batchRecxFillSchemas(); sel.value = name; });
+  };
 }
 
 async function _batchRecxInit() {

@@ -429,6 +429,11 @@ only ever written by a person.
 - Per-project JSON Schemas (`projects/<p>/schemas/`, CRUD API),
   strict-mode-friendly; LLM JSON mode per cell and in batch
   (strict → non-strict → json_object fallback for local backends).
+  **Copy from another project** (added 2026-11-13): both schema pickers
+  (LLM panel, 🧩 Records: extract) end with "⇩ copy from another
+  project…", an inline chooser over `GET /api/schemas/catalog` (every
+  project's schemas); `POST /api/schemas/copy` brings one over under the
+  same or a new name, never overwriting.
 - Result in `shape.structured`; live-validated editor (JSON validity +
   schema conformance + tree view); `edited:true` protects human data from
   re-runs.

@@ -582,3 +582,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   entities (and, for same decisions, slices and aliases) to the index
   incrementally; flushed every 60 s and at the end, index rebuilt once.
   Measured need: the local 1876 run's pass 2 rewrote 15 MB per decision.
+- **Nov 13 — Schema copy between projects**: `GET /api/schemas/catalog`,
+  `POST /api/schemas/copy {from_project, name, as_name}` (409 when the
+  name exists here); "⇩ copy from another project…" in the LLM panel's and
+  the batch panel's schema pickers (`schemaCopyChooser`). The Compass
+  identity schema no longer has to be re-created per volume. Test:
+  `tests/test_schema_copy.py`.

@@ -6319,6 +6319,50 @@ def api_save_schema(folder: str = Query(...), name: str = Query(...),
     return {"ok": True, "name": fname}
 
 
+@app.get("/api/schemas/catalog")
+def api_schema_catalog():
+    """Every project's extraction schemas (project, name, the schema), so a
+    schema made for one volume can be copied to the next from the editor."""
+    out = []
+    if PROJECTS_ROOT.exists():
+        for pdir in sorted(PROJECTS_ROOT.iterdir()):
+            sdir = pdir / "schemas"
+            if not pdir.is_dir() or not sdir.is_dir():
+                continue
+            for f in sorted(sdir.glob("*.json")):
+                try:
+                    out.append({"project": pdir.name, "name": f.stem,
+                                "schema": json.loads(f.read_text(encoding="utf-8"))})
+                except Exception:
+                    continue
+    return {"schemas": out}
+
+
+class SchemaCopy(BaseModel):
+    from_project: str
+    name:         str
+    as_name:      Optional[str] = None     # default: the same name
+
+
+@app.post("/api/schemas/copy")
+def api_copy_schema(folder: str = Query(...), body: SchemaCopy = ...):
+    """Copy another project's schema into this project's schemas/ folder
+    (never overwrites: 409 when the name is taken here)."""
+    if not body.from_project or any(ch in body.from_project for ch in "/\\") or body.from_project.startswith("."):
+        raise HTTPException(status_code=400, detail="from_project must be a project name")
+    src = PROJECTS_ROOT / body.from_project / "schemas" / f"{_safe_schema_name(body.name)}.json"
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"No schema {body.name!r} in project {body.from_project!r}")
+    sdir = _schemas_dir(folder)
+    sdir.mkdir(parents=True, exist_ok=True)
+    fname = _safe_schema_name(body.as_name or body.name)
+    dst = sdir / f"{fname}.json"
+    if dst.exists():
+        raise HTTPException(status_code=409, detail=f"This project already has a schema named {fname!r}")
+    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    return {"ok": True, "name": fname, "from_project": body.from_project}
+
+
 @app.delete("/api/schemas")
 def api_delete_schema(folder: str = Query(...), name: str = Query(...)):
     p = _schemas_dir(folder) / f"{_safe_schema_name(name)}.json"
