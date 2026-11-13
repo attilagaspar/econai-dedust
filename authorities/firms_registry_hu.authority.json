@@ -1,0 +1,49 @@
+{
+ "authority": "firms_registry_hu",
+ "version": "0.3",
+ "schema": "temporal ledger: entity = one registry entry (a firm at a court); entity.slices[] = events {as_of (volume year), date, event, source, name, attrs, provenance{project, stem, group_id, issue}, seq}; edges[] = typed entity→entity links (transfer / successor / duplicate_of)",
+ "spine": "opaque sequential ids minted by Dedust (id_scheme) from the registry gazette (Központi Értesítő); identity is the registering court + the firm as entered; renames keep the entry, a transfer or transformation is a new entry with an edge",
+ "entity_types": [
+  "firm"
+ ],
+ "id_scheme": {
+  "prefix": "R",
+  "width": 6
+ },
+ "normalize": {
+  "strip_tokens": [
+   "részvénytársaság",
+   "részvény-társaság",
+   "részvény társaság",
+   "részvénytársulat",
+   "r.-t.",
+   "r. t.",
+   "rt.",
+   "r.t.",
+   "szövetkezet",
+   "egyesület",
+   "társaság",
+   "társulat",
+   "Actiengesellschaft",
+   "Aktiengesellschaft",
+   "Actien-Gesellschaft",
+   "Aktien-Gesellschaft",
+   "A.-G.",
+   "A. G.",
+   "A.G.",
+   "AG",
+   "Gesellschaft",
+   "Genossenschaft",
+   "Verein"
+  ],
+  "note": "legal-form and status words dropped wherever they occur, in queries and in entity names/aliases, before matching; edit here, never in code"
+ },
+ "slices_present": [],
+ "counts": {
+  "entities": 0,
+  "aliases": 0,
+  "edges": 0
+ },
+ "edges": [],
+ "entities": []
+}

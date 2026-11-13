@@ -9703,9 +9703,32 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
     coll, by_stem = _collect_for(name, label, mode)
     wanted = set(body.record_ids) if body.record_ids is not None else None
     items, counts = [], {"same": 0, "new": 0, "unresolved": 0, "kept": 0}
-    for gid in sorted(coll["records"]):
+    # A ledger volume registers thousands of firms (13 §6b): minting them one
+    # by one would rewrite the authority file and rebuild its index per row.
+    # So: pass 1 = the registrations (no verb of change, no cited issue), in
+    # reading order, minted together in one update and one write per page;
+    # pass 2 = every other row, one by one, against the index that now holds
+    # the year's registrations. A census keeps the single pass.
+    kind = _record_kind(cfg)
+    bulk = kind == "ledger" and body.mint_unmatched and not body.dry_run
+
+    def _is_reg(r):
+        ident = r.get("identity") or {}
+        return ident.get("event_type") in (None, "registered") and not ident.get("issue_ref")
+    order = sorted(coll["records"])
+    if bulk:
+        order = [g for g in order if _is_reg(coll["records"][g])] + [g for g in order if not _is_reg(coll["records"][g])]
+    pending: list = []                       # pass 1: (gid, rec, head, item)
+
+    def _flush_pending():
+        if pending:
+            _bulk_mint(name, ann, fname, sy, pending, by_stem)
+            pending.clear()
+    for gid in order:
         rec = coll["records"][gid]
         head = rec["fragments"][0]
+        if bulk and pending and not _is_reg(rec):
+            _flush_pending()                 # pass 2 begins: later rows must see the minted entities
         if wanted is not None and gid not in wanted:
             continue
         if rx and not rx.search(head["stem"]):
@@ -9737,18 +9760,91 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
                           "boost_why": best.get("boost_why"), "seat_agree": best.get("seat_agree"),
                           "year_agree": best.get("year_agree")} if best else None)}
         if not body.dry_run and decision in ("same", "new"):
-            try:
-                res = _apply_resolution(name, rec, by_stem, ann, fname, sy, gid, decision, ent, None, None,
-                                        "auto", best["score"] if (best and decision == "same") else None)
-                item["entity"] = res["entity"]["id"]
-                # the file changed: later records must see the new entity
-                by_stem[head["stem"]] = json.loads((ann / f"{head['stem']}.json").read_text(encoding="utf-8"))
-            except HTTPException as e:
-                item["decision"], item["error"] = "error", e.detail
+            if bulk and decision == "new" and _is_reg(rec):
+                pending.append((gid, rec, head, item))
+            else:
+                try:
+                    res = _apply_resolution(name, rec, by_stem, ann, fname, sy, gid, decision, ent, None, None,
+                                            "auto", best["score"] if (best and decision == "same") else None)
+                    item["entity"] = res["entity"]["id"]
+                    # the file changed: later records must see the new entity
+                    by_stem[head["stem"]] = json.loads((ann / f"{head['stem']}.json").read_text(encoding="utf-8"))
+                except HTTPException as e:
+                    item["decision"], item["error"] = "error", e.detail
         counts[decision] = counts.get(decision, 0) + 1
         items.append(item)
+    if bulk:
+        _flush_pending()
+    for it in items:                         # bulk mints that failed are errors, not news
+        if it.get("error") and it.get("decision") == "error":
+            counts["new"] = max(0, counts.get("new", 0) - 1); counts["error"] = counts.get("error", 0) + 1
     return {"authority_file": fname, "source_year": sy, "dry_run": body.dry_run,
             "n_records": len(coll["records"]), "counts": counts, "items": items}
+
+
+def _bulk_mint(name: str, ann: Path, fname: str, source_year, pending: list, by_stem: dict) -> int:
+    """Mint many records as new entities in ONE authority update and one
+    write per page: the ledger bootstrap's pass 1 (see the batch). Each
+    item gets its entity id; a record without a name becomes an error."""
+    from app import record_resolve as _rr
+    types = (_authority_meta(fname).get("entity_types") or [])
+    etype = types[0] if len(types) == 1 else None
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    docs = []
+    for gid, rec, head, item in pending:
+        ident = rec.get("identity") or {}
+        rname = rec.get("name") or ""
+        printed = _rr.display_name(rname, ident)
+        if not printed:
+            item["decision"], item["error"] = "error", "the record has no name to mint from"
+            continue
+        seq = ident.get("serial_no") if isinstance(ident.get("serial_no"), int) else None
+        sl = _rr.slice_from(ident, rname, name, head["stem"], gid, seq, source_year, etype)
+        ent = {"name": printed,
+               "aliases": [{k: v for k, v in a.items() if v is not None}
+                           for a in _rr.aliases_from(ident, name) if a["name"] != printed],
+               "xref": {}, "attrs": _rr.entity_attrs(ident), "slices": [sl]}
+        if etype:
+            ent["type"] = etype
+        docs.append((gid, head, item, ent))
+    if not docs:
+        return 0
+
+    def _do(data):
+        if types and etype not in types:
+            raise HTTPException(status_code=400, detail=f"the authority declares several entity types {types}; "
+                                                        "record resolution needs exactly one")
+        scheme = data.get("id_scheme") or {}
+        prefix, width = scheme.get("prefix"), int(scheme.get("width") or 6)
+        if not prefix:
+            raise HTTPException(status_code=400, detail="This authority declares no id_scheme {prefix, width}; minting needs one.")
+        hi = 0
+        for e in data.get("entities") or []:
+            i = str(e.get("id") or "")
+            if i.startswith(prefix) and i[len(prefix):].isdigit():
+                hi = max(hi, int(i[len(prefix):]))
+        ents = data.setdefault("entities", [])
+        for _g, _h, _i, ent in docs:
+            hi += 1
+            ent["id"] = f"{prefix}{hi:0{width}d}"
+            ents.append(ent)
+        return len(docs)
+    _auth_file_update(fname, _do)
+    marks_by_stem: dict = {}
+    for gid, head, item, ent in docs:
+        item["entity"] = ent["id"]
+        marks_by_stem.setdefault(head["stem"], {})[head["idx"]] = _rr.mark(ent, "new", "auto", None, fname, gid, ts)
+    for stem, marks in marks_by_stem.items():
+        jf = ann / f"{stem}.json"
+        with _SHAPE_MERGE_LOCK:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+            shapes = data.get("shapes") or []
+            for idx, m in marks.items():
+                if 0 <= idx < len(shapes):
+                    shapes[idx]["authority"] = m
+            _write_json(jf, data)
+        by_stem[stem] = data
+    return len(docs)
 
 
 # ---------------------------------------------------------------------------

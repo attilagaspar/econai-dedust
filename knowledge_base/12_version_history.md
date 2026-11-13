@@ -563,3 +563,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   `BOOST_ISSUE`, no same-source exclusion for ledgers; `decide` blocks on
   a different court; the batch mints registrations only. Tests:
   `tests/test_ledger.py`.
+- **Nov 13 — Ledger batch in two passes + registry authority**: for a
+  ledger with minting, pass 1 mints the registrations together
+  (`_bulk_mint`: one authority update, one write per page, sequential ids),
+  pass 2 resolves the other rows one by one against the index that now
+  holds the year's registrations (per-row minting was O(n²) on 18.7k rows).
+  `authorities/firms_registry_hu.authority.json` (empty, prefix R) created
+  and installed on Azure; gazette_1876 set to kind ledger with this
+  authority, its declarations gained `inherit: ditto` on the court,
+  `record.derive` and the court identity field. Not yet run.
