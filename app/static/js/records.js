@@ -26,7 +26,7 @@ async function loadRecordsContext() {
   } catch (e) { /* outside a project: record tools stay off */ }
   updateRecordBtn();
   const rb = document.getElementById('records-btn');
-  if (rb) rb.style.display = _recCtx.record_label ? '' : 'none';   // the toolbar's way into the record browser
+  if (rb) rb.style.display = (_recCtx.record_label || (_recCtx.record_datasets || []).length) ? '' : 'none';   // the toolbar's way into the record browser
   if (pageData) drawOverlay();
 }
 
@@ -136,6 +136,8 @@ async function runRecordSweep(opts = {}) {
 
 // ── Record browser (report chassis) ─────────────────────────────────────────
 let _recData = null;
+// records from lattice rows (13 §6) have no sweep: no chain marks, no resweep
+function _recSweepTools() { return !_recData || _recData.record_source !== 'dataset'; }
 let _recMaxPages = 2;
 let _recFlaggedOnly = false;
 // Strip view: every fragment as a full-width crop, one under the other in
@@ -275,9 +277,9 @@ function _recFragStrip(f, gid) {
         `title="Open this fragment in the editor">${_escHtml(pg(f.stem))} · #${f.idx}</span>` +
       (f.continuation ? '<span style="color:#f0c040;">⛓ continuation</span>' : '<span style="color:#8a94a6;">record head</span>') +
       `<span style="flex:1;color:#667;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(f.text || '')}</span>` +
-      `<button class="nav-btn" style="${contStyle}" onclick="_recToggleFrag('${_escHtml(f.stem)}',${f.idx},${f.continuation ? 'true' : 'false'})" ` +
+      (_recSweepTools() ? `<button class="nav-btn" style="${contStyle}" onclick="_recToggleFrag('${_escHtml(f.stem)}',${f.idx},${f.continuation ? 'true' : 'false'})" ` +
         `title="${f.continuation ? 'Un-mark: this box STARTS a record' : 'Mark: this box CONTINUES the previous box in reading order'}">⛓${f.continuation ? ' cont.' : ''}</button>` +
-      `<button class="nav-btn" onclick="_recResweepFrom('${_escHtml(f.stem)}')" title="Renumber from this page onward (earlier pages keep their ids)">⟳▶</button>` +
+      `<button class="nav-btn" onclick="_recResweepFrom('${_escHtml(f.stem)}')" title="Renumber from this page onward (earlier pages keep their ids)">⟳▶</button>` : '') +
       (f.locked ? ' <span title="hand-assigned id, kept by the sweep">🔒</span>' : '') +
     `</div>` +
     `<img src="${src}" loading="lazy" style="width:100%;display:block;background:#fff;border:1px solid #2a2a4a;border-radius:2px;">` +
@@ -295,9 +297,9 @@ function _recFragRow(f, gid) {
       `style="max-height:150px;max-width:400px;object-fit:contain;display:block;cursor:zoom-in;"></td>` +
     `<td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_escHtml(f.text || '')}">${_escHtml(f.text || '')}</td>` +
     `<td style="white-space:nowrap;">` +
-      `<button class="nav-btn" style="${contStyle}" onclick="_recToggleFrag('${_escHtml(f.stem)}',${f.idx},${f.continuation ? 'true' : 'false'})" ` +
+      (_recSweepTools() ? `<button class="nav-btn" style="${contStyle}" onclick="_recToggleFrag('${_escHtml(f.stem)}',${f.idx},${f.continuation ? 'true' : 'false'})" ` +
         `title="${f.continuation ? 'Un-mark: this box STARTS a record' : 'Mark: this box CONTINUES the previous box in reading order'}">⛓${f.continuation ? ' cont.' : ''}</button> ` +
-      `<button class="nav-btn" onclick="_recResweepFrom('${_escHtml(f.stem)}')" title="Renumber from this page onward (earlier pages keep their ids)">⟳▶</button>` +
+      `<button class="nav-btn" onclick="_recResweepFrom('${_escHtml(f.stem)}')" title="Renumber from this page onward (earlier pages keep their ids)">⟳▶</button>` : '') +
       (f.locked ? ' <span title="hand-assigned id, kept by the sweep">🔒</span>' : '') +
     `</td></tr>`;
 }
@@ -308,7 +310,7 @@ function _recRenderBody() {
   const d = _recData;
   const pg = _recPageNo();
   if (!d.records.length && !d.unswept.length) {
-    body.innerHTML = `<div style="padding:20px;color:#8a94a6;">No "${_escHtml(d.record_label)}" boxes${_recFlaggedOnly ? ' with flags' : ''} — ` +
+    body.innerHTML = `<div style="padding:20px;color:#8a94a6;">${d.record_source === 'dataset' ? `No records from ${_escHtml((d.record_datasets || []).join(', '))}` : `No "${_escHtml(d.record_label)}" boxes`}${_recFlaggedOnly ? ' with flags' : ''} — ` +
       (d.boxes ? 'nothing flagged. 🎉' : 'draw or detect them first, then sweep.') + '</div>';
     return;
   }
@@ -319,12 +321,16 @@ function _recRenderBody() {
     const flags = (r.flags || []).map(f => f === 'orphan'
       ? '<span style="color:#f87171;" title="the first fragment is marked as a continuation — its head is missing or lies on an earlier page">⚠ orphan</span>'
       : `<span style="color:#fbbf24;" title="spans more than ${d.max_pages} pages — check for a missed record start">long span</span>`).join(' ');
+    const vals = r.values
+      ? `<div style="margin:0 0 4px 24px;color:#8a94a6;font-size:11px;">` + Object.entries(r.values).filter(([, v]) => v)
+          .map(([k, v]) => `<span style="color:#667;">${_escHtml(k)}</span> ${_escHtml(String(v).slice(0, 140))}`).join(' · ') + `</div>`
+      : '';
     html += `<div id="rec-head-${r.id}" style="margin:10px 0 4px;padding:4px 6px;background:#12224a;border-radius:4px;display:flex;gap:10px;align-items:baseline;">` +
       `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${recordColor(r.id)};align-self:center;"></span>` +
       `<b style="color:#93c5fd;font-size:12px;">record ${r.id}</b>` +
       `<span style="color:#cde;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escHtml(r.name || '')}</span>` +
       `<span style="color:#667;">${r.n_fragments} fragment${r.n_fragments === 1 ? '' : 's'} · ${span}</span>` +
-      (flags ? `<span>${flags}</span>` : '') + _recStructChip(r) + _recAuthChip(r) + `</div>` + `<div id="rec-cand-${r.id}"></div>`;
+      (flags ? `<span>${flags}</span>` : '') + _recStructChip(r) + _recAuthChip(r) + `</div>` + vals + `<div id="rec-cand-${r.id}"></div>`;
     if (_recStrip) {
       r.fragments.forEach(f => { html += _recFragStrip(f, r.id); });
     } else {

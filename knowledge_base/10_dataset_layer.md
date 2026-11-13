@@ -106,6 +106,13 @@ Notes:
   whose lattice disagrees with the declaration (missing/extra columns) are
   *findable* — that is itself the first diagnostic (would have caught the
   page_39 missing column and the page_29 stale row bands before export).
+- **`record.identity`** (added 2026-11-13, plan 13 §6) turns a
+  `lattice_row` declaration into a *record source*: when the project's
+  config lists the declaration in `record_datasets`, each row is a record
+  of the entity-linkage pipeline, its identity object read from the mapped
+  variables (`{"name_hu": "name", "seat": "seat", "founded": "founded"}`),
+  its resolution mark stored on the key column's cell (so declare that key
+  as `text`, not `entity`).
 - **`dtype: "entity"`** ties a variable to authority resolution; the record
   key being an entity gives every record a stable ID (`places_hu` id) — this
   is what makes the dataset joinable across projects/years later

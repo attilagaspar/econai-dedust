@@ -48,10 +48,12 @@ def _ann_signature(ann: Path) -> tuple:
         return (0, 0.0)
 
 
-def record_heads(name: str, ann: Path, pages: list, record_label: str, mode) -> dict:
+def record_heads(name: str, ann: Path, pages: list, record_label, mode, collect=None) -> dict:
     """{group_id: {stem, idx, name, mark}} for a project's records, cached on
     the annotations folder's signature. `pages` = [(stem, data)] as
-    `_records_pages` returns them; `mark` = the head's `authority` dict."""
+    `_records_pages` returns them; `mark` = the head's `authority` dict.
+    `collect(pages, stem_order)` replaces the record-label sweep when the
+    project's records come from dataset declarations (13 §6)."""
     from app import records as _records
     sig = _ann_signature(ann)
     with _CACHE_LOCK:
@@ -59,7 +61,7 @@ def record_heads(name: str, ann: Path, pages: list, record_label: str, mode) -> 
         if c and c["sig"] == sig:
             return c["heads"]
     stem_order = {s: i for i, (s, _) in enumerate(pages)}
-    coll = _records.collect_records(pages, record_label, mode, stem_order)
+    coll = collect(pages, stem_order) if collect else _records.collect_records(pages, record_label, mode, stem_order)
     by_stem = dict(pages)
     heads = {}
     for gid, rec in coll["records"].items():
@@ -71,6 +73,9 @@ def record_heads(name: str, ann: Path, pages: list, record_label: str, mode) -> 
         printed = None
         if isinstance(obj, dict):
             printed = obj.get("name_hu") or obj.get("name_de") or None
+        ident = rec.get("identity") or {}          # dataset-backed record (13 §6)
+        if not printed and ident:
+            printed = ident.get("name_hu") or ident.get("name_de") or None
         sug = sh.get("authority_suggestion") if isinstance(sh.get("authority_suggestion"), dict) else None
         heads[gid] = {"stem": h["stem"], "idx": h["idx"],
                       "name": printed or rec.get("name") or "",

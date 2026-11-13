@@ -1080,6 +1080,12 @@ function renderRecordSettings() {
     labels.map(l => `<option value="${l}">${l}</option>`).join('');
   sel.value = labels.includes(cur) ? cur : '';
   cols.value = String(activeProj.config?.layout_columns || 'auto');
+  const dsIn = document.getElementById('rec-datasets');
+  if (dsIn) {
+    dsIn.value = (activeProj.config?.record_datasets || []).join(', ');
+    const dh = document.getElementById('rec-datasets-hint');
+    if (dh) dh.textContent = dsIn.value ? 'the rows of these declarations are the records; the label sweep is off' : '';
+  }
   const hint = document.getElementById('rec-hint');
   if (hint) hint.textContent = cur
     ? `mark ⛓ continuations in the editor (C), then batch op "⛓ Records: sweep"`
@@ -1124,6 +1130,11 @@ async function _patchRecordSetting(body, okMsg) {
     showToast('Error: ' + errMsg(data), 4000, 'red');
   }
   renderRecordSettings();
+}
+
+function onRecordDatasetsChange() {
+  const v = (document.getElementById('rec-datasets')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+  _patchRecordSetting({ record_datasets: v }, v.length ? `Records are the rows of ${v.join(', ')}` : 'Records from datasets off');
 }
 
 function onRecordLabelChange() {
@@ -1548,6 +1559,13 @@ function renderDetail() {
           <option value="auto">auto</option><option value="1">1</option><option value="2">2</option>
         </select>
         <span id="rec-hint" style="font-size:0.75rem;color:#667;"></span>
+      </div>
+      <div class="btn-row" style="margin-top:4px;align-items:center;gap:6px;"
+           title="Records from lattice rows (a printed table: one row per entry). Name the dataset declarations (editor → 📋 Dataset; record.unit = lattice_row, record.identity maps name_hu / seat / founded … to variables) whose rows are this project's records, comma-separated. When set, the record browser, resolve, the judge and the entity view work on these rows and the label sweep is off. Saved in the project config.">
+        <span style="font-size:0.8rem;color:#aaa;">Records from datasets:</span>
+        <input id="rec-datasets" onchange="onRecordDatasetsChange()" placeholder="e.g. egyeni, tarsas"
+               style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;min-width:220px;">
+        <span id="rec-datasets-hint" style="font-size:0.75rem;color:#667;"></span>
       </div>
       <div class="btn-row" id="rec-roles-row" style="margin-top:4px;align-items:center;gap:6px;flex-wrap:wrap;display:none;"
            title="Fragment derivation. The detector learns small, consistent objects: a START label marks where a record begins (a name line), a STOP label what ends it (a section heading, an advertisement), an IGNORE label is skipped and masked out of the ink. The batch op ⛓ Records: derive fragments builds the record-label boxes (with ⛓ continuation marks) from these; a page with no starts and no stops is a continuation page while a record is open. Saved in the project config.">

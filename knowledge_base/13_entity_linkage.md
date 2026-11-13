@@ -247,3 +247,35 @@ The first 1882 run then showed the second flaw: a plain whole-name ratio still r
    the name itself changes (rename, merger, split), even if the people are
    the same. An edge can be collapsed later; a missed split cannot be
    recovered. The rule goes into the authority file's README.
+
+## 6. Records from lattice rows (built 2026-11-13)
+
+**Status: BUILT (the bridge); ledger kind, key lane, back-reference lane
+NOT BUILT.** The second source of records: a project whose pages are a
+printed table (one lattice row per entry — the Gazette's registry extracts,
+any ledger) declares `record_datasets: ["egyeni", "tarsas"]` in its config,
+and its records are the rows of those dataset declarations (10_dataset_layer)
+instead of the start/stop/continuation sweep. Nothing downstream changes:
+
+- A record = one lattice row of a declaration with `record.unit:
+  lattice_row`. Its **head fragment is the key column's cell** (the mark
+  `authority` lives there, as on a swept record's head); the other
+  variables' cells are its fragments, in declaration order; `gid` is
+  derived from (dataset, page order, table, row) and is a session handle
+  like a swept id — the mark on the cell is the fact.
+- The **identity object comes from the declaration**, not from a structured
+  extraction: `record.identity: {"name_hu": "name", "seat": "seat", …}`
+  maps identity fields (the `IDENT_KEYS` of `record_resolve`) to variables;
+  cell text is read from the best layer (Human > LLM > OCR > PDF) and
+  letter-spaced print ("Z i n n e r  M ó r i t z") is collapsed.
+- Candidates, decisions, the judge, the batch, the entity view and the
+  record browser work on these records unchanged; the sweep, chain marks
+  and resweep do not apply (400 / hidden). A declaration used as a record
+  source must be `lattice_row` and its key column should be `text`
+  (a key of dtype `entity` would share the cell's `authority` field).
+
+Why a second source rather than converting rows into boxes: the lattice is
+already the human-verified structure of these books (gazette_1876: 1109
+verified pages); the declaration already names the columns; and a dataset
+record carries every column as a variable, which the ledger design (keys,
+back-references, event dates) needs as named fields, not as free text.

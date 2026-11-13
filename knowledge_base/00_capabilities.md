@@ -348,6 +348,20 @@ only ever written by a person.
   each linked project are listed under the table with the same
   click-through. Derived from the authority's slices and the live marks;
   nothing stored.
+- **Records from lattice rows** (plan 13 §6, built 2026-11-13): a project
+  whose pages are a printed table (one row per entry: the Gazette's registry
+  extracts, any ledger) sets `record_datasets: ["egyeni", "tarsas"]`
+  (dashboard → Records from datasets, or `PATCH …/config`) and its records
+  are the rows of those dataset declarations instead of the label sweep.
+  A declaration used this way is `record.unit: lattice_row` with
+  `record.identity: {"name_hu": "name", "seat": "seat", …}` mapping the
+  resolver's identity fields to variables; the key column's cell is the
+  record's head (the `authority` mark lives there), the other variables'
+  cells are its fragments, `values` carries the row's best-layer text and
+  letter-spaced PDF print is collapsed (`record_resolve.unspace`). The
+  record browser (values under each record, no chain / resweep buttons),
+  candidates, decisions, the batch, the judge and the entity view work on
+  these records unchanged; the sweep answers 400.
 - **Entity merge** (plan 13 §5.3, built 2026-11-12): two entities that are
   one firm are joined by a `duplicate_of` edge from the higher id to the
   lower (`POST /api/authority/merge {ids:[a,b]}`; ids are never rewritten,

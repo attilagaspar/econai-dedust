@@ -499,3 +499,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   excludes the whole group on a same-source slice; ⊕ merge in the entity
   browser (search box) and in the record browser's candidates panel; ✕
   unmerge on the chip. Tests: merge/unmerge/conflicts, merged candidates.
+- **Nov 13 — Records from lattice rows (plan 13 §6)**: `record_datasets`
+  in the project config makes the rows of the named dataset declarations
+  the project's records (`_ds_collect_records`: head = key cell, fragments
+  = the variables' cells, `values`, `identity` from the declaration's new
+  `record.identity` map; `record_resolve.unspace` collapses letter-spaced
+  print); `_collect_for`, the record list, `_project_heads` and the browser
+  context dispatch on it; the sweep refuses such projects; dashboard
+  "Records from datasets" input; browser hides chain / resweep for them.
+  Tests: `tests/test_records_from_datasets.py`.

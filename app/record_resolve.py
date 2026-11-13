@@ -36,6 +36,28 @@ IDENT_KEYS = ("serial_no", "name_hu", "name_de", "other_names", "legal_form", "s
 OUTCOMES = ("same", "new", "successor")
 
 
+_LETTER_SPACED_RE = re.compile(r"(?<=\S) (?=\S)")
+
+
+def unspace(text: str) -> str:
+    """Collapse letter-spaced print ("Z i n n e r  M ó r i t z": the PDF text
+    layer of a spaced-out firm name) into words. Within a run whose tokens
+    are mostly one character and separated by single spaces, the single
+    spaces go; two or more spaces (or a line break) separate words.
+    Ordinary text comes back with its whitespace normalised, nothing else."""
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    out = []
+    for part in re.split(r"\s{2,}|\n", t):
+        toks = part.split(" ")
+        if len(toks) >= 3 and sum(1 for x in toks if len(x) == 1) >= 0.6 * len(toks):
+            out.append(_LETTER_SPACED_RE.sub("", part))
+        else:
+            out.append(re.sub(r"\s+", " ", part).strip())
+    return " ".join(x for x in out if x)
+
+
 def identity_of(structured) -> dict:
     """The identity fields from a record's structured object (data over
     llm), restricted to the known keys; {} when there is none."""

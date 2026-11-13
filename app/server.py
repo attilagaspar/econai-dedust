@@ -4660,6 +4660,9 @@ class ConfigUpdate(BaseModel):
     # fragment derivation (app/fragments.py): {label: start | stop | ignore};
     # the whole mapping is replaced ("" / missing role = no role; {} clears)
     record_roles:   Optional[dict] = None
+    # records from lattice rows (13 §6): dataset declaration names whose rows
+    # are the project's records; [] clears (back to the label sweep)
+    record_datasets: Optional[list] = None
     # PDF import resolution (app/page_import.py): render_scale = number or
     # "native" ("" / 2.0 clears → default); render_longest_px = int (0 / ""
     # clears; wins over render_scale when set)
@@ -4711,6 +4714,17 @@ def api_update_config(name: str, body: ConfigUpdate):
                 cfg["record_roles"] = roles
             else:
                 cfg.pop("record_roles", None)
+        if body.record_datasets is not None:
+            names = [str(x).strip() for x in body.record_datasets if str(x).strip()]
+            ddir = pdir / "datasets"
+            missing = [n for n in names if not (ddir / f"{n}.dataset.json").exists()]
+            if missing:
+                raise HTTPException(status_code=400,
+                                    detail=f"no such dataset declaration in project '{name}': {missing}")
+            if names:
+                cfg["record_datasets"] = names
+            else:
+                cfg.pop("record_datasets", None)
         if body.layout_columns is not None:
             try:
                 mode = _records.normalize_layout(body.layout_columns)
@@ -9006,6 +9020,13 @@ def _records_pages(ann: Path, include_skip: bool = False) -> list:
     return out
 
 
+def _record_datasets_for(cfg: dict) -> list:
+    """The dataset declarations a project's records come from (13 §6);
+    [] = records come from the record-label sweep."""
+    v = (cfg or {}).get("record_datasets")
+    return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+
+
 def _records_settings(cfg: dict, record_label=None, layout_columns=None):
     from app import records as _records
     label = (record_label or "").strip() or _records.record_label_for(cfg)
@@ -9036,7 +9057,7 @@ def api_records_context(folder: str = Query(...)):
     if not cfgp.exists():
         return {"project": None, "record_label": None, "layout_columns": "auto",
                 "record_roles": {}, "record_authority": None, "source_year": None,
-                "labels": [], "projects_root": str(PROJECTS_ROOT)}
+                "record_datasets": [], "labels": [], "projects_root": str(PROJECTS_ROOT)}
     try:
         cfg = json.loads(cfgp.read_text(encoding="utf-8"))
     except Exception:
@@ -9048,6 +9069,7 @@ def api_records_context(folder: str = Query(...)):
             "record_roles": _fragments.record_roles_for(cfg),
             "record_authority": cfg.get("record_authority"),
             "source_year": cfg.get("source_year"),
+            "record_datasets": _record_datasets_for(cfg),
             "labels": cfg.get("labels") or [],
             "projects_root": str(PROJECTS_ROOT)}
 
@@ -9073,6 +9095,10 @@ def api_sweep_records(name: str, body: SweepRecordsRequest = SweepRecordsRequest
     from app import records as _records
     try:
         cfg = load_config(name)
+        if _record_datasets_for(cfg):
+            raise HTTPException(status_code=400, detail=(
+                "This project's records are the rows of its dataset declarations "
+                "(record_datasets); there is nothing to sweep."))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     label, mode = _records_settings(cfg, body.record_label, body.layout_columns)
@@ -9196,11 +9222,13 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
         cfg = load_config(name)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    label, mode = _records_settings(cfg)
+    ds_names = _record_datasets_for(cfg)
+    label, mode = (None, None) if ds_names else _records_settings(cfg)
     ann = project_dir(name) / "annotations"
     pages = _records_pages(ann)
     stem_order = {s: i for i, (s, _) in enumerate(pages)}
-    coll = _records.collect_records(pages, label, mode, stem_order)
+    coll = (_ds_collect_records(ann, pages, ds_names) if ds_names
+            else _records.collect_records(pages, label, mode, stem_order))
     items = []
     for gid in sorted(coll["records"]):
         r = coll["records"][gid]
@@ -9220,6 +9248,7 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
         items.append({"id": gid, "name": r["name"], "n_fragments": len(r["fragments"]),
                       "page_span": r["page_span"], "n_pages": r["n_pages"],
                       "flags": flags, "fragments": r["fragments"],
+                      "values": r.get("values"), "dataset": r.get("dataset"),
                       "structured": _record_extract.summary(structured),
                       "authority": _record_resolve.summary(authority),
                       "suggestion": _record_judge.summary(head_shape[head["idx"]].get("authority_suggestion")
@@ -9228,6 +9257,7 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
     n_long = sum(1 for r in coll["records"].values() if r["n_pages"] > max_pages)
     n_resolved = sum(1 for i in items if i["authority"])
     return {"record_label": label, "layout_columns": mode, "max_pages": max_pages,
+            "record_source": "dataset" if ds_names else "sweep", "record_datasets": ds_names,
             "record_authority": cfg.get("record_authority"), "source_year": cfg.get("source_year"),
             "n_resolved": n_resolved,
             "pages": len(pages), "boxes": coll["n_boxes"],
@@ -9248,7 +9278,7 @@ def _records_resolve_ctx(name: str):
         cfg = load_config(name)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    label, mode = _records_settings(cfg)
+    label, mode = (None, None) if _record_datasets_for(cfg) else _records_settings(cfg)
     fname = cfg.get("record_authority")
     if not fname:
         raise HTTPException(status_code=400, detail=(
@@ -9325,7 +9355,7 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
     head = rec["fragments"][0]
     shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
     head_shape = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
-    ident = _rr.identity_of(head_shape.get("structured"))
+    ident = rec.get("identity") or _rr.identity_of(head_shape.get("structured"))
     q = (q or "").strip()
     queries = [(q, "search")] if q else _rr.queries_for(rec.get("name") or "", ident)
     index = _load_authority(fname)
@@ -9360,13 +9390,90 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
             "head": {"stem": head["stem"], "idx": head["idx"]}, "current": cur}
 
 
-def _collect_for(name: str, label: str, mode: str):
+def _collect_for(name: str, label, mode):
+    """The project's records: the rows of its record datasets (13 §6) when
+    the config lists any, else the record-label sweep."""
     from app import records as _records
     ann = project_dir(name) / "annotations"
     pages = _records_pages(ann)
+    ds_names = _record_datasets_for(load_config(name))
+    if ds_names:
+        return _ds_collect_records(ann, pages, ds_names), dict(pages)
     stem_order = {s: i for i, (s, _) in enumerate(pages)}
     coll = _records.collect_records(pages, label, mode, stem_order)
     return coll, dict(pages)
+
+
+def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
+    """Records from dataset declarations (13 §6): one record per lattice row
+    of each declaration named in `record_datasets`, in page order. The head
+    fragment is the key column's cell (the resolution mark lives there, as
+    on a swept record's head); the other variables' cells follow in
+    declaration order. `values` = best-layer text per variable; `identity`
+    = the declaration's identity map applied to the values (letter-spaced
+    print collapsed, years and serials as ints). The id is derived from
+    (dataset, page order, table, row): a session handle like a swept id —
+    the mark on the cell is the fact. Same shape as
+    records.collect_records, with no unswept boxes."""
+    from app import records as _records
+    from app import record_resolve as _rr
+    by_stem = dict(pages)
+    stem_order = {st: i for i, (st, _) in enumerate(pages)}
+    records: dict = {}
+    n_boxes = 0
+    for di, dsn in enumerate(ds_names):
+        try:
+            decl = _ds_load_decl(str(ann), dsn)
+        except HTTPException as e:
+            raise HTTPException(status_code=400, detail=f"record dataset {dsn!r}: {e.detail}")
+        if decl.record.unit != "lattice_row":
+            raise HTTPException(status_code=400,
+                                detail=f"record dataset {dsn!r} must have record.unit = lattice_row")
+        ident_map = decl.record.identity or {}
+        recs, _findings, _stats = _ds_build(ann, decl)
+        for r in recs:
+            if r.get("excluded"):
+                continue
+            stem = r["key"]["stem"]
+            if stem not in by_stem:
+                continue                                   # a skip page
+            shapes = by_stem[stem].get("shapes") or []
+
+            def frag(idx):
+                sh = shapes[idx] if 0 <= idx < len(shapes) else {}
+                bb = _records._bbox(sh) if sh else None
+                return {"stem": stem, "idx": idx, "bbox": list(bb) if bb else None,
+                        "continuation": False, "locked": False,
+                        "text": _ds_best(_ds_cell_layers(sh))[1][:80] if sh else ""}
+            head_idx = r["key"]["idx"]
+            frags = [frag(head_idx)]
+            seen = {head_idx}
+            values = {}
+            for var in decl.variables:
+                v = r["values"].get(var.name) or {}
+                values[var.name] = v.get("text") or ""
+                if v.get("idx") is not None and v.get("stem") == stem and v["idx"] not in seen:
+                    seen.add(v["idx"]); frags.append(frag(v["idx"]))
+            identity = {}
+            for ik, vn in ident_map.items():
+                t = _rr.unspace(values.get(vn) or "")
+                if not t:
+                    continue
+                if ik in ("founded", "serial_no") and re.fullmatch(r"\d{1,4}", t):
+                    identity[ik] = int(t)
+                elif ik == "other_names":
+                    identity[ik] = [x.strip() for x in re.split(r"\s*[;/|]\s*|\n", t) if x.strip()]
+                else:
+                    identity[ik] = t
+            gid = ((di + 1) * 10**8 + stem_order[stem] * 10**4
+                   + int(r.get("table") or 0) * 1000 + int(r.get("unit_i") or 0))
+            name = _rr.display_name(_rr.unspace(r["key"].get("text") or ""), identity)
+            records[gid] = {"fragments": frags, "first_stem": stem, "page_span": [stem, stem],
+                            "n_pages": 1, "orphan": False, "name": name,
+                            "values": values, "identity": identity, "dataset": dsn,
+                            "table": r.get("table"), "lattice_row": r.get("lattice_row")}
+            n_boxes += len(frags)
+    return {"records": records, "unswept": [], "n_boxes": n_boxes}
 
 
 @app.get("/api/project/{name}/records/candidates")
@@ -9414,7 +9521,7 @@ def _apply_resolution(name: str, rec: dict, by_stem: dict, ann: Path, fname: str
     jf = ann / f"{head['stem']}.json"
     shapes = (by_stem.get(head["stem"]) or {}).get("shapes") or []
     head_shape = shapes[head["idx"]] if 0 <= head["idx"] < len(shapes) else {}
-    ident = _rr.identity_of(head_shape.get("structured"))
+    ident = rec.get("identity") or _rr.identity_of(head_shape.get("structured"))
     rname = rec.get("name") or ""
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     seq = ident.get("serial_no") if isinstance(ident.get("serial_no"), int) else None
@@ -9603,10 +9710,13 @@ def _project_heads(name: str):
     """(heads, label) for a linked project — record heads with their marks."""
     from app import entities as _ent
     cfg = load_config(name)
-    label, mode = _records_settings(cfg)
+    ds_names = _record_datasets_for(cfg)
+    label, mode = (None, None) if ds_names else _records_settings(cfg)
     ann = project_dir(name) / "annotations"
     pages = _records_pages(ann)
-    return _ent.record_heads(name, ann, pages, label, mode), label, ann
+    collect = (lambda pg, so: _ds_collect_records(ann, pg, ds_names)) if ds_names else None
+    return (_ent.record_heads(name, ann, pages, label, mode, collect=collect),
+            label or ", ".join(ds_names), ann)
 
 
 @app.get("/api/entities/groups")
@@ -11532,6 +11642,13 @@ class DatasetRecordSpec(BaseModel):
     # excluded from the records; it still occupies its position in the
     # join sequence.
     exclude_keys: List[str] = []
+    # Records from lattice rows (13 §6): when the project lists this
+    # declaration in `record_datasets`, every row is a record whose identity
+    # object (record_resolve.IDENT_KEYS: name_hu, name_de, seat, founded, …)
+    # is read from these variables: {"name_hu": "name", "seat": "seat"}.
+    # lattice_row only (one cell per record and column; the key cell holds
+    # the resolution mark).
+    identity: Optional[dict] = None
     key:  DatasetKey
 
 
@@ -11607,6 +11724,16 @@ def _ds_pattern_bits(decl: DatasetDecl) -> List[int]:
 def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
     """Human-readable declaration errors beyond what pydantic types enforce."""
     probs = []
+    if decl.record.identity:
+        from app import record_resolve as _rr
+        if decl.record.unit != "lattice_row":
+            probs.append("record.identity needs record.unit = lattice_row (one cell per record and column)")
+        vnames = {v.name for v in decl.variables}
+        for ik, vn in decl.record.identity.items():
+            if ik not in _rr.IDENT_KEYS:
+                probs.append(f"record.identity: {ik!r} is not an identity field {list(_rr.IDENT_KEYS)}")
+            if vn not in vnames:
+                probs.append(f"record.identity: {ik} → variable {vn!r} is not declared")
     bits = _ds_pattern_bits(decl)
     n_slots = sum(bits)
     if n_slots == 0:
