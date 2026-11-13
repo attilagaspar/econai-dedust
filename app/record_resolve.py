@@ -28,10 +28,16 @@ BOOST_SEAT     = 12.0
 BOOST_FOUNDED  = 10.0
 BOOST_COUNTY   = 4.0
 BOOST_FORM     = 3.0
+BOOST_COURT    = 8.0    # ledger: the same registering court
+BOOST_ISSUE    = 25.0   # ledger: the entity has an event in the issue this row cites
 
 IDENT_KEYS = ("serial_no", "name_hu", "name_de", "other_names", "legal_form", "seat",
               "county", "address", "founded", "charter_until", "capital_nominal",
-              "capital_paid_in", "currency", "notes")
+              "capital_paid_in", "currency", "notes",
+              # ledger sources (13 §6b): the registering court, the event's date
+              # and kind, the issue the row was printed in and the one it cites,
+              # the registry position
+              "court", "event_date", "event_type", "issue", "issue_ref", "registry_no")
 
 OUTCOMES = ("same", "new", "successor")
 
@@ -141,6 +147,38 @@ def seats_agree(a, b):
         return difflib.SequenceMatcher(None, fa, fb).ratio() * 100 >= 85
 
 
+# words of a court's printed name that carry no identity ("kir. törvényszék",
+# "k. és v. törv." = commercial and exchange court): the town adjective is the key
+_COURT_NOISE = {"kiralyi", "kir", "k", "es", "v", "torvenyszek", "torvenyszeki", "torvenyszel", "torveny",
+                "torv", "tvszk", "tszek", "tszk", "birosag", "a", "az", "kereskedelmi", "valto", "ker", "kerti"}
+
+
+def court_key(s) -> str:
+    """The town adjective(s) of a court name, folded: 'Budapesti k. és v.
+    törv.' and 'Budapesti törvényszék' → 'budapesti'."""
+    return " ".join(t for t in _fold(s).split() if t not in _COURT_NOISE and len(t) > 1)
+
+
+def courts_agree(a, b):
+    """True / False / None (unknown): the same registering court under its
+    printed variants (abbreviations, 'Sz.-fehérvári' ~ 'Székesfehérvári')."""
+    if not a or not b:
+        return None
+    ka, kb = court_key(a), court_key(b)
+    if not ka or not kb:
+        return None
+    if ka == kb or ka in kb or kb in ka:
+        return True
+    la, lb = ka.split()[-1], kb.split()[-1]
+    if min(len(la), len(lb)) >= 5 and (la.endswith(lb) or lb.endswith(la)):
+        return True
+    try:
+        from rapidfuzz import fuzz
+        return fuzz.ratio(ka, kb) >= 85
+    except ImportError:
+        return False
+
+
 def years_agree(a, b):
     ya, yb = _year(a), _year(b)
     if ya is None or yb is None:
@@ -154,7 +192,7 @@ def entity_facts(entity: dict) -> dict:
     facts = {}
     layers = [entity.get("attrs") or {}] + [sl.get("attrs") or {} for sl in (entity.get("slices") or [])]
     for layer in layers:
-        for k in ("seat", "county", "founded", "legal_form"):
+        for k in ("seat", "county", "founded", "legal_form", "court"):
             if layer.get(k) not in (None, ""):
                 facts[k] = layer[k]
     return facts
@@ -174,6 +212,8 @@ def boost_for(entity: dict, ident: dict) -> tuple:
         b += BOOST_COUNTY; why.append("county")
     if ident.get("legal_form") and f.get("legal_form") and _norm(ident["legal_form"]) == _norm(f["legal_form"]):
         b += BOOST_FORM; why.append("legal_form")
+    if courts_agree(ident.get("court"), f.get("court")):
+        b += BOOST_COURT; why.append("court")
     return b, why
 
 
@@ -247,7 +287,7 @@ def founded_after_seen(ident: dict, entity: dict):
 
 def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                      rescore=None, exclude_source: str | None = None, own_gid=None,
-                     members: dict | None = None) -> list:
+                     members: dict | None = None, cited: set | None = None) -> list:
     """Union of the matcher's candidate lists (one per query), best score per
     entity, blocking boosts applied for ranking; `score` is the string
     similarity (re-scored by `rescore(query, matched)` when given — the
@@ -278,6 +318,8 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
     for cid, c in best.items():
         ent = merged_entity(raw_by_id, members, cid)
         b, why = boost_for(ent, ident)
+        if cited and cid in cited:            # the row cites the issue this entity was printed in
+            b += BOOST_ISSUE; why.append("cited issue")
         facts = entity_facts(ent)
         slices = ent.get("slices") or []
         last = slices[-1] if slices else {}
@@ -285,6 +327,7 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                     "facts": facts, "n_slices": len(slices),
                     "seat_agree": seats_agree(ident.get("seat"), facts.get("seat")),
                     "year_agree": years_agree(ident.get("founded"), facts.get("founded")),
+                    "court_agree": courts_agree(ident.get("court"), facts.get("court")),
                     "first_seen": first_seen(ent),
                     "founded_after_seen": founded_after_seen(ident, ent),
                     "last_slice": {"as_of": last.get("as_of"), "source": last.get("source"),
@@ -315,6 +358,8 @@ def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
     best = cands[0]
     sc = best.get("score", 0.0)
     sa, ya = best.get("seat_agree"), best.get("year_agree")
+    if best.get("court_agree") is False:        # another court = another registry entry (13 §6b)
+        return "open", "court differs"
     sure, weak = floor + (SURE_NAME - GOOD_NAME), floor - (GOOD_NAME - WEAK_NAME)
     if sc >= sure:
         if sa is False and ya is False:
@@ -367,17 +412,29 @@ def slice_from(ident: dict, record_name: str, project: str, stem: str, gid, seq,
     """The source-year slice a resolution writes to the entity."""
     attrs = {k: ident[k] for k in ("seat", "county", "founded", "charter_until", "legal_form",
                                    "capital_nominal", "capital_paid_in", "currency", "address",
-                                   "serial_no", "name_de", "notes") if ident.get(k) not in (None, "")}
-    return {"as_of": source_year, "source": project, "type": etype,
-            "name": display_name(record_name, ident) or None,
-            "attrs": attrs,
-            "provenance": {"project": project, "stem": stem, "group_id": gid},
-            "seq": seq if seq is not None else gid}
+                                   "serial_no", "name_de", "notes", "court") if ident.get(k) not in (None, "")}
+    sl = {"as_of": source_year, "source": project, "type": etype,
+          "name": display_name(record_name, ident) or None,
+          "attrs": attrs,
+          "provenance": {"project": project, "stem": stem, "group_id": gid},
+          "seq": seq if seq is not None else gid}
+    # ledger sources (13 §6b): the slice is a dated, typed event of the volume
+    if ident.get("event_date"):
+        sl["date"] = ident["event_date"]
+    if ident.get("event_type"):
+        sl["event"] = ident["event_type"]
+    if ident.get("issue") is not None:
+        sl["provenance"]["issue"] = ident["issue"]
+    if isinstance(ident.get("registry_no"), dict):
+        sl["registry_no"] = ident["registry_no"]
+        if ident["registry_no"].get("sub") is not None and seq is None:
+            sl["seq"] = ident["registry_no"]["sub"]
+    return sl
 
 
 def entity_attrs(ident: dict) -> dict:
     """Timeless-ish facts worth keeping at entity level at mint time."""
-    return {k: ident[k] for k in ("legal_form", "founded", "seat") if ident.get(k) not in (None, "")}
+    return {k: ident[k] for k in ("legal_form", "founded", "seat", "court") if ident.get(k) not in (None, "")}
 
 
 def mark(entity: dict | None, outcome: str, source: str, score, file: str, gid, ts: str,

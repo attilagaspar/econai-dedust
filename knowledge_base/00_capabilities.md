@@ -369,6 +369,16 @@ only ever written by a person.
   record browser (values under each record, no chain / resweep buttons),
   candidates, decisions, the batch, the judge and the entity view work on
   these records unchanged; the sweep answers 400.
+- **Ledger sources** (plan 13 §6b, built 2026-11-13; `app/ledger.py`): a
+  project of kind `ledger` (dashboard → Records → kind) treats its rows
+  as events of a volume — several per firm. Declarations get `inherit:
+  ditto` (a column printed only when it changes) and `record.derive`
+  (parsers: `date_hu`, `issue_ref`, `folio`, `event_type`); the page's
+  issue comes from the mastheads. A decision writes a dated, typed slice
+  with the issue in its provenance; candidates: no same-source exclusion,
+  the entities printed in a cited issue boosted, the same court boosted, a
+  different court blocks; the batch mints registrations only and leaves
+  change events without a match open.
 - **Entity merge** (plan 13 §5.3, built 2026-11-12): two entities that are
   one firm are joined by a `duplicate_of` edge from the higher id to the
   lower (`POST /api/authority/merge {ids:[a,b]}`; ids are never rewritten,

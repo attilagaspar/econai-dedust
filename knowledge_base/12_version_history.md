@@ -552,3 +552,14 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   (bottom right, above the record browser's pill) with the name and the
   uncovered-table count; clicking a page in the test results or the
   coverage list minimizes by itself; restore brings the same window back.
+- **Nov 13 — Ledger layer (plan 13 §6b)**: `app/ledger.py` parsers
+  (`date_hu`, `issue_ref`, `folio`, `event_type`, `issue_of_pages`);
+  declarations: `inherit: ditto` on variables, `record.derive`; identity
+  keys `court` / `event_date` / `event_type` / `issue` / `issue_ref` /
+  `registry_no`; `record_source_kind` (census | ledger) in the config,
+  dashboard select; slices carry `date`, `event`, `provenance.issue`,
+  attrs `court`; the authority index maps (source, issue) → entities;
+  candidates: `courts_agree` + `BOOST_COURT`, cited-issue lane +
+  `BOOST_ISSUE`, no same-source exclusion for ledgers; `decide` blocks on
+  a different court; the batch mints registrations only. Tests:
+  `tests/test_ledger.py`.

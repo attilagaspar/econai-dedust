@@ -279,3 +279,43 @@ already the human-verified structure of these books (gazette_1876: 1109
 verified pages); the declaration already names the columns; and a dataset
 record carries every column as a variable, which the ledger design (keys,
 back-references, event dates) needs as named fields, not as free text.
+
+
+## 6b. Ledger sources (built 2026-11-13)
+
+**Status: BUILT — ditto inheritance, parsed event fields, the `ledger`
+source kind, court and cited-issue lanes, the batch's minting rule.
+NOT BUILT: the registry-key lane (folio / sub-number: no volume with
+folios is ready yet), cross-volume back-references ("Lásd a II. évf."),
+the year-end index validator, the lifecycle export.**
+
+A *census* lists a firm once per volume (the Compass); a *ledger* prints
+every registry act (the Gazette), so one firm has many rows in a volume
+and the rows are events. A project declares `record_source_kind: ledger`
+(dashboard → Records → kind). What changes:
+
+- **Rows carry parsed fields.** The declaration says which text to parse
+  with which parser (`record.derive`, parsers in `app/ledger.py`: `date_hu`,
+  `issue_ref`, `folio`, `event_type`), and which column inherits down the
+  page (`inherit: ditto` — the court is printed only when it changes; the
+  OCR's `>` for „ counts). The record bridge folds the results into the
+  identity object: `court`, `event_date`, `event_type`, `issue_ref`, the
+  page's own `issue` (from the mastheads, `issue_of_pages`).
+- **A decision writes an event.** The slice keeps `as_of` = the volume's
+  year and adds `date`, `event` and `provenance.issue`; the entity's attrs
+  gain `court`. The lifecycle is the entity's slices by date.
+- **Lanes.** No same-source exclusion. A row citing an earlier issue of
+  the same volume gets the entities printed there as candidates, boosted
+  (`BOOST_ISSUE`); the same court boosts (`BOOST_COURT`); a *different*
+  court blocks a match at every tier — another court is another registry
+  entry, and a transfer cites the old position, which becomes a successor
+  edge later.
+- **Minting.** The batch mints only rows whose event is a registration
+  (no verb of change). A deletion or change that matches nothing stays
+  open: a gap to look at, never a new firm.
+
+First target: gazette_1876, the year the register was set up — 18.7k rows,
+nearly all first registrations, 241 rows citing an earlier issue of the
+year. The registry key arrives with the first volume that prints folio and
+sub-number (1880 does; 1877–1879 to be checked), and with it the lane that
+makes later volumes a lookup.

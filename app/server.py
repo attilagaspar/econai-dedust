@@ -4663,6 +4663,8 @@ class ConfigUpdate(BaseModel):
     # records from lattice rows (13 §6): dataset declaration names whose rows
     # are the project's records; [] clears (back to the label sweep)
     record_datasets: Optional[list] = None
+    # "census" | "ledger" (13 §6b); "" / "census" clears
+    record_source_kind: Optional[str] = None
     # PDF import resolution (app/page_import.py): render_scale = number or
     # "native" ("" / 2.0 clears → default); render_longest_px = int (0 / ""
     # clears; wins over render_scale when set)
@@ -4725,6 +4727,14 @@ def api_update_config(name: str, body: ConfigUpdate):
                 cfg["record_datasets"] = names
             else:
                 cfg.pop("record_datasets", None)
+        if body.record_source_kind is not None:
+            kind = body.record_source_kind.strip().lower()
+            if kind not in ("", "census", "ledger"):
+                raise HTTPException(status_code=400, detail="record_source_kind must be census or ledger")
+            if kind == "ledger":
+                cfg["record_source_kind"] = "ledger"
+            else:
+                cfg.pop("record_source_kind", None)
         if body.layout_columns is not None:
             try:
                 mode = _records.normalize_layout(body.layout_columns)
@@ -5864,6 +5874,17 @@ def _build_auth_index(data: dict) -> dict:
         edges_by_id.setdefault(b, []).append(ed)
         if ed.get("type") == "duplicate_of":
             dup_of[a] = b
+    # Ledger sources: which entities have an event in which issue of which
+    # volume (slice provenance.issue), for rows citing an earlier issue.
+    by_source_issue: dict = {}
+    for e in data.get("entities", []):
+        for sl in e.get("slices") or []:
+            prov = sl.get("provenance") or {}
+            if prov.get("issue") is not None and prov.get("project") and e.get("id"):
+                try:
+                    by_source_issue.setdefault((prov["project"], int(prov["issue"])), []).append(e["id"])
+                except (TypeError, ValueError):
+                    pass
     canonical: dict = {}
     members: dict = {}        # survivor -> the ids merged into it (13 §5.3)
     for a in dup_of:
@@ -5873,6 +5894,7 @@ def _build_auth_index(data: dict) -> dict:
         canonical[a] = cur
         members.setdefault(cur, []).append(a)
     return {"by_id": by_id, "children": children, "pools": pools, "members": members,
+            "by_source_issue": by_source_issue,
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
             "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
             "strip": strip, "phrases": phrases, "fold_phrases": fold_phrases,
@@ -9027,6 +9049,13 @@ def _record_datasets_for(cfg: dict) -> list:
     return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
 
 
+def _record_kind(cfg: dict) -> str:
+    """"census" (a directory: one entry per firm per volume) or "ledger" (a
+    registry gazette: many events of one firm per volume — no same-source
+    exclusion, slices carry the event's date and kind; 13 §6b)."""
+    return "ledger" if (cfg or {}).get("record_source_kind") == "ledger" else "census"
+
+
 def _records_settings(cfg: dict, record_label=None, layout_columns=None):
     from app import records as _records
     label = (record_label or "").strip() or _records.record_label_for(cfg)
@@ -9057,7 +9086,8 @@ def api_records_context(folder: str = Query(...)):
     if not cfgp.exists():
         return {"project": None, "record_label": None, "layout_columns": "auto",
                 "record_roles": {}, "record_authority": None, "source_year": None,
-                "record_datasets": [], "labels": [], "projects_root": str(PROJECTS_ROOT)}
+                "record_datasets": [], "record_source_kind": "census",
+                "labels": [], "projects_root": str(PROJECTS_ROOT)}
     try:
         cfg = json.loads(cfgp.read_text(encoding="utf-8"))
     except Exception:
@@ -9070,6 +9100,7 @@ def api_records_context(folder: str = Query(...)):
             "record_authority": cfg.get("record_authority"),
             "source_year": cfg.get("source_year"),
             "record_datasets": _record_datasets_for(cfg),
+            "record_source_kind": _record_kind(cfg),
             "labels": cfg.get("labels") or [],
             "projects_root": str(PROJECTS_ROOT)}
 
@@ -9258,6 +9289,7 @@ def api_list_records(name: str, max_pages: int = Query(2, ge=1),
     n_resolved = sum(1 for i in items if i["authority"])
     return {"record_label": label, "layout_columns": mode, "max_pages": max_pages,
             "record_source": "dataset" if ds_names else "sweep", "record_datasets": ds_names,
+            "record_source_kind": _record_kind(cfg),
             "record_authority": cfg.get("record_authority"), "source_year": cfg.get("source_year"),
             "n_resolved": n_resolved,
             "pages": len(pages), "boxes": coll["n_boxes"],
@@ -9365,10 +9397,25 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
         ent = raw.get(q) or raw.get(q.upper())
         if ent:   # an entity id typed verbatim
             per_query.append((q, "id", [{"id": ent.get("id"), "score": 100.0, "via": "id", "raw": ent.get("name") or q}]))
+    kind = _record_kind(load_config(name))
+    cited = None
+    ref = ident.get("issue_ref") if isinstance(ident.get("issue_ref"), dict) else None
+    if ref and ref.get("issue") is not None and not ref.get("year") and not ref.get("volume"):
+        # the row cites an earlier issue of THIS volume: the entities printed
+        # there are candidates by name, boosted (13 §6b, the issue lane)
+        ids = (index.get("by_source_issue") or {}).get((name, int(ref["issue"]))) or []
+        if ids:
+            cited = set(ids)
+            raw = index.get("raw_by_id") or {}
+            q0 = queries[0][0] if queries else (rec.get("name") or "")
+            per_query.append((q0, "issue", [
+                {"id": i, "score": _auth_whole_name_score(q0, (raw.get(i) or {}).get("name") or "", index),
+                 "via": "issue", "raw": (raw.get(i) or {}).get("name") or ""} for i in ids]))
     cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k,
                                  rescore=lambda q, m: _auth_whole_name_score(q, m, index),
-                                 exclude_source=name, own_gid=_rr_own_gid(rec),
-                                 members=index.get("members"))
+                                 exclude_source=None if kind == "ledger" else name,
+                                 own_gid=_rr_own_gid(rec),
+                                 members=index.get("members"), cited=cited)
     for c in cands:
         prov = (c.get("last_slice") or {}).get("provenance") or {}
         if not prov.get("project"):
@@ -9387,7 +9434,7 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
     if cur:   # the mark may name an id since merged into a survivor
         cur["canonical_id"] = (index.get("canonical") or {}).get(cur["id"], cur["id"])
     return {"queries": queries, "identity": ident, "candidates": cands, "search": q or None,
-            "head": {"stem": head["stem"], "idx": head["idx"]}, "current": cur}
+            "kind": kind, "head": {"stem": head["stem"], "idx": head["idx"]}, "current": cur}
 
 
 def _collect_for(name: str, label, mode):
@@ -9417,8 +9464,10 @@ def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
     records.collect_records, with no unswept boxes."""
     from app import records as _records
     from app import record_resolve as _rr
+    from app import ledger as _ledger
     by_stem = dict(pages)
     stem_order = {st: i for i, (st, _) in enumerate(pages)}
+    issues = _ledger.issue_of_pages(pages)             # {stem: issue number} from the mastheads
     records: dict = {}
     n_boxes = 0
     for di, dsn in enumerate(ds_names):
@@ -9465,12 +9514,18 @@ def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
                     identity[ik] = [x.strip() for x in re.split(r"\s*[;/|]\s*|\n", t) if x.strip()]
                 else:
                     identity[ik] = t
+            for dk, dv in (r.get("derived") or {}).items():    # parsed ledger fields (13 §6b)
+                if dv not in (None, "", {}):
+                    identity[dk] = dv
+            if issues.get(stem) is not None:
+                identity["issue"] = issues[stem]
             gid = ((di + 1) * 10**8 + stem_order[stem] * 10**4
                    + int(r.get("table") or 0) * 1000 + int(r.get("unit_i") or 0))
             name = _rr.display_name(_rr.unspace(r["key"].get("text") or ""), identity)
             records[gid] = {"fragments": frags, "first_stem": stem, "page_span": [stem, stem],
                             "n_pages": 1, "orphan": False, "name": name,
                             "values": values, "identity": identity, "dataset": dsn,
+                            "derived": r.get("derived") or {},
                             "table": r.get("table"), "lattice_row": r.get("lattice_row")}
             n_boxes += len(frags)
     return {"records": records, "unswept": [], "n_boxes": n_boxes}
@@ -9666,10 +9721,14 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
         cands = c["candidates"]
         best = cands[0] if cands else None
         verdict, reason = _rr.decide(cands, body.accept_floor, body.margin)
+        ev = (c.get("identity") or {}).get("event_type")
         if verdict == "same":
             decision, ent = "same", best["id"]
-        elif body.mint_unmatched:
+        elif body.mint_unmatched and (c.get("kind") != "ledger" or ev in (None, "registered")):
             decision, ent = "new", None
+        elif body.mint_unmatched:
+            # ledger: a later event of a firm nobody registered is a gap to look at, not a new firm
+            decision, ent, reason = "unresolved", None, f"{reason}; a '{ev}' event is not minted"
         else:
             decision, ent = "unresolved", None
         item = {"id": gid, "name": rec.get("name") or _rr.display_name("", c.get("identity") or {}),
@@ -11664,6 +11723,11 @@ class DatasetRecordSpec(BaseModel):
     # lattice_row only (one cell per record and column; the key cell holds
     # the resolution mark).
     identity: Optional[dict] = None
+    # Ledger fields parsed from the row without a model (app/ledger.py,
+    # 13 §6b): {"event_date": {"from": "order", "parser": "date_hu"},
+    # "issue_ref": {"from": "note", "parser": "issue_ref"}, …}; the record
+    # bridge folds the results into the identity object.
+    derive: Optional[dict] = None
     key:  DatasetKey
 
 
@@ -11681,6 +11745,9 @@ class DatasetVariable(BaseModel):
                                        # (serial numbers, codes)
     scale:  Optional[str] = None       # "log" | "raw"; default log when all ≥ 0
     esd:    bool = False               # run Generalized ESD on this variable
+    # "ditto": a blank cell or a ditto mark („ » ") takes the value of the
+    # record above in reading order (a court printed only when it changes)
+    inherit: Optional[str] = None
 
 
 class DatasetIdentity(BaseModel):
@@ -11739,6 +11806,19 @@ def _ds_pattern_bits(decl: DatasetDecl) -> List[int]:
 def _ds_decl_problems(decl: DatasetDecl) -> List[str]:
     """Human-readable declaration errors beyond what pydantic types enforce."""
     probs = []
+    from app import ledger as _ledger
+    vnames_all = {v.name for v in decl.variables}
+    for v in decl.variables:
+        if v.inherit not in (None, "ditto"):
+            probs.append(f"variable {v.name}: inherit must be 'ditto'")
+    for dn, spec in (decl.record.derive or {}).items():
+        if not isinstance(spec, dict) or spec.get("parser") not in _ledger.PARSERS:
+            probs.append(f"record.derive {dn}: parser must be one of {sorted(_ledger.PARSERS)}")
+            continue
+        src = spec.get("from")
+        for sv in ([src] if isinstance(src, str) else (src or [])):
+            if sv not in vnames_all:
+                probs.append(f"record.derive {dn}: variable {sv!r} is not declared")
     if decl.scope.header is not None:
         if not isinstance(decl.scope.header, dict) or not decl.scope.header:
             probs.append("scope.header must be a non-empty {column: pattern} object")
@@ -12466,6 +12546,38 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                                      "row_n": entry["row_n"],
                                      "detail": f"keyed join: slot-{sl} row '{entry['text']}' "
                                                f"matches no row on the key page"})
+
+    # inherit: "ditto" — a blank or ditto-mark cell takes the value above, in
+    # reading order; crossing a table or page is reported (once per table)
+    for var in decl.variables:
+        if var.inherit != "ditto":
+            continue
+        carry, origin = None, None
+        for rec in records:
+            if rec.get("excluded"):
+                continue
+            val = rec["values"].get(var.name)
+            if val is None:
+                continue
+            t = (val.get("text") or "").strip()
+            here = (rec["key"]["stem"], rec.get("table"))
+            if not t or _auth_is_ditto(t):
+                if carry is None:
+                    continue
+                val.update({"text": carry, "value": carry, "status": "ok", "inherited": True})
+                if origin != here:
+                    findings.append({"check": "structure", "stem": rec["key"]["stem"], "idx": val.get("idx"),
+                                     "detail": f"{var.name}: a ditto / blank at the top of a table inherits "
+                                               f"'{carry}' from the previous table or page"})
+                    origin = here
+            else:
+                carry, origin = t, here
+    if decl.record.derive:
+        from app import ledger as _ledger
+        for rec in records:
+            if not rec.get("excluded"):
+                rec["derived"] = _ledger.derive({k: (v.get("text") or "") for k, v in rec["values"].items()},
+                                                decl.record.derive)
 
     stats = {"pages": n_pages_used, "cycles": len(cycles),
              "records": sum(1 for r in records if not r.get("excluded")),

@@ -1080,6 +1080,8 @@ function renderRecordSettings() {
     labels.map(l => `<option value="${l}">${l}</option>`).join('');
   sel.value = labels.includes(cur) ? cur : '';
   cols.value = String(activeProj.config?.layout_columns || 'auto');
+  const kindSel = document.getElementById('rec-kind');
+  if (kindSel) kindSel.value = activeProj.config?.record_source_kind === 'ledger' ? 'ledger' : 'census';
   const dsIn = document.getElementById('rec-datasets');
   if (dsIn) {
     dsIn.value = (activeProj.config?.record_datasets || []).join(', ');
@@ -1130,6 +1132,11 @@ async function _patchRecordSetting(body, okMsg) {
     showToast('Error: ' + errMsg(data), 4000, 'red');
   }
   renderRecordSettings();
+}
+
+function onRecordKindChange() {
+  const v = document.getElementById('rec-kind')?.value || 'census';
+  _patchRecordSetting({ record_source_kind: v }, v === 'ledger' ? 'Records are events of a ledger: several per firm per volume' : 'Records are census entries: one per firm per volume');
 }
 
 function onRecordDatasetsChange() {
@@ -1566,6 +1573,12 @@ function renderDetail() {
         <input id="rec-datasets" onchange="onRecordDatasetsChange()" placeholder="e.g. egyeni, tarsas"
                style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;min-width:220px;">
         <span id="rec-datasets-hint" style="font-size:0.75rem;color:#667;"></span>
+        <span style="font-size:0.8rem;color:#aaa;margin-left:8px;">kind</span>
+        <select id="rec-kind" onchange="onRecordKindChange()"
+                title="census: one entry per firm per volume (a directory) — an entity that already holds a record of this volume is never offered again. ledger: many events of one firm per volume (a registry gazette) — no such exclusion; a decision writes a dated, typed event; rows citing an earlier issue find the entities printed there; a change event with no match stays open instead of minting."
+                style="background:#1e1e2e;border:1px solid #444;color:#ccc;border-radius:4px;padding:3px 8px;font-size:0.8rem;">
+          <option value="census">census</option><option value="ledger">ledger</option>
+        </select>
       </div>
       <div class="btn-row" id="rec-roles-row" style="margin-top:4px;align-items:center;gap:6px;flex-wrap:wrap;display:none;"
            title="Fragment derivation. The detector learns small, consistent objects: a START label marks where a record begins (a name line), a STOP label what ends it (a section heading, an advertisement), an IGNORE label is skipped and masked out of the ink. The batch op ⛓ Records: derive fragments builds the record-label boxes (with ⛓ continuation marks) from these; a page with no starts and no stops is a continuation page while a record is open. Saved in the project config.">

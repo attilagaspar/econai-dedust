@@ -280,7 +280,7 @@ def test_sweep_endpoint_dry_run_then_write_and_browse(client, rec_project):
     assert r.status_code == 200 and r.json()["config"]["record_label"] == "firm"
     assert "layout_columns" not in r.json()["config"]          # auto = absent
     ctx = client.get("/api/records/context", params={"folder": str(pdir / "annotations")}).json()
-    assert ctx == {"project": name, "record_label": "firm", "layout_columns": "auto", "record_datasets": [],
+    assert ctx == {"project": name, "record_label": "firm", "layout_columns": "auto", "record_datasets": [], "record_source_kind": "census",
                    "record_roles": {}, "record_authority": None, "source_year": None,
                    "labels": ["firm", "page_header"], "projects_root": str(PROJECTS_ROOT)}
 
