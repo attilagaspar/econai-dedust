@@ -378,7 +378,14 @@ only ever written by a person.
   with the issue in its provenance; candidates: no same-source exclusion,
   the entities printed in a cited issue boosted, the same court boosted, a
   different court blocks; the batch mints registrations only and leaves
-  change events without a match open.
+  change events without a match open. **Batch runs as a server job**
+  (`background: true`; `GET …/resolve-records/status`, `POST …/stop`):
+  the batch panel shows pass, done / total, counts and elapsed time every
+  2 s with a ■ Stop button, resumes watching when reopened; a write run
+  holds the authority in an **authority session** (in memory, new
+  entities and slices join the index at once, the file written every
+  60 s and at the end) — the 1876 bootstrap's second pass went from one
+  file rewrite per decision to none.
 - **Entity merge** (plan 13 §5.3, built 2026-11-12): two entities that are
   one firm are joined by a `duplicate_of` edge from the higher id to the
   lower (`POST /api/authority/merge {ids:[a,b]}`; ids are never rewritten,

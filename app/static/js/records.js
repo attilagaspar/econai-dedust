@@ -793,6 +793,39 @@ async function _recDecide(gid, outcome, entityId, edgeType) {
   } catch (e) { showToast('Resolve error: ' + (e?.message || e), 7000); }
 }
 
+// The resolve batch runs as a server job: poll its status every 2 s into
+// the batch panel's progress line (pass, done / total, counts, elapsed, a
+// ■ Stop button) and return the finished run's result. Resumes on an
+// already running job (the panel was reopened).
+async function _recWatchResolveJob(prog, fmt) {
+  const url = `${API}/api/project/${encodeURIComponent(_recCtx.project)}/resolve-records/status`;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  for (;;) {
+    let j;
+    try { const r = await fetch(url); j = (await r.json()).job; } catch (e) { j = null; }
+    if (!j) { if (prog) prog.textContent = 'No resolve job found'; return null; }
+    const c = j.counts || {};
+    const el = Math.round(((j.finished || Date.now() / 1000) - j.started));
+    const line = `${j.state === 'running' ? '⏳' : '✓'} pass ${j.phase} · ${j.done}${j.total != null ? ' / ' + j.total : ''} records · ` +
+      `${c.same || 0} same · ${c.new || 0} new · ${c.unresolved || 0} unresolved · ${c.kept || 0} kept` +
+      (c.error ? ` · ${c.error} error(s)` : '') + ` · ${Math.floor(el / 60)}m${String(el % 60).padStart(2, '0')}s` +
+      (j.current ? ` · <span style="color:#667;">${_escHtml(j.current)}</span>` : '');
+    if (j.state === 'running') {
+      if (prog) prog.innerHTML = line + ` <button class="nav-btn" onclick="_recStopResolveJob()" title="Stop after the current record; what is decided stays written">■ Stop</button>`;
+      await sleep(2000);
+      continue;
+    }
+    if (j.state === 'failed') { if (prog) prog.innerHTML = `<span style="color:#f87171;">✗ ${_escHtml(j.error || 'failed')}</span>`; showToast('Resolve job failed: ' + (j.error || ''), 9000); return null; }
+    const r2 = await fetch(url + '?items=true'); const d = (await r2.json()).job?.result;
+    if (j.state === 'stopped') showToast('Resolve job stopped: ' + (d ? fmt(d) : ''), 8000);
+    return d || null;
+  }
+}
+
+async function _recStopResolveJob() {
+  try { await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/resolve-records/stop`, {method: 'POST'}); } catch (e) {}
+}
+
 function _batchSortedPages() {
   // the batch modal's page range when a helper exposes it; else every page
   try { if (typeof _batchSelectedIndices === 'function') return [..._batchSelectedIndices()].sort((a, b) => a - b); } catch (e) { /* fall through */ }
@@ -818,6 +851,16 @@ async function _batchRecrInit() {
       .map(a => `<option value="${_escHtml(a.file)}"${a.file === cur ? ' selected' : ''}>${_escHtml(a.authority || a.file)}${a.id_scheme ? '' : ' (no id scheme: cannot mint)'}</option>`).join('');
   } catch (e) { sel.innerHTML = '<option value="">(authorities unavailable)</option>'; }
   if (yr) yr.value = _recCtx.source_year ?? '';
+  // a resolve job started earlier (another tab, a reload) still runs on the server: show it
+  try {
+    const r = await fetch(`${API}/api/project/${encodeURIComponent(_recCtx.project)}/resolve-records/status`);
+    const j = (await r.json()).job;
+    if (j && j.state === 'running') {
+      const prog = document.getElementById('batch-progress');
+      const fmt = (d) => `${d.counts.same || 0} same · ${d.counts.new || 0} new · ${d.counts.unresolved || 0} unresolved · ${d.counts.kept || 0} kept`;
+      _recWatchResolveJob(prog, fmt).then(d => { if (d) showToast('✓ resolve job finished: ' + fmt(d), 9000); });
+    }
+  } catch (e) { /* no project context */ }
 }
 
 async function runResolveRecords(sorted, {dryRun = false} = {}) {
@@ -855,7 +898,9 @@ async function runResolveRecords(sorted, {dryRun = false} = {}) {
     if (plan.source_year == null && !(await _batchConfirmInline('Source year is not set: slices will carry no year. Continue anyway?', '▶ Continue'))) return null;
     if (!(await _batchConfirmInline(`Write ${todo} decision(s)? ${fmt(plan)}\n\nThe authority file gains slices${plan.counts.new ? ' and ' + plan.counts.new + ' new entit' + (plan.counts.new === 1 ? 'y' : 'ies') : ''}; each record's head fragment gets the mark (source auto). Human decisions are untouched.`, '▶ Resolve'))) return null;
     if (prog) prog.textContent = 'Resolving…';
-    const d = await post({...body, dry_run: false});
+    await post({...body, dry_run: false, background: true});
+    const d = await _recWatchResolveJob(prog, fmt);
+    if (!d) return null;
     const done = `✓ ${fmt(d)}`;
     if (prog) prog.innerHTML = _escHtml(done) + (d.items.some(i => i.error) ? '<div style="color:#f87171;margin-top:4px;">' +
       d.items.filter(i => i.error).map(i => `record ${i.id}: ${_escHtml(i.error)}`).join('<br>') + '</div>' : '');

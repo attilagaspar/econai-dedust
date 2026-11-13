@@ -572,3 +572,13 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   and installed on Azure; gazette_1876 set to kind ledger with this
   authority, its declarations gained `inherit: ditto` on the court,
   `record.derive` and the court identity field. Not yet run.
+- **Nov 13 — Resolve batch as a job + authority sessions**: `background`
+  on `POST …/resolve-records` runs the batch in a server thread with live
+  status (`…/resolve-records/status`: state, pass, done / total, counts,
+  current record; `…/stop`); the batch panel polls it and shows a progress
+  line with ■ Stop, and resumes on reopen. `_AUTH_SESSIONS`: a write run
+  holds the authority in memory — `_load_authority` serves the session's
+  index, `_auth_file_update` applies updates in memory and adds new
+  entities (and, for same decisions, slices and aliases) to the index
+  incrementally; flushed every 60 s and at the end, index rebuilt once.
+  Measured need: the local 1876 run's pass 2 rewrote 15 MB per decision.

@@ -5913,6 +5913,9 @@ def _load_authority(name: Optional[str] = None) -> dict:
     # outside the lock let every in-flight request start its own multi-second
     # build (thundering herd = the editor freezing for minutes).
     with _AUTH_LOCK:
+        sess = _AUTH_SESSIONS.get(fname)
+        if sess:
+            return sess["index"]                  # a batch holds this file in memory
         cached = _AUTH_CACHE.get(fname)
         if cached and cached["mtime"] == mtime:
             return cached["index"]
@@ -5923,6 +5926,136 @@ def _load_authority(name: Optional[str] = None) -> dict:
 
 
 _AUTH_META_CACHE: dict = {}   # filename -> {"mtime", "meta"}
+
+# ── Authority sessions ──────────────────────────────────────────────────────
+# A batch resolving thousands of records cannot rewrite a 15 MB file and
+# rebuild its index per decision. While a session is open for a file,
+# `_load_authority` serves the session's index and `_auth_file_update`
+# applies updates to the session's data in memory, adding new entities to
+# the index incrementally; the file is written every ~60 s and at the end.
+_AUTH_SESSIONS: dict = {}     # fname -> {"data", "index", "dirty", "last_flush", "started"}
+_AUTH_FLUSH_EVERY = 60.0
+
+
+def _auth_session_begin(fname: str) -> None:
+    path = AUTHORITIES_DIR / fname
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
+    with _AUTH_LOCK:
+        if fname in _AUTH_SESSIONS:
+            raise HTTPException(status_code=409, detail=f"A batch is already running on {fname}; wait for it to finish")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        _AUTH_SESSIONS[fname] = {"data": data, "index": _build_auth_index(data), "dirty": False,
+                                 "last_flush": time.time(), "started": time.time()}
+
+
+def _auth_session_flush(fname: str, end: bool = False) -> None:
+    """Write the session's data to the file (counts and slices_present
+    refreshed); with `end` the session closes and the loaded-index cache
+    takes over the session's index, so nothing is rebuilt."""
+    with _AUTH_LOCK:
+        sess = _AUTH_SESSIONS.get(fname)
+        if not sess:
+            return
+        if sess["dirty"] or end:
+            data = sess["data"]
+            counts = data.setdefault("counts", {})
+            if isinstance(counts, dict):
+                counts["entities"] = len(data.get("entities") or [])
+                counts["aliases"] = sum(len(e.get("aliases") or []) for e in data.get("entities") or [])
+                counts["edges"] = len(data.get("edges") or [])
+            years = {sl.get("as_of") for e in data.get("entities") or []
+                     for sl in (e.get("slices") or []) if sl.get("as_of") is not None}
+            data["slices_present"] = sorted(years, key=lambda y: str(y))
+            path = AUTHORITIES_DIR / fname
+            if sess["dirty"]:
+                _write_json(path, data)
+            sess["dirty"], sess["last_flush"] = False, time.time()
+            if end:
+                try:                               # one rebuild per batch, not one per decision
+                    _AUTH_CACHE[fname] = {"mtime": path.stat().st_mtime, "index": _build_auth_index(data)}
+                except OSError:
+                    _AUTH_CACHE.pop(fname, None)
+                _AUTH_META_CACHE.pop(fname, None)
+        if end:
+            _AUTH_SESSIONS.pop(fname, None)
+
+
+def _auth_session_note_slice(fname: str, e: dict, sl: dict, new_aliases: list) -> None:
+    """During a session a 'same' decision adds a slice (and maybe an alias)
+    to an existing entity: keep the issue map and the name pools current so
+    later rows of the same run find it."""
+    with _AUTH_LOCK:
+        sess = _AUTH_SESSIONS.get(fname)
+        if not sess or not e.get("id"):
+            return
+        index = sess["index"]
+        prov = (sl or {}).get("provenance") or {}
+        if prov.get("issue") is not None and prov.get("project"):
+            try:
+                lst = index.setdefault("by_source_issue", {}).setdefault((prov["project"], int(prov["issue"])), [])
+                if e["id"] not in lst:
+                    lst.append(e["id"])
+            except (TypeError, ValueError):
+                pass
+        v = index["by_id"].get(e["id"]) or _auth_entity_view(e)
+        t = v.get("type") or "settlement"
+        phrases, fold_phrases = index.get("phrases") or (), index.get("fold_phrases") or ()
+        for a in new_aliases or []:
+            raw = a.get("name") if isinstance(a, dict) else a
+            key = _auth_norm(raw or "")
+            if not key:
+                continue
+            c = {"id": e["id"], "raw": raw, "norm": key, "fold": _auth_fold(raw),
+                 "via": (a.get("source") if isinstance(a, dict) else None) or "alias", "parent": v.get("parent")}
+            if phrases:
+                c["norm"] = _auth_strip_status(c["norm"], set(), phrases)
+                c["fold"] = _auth_strip_status(c["fold"], set(), fold_phrases)
+            index["pools"].setdefault(t, []).append(c); index["folds_by_type"].setdefault(t, []).append(c["fold"])
+            index["exact_by_type"].setdefault(t, {}).setdefault(c["norm"], []).append(c)
+            index["pool_all"].append(c); index["folds_all"].append(c["fold"])
+            index["exact_all"].setdefault(c["norm"], []).append(c)
+
+
+def _auth_index_add_entity(index: dict, data: dict, e: dict) -> None:
+    """Add one entity to a built index (the session's), the way
+    `_build_auth_index` would have: views, pools and exact maps, folds,
+    the issue map. Token rarity (idf) is left as built — a new token
+    counts as rare, which is what it is."""
+    v = _auth_entity_view(e)
+    if not v["id"]:
+        return
+    index["by_id"][v["id"]] = v
+    index["raw_by_id"][v["id"]] = e
+    if v["parent"]:
+        index["children"].setdefault(v["parent"], []).append(v["id"])
+    t = v["type"] or "settlement"
+    phrases, fold_phrases = index.get("phrases") or (), index.get("fold_phrases") or ()
+    cands = [(v["name"], "name")] + [(a.get("name"), a.get("source") or "alias")
+                                      for a in (e.get("aliases") or []) if a.get("name")]
+    seen = set()
+    pool = index["pools"].setdefault(t, [])
+    folds = index["folds_by_type"].setdefault(t, [])
+    exact = index["exact_by_type"].setdefault(t, {})
+    for raw, via in cands:
+        key = _auth_norm(raw)
+        if not key or (key, via) in seen:
+            continue
+        seen.add((key, via))
+        c = {"id": v["id"], "raw": raw, "norm": key, "fold": _auth_fold(raw), "via": via, "parent": v["parent"]}
+        if phrases:
+            c["norm"] = _auth_strip_status(c["norm"], set(), phrases)
+            c["fold"] = _auth_strip_status(c["fold"], set(), fold_phrases)
+        pool.append(c); folds.append(c["fold"]); exact.setdefault(c["norm"], []).append(c)
+        index["pool_all"].append(c); index["folds_all"].append(c["fold"])
+        index["exact_all"].setdefault(c["norm"], []).append(c)
+    for sl in e.get("slices") or []:
+        prov = sl.get("provenance") or {}
+        if prov.get("issue") is not None and prov.get("project"):
+            try:
+                index.setdefault("by_source_issue", {}).setdefault((prov["project"], int(prov["issue"])), []).append(v["id"])
+            except (TypeError, ValueError):
+                pass
 
 
 def _authority_meta(fname: str) -> dict:
@@ -6831,6 +6964,18 @@ def _auth_file_update(fname: str, fn) -> dict:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Authority file not found: {fname}")
     with _AUTH_WRITE_LOCK:
+        sess = _AUTH_SESSIONS.get(fname)
+        if sess:                                  # in memory; new entities join the index at once
+            data = sess["data"]
+            ents = data.setdefault("entities", [])
+            n0 = len(ents)
+            result = fn(data)
+            for e in ents[n0:]:
+                _auth_index_add_entity(sess["index"], data, e)
+            sess["dirty"] = True
+            if time.time() - sess["last_flush"] > _AUTH_FLUSH_EVERY:
+                _auth_session_flush(fname)
+            return result
         data = json.loads(path.read_text(encoding="utf-8"))
         result = fn(data)
         counts = data.setdefault("counts", {})
@@ -9614,12 +9759,15 @@ def _apply_resolution(name: str, rec: dict, by_stem: dict, ann: Path, fname: str
             else:
                 slices.append(sl)
             known = {_auth_norm(e.get("name") or "")} | {_auth_norm(a.get("name") or "") for a in e.get("aliases") or []}
+            added = []
             for a in ([alias] if alias else []) + extra:
                 if _auth_norm(a["name"]) not in known:
                     e.setdefault("aliases", []).append({k: v for k, v in a.items() if v is not None})
-                    known.add(_auth_norm(a["name"]))
+                    known.add(_auth_norm(a["name"])); added.append(a)
+            e["_added_aliases"] = added
             return e
         ent = _auth_file_update(fname, _do)
+        _auth_session_note_slice(fname, ent, sl, ent.pop("_added_aliases", []))
     elif outcome in ("new", "successor"):
         if outcome == "successor":
             if not entity_id or entity_id not in index["by_id"]:
@@ -9685,6 +9833,11 @@ class ResolveRecordsBatch(BaseModel):
     mint_unmatched: bool = False             # bootstrap: records with no acceptable candidate become new entities
     overwrite:      bool = False             # re-decide records already marked by auto (human marks are never touched)
     dry_run:        bool = False
+    background:     bool = False             # run as a server job; poll …/resolve-records/status
+
+
+_RESOLVE_JOBS: dict = {}       # project name -> job status dict
+_RESOLVE_JOBS_LOCK = threading.Lock()
 
 
 @app.post("/api/project/{name}/resolve-records")
@@ -9693,7 +9846,75 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
     unambiguous (leads by `margin`) → same (source auto); otherwise → new
     when `mint_unmatched` (the bootstrap of a first source), else left for
     the browser. Human decisions are never overwritten; auto ones only with
-    `overwrite`. Dry run reports the decisions without writing."""
+    `overwrite`. Dry run reports the decisions without writing. A write run
+    holds the authority in memory (an authority session) and writes it at
+    the end; `background` runs it as a server job with live progress
+    (`GET …/resolve-records/status`, `POST …/resolve-records/stop`)."""
+    _records_resolve_ctx(name)                      # fail early on a bad project
+    if not body.background:
+        return _resolve_records(name, body)
+    with _RESOLVE_JOBS_LOCK:
+        j = _RESOLVE_JOBS.get(name)
+        if j and j["state"] == "running":
+            raise HTTPException(status_code=409, detail="A resolve job is already running for this project")
+        job = {"state": "running", "stop": False, "phase": 1, "done": 0, "total": None,
+               "counts": {}, "current": "", "started": time.time(), "finished": None,
+               "error": None, "result": None, "dry_run": body.dry_run}
+        _RESOLVE_JOBS[name] = job
+
+    def _run():
+        try:
+            job["result"] = _resolve_records(name, body, job)
+            job["state"] = "stopped" if job["stop"] else "finished"
+        except HTTPException as e:
+            job["state"], job["error"] = "failed", e.detail
+        except Exception as e:
+            job["state"], job["error"] = "failed", f"{type(e).__name__}: {e}"
+        finally:
+            job["finished"] = time.time()
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "job": {k: v for k, v in job.items() if k != "result"}}
+
+
+@app.get("/api/project/{name}/resolve-records/status")
+def api_resolve_records_status(name: str, items: bool = Query(False)):
+    """The project's resolve job: state (running / finished / stopped /
+    failed), pass, done / total, counts so far; with `items` the finished
+    run's full result."""
+    with _RESOLVE_JOBS_LOCK:
+        j = _RESOLVE_JOBS.get(name)
+        if not j:
+            return {"job": None}
+        out = {k: v for k, v in j.items() if k != "result"}
+        if items and j.get("result") is not None:
+            out["result"] = j["result"]
+        return {"job": out}
+
+
+@app.post("/api/project/{name}/resolve-records/stop")
+def api_resolve_records_stop(name: str):
+    with _RESOLVE_JOBS_LOCK:
+        j = _RESOLVE_JOBS.get(name)
+        if not j or j["state"] != "running":
+            return {"ok": False, "detail": "No running job"}
+        j["stop"] = True
+    return {"ok": True}
+
+
+def _resolve_records(name: str, body: ResolveRecordsBatch, job: dict | None = None) -> dict:
+    """A write run holds the authority in memory and writes it once at the
+    end (and every ~60 s); a dry run touches nothing."""
+    cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
+    if body.dry_run:
+        return _resolve_records_run(name, body, job)
+    _auth_session_begin(fname)
+    try:
+        return _resolve_records_run(name, body, job)
+    finally:
+        _auth_session_flush(fname, end=True)
+
+
+def _resolve_records_run(name: str, body: ResolveRecordsBatch, job: dict | None = None) -> dict:
     from app import record_resolve as _rr
     cfg, label, mode, ann, fname, sy = _records_resolve_ctx(name)
     try:
@@ -9719,14 +9940,24 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
     if bulk:
         order = [g for g in order if _is_reg(coll["records"][g])] + [g for g in order if not _is_reg(coll["records"][g])]
     pending: list = []                       # pass 1: (gid, rec, head, item)
+    if job is not None:
+        job["total"] = len(order) if wanted is None else len([g for g in order if g in wanted])
 
     def _flush_pending():
         if pending:
+            if job is not None:
+                job["current"] = f"writing {len(pending)} new entities and their marks"
             _bulk_mint(name, ann, fname, sy, pending, by_stem)
             pending.clear()
     for gid in order:
         rec = coll["records"][gid]
         head = rec["fragments"][0]
+        if job is not None:
+            if job.get("stop"):
+                break
+            job["phase"] = 2 if (bulk and not _is_reg(rec)) else 1
+            job["current"] = (rec.get("name") or "")[:60]
+            job["counts"] = dict(counts)
         if bulk and pending and not _is_reg(rec):
             _flush_pending()                 # pass 2 begins: later rows must see the minted entities
         if wanted is not None and gid not in wanted:
@@ -9773,8 +10004,12 @@ def api_resolve_records_batch(name: str, body: ResolveRecordsBatch):
                     item["decision"], item["error"] = "error", e.detail
         counts[decision] = counts.get(decision, 0) + 1
         items.append(item)
+        if job is not None:
+            job["done"] += 1
     if bulk:
         _flush_pending()
+    if job is not None:
+        job["counts"], job["current"] = dict(counts), ""
     for it in items:                         # bulk mints that failed are errors, not news
         if it.get("error") and it.get("decision") == "error":
             counts["new"] = max(0, counts.get("new", 0) - 1); counts["error"] = counts.get("error", 0) + 1

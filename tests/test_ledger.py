@@ -192,6 +192,40 @@ def test_ledger_batch_mints_registrations_attaches_cited_events_and_leaves_gaps_
     assert [cell["group_id"] for cell in row["cells"][name]] == [a, c]
 
 
+def test_batch_runs_as_a_background_job_with_progress(client, ledger_project):
+    """`background: true` returns at once; the status endpoint reports pass,
+    done / total and counts while it runs and the full result at the end;
+    the authority is held in memory meanwhile and written once."""
+    name, auth_dir = ledger_project
+    assert client.get(f"/api/project/{name}/resolve-records/status").json()["job"] is None
+    assert client.post(f"/api/project/{name}/resolve-records/stop").json()["ok"] is False
+    r = client.post(f"/api/project/{name}/resolve-records", json={"mint_unmatched": True, "background": True})
+    assert r.status_code == 200 and r.json()["job"]["state"] == "running"
+    for _ in range(300):
+        j = client.get(f"/api/project/{name}/resolve-records/status").json()["job"]
+        if j["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert j["state"] == "finished" and j["total"] == 5 and j["done"] == 5 and j["error"] is None
+    assert {k: v for k, v in j["counts"].items() if v} == {"new": 3, "same": 1, "unresolved": 1}
+    assert "result" not in j
+    res = client.get(f"/api/project/{name}/resolve-records/status", params={"items": True}).json()["job"]["result"]
+    assert len(res["items"]) == 5 and res["authority_file"] == AUTH
+    auth = json.loads((auth_dir / AUTH).read_text(encoding="utf-8"))
+    assert len(auth["entities"]) == 3 and auth["counts"]["entities"] == 3 and auth["slices_present"] == [1876]
+    assert AUTH not in srv._AUTH_SESSIONS                               # the session closed
+    # the loaded index is the session's: the cited-issue map is there without a rebuild
+    assert srv._load_authority(AUTH)["by_source_issue"][(name, 1)] == ["R000001", "R000002"]
+    # a second job while none runs: everything kept
+    r = client.post(f"/api/project/{name}/resolve-records", json={"mint_unmatched": True, "background": True})
+    for _ in range(300):
+        j = client.get(f"/api/project/{name}/resolve-records/status").json()["job"]
+        if j["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert j["counts"].get("kept") == 4
+
+
 def test_census_projects_keep_the_same_source_exclusion(client, ledger_project):
     """The same rows as a census: the deletion row cannot be offered the
     entity its own volume already registered (the old rule, unchanged)."""
