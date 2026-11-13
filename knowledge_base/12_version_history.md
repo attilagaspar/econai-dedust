@@ -548,3 +548,7 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   (Ctrl adds); deleting a whole row or column renumbers the table so the
   numbering stays gap-free (`_latticeCompactAfterDelete`, only the gaps the
   deletion made).
+- **Nov 13 — 📋 Dataset window minimizes**: ▁ shrinks it to a pill
+  (bottom right, above the record browser's pill) with the name and the
+  uncovered-table count; clicking a page in the test results or the
+  coverage list minimizes by itself; restore brings the same window back.

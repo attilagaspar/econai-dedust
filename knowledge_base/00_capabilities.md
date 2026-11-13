@@ -467,7 +467,8 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   per page; a header-less first table inherits the previous page's type;
   `GET /api/datasets/coverage` lists uncovered / doubly covered tables —
   the 📋 Dataset window's **🗂 Coverage** button shows them with a page
-  jump and the header texts), record
+  jump and the header texts; the window **minimizes to a pill** (▁, or by
+  itself when a page is clicked in a list) and keeps its state), record
   spec (internal_row / lattice_row; **join**: positional by page-level
   column sequence, or keyed by the identifier column; `exclude_keys` regexes
   for printed total/header rows), position → named **variables**

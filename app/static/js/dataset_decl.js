@@ -104,7 +104,37 @@ function _ddOpenPanel() {
 
 function closeDatasetDecl() {
   document.getElementById('dd-panel')?.remove();
+  document.getElementById('dd-pill')?.remove();
   _ddUnhighlight();
+}
+
+// Minimize to a pill so the page can be edited (a header cell, a ghost
+// column) without losing the window's state; clicking a page in the test
+// results or the coverage list minimizes by itself.
+function _ddMinimize() {
+  const p = document.getElementById('dd-panel');
+  if (!p || document.getElementById('dd-pill')) return;
+  p.style.display = 'none';
+  _ddUnhighlight();
+  const pill = document.createElement('div');
+  pill.id = 'dd-pill';
+  const recPill = document.getElementById('rec-browser-pill');   // stack above the record browser's pill
+  pill.style.cssText = `position:fixed;right:18px;bottom:${recPill ? 56 : 18}px;z-index:1750;background:#12224a;` +
+    'border:1px solid #2a4a8e;border-radius:18px;box-shadow:0 6px 22px rgba(0,0,0,0.55);' +
+    'padding:7px 14px;font-size:12px;color:#cde;cursor:pointer;display:flex;gap:8px;align-items:center;';
+  pill.title = 'Restore the Dataset window';
+  pill.innerHTML = `📋 Dataset <span style="color:#8a94a6;">${_escHtml(_dd?.name || 'new')}</span>` +
+    (_dd?.coverage?.n_unmatched != null ? ` <span style="color:#fbbf24;">${_dd.coverage.n_unmatched} uncovered</span>` : '') +
+    ` <span style="color:#93c5fd;">▲ restore</span>` +
+    ` <span onclick="event.stopPropagation();closeDatasetDecl()" title="Close" style="color:#fca5a5;padding-left:4px;">✕</span>`;
+  pill.onclick = _ddRestore;
+  document.body.appendChild(pill);
+}
+
+function _ddRestore() {
+  document.getElementById('dd-pill')?.remove();
+  const p = document.getElementById('dd-panel');
+  if (p) { p.style.display = 'flex'; _ddRender(); }
 }
 
 const _ddInput = 'background:#0d1b35;border:1px solid #0f3460;color:#ccc;border-radius:3px;padding:3px 6px;font-size:12px;';
@@ -136,6 +166,7 @@ function _ddRenderHead() {
     '<button class="nav-btn" onclick="_ddSave()" style="color:#86efac;">💾 Save</button>' +
     (!_dd.isNew ? '<button class="nav-btn" onclick="_ddOpenQuality()" title="Open the data-quality page for this dataset">📈 Quality</button>' : '') +
     (!_dd.isNew ? '<button class="nav-btn" onclick="_ddDelete()" title="Delete this declaration (kept as a backup file)" style="color:#fca5a5;">🗑</button>' : '') +
+    '<button class="nav-btn" onclick="_ddMinimize()" title="Minimize to a pill (bottom right); the window keeps its settings, test results and coverage list">▁</button>' +
     '<button class="nav-btn" onclick="closeDatasetDecl()">✕</button>';
 }
 
@@ -607,7 +638,7 @@ function _ddResultsSection() {
     (p.structure_n ? ' — pages whose columns or rows do not match these settings:' : ' 🎉') + '</div>';
   (p.structure_sample || []).forEach(f => {
     html += `<div style="color:#8a94a6;font-size:11px;margin-left:10px;"><span style="color:#93c5fd;cursor:pointer;" ` +
-      `onclick="_searchJump({stem:'${_escHtml(f.stem)}',idx:-1})">${_escHtml(f.stem.slice(-18))}</span> ${_escHtml(f.detail)}</div>`;
+      `onclick="_ddMinimize(); _searchJump({stem:'${_escHtml(f.stem)}',idx:-1})">${_escHtml(f.stem.slice(-18))}</span> ${_escHtml(f.detail)}</div>`;
   });
   html += '<div style="color:#8a94a6;margin-top:4px;">Per-variable read counts are shown in the table above (✓ read / ✗ unreadable; hover ✗ for examples).</div>';
   return html + '</div>';
@@ -636,7 +667,7 @@ function _ddCoverageSection() {
   const row = (t, why) => {
     const hdr = Object.entries(t.header || {}).map(([col, txt]) => `<span style="color:#667;">${col}</span> ${_escHtml(txt)}`).join(' · ');
     return `<div style="color:#8a94a6;font-size:11px;margin-left:10px;">` +
-      `<span style="color:#93c5fd;cursor:pointer;" onclick="_searchJump({stem:'${_escHtml(t.stem)}',idx:-1})" title="open this page">${_escHtml(t.stem.slice(-18))}</span>` +
+      `<span style="color:#93c5fd;cursor:pointer;" onclick="_ddMinimize(); _searchJump({stem:'${_escHtml(t.stem)}',idx:-1})" title="open this page (the window minimizes to a pill)">${_escHtml(t.stem.slice(-18))}</span>` +
       ` table ${t.table} · ${t.columns} col · ${t.rows} rows${why ? ` · <span style="color:#fbbf24;">${why}</span>` : ''}` +
       (hdr ? `<div style="margin-left:14px;color:#556;">${hdr}</div>` : '<div style="margin-left:14px;color:#556;">no header cells</div>') + `</div>`;
   };
