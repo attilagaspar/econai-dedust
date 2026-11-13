@@ -543,3 +543,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   projects hide the sweep buttons. The 📋 Dataset window gets **🗂
   Coverage**: per-declaration counts, the tables no declaration covers and
   those two cover, with header texts and a click-to-page.
+- **Nov 13 — Lattice edge pick**: in edit mode the grid's outer margins are
+  pick zones — click beside row r / above column c to select all its cells
+  (Ctrl adds); deleting a whole row or column renumbers the table so the
+  numbering stays gap-free (`_latticeCompactAfterDelete`, only the gaps the
+  deletion made).

@@ -985,6 +985,9 @@ async function deleteSelectedShape() {
   if (!confirm(`Delete ${count} box${count>1?'es':''}?`)) return;
   pushUndo();
   const newShapes = pageData.shapes.filter((_,i) => !selSet.has(i));
+  // a whole lattice row / column deleted → close the gap in the numbering
+  const renumbered = typeof _latticeCompactAfterDelete === 'function'
+    ? _latticeCompactAfterDelete(pageData.shapes, newShapes, [...selSet]) : 0;
   const params = new URLSearchParams({folder, stem: pages[pageIdx].stem});
   await fetch(`${API}/api/page/shapes?${params}`, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -992,6 +995,7 @@ async function deleteSelectedShape() {
   });
   selSet.clear(); selIdx=-1; flaggedOverlaps=new Set();
   await reloadPageData(); drawOverlay(); updatePanel();
+  if (renumbered) showToast(`Deleted ${count} cell(s); lattice rows / columns renumbered (${renumbered} cells)`, 4000);
 }
 
 async function changeLabel(newLabel) {

@@ -277,6 +277,43 @@ function toggleLatticeSepMode(type) {
   drawOverlay();
 }
 
+// Select every cell of one row / column of a table (edge pick zones).
+function _latticeSelectLine(tid, key, val, add) {
+  const idxs = [];
+  pageData.shapes.forEach((sh, i) => { if (_tableOf(sh) === tid && sh[key] === val) idxs.push(i); });
+  if (!idxs.length) return;
+  if (!add) selSet.clear();
+  idxs.forEach(i => selSet.add(i));
+  selIdx = idxs[0];
+  drawOverlay(); updatePanel();
+  showToast(`${add ? 'added' : 'selected'} ${key === 'super_row' ? 'row' : 'column'} ${val} of T${tid}: ${idxs.length} cell(s)`, 2500);
+}
+
+// After cells were deleted: when a whole row / column of a table is gone,
+// close the gap in the numbering (only the gaps the deletion made — rows or
+// columns that were already missing stay as they were). Returns the number
+// of cells renumbered. `before` / `after` are shape arrays; `deleted` the
+// indices removed from `before`.
+function _latticeCompactAfterDelete(before, after, deleted) {
+  const touched = new Set();
+  deleted.forEach(i => { const sh = before[i]; if (sh && sh.super_row != null) touched.add(_tableOf(sh)); });
+  let changed = 0;
+  touched.forEach(t => {
+    ['super_row', 'super_column'].forEach(key => {
+      const was = new Set(before.filter(sh => _tableOf(sh) === t && sh[key] != null).map(sh => sh[key]));
+      const now = new Set(after.filter(sh => _tableOf(sh) === t && sh[key] != null).map(sh => sh[key]));
+      const gone = [...was].filter(v => !now.has(v)).sort((a, b) => a - b);
+      if (!gone.length) return;
+      after.forEach(sh => {
+        if (_tableOf(sh) !== t || sh[key] == null) return;
+        const shift = gone.filter(g => g < sh[key]).length;
+        if (shift) { sh[key] -= shift; changed++; }
+      });
+    });
+  });
+  return changed;
+}
+
 function toggleLatticeSplitMode() {
   latticeSplitMode = !latticeSplitMode;
   if (latticeSplitMode) {
@@ -1529,6 +1566,48 @@ function drawOverlay() {
       });
       mkLine(gxR,gyT,gxR,gyB);
       mkColHandle(gxR, sCols[sCols.length-1], null);
+
+      // Edit mode: the margins outside the grid pick whole rows / columns.
+      // A click left or right of row r selects every cell of row r; above
+      // or below column c every cell of column c (Ctrl / Shift adds to the
+      // selection). The zones sit beside the row / column labels, clear of
+      // the separator handles (which are 10 px bands on the lines).
+      if (editMode && !latticeSepMode && !latticeSplitMode) {
+        const pick = (x, y, w, h, key, val, what) => {
+          if (w <= 0 || h <= 0) return;
+          const z = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          z.setAttribute('x', x); z.setAttribute('y', y); z.setAttribute('width', w); z.setAttribute('height', h);
+          z.setAttribute('fill', lineCol); z.setAttribute('fill-opacity', '0.08'); z.setAttribute('rx', '3');
+          z.style.pointerEvents = 'all'; z.style.cursor = 'pointer';
+          z.addEventListener('mouseenter', () => z.setAttribute('fill-opacity', '0.35'));
+          z.addEventListener('mouseleave', () => z.setAttribute('fill-opacity', '0.08'));
+          z.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            _latticeSelectLine(tid, key, val, e.ctrlKey || e.metaKey || e.shiftKey);
+          });
+          const tt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+          tt.textContent = `click: select ${what} ${val} of T${tid} (Ctrl: add to the selection) · Del then removes it and renumbers`;
+          z.appendChild(tt);
+          svgOverlay.appendChild(z);
+        };
+        const M = 6, W = 20;                       // margin to the grid line, zone thickness (screen px)
+        sRows.forEach(r => {
+          const b = rowBands[r];
+          const pl = imgToScreen(gxL, b.top), pr = imgToScreen(gxR, b.bot);
+          if (!pl || !pr) return;
+          const y = pl.y + M, h = (pr.y - M) - y;
+          pick(pl.x - M - W, y, W, h, 'super_row', r, 'row');
+          pick(pr.x + M,     y, W, h, 'super_row', r, 'row');
+        });
+        sCols.forEach(c => {
+          const b = colBands[c];
+          const pt = imgToScreen(b.left, gyT), pb = imgToScreen(b.right, gyB);
+          if (!pt || !pb) return;
+          const x = pt.x + M, w = (pb.x - M) - x;
+          pick(x, pt.y - M - W, w, W, 'super_column', c, 'column');
+          pick(x, pb.y + M,     w, W, 'super_column', c, 'column');
+        });
+      }
 
       // Lattice sep mode: transparent catcher over the active grid only
       if (isActive && (latticeSepMode === 'col' || latticeSepMode === 'row')) {

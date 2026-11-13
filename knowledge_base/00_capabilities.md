@@ -216,6 +216,10 @@ one LabelMe-style JSON per page as the single source of truth.
 - **Separator tools**: add/delete column & row separators, double-click
   deletes an internal separator, drag boundaries to resize whole rows/columns,
   row/col fill buttons.
+- **Edge pick** (edit mode): the margin left / right of a row selects every
+  cell of that row, the margin above / below a column every cell of that
+  column (Ctrl adds); Del on such a selection removes the row / column and
+  closes the gap in the numbering (only the gaps the deletion made).
 
 ## 4. Content layers & text extraction
 
