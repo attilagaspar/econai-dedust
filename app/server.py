@@ -9566,7 +9566,7 @@ def _rr_own_gid(rec: dict):
 
 
 def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
-                       q: str | None = None) -> dict:
+                       q: str | None = None, crops: bool = True) -> dict:
     """Candidates for one collected record: queries from its identity object
     (13 §1b) or its name text; union over the queries; blocking boosts.
     A keyword `q` (the panel's search box) replaces the record's own names:
@@ -9606,6 +9606,8 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
                                  own_gid=_rr_own_gid(rec),
                                  members=index.get("members"), cited=cited)
     for c in cands:
+        if not crops:          # the batch needs no crop locations (each lookup walks a project's records)
+            break
         prov = (c.get("last_slice") or {}).get("provenance") or {}
         if not prov.get("project"):
             continue
@@ -10015,7 +10017,7 @@ def _resolve_records_run(name: str, body: ResolveRecordsBatch, job: dict | None 
             items.append({"id": gid, "name": rec.get("name"), "decision": "kept", "entity": cur.get("id")})
             continue
         rec["gid"] = gid
-        c = _record_candidates(name, rec, by_stem, fname, 3)
+        c = _record_candidates(name, rec, by_stem, fname, 3, crops=False)
         cands = c["candidates"]
         best = cands[0] if cands else None
         verdict, reason = _rr.decide(cands, body.accept_floor, body.margin)

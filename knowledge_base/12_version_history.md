@@ -588,3 +588,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   the batch panel's schema pickers (`schemaCopyChooser`). The Compass
   identity schema no longer has to be re-created per volume. Test:
   `tests/test_schema_copy.py`.
+- **Nov 13 — Batch resolver skips crop lookups** (`_record_candidates(…,
+  crops=False)`): locating a candidate's crop walks its project's record
+  heads, whose cache every written mark invalidates — in the 1876 run that
+  rebuilt 18.7k rows per candidate. The batch never shows crops; the
+  browser and the judge still get them.
