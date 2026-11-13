@@ -46,6 +46,11 @@ document.addEventListener('keydown', e => {
   if (e.key==='m'||e.key==='M') { goPage(-1); return; }
   if (e.key==='s'||e.key==='S') { if (pages.length) setPageStatus('skip'); return; }
   if ((e.key==='c'||e.key==='C') && typeof toggleContinuation==='function') { toggleContinuation(); return; }
+  if (e.key==='l'||e.key==='L') {           // the 🔲 Lattice button, when it is enabled
+    const b = document.getElementById('lattice-btn');
+    if (b && !b.disabled && typeof openLatticeModal==='function') openLatticeModal();
+    return;
+  }
   if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
   if (e.key==='o'||e.key==='O') { cloneSelectionToPage(-2); return; }
   if (e.key==='ArrowRight') { navigateLattice('right'); return; }

@@ -86,7 +86,8 @@ one LabelMe-style JSON per page as the single source of truth.
 - **Perspective correction**: 4 corner tokens → full-image warp (zoomable
   stage, safety margin, auto corner detection).
 - **Modes**: edit (`E`) / review; mode survives page navigation.
-- **Page status**: dropdown + hotkeys (`V` verify-and-next, `S` mark skip);
+- **Page status**: dropdown + hotkeys (`V` verify-and-next, `S` mark skip;
+  `L` opens the 🔲 Lattice modal);
   `skip` = clutter — excluded from review totals, never receives applied
   predictions, never trains. Page-selector entries colored by status.
 - **Page deletion**: soft-delete page (image + JSON) to the project trash;

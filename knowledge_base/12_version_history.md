@@ -508,3 +508,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   context dispatch on it; the sweep refuses such projects; dashboard
   "Records from datasets" input; browser hides chain / resweep for them.
   Tests: `tests/test_records_from_datasets.py`.
+- **Nov 13 — `L` hotkey** opens the 🔲 Lattice modal (same guard as the
+  other letter keys: not inside a text field, only when the button is
+  enabled); listed in the `?` cheatsheet.

@@ -931,6 +931,7 @@ function _shToggle() {
         ${row('H', 'Focus the Human correction field')}
         ${row('B', 'Mark / un-mark the cell as a structural blank')}
         ${row('C', 'Mark / un-mark a record-label box as a ⛓ continuation of the previous box')}
+        ${row('L', 'Open 🔲 Lattice (detect rows and columns on this page)')}
         ${row('V', 'Verify this page & jump to the next unverified page')}
         ${row('S', 'Mark this page ⊘ skip (no annotations)')}
         ${row('⚡', 'Review button: step through only the suspect cells')}
