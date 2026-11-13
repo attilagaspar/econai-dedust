@@ -3287,6 +3287,85 @@ def _parse_col_ranges_srv(raw):
     return ranges or None
 
 
+def _tess_parse_tsv(tsv_text: str, n_pages: int) -> list:
+    """Tesseract's TSV output for a list of images → one pytesseract-style
+    dict per image (the keys `_tess_group_lines` reads: text, conf,
+    block_num, par_num, line_num, top), in list order; `page_num` in the
+    TSV counts the images from 1."""
+    empty = lambda: {"text": [], "conf": [], "block_num": [], "par_num": [], "line_num": [], "top": []}
+    out = [empty() for _ in range(n_pages)]
+    lines = tsv_text.splitlines()
+    if not lines:
+        return out
+    col = {h: i for i, h in enumerate(lines[0].split("\t"))}
+    need = ("page_num", "conf", "block_num", "par_num", "line_num", "top", "text")
+    if any(k not in col for k in need):
+        return out
+    for line in lines[1:]:
+        f = line.split("\t")
+        if len(f) <= col["top"]:
+            continue
+        try:
+            pg = int(f[col["page_num"]]) - 1
+        except ValueError:
+            continue
+        if not 0 <= pg < n_pages:
+            continue
+        d = out[pg]
+        d["text"].append(f[col["text"]] if len(f) > col["text"] else "")
+        try:
+            d["conf"].append(float(f[col["conf"]]))
+        except ValueError:
+            d["conf"].append(-1.0)
+        for k in ("block_num", "par_num", "line_num", "top"):
+            try:
+                d[k].append(int(f[col[k]]))
+            except ValueError:
+                d[k].append(0)
+    return out
+
+
+def _tess_batch_data(crops: list, lang: str, config: str = "--psm 4", workers=None) -> list:
+    """Tesseract over many crops with ONE process per worker (a list file,
+    TSV output) instead of one process per crop. The language models load
+    once per process, and OMP_THREAD_LIMIT=1 keeps each process on one
+    core so the workers do not fight for the machine. Measured on the
+    2-vCPU VM, hun+deu: 0.26 s per cell one by one → 0.03 s per cell this
+    way. Returns one pytesseract-style dict per crop, in order; raises
+    when tesseract fails (the caller falls back to cell-by-cell)."""
+    import shutil, subprocess, tempfile
+    from concurrent.futures import ThreadPoolExecutor
+    n = len(crops)
+    if not n:
+        return []
+    exe = shutil.which("tesseract") or r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    workers = max(1, min(int(workers or (os.cpu_count() or 1)), 4, n))
+    chunks = [list(range(k, n, workers)) for k in range(workers)]      # round-robin: even chunks
+    env = dict(os.environ, OMP_THREAD_LIMIT="1")
+    out = [None] * n
+
+    def _run(chunk):
+        with tempfile.TemporaryDirectory(prefix="tess_") as td:
+            paths = []
+            for j, k in enumerate(chunk):
+                pth = os.path.join(td, f"c{j:05d}.png")
+                crops[k].save(pth); paths.append(pth)
+            lst = os.path.join(td, "list.txt")
+            with open(lst, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(paths) + "\n")
+            args = [exe, lst, os.path.join(td, "out"), "-l", lang] + config.split() + ["tsv"]
+            r = subprocess.run(args, capture_output=True, env=env)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or b"").decode("utf-8", "replace").strip()[-300:] or f"tesseract rc {r.returncode}")
+            with open(os.path.join(td, "out.tsv"), encoding="utf-8", errors="replace") as fh:
+                parsed = _tess_parse_tsv(fh.read(), len(chunk))
+        for j, k in enumerate(chunk):
+            out[k] = parsed[j]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(_run, chunks))
+    return out
+
+
 def _ocr_shape_whole(engine, crop, lang, langs):
     """OCR one whole-cell crop. Mirrors the single-cell endpoints exactly."""
     if engine == "tesseract":
@@ -3421,6 +3500,32 @@ def _run_ocr_batch_job(folder: str, d: Path, body: OcrBatchBody, job: dict):
             shadow = _get_shadow_page(folder, stem, img_path)
             sw, sh_ = shadow.size
             touched = []
+            if body.engine == "tesseract" and body.scope == "whole" and todo:
+                # the fast path: every cell of the page through a few tesseract
+                # processes at once (see _tess_batch_data); cell-by-cell below
+                # only when that fails
+                crops, idxs = [], []
+                for i in todo:
+                    pts = shapes[i]["points"]
+                    xs = [pt[0] for pt in pts]; ys = [pt[1] for pt in pts]
+                    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+                    crops.append(shadow.crop((max(0, int(x1) - 4), max(0, int(y1) - 4),
+                                              min(sw, int(x2) + 4), min(sh_, int(y2) + 4))).convert("L"))
+                    idxs.append(i)
+                try:
+                    results = _tess_batch_data(crops, body.lang, "--psm 4")
+                except Exception as exc:
+                    results = None
+                    if len(job["errors"]) < 50:
+                        job["errors"].append(f"{stem}: batch tesseract failed ({exc}); cells read one by one")
+                if results is not None:
+                    for i, tess in zip(idxs, results):
+                        text, conf = _tess_group_lines(tess)
+                        shapes[i]["tesseract_output"] = {"ocr_text": text, "mean_conf": conf, "lang": body.lang}
+                        _distribute_flat_to_rows(shapes[i], "ocr", text)
+                        touched.append(i)
+                        job["cells_done"] += 1
+                    todo = []
             for i in todo:
                 if job["stop"]:
                     break

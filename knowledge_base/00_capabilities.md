@@ -231,7 +231,11 @@ only ever written by a person.
 - **OCR**: Tesseract + EasyOCR (GPU-warmed), whole-cell or line-by-line;
   shadow-page preprocessing (line-erased full page, tunable), digit
   whitelist, output-stage preprocessing (blur/binarize/opening); batch OCR
-  as a **server-side background job** (survives browser close).
+  as a **server-side background job** (survives browser close). Whole-cell
+  tesseract runs **one process per core over the page's cells** (a list
+  file + TSV, `OMP_THREAD_LIMIT=1`; `_tess_batch_data`) instead of one
+  process per cell — on the 2-vCPU VM 0.26 s → 0.03 s per cell (hun+deu);
+  cell-by-cell remains the fallback and the rows / EasyOCR path.
 - **Internal row structure** (`row_struct`): per-cell row bands shared by
   all layers. Structure and content are separate: **⊞ Build internal row
   structure** (free, local) detects bands from the image or a layer's line

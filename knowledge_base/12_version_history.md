@@ -602,3 +602,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
 - **Nov 13 — Batch panel hint for dataset-sourced projects**: instead of
   "Pick the record label first" the records row says which declarations
   the records come from.
+- **Nov 13 — Batch OCR speed**: whole-cell tesseract in the batch job runs
+  one tesseract process per core over all cells of a page (list file, TSV
+  output parsed by `_tess_parse_tsv`, `OMP_THREAD_LIMIT=1`) instead of
+  one process per cell; measured on the Azure VM (2 vCPU, hun+deu) 0.26 s
+  → 0.03 s per cell, so a 133k-cell volume takes about an hour, not a day.
+  Falls back to cell-by-cell when the batch call fails. Tests:
+  `tests/test_ocr_batch_tess.py`.
