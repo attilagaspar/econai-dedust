@@ -599,3 +599,6 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   of 2,942 rows; `mint_changes` on the batch (checkbox "also mint change
   events (first volume)") mints change / deletion events that match no
   entity, for a ledger's first volume.
+- **Nov 13 — Batch panel hint for dataset-sourced projects**: instead of
+  "Pick the record label first" the records row says which declarations
+  the records come from.

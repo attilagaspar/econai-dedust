@@ -314,7 +314,9 @@ async function _batchRecordsInit(op) {
     if (sel) sel.innerHTML = '';
     return;
   }
-  if (info) info.textContent = _recCtx.record_label ? '' : 'Pick the record label first (saved in the project config).';
+  if (info) info.textContent = (_recCtx.record_datasets || []).length
+    ? `Records are the rows of the dataset declaration(s) ${_recCtx.record_datasets.join(', ')} (no record label needed; sweep and chain marks are off).`
+    : (_recCtx.record_label ? '' : 'Pick the record label first (saved in the project config).');
   const labels = [...new Set([...(_recCtx.labels || []), ...projectLabels])];
   if (sel) {
     sel.innerHTML = '<option value="">— none —</option>' +
