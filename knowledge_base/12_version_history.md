@@ -593,3 +593,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   heads, whose cache every written mark invalidates — in the 1876 run that
   rebuilt 18.7k rows per candidate. The batch never shows crops; the
   browser and the judge still get them.
+- **Nov 13 — Ledger bootstrap tuning from the local 1876 run** (1.5 min
+  for 18,736 rows): `inherit: ditto` also treats wordless print ("3>",
+  "í") as a ditto — such cells had become carries and emptied the court
+  of 2,942 rows; `mint_changes` on the batch (checkbox "also mint change
+  events (first volume)") mints change / deletion events that match no
+  entity, for a ledger's first volume.

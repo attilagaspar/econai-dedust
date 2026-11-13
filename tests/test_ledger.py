@@ -128,7 +128,7 @@ def ledger_project(tmp_path, monkeypatch):
     _page(ann, "p2", 2, [
         ["Pesti törvényszék", "1876. jan. 30.", "Zinner Móritz", "Pest", "", "Ezen czég töröltetett. (Lásd az eredeti bejegyzést, 1. szám.)"],
         ["Szegedi törvényszék", "1876. febr. 2.", "Zinner Móritz", "Szeged", "Zinner Móritz rőfös kereskedő Szegeden", ""],
-        [">", "1876. febr. 3.", "Kis János", "Szeged", "Kis János társ kilépett", ""],
+        ["3>", "1876. febr. 3.", "Kis János", "Szeged", "Kis János társ kilépett", ""],   # a footnote digit beside the ditto
     ])
     try:
         yield name, d
@@ -186,6 +186,13 @@ def test_ledger_batch_mints_registrations_attaches_cited_events_and_leaves_gaps_
     assert idx["by_source_issue"][(name, 1)] == ["R000001", "R000002"] and idx["by_source_issue"][(name, 2)] == ["R000001", "R000003"]
     again = client.post(f"/api/project/{name}/resolve-records", json={"mint_unmatched": True}).json()
     assert again["counts"].get("kept") == 4 and again["counts"].get("unresolved") == 1
+    # a first volume: change events of firms registered before it are minted on request
+    third = client.post(f"/api/project/{name}/resolve-records", json={"mint_unmatched": True, "mint_changes": True}).json()
+    assert third["counts"].get("kept") == 4 and third["counts"].get("new") == 1
+    assert next(i for i in third["items"] if i["id"] == e)["entity"] == "R000004"
+    auth = json.loads((auth_dir / AUTH).read_text(encoding="utf-8"))
+    kis = next(x for x in auth["entities"] if x["id"] == "R000004")
+    assert kis["name"] == "Kis János" and kis["attrs"]["court"] == "Szegedi törvényszék" and kis["slices"][0]["event"] == "changed"
     # the entity view lists both events of Zinner under the one project
     t = client.get("/api/entities/table", params={"authority": AUTH}).json()
     row = next(x for x in t["rows"] if x["id"] == "R000001")

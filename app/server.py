@@ -9877,6 +9877,8 @@ class ResolveRecordsBatch(BaseModel):
     accept_floor:   float = 85.0             # the GOOD tier (record_resolve.decide); sure = +10, weak = -15
     margin:         float = 5.0              # best must lead the runner-up by this (ranked score) to be unambiguous
     mint_unmatched: bool = False             # bootstrap: records with no acceptable candidate become new entities
+    mint_changes:   bool = False             # ledger: mint change / deletion events too (a first volume: the firms
+                                             # were registered before it); otherwise such events stay open
     overwrite:      bool = False             # re-decide records already marked by auto (human marks are never touched)
     dry_run:        bool = False
     background:     bool = False             # run as a server job; poll …/resolve-records/status
@@ -10024,7 +10026,7 @@ def _resolve_records_run(name: str, body: ResolveRecordsBatch, job: dict | None 
         ev = (c.get("identity") or {}).get("event_type")
         if verdict == "same":
             decision, ent = "same", best["id"]
-        elif body.mint_unmatched and (c.get("kind") != "ledger" or ev in (None, "registered")):
+        elif body.mint_unmatched and (c.get("kind") != "ledger" or ev in (None, "registered") or body.mint_changes):
             decision, ent = "new", None
         elif body.mint_unmatched:
             # ledger: a later event of a firm nobody registered is a gap to look at, not a new firm
@@ -12938,7 +12940,9 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                 continue
             t = (val.get("text") or "").strip()
             here = (rec["key"]["stem"], rec.get("table"))
-            if not t or _auth_is_ditto(t):
+            # blank, a ditto mark, or print with no word in it ("3>", "í", a
+            # footnote digit beside the mark): the value above continues
+            if not t or _auth_is_ditto(t) or not re.search(r"[A-Za-zÀ-ž]{3}", t):
                 if carry is None:
                     continue
                 val.update({"text": carry, "value": carry, "status": "ok", "inherited": True})

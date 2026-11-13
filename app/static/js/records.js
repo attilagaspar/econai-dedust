@@ -871,6 +871,7 @@ async function runResolveRecords(sorted, {dryRun = false} = {}) {
     accept_floor: parseFloat(document.getElementById('batch-recr-floor')?.value) || 85,
     margin: parseFloat(document.getElementById('batch-recr-margin')?.value) || 0,
     mint_unmatched: !!document.getElementById('batch-recr-mint')?.checked,
+    mint_changes: !!document.getElementById('batch-recr-mintchanges')?.checked,
     overwrite: !!document.getElementById('batch-recr-overwrite')?.checked,
     dry_run: true,
   };

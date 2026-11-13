@@ -312,7 +312,12 @@ and the rows are events. A project declares `record_source_kind: ledger`
   edge later.
 - **Minting.** The batch mints only rows whose event is a registration
   (no verb of change). A deletion or change that matches nothing stays
-  open: a gap to look at, never a new firm.
+  open: a gap to look at, never a new firm — except in the FIRST volume
+  of a ledger, where such firms were registered before the volume began:
+  `mint_changes` (batch panel: "also mint change events") mints them and
+  the lifecycle starts with that event. The local 1876 dry run showed
+  why: of 722 later rows only 66 found their registration in the volume;
+  the rest are pre-1876 firms.
 
 First target: gazette_1876, the year the register was set up — 18.7k rows,
 nearly all first registrations, 241 rows citing an earlier issue of the

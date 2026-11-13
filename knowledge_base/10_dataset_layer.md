@@ -125,9 +125,10 @@ Notes:
   structure finding. `GET /api/datasets/coverage?folder=` reports, per
   table, which declarations cover it — the uncovered and doubly covered
   tables are the lists to act on.
-- **`inherit: "ditto"`** on a variable (added 2026-11-13): a blank cell or a
-  ditto mark („ » " > …) takes the value of the record above in reading
-  order; an inheritance across a table or page break is a structure
+- **`inherit: "ditto"`** on a variable (added 2026-11-13): a blank cell, a
+  ditto mark („ » " > …) or print with no word of three letters in it (a
+  footnote digit beside the mark, "3>") takes the value of the record
+  above in reading order; an inheritance across a table or page break is a structure
   finding (once per table).
 - **`record.derive`** (added 2026-11-13, plan 13 §6b): fields parsed from
   the row's text by named parsers (`app/ledger.py`: `date_hu`, `issue_ref`,

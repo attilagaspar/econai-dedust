@@ -1010,6 +1010,8 @@
           <input id="batch-recr-margin" type="number" min="0" max="100" value="5" style="width:44px;background:#0d1b35;border:1px solid #333;border-radius:3px;color:#ccc;padding:2px 4px;font-size:11px;">
           <label class="row" style="margin:0;" title="Bootstrap: every record without an acceptable candidate becomes a NEW entity (use for the first source of a family; otherwise leave unresolved records for the browser)">
             <input type="checkbox" id="batch-recr-mint" style="accent-color:#e94560;width:13px;height:13px;"><span>mint unmatched (bootstrap)</span></label>
+          <label class="row" style="margin:0;" title="Ledger sources only. A change, transfer or deletion event that matches no entity normally stays open (the registration should exist). In the FIRST volume of a ledger the firm was registered before the volume began: tick this to mint such events too — the entity's lifecycle then starts with that event.">
+            <input type="checkbox" id="batch-recr-mintchanges" style="accent-color:#e94560;width:13px;height:13px;"><span>also mint change events (first volume)</span></label>
           <label class="row" style="margin:0;" title="Re-decide records that an earlier batch resolved automatically; human decisions are never touched">
             <input type="checkbox" id="batch-recr-overwrite" style="accent-color:#e94560;width:13px;height:13px;"><span>overwrite auto</span></label>
         </div>
