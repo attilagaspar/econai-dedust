@@ -20,6 +20,16 @@ one LabelMe-style JSON per page as the single source of truth.
 
 - **Project lifecycle**: create (type A tables / B structured text, custom
   labels), clone, rename, soft-delete; active project remembered.
+- **Notes view** (added 2026-11-13; `app/notes.py`, `/api/notes`): the
+  sidebar's third tab, **Projects | Entities | Notes**. Topics on the left
+  (+ Topic; rename by clicking the title; delete with a two-click button),
+  a Keep-style board of post-its on the right: a "take a note" box
+  (Ctrl+Enter adds), cards newest first with the timestamp (created /
+  edited), URLs as links, click to edit, two-click delete. One JSON file
+  shared by the instance (`DEDUST_NOTES_PATH`, else beside the GPU
+  profiles file on the data volume, else `notes.json` in the repo root).
+  First use: candidate data sources with their URLs and comments. The
+  + New / Inbox / trash buttons show in the Projects view only.
 - **Notes card** (first card of the project detail): one free-text field
   per project, `config.notes`, autosaved ~800 ms after the last keystroke
   ("saving… / saved ✓" indicator; a pending edit is flushed on project

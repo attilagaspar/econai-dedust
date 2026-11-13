@@ -609,3 +609,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   → 0.03 s per cell, so a 133k-cell volume takes about an hour, not a day.
   Falls back to cell-by-cell when the batch call fails. Tests:
   `tests/test_ocr_batch_tess.py`.
+- **Nov 13 — Notes view** (dashboard sidebar tab Projects | Entities |
+  Notes): topics of timestamped notes on a post-it board, `app/notes.py`
+  (one JSON file, `DEDUST_NOTES_PATH` / data volume / repo root) and
+  `/api/notes` (topics CRUD, notes add / edit / delete). The sidebar's
+  + New, Inbox and trash buttons belong to the Projects view and hide
+  elsewhere; + New becomes + Topic in Notes. Tests: `tests/test_notes.py`.

@@ -4725,6 +4725,79 @@ async def api_llm_anchored(
 # Routes — project management
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Routes — Notes (dashboard → Notes): topics of timestamped notes, app/notes.py
+# ---------------------------------------------------------------------------
+
+class NoteTopicBody(BaseModel):
+    title: str
+
+
+class NoteBody(BaseModel):
+    text: str
+
+
+def _notes_call(fn, *args):
+    from app import notes as _notes
+    try:
+        return fn(*args)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=f"not found: {e.args[0] if e.args else e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/notes")
+def api_notes_topics():
+    """Every topic with its note count and last change."""
+    from app import notes as _notes
+    return {"topics": _notes.list_topics(), "path": str(_notes.NOTES_PATH)}
+
+
+@app.post("/api/notes")
+def api_notes_add_topic(body: NoteTopicBody):
+    from app import notes as _notes
+    return {"ok": True, "topic": _notes_call(_notes.add_topic, body.title)}
+
+
+@app.get("/api/notes/{tid}")
+def api_notes_topic(tid: str):
+    """One topic with its notes, newest first."""
+    from app import notes as _notes
+    return {"topic": _notes_call(_notes.get_topic, tid)}
+
+
+@app.patch("/api/notes/{tid}")
+def api_notes_rename_topic(tid: str, body: NoteTopicBody):
+    from app import notes as _notes
+    return {"ok": True, "topic": _notes_call(_notes.rename_topic, tid, body.title)}
+
+
+@app.delete("/api/notes/{tid}")
+def api_notes_delete_topic(tid: str):
+    from app import notes as _notes
+    return {"ok": True, "notes_removed": _notes_call(_notes.delete_topic, tid)}
+
+
+@app.post("/api/notes/{tid}/notes")
+def api_notes_add(tid: str, body: NoteBody):
+    from app import notes as _notes
+    return {"ok": True, "note": _notes_call(_notes.add_note, tid, body.text)}
+
+
+@app.patch("/api/notes/{tid}/notes/{nid}")
+def api_notes_edit(tid: str, nid: str, body: NoteBody):
+    from app import notes as _notes
+    return {"ok": True, "note": _notes_call(_notes.edit_note, tid, nid, body.text)}
+
+
+@app.delete("/api/notes/{tid}/notes/{nid}")
+def api_notes_delete(tid: str, nid: str):
+    from app import notes as _notes
+    _notes_call(_notes.delete_note, tid, nid)
+    return {"ok": True}
+
+
 @app.get("/api/projects")
 def api_list_projects():
     return {"projects": list_projects()}

@@ -68,3 +68,6 @@ benchmarks/vision_benchmark_*.md
 benchmarks/raw_*.json
 
 app/docker_config.json
+
+# dashboard notes (instance data, not code)
+notes.json

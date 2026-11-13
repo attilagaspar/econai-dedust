@@ -34,6 +34,30 @@ header span { color: #888; font-size: 0.85rem; }
 .sidebar-header h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #888; }
 .sv-tab { cursor: pointer; color: #666; padding-bottom: 2px; border-bottom: 2px solid transparent; }
 .sv-tab.on { color: #ddd; border-bottom-color: #e94560; }
+/* Notes: topics in the sidebar, a board of post-its in the detail panel */
+.topic-row { padding: 10px 16px; border-bottom: 1px solid #0f3460; cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+.topic-row:hover { background: #1d2e50; }
+.topic-row.active { background: #0f3460; border-left: 3px solid #e94560; }
+.topic-row .topic-title { font-weight: 600; font-size: 0.95rem; flex: 1; }
+.topic-row .topic-meta { font-size: 0.75rem; color: #888; white-space: nowrap; }
+.notes-board { padding: 18px 22px; }
+.notes-head { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+.notes-head h2 { font-size: 1.1rem; color: #e0e0e0; margin: 0; cursor: text; }
+.notes-head .hint { color: #667; font-size: 0.75rem; }
+.note-new { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 16px; }
+.note-new textarea { flex: 1; min-height: 64px; max-width: 720px; background: #0d1b35; border: 1px solid #0f3460; color: #e0e0e0; border-radius: 6px; padding: 8px 10px; font-size: 0.9rem; font-family: inherit; resize: vertical; }
+.note-grid { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.note-card { width: 260px; background: #f7f0c8; color: #222; border-radius: 6px; padding: 10px 12px 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.45); display: flex; flex-direction: column; gap: 6px; }
+.note-card .note-text { white-space: pre-wrap; word-break: break-word; font-size: 0.88rem; line-height: 1.35; cursor: text; }
+.note-card .note-text a { color: #1a4a9c; text-decoration: underline; }
+.note-card textarea { width: 100%; min-height: 90px; background: #fffbe6; border: 1px solid #c9b86a; border-radius: 4px; padding: 6px; font-size: 0.88rem; font-family: inherit; color: #222; resize: vertical; }
+.note-card .note-foot { display: flex; gap: 6px; align-items: center; font-size: 0.7rem; color: #6b6340; }
+.note-card .note-foot .when { flex: 1; }
+.note-card .note-foot button { background: none; border: none; color: #6b6340; cursor: pointer; font-size: 0.8rem; padding: 0 3px; }
+.note-card .note-foot button:hover { color: #b0202a; }
+.note-card .note-foot button.sure { color: #fff; background: #b0202a; border-radius: 3px; padding: 0 6px; }
+.notes-btn { background: #0f3460; border: 1px solid #1a3a6e; color: #e0e0e0; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; }
+.notes-btn:hover { border-color: #e94560; }
 .auth-group { padding: 8px 12px 6px; border-bottom: 1px solid #1a3a6e; }
 .auth-group .auth-head { display: flex; align-items: center; gap: 8px; }
 .auth-group .auth-name { font-weight: 700; color: #e0e0e0; }
@@ -230,8 +254,9 @@ header span { color: #888; font-size: 0.85rem; }
       <h2 id="sidebar-title" style="display:flex;gap:10px;align-items:center;">
         <span id="sv-projects" class="sv-tab on" onclick="setSidebarView('projects')" title="All projects">Projects</span>
         <span id="sv-entities" class="sv-tab" onclick="setSidebarView('entities')" title="Projects linked through a shared authority, with the entity browser">Entities</span>
+        <span id="sv-notes" class="sv-tab" onclick="setSidebarView('notes')" title="Topics of timestamped notes — candidate data sources, decisions, reminders">Notes</span>
       </h2>
-      <button id="btn-new-project" onclick="openNewProjectModal()">+ New</button>
+      <button id="btn-new-project" onclick="sidebarView === 'notes' ? notesNewTopic() : openNewProjectModal()">+ New</button>
       <button id="btn-inbox" onclick="openInboxModal()" style="display:none;background:#1a5c38;border:none;color:#eee;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;position:relative;"
               title="Bulk import: pick a folder of PDFs from the storage inbox and render it into a project">📥 Inbox<span id="inbox-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:#f0c040;animation:pulse 1.2s infinite;"></span></button>
       <button id="btn-trash" onclick="openTrashModal()" style="background:#2a2a3e;border:none;color:#aaa;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;"
@@ -476,7 +501,7 @@ async function initInbox() {
   try {
     const r = await fetch('/api/inbox/config');
     if ((await r.json()).configured) {
-      document.getElementById('btn-inbox').style.display = '';
+      _inboxEnabled = true; if (sidebarView === 'projects') document.getElementById('btn-inbox').style.display = '';
       ibUpdateBadge();
       setInterval(ibUpdateBadge, 20000);
     }
@@ -772,8 +797,7 @@ async function loadProjects(selectName = null) {
   const data = await res.json();
   projects   = data.projects || [];
   _entityGroups = null;                       // linkage may have changed
-  document.getElementById('sv-projects')?.classList.toggle('on', sidebarView === 'projects');
-  document.getElementById('sv-entities')?.classList.toggle('on', sidebarView === 'entities');
+  _applySidebarView();
   renderProjectList();
   // Explicit selection (e.g. a just-created project) beats the auto-restore —
   // the old fire-and-forget restore raced the caller's selectProject and the
@@ -844,10 +868,144 @@ function projectRowHtml(p) {
 let sidebarView = localStorage.getItem('sidebarView') || 'projects';
 function setSidebarView(v) {
   sidebarView = v; localStorage.setItem('sidebarView', v);
-  document.getElementById('sv-projects').classList.toggle('on', v === 'projects');
-  document.getElementById('sv-entities').classList.toggle('on', v === 'entities');
+  _applySidebarView();
   renderProjectList();
 }
+// The header buttons belong to the Projects view (+ New, Inbox, trash); the
+// Notes view reuses + New for a topic.
+function _applySidebarView() {
+  ['projects', 'entities', 'notes'].forEach(k => document.getElementById('sv-' + k)?.classList.toggle('on', sidebarView === k));
+  const isProj = sidebarView === 'projects', isNotes = sidebarView === 'notes';
+  const nb = document.getElementById('btn-new-project');
+  if (nb) { nb.style.display = (isProj || isNotes) ? '' : 'none'; nb.textContent = isNotes ? '+ Topic' : '+ New'; nb.title = isNotes ? 'A new topic of notes' : ''; }
+  const ib = document.getElementById('btn-inbox');
+  if (ib) ib.style.display = (isProj && _inboxEnabled) ? '' : 'none';
+  const tb = document.getElementById('btn-trash');
+  if (tb) tb.style.display = isProj ? '' : 'none';
+}
+let _inboxEnabled = false;
+// ── Notes: topics (sidebar) and a board of timestamped post-its (detail) ──
+let _notesTopics = null, _notesTopic = localStorage.getItem('notesTopic') || null;
+async function _notesApi(method, path, body) {
+  const r = await fetch(path, {method, headers: body ? {'Content-Type': 'application/json'} : {}, body: body ? JSON.stringify(body) : undefined});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+  return d;
+}
+function _fmtWhen(iso) {
+  if (!iso) return '';
+  const d = new Date(iso); if (isNaN(d)) return iso;
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function _linkify(text) {
+  // escape, then turn URLs into links (a trailing ) . , ; stays outside the link)
+  return escHtml(text).replace(/(https?:\/\/[^\s<]+?)([).,;:!?]*)(?=\s|$)/g,
+    (m, url, tail) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>${tail}`);
+}
+async function renderNotesSidebar() {
+  const el = document.getElementById('project-list');
+  if (!_notesTopics) {
+    el.innerHTML = '<div class="empty"><div class="big">📝</div>Loading…</div>';
+    try { _notesTopics = (await _notesApi('GET', '/api/notes')).topics || []; }
+    catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+  }
+  if (!_notesTopics.length) {
+    el.innerHTML = '<div class="empty"><div class="big">📝</div>No topics yet.<br>Click <b>+ Topic</b> to start one — data sources, decisions, reminders.</div>';
+    document.getElementById('detail-panel').innerHTML = '<div class="empty"><div class="big">📝</div><div>Notes live in topics. Make one on the left.</div></div>';
+    return;
+  }
+  el.innerHTML = _notesTopics.map(t => `<div class="topic-row ${t.id === _notesTopic ? 'active' : ''}" onclick="notesSelect('${escHtml(t.id)}')">
+      <span class="topic-title">${escHtml(t.title)}</span>
+      <span class="topic-meta">${t.n_notes} note${t.n_notes === 1 ? '' : 's'}${t.updated ? ' · ' + _fmtWhen(t.updated).slice(0, 10) : ''}</span>
+    </div>`).join('');
+  if (!_notesTopic || !_notesTopics.find(t => t.id === _notesTopic)) _notesTopic = _notesTopics[0].id;
+  notesSelect(_notesTopic);
+}
+async function notesNewTopic() {
+  const el = document.getElementById('detail-panel');
+  el.innerHTML = `<div class="notes-board"><div class="notes-head"><h2>New topic</h2></div>
+    <div class="note-new"><input id="notes-new-title" placeholder="topic title, e.g. Data sources" style="flex:1;max-width:480px;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:6px;padding:8px 10px;font-size:0.95rem;"
+      onkeydown="if (event.key === 'Enter') notesCreateTopic()">
+    <button class="notes-btn" onclick="notesCreateTopic()">Create</button></div></div>`;
+  document.getElementById('notes-new-title').focus();
+}
+async function notesCreateTopic() {
+  const title = (document.getElementById('notes-new-title')?.value || '').trim();
+  if (!title) { showToast('Give the topic a title', 3000, 'red'); return; }
+  try {
+    const d = await _notesApi('POST', '/api/notes', {title});
+    _notesTopics = null; _notesTopic = d.topic.id; localStorage.setItem('notesTopic', _notesTopic);
+    renderNotesSidebar();
+  } catch (e) { showToast('Error: ' + (e.message || e), 4000, 'red'); }
+}
+async function notesSelect(tid) {
+  _notesTopic = tid; localStorage.setItem('notesTopic', tid);
+  document.querySelectorAll('.topic-row').forEach(r => r.classList.toggle('active', r.getAttribute('onclick')?.includes(`'${tid}'`)));
+  const el = document.getElementById('detail-panel');
+  let t;
+  try { t = (await _notesApi('GET', `/api/notes/${encodeURIComponent(tid)}`)).topic; }
+  catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+  const cards = t.notes.map(n => `<div class="note-card" id="note-${escHtml(n.id)}">
+      <div class="note-text" onclick="notesEdit('${escHtml(n.id)}')" title="click to edit">${_linkify(n.text)}</div>
+      <div class="note-foot"><span class="when" title="created ${escHtml(_fmtWhen(n.created))}">${escHtml(_fmtWhen(n.updated || n.created))}${n.updated && n.updated !== n.created ? ' (edited)' : ''}</span>
+        <button onclick="notesEdit('${escHtml(n.id)}')" title="edit">✎</button>
+        <button onclick="notesDelete(this, '${escHtml(n.id)}')" title="delete (click twice)">✕</button></div></div>`).join('');
+  el.innerHTML = `<div class="notes-board">
+    <div class="notes-head"><h2 id="notes-title" title="click to rename" onclick="notesRename()">${escHtml(t.title)}</h2>
+      <span class="hint">${t.notes.length} note${t.notes.length === 1 ? '' : 's'} · newest first · click a note to edit · Ctrl+Enter saves</span>
+      <span style="flex:1"></span>
+      <button class="notes-btn" onclick="notesDeleteTopic(this)" title="delete this topic and its notes (click twice)">🗑 topic</button></div>
+    <div class="note-new"><textarea id="notes-new-text" placeholder="Take a note… a URL with a comment, a decision, a reminder" onkeydown="if (event.key === 'Enter' && event.ctrlKey) notesAdd()"></textarea>
+      <button class="notes-btn" onclick="notesAdd()">Add</button></div>
+    <div class="note-grid">${cards || '<div class="hint" style="color:#667;">No notes in this topic yet.</div>'}</div></div>`;
+  document.getElementById('notes-new-text').focus();
+}
+async function notesAdd() {
+  const ta = document.getElementById('notes-new-text'); const text = (ta?.value || '').trim();
+  if (!text) return;
+  try { await _notesApi('POST', `/api/notes/${encodeURIComponent(_notesTopic)}/notes`, {text}); _notesTopics = null; renderNotesSidebar(); }
+  catch (e) { showToast('Error: ' + (e.message || e), 4000, 'red'); }
+}
+async function notesEdit(nid) {
+  const card = document.getElementById('note-' + nid); if (!card || card.querySelector('textarea')) return;
+  const div = card.querySelector('.note-text');
+  const text = div.innerText;
+  const ta = document.createElement('textarea'); ta.value = text;
+  ta.onkeydown = async ev => { if (ev.key === 'Enter' && ev.ctrlKey) { ev.preventDefault(); await save(); } if (ev.key === 'Escape') notesSelect(_notesTopic); };
+  const save = async () => {
+    const v = ta.value.trim(); if (!v || v === text) { notesSelect(_notesTopic); return; }
+    try { await _notesApi('PATCH', `/api/notes/${encodeURIComponent(_notesTopic)}/notes/${encodeURIComponent(nid)}`, {text: v}); _notesTopics = null; renderNotesSidebar(); }
+    catch (e) { showToast('Error: ' + (e.message || e), 4000, 'red'); }
+  };
+  ta.onblur = save;
+  div.replaceWith(ta); ta.focus();
+}
+async function notesDelete(btn, nid) {
+  if (!btn.classList.contains('sure')) { btn.classList.add('sure'); btn.textContent = 'delete?'; setTimeout(() => { btn.classList.remove('sure'); btn.textContent = '✕'; }, 3000); return; }
+  try { await _notesApi('DELETE', `/api/notes/${encodeURIComponent(_notesTopic)}/notes/${encodeURIComponent(nid)}`); _notesTopics = null; renderNotesSidebar(); }
+  catch (e) { showToast('Error: ' + (e.message || e), 4000, 'red'); }
+}
+async function notesRename() {
+  const h = document.getElementById('notes-title'); if (!h || h.querySelector('input')) return;
+  const old = h.textContent;
+  h.innerHTML = `<input value="${escHtml(old)}" style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 8px;font-size:1rem;min-width:260px;">`;
+  const inp = h.querySelector('input'); inp.focus(); inp.select();
+  const done = async () => {
+    const v = inp.value.trim();
+    if (!v || v === old) { h.textContent = old; return; }
+    try { await _notesApi('PATCH', `/api/notes/${encodeURIComponent(_notesTopic)}`, {title: v}); _notesTopics = null; renderNotesSidebar(); }
+    catch (e) { showToast('Error: ' + (e.message || e), 4000, 'red'); h.textContent = old; }
+  };
+  inp.onkeydown = ev => { if (ev.key === 'Enter') inp.blur(); if (ev.key === 'Escape') { inp.onblur = null; h.textContent = old; } };
+  inp.onblur = done;
+}
+async function notesDeleteTopic(btn) {
+  if (!btn.classList.contains('sure')) { btn.classList.add('sure'); btn.style.background = '#b0202a'; btn.textContent = 'delete topic and its notes?'; setTimeout(() => { btn.classList.remove('sure'); btn.style.background = ''; btn.textContent = '🗑 topic'; }, 4000); return; }
+  try { await _notesApi('DELETE', `/api/notes/${encodeURIComponent(_notesTopic)}`); _notesTopics = null; _notesTopic = null; renderNotesSidebar(); }
+  catch (e) { showToast('Error: ' + (e.message || e), 4000, 'red'); }
+}
+
 let _entityGroups = null;
 async function renderEntityGroups() {
   const el = document.getElementById('project-list');
@@ -879,6 +1037,7 @@ async function renderEntityGroups() {
 function renderProjectList() {
   const el = document.getElementById('project-list');
   if (sidebarView === 'entities') { renderEntityGroups(); return; }
+  if (sidebarView === 'notes') { renderNotesSidebar(); return; }
   if (!projects.length) {
     el.innerHTML = `<div class="empty"><div class="big">📂</div>No projects yet.<br>Click <b>+ New</b> to create one.</div>`;
     return;
