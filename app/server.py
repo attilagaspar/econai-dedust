@@ -1429,6 +1429,20 @@ def get_cell(
     return StreamingResponse(buf, media_type="image/jpeg")
 
 
+# What a cell crop's edges leave in Tesseract's reading: the grid lines as
+# bars and brackets, specks as quotes and dots, at the start or end of a line.
+_OCR_EDGE_LEAD  = re.compile(r"""^[\s|\[\]{}()<>!'"´`‘’“”.,:;_\-—–~*^°]+""")
+_OCR_EDGE_TRAIL = re.compile(r"""[\s|\[\]{}()<>!'"´`‘’“”,:;_\-—–~*^°]+$""")   # a trailing "." stays: "Jós."
+
+
+def _ocr_strip_edges(line: str) -> str:
+    """Drop grid-line debris from both ends of an OCR line ("| Masszaner
+    Gyula |" → "Masszaner Gyula"; "[TT" → ""); a line with no letter or
+    digit left is dropped by the caller."""
+    t = _OCR_EDGE_TRAIL.sub("", _OCR_EDGE_LEAD.sub("", line or ""))
+    return t if re.search(r"[\w]", t) else ""
+
+
 def _tess_group_lines(tess: dict) -> tuple:
     """Group confident Tesseract words by (block, paragraph, line), sorted by
     visual top coordinate (block_num order ≠ top-to-bottom order). Returns
@@ -1449,8 +1463,8 @@ def _tess_group_lines(tess: dict) -> tuple:
             line_top[key] = min(line_top[key], int(top))
             conf_values.append(c)
     sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
-    lines = [" ".join(line_words[k]) for k in sorted_keys]
-    ocr_text  = "\n".join(lines).strip()
+    lines = [_ocr_strip_edges(" ".join(line_words[k])) for k in sorted_keys]
+    ocr_text  = "\n".join(l for l in lines if l).strip()
     mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
     return ocr_text, mean_conf
 

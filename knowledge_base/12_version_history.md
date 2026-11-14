@@ -656,3 +656,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   4,486 new, 78 open, 5 nameless; 5,071 events, 4,605 with a folio) had
   13 such attachments. The batch panel's dry-run summary says that a dry
   run cannot attach later events to the firms the run itself would create.
+- **Nov 14 — OCR edge cleanup** (`_ocr_strip_edges` in `_tess_group_lines`):
+  grid-line debris at the ends of a Tesseract line (bars, brackets, stray
+  quotes) is stripped, a line with no letter or digit left is dropped; a
+  trailing dot stays ("Jós."). Applies to the single-cell and the batch
+  path. The PDF layer is no longer the plan for new Gazette volumes: batch
+  OCR (an hour per volume) wins in the best-layer rule.

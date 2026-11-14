@@ -54,3 +54,15 @@ def test_batch_tesseract_reads_many_crops_in_order():
     assert len(res) == 3
     texts = [srv._tess_group_lines(d)[0] for d in res]
     assert "1876" in texts[0] and "1882" in texts[1] and "Adony" in texts[2]
+
+
+
+def test_grid_line_debris_is_stripped_from_line_edges():
+    g = lambda words: srv._tess_group_lines({"text": words, "conf": [90] * len(words), "block_num": [1] * len(words),
+                                             "par_num": [1] * len(words), "line_num": [1] * len(words), "top": [5] * len(words)})[0]
+    assert g(["|", "Masszaner", "Gyula", "|"]) == "Masszaner Gyula"
+    assert g(["[TT"]) == "TT" and g(["|", "]"]) == ""         # the bracket goes; letters stay (a real "TT" is possible); debris alone: no line
+    assert g(["|Friedman", "Jósef", "|"]) == "Friedman Jósef"
+    assert g(["Weisz", "&", "Co."]) == "Weisz & Co."           # inner punctuation and a trailing dot stay
+    assert g(["S.", "Reichardnő", "|"]) == "S. Reichardnő"
+    assert srv._ocr_strip_edges("“1876. jun. 26.”") == "1876. jun. 26."
