@@ -640,3 +640,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   minted whatever its verb ("new registry position"). First 1877
   rehearsal before this: 576 same (370 name, 110 key, 96 name + facts),
   510 open; 0 citations parsed of 973 — the format differed from 1876's.
+- **Nov 14 — `firms_registry_hu.authority.json` untracked**: the file is
+  instance data the server writes (18.8k entities on Azure); tracking it
+  made every `git pull` on the VM refuse to merge. It stays in the working
+  tree, ignored by git; a new instance starts it from the empty header
+  (see 13 §6b).

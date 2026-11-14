@@ -71,3 +71,6 @@ app/docker_config.json
 
 # dashboard notes (instance data, not code)
 notes.json
+
+# live registry authority: instance data written by the server, never pulled over
+authorities/firms_registry_hu.authority.json
