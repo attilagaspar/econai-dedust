@@ -187,6 +187,35 @@ def years_agree(a, b):
     return ya == yb
 
 
+def entity_folios(entity: dict) -> dict:
+    """{court key: {folios}} the entity's events were printed under — the
+    registry positions it holds (a ledger entity has one per court)."""
+    out: dict = {}
+    ecourt = (entity.get("attrs") or {}).get("court")
+    for sl in entity.get("slices") or []:
+        rn = sl.get("registry_no") if isinstance(sl.get("registry_no"), dict) else None
+        court = (sl.get("attrs") or {}).get("court") or ecourt
+        if rn and rn.get("folio") is not None and court:
+            ck = court_key(court)
+            if ck:
+                out.setdefault(ck, set()).add(int(rn["folio"]))
+    return out
+
+
+def folio_agrees(ident: dict, entity: dict):
+    """True when the entity holds the row's registry position (court +
+    folio), False when it holds a DIFFERENT folio at that court — another
+    registry entry, whatever the name says — None when either side has no
+    folio yet (1876 entities learn theirs from their first 1877 event)."""
+    rn = ident.get("registry_no") if isinstance(ident.get("registry_no"), dict) else None
+    if not rn or rn.get("folio") is None or not ident.get("court"):
+        return None
+    held = entity_folios(entity).get(court_key(ident["court"]))
+    if not held:
+        return None
+    return int(rn["folio"]) in held
+
+
 def entity_facts(entity: dict) -> dict:
     """seat / county / founded / legal_form of an entity, from its latest
     slice's attrs (falling back through earlier slices and top-level attrs)."""
@@ -337,6 +366,7 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                     "seat_agree": seats_agree(ident.get("seat"), facts.get("seat")),
                     "year_agree": years_agree(ident.get("founded"), facts.get("founded")),
                     "court_agree": courts_agree(ident.get("court"), facts.get("court")),
+                    "folio_agree": folio_agrees(ident, ent),
                     "first_seen": first_seen(ent),
                     "founded_after_seen": founded_after_seen(ident, ent),
                     "last_slice": {"as_of": last.get("as_of"), "source": last.get("source"),
@@ -369,6 +399,8 @@ def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
     sa, ya = best.get("seat_agree"), best.get("year_agree")
     if best.get("court_agree") is False:        # another court = another registry entry (13 §6b)
         return "open", "court differs"
+    if best.get("folio_agree") is False:        # it holds another folio at this court: another entry
+        return "open", "registry position differs"
     if best.get("keyed"):                       # the registry position IS the identity: a rename keeps it
         return "same", "registry key"
     if best.get("pointed"):                     # an explicit pointer to the entry above

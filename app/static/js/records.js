@@ -893,7 +893,8 @@ async function runResolveRecords(sorted, {dryRun = false} = {}) {
     await post({...body, background: true});
     const plan = await _recWatchResolveJob(prog, fmt);
     if (!plan) return null;
-    const head = `${dryRun ? 'Dry run' : 'Preview'}: ${fmt(plan)}`;
+    const head = `${dryRun ? 'Dry run' : 'Preview'}: ${fmt(plan)}` +
+      (plan.counts.new ? ' — a dry run creates nothing, so later events of firms this run would create cannot attach yet; the real run attaches more' : '');
     if (prog) prog.innerHTML = _escHtml(head) + '<div style="max-height:200px;overflow:auto;margin-top:4px;color:#8a94a6;">' +
       plan.items.filter(i => i.decision !== 'kept').map(i => `record ${i.id} · ${_escHtml(i.name || '')} → <b>${i.decision}</b>` +
         (i.best ? ` (best ${_escHtml(i.best.id)} ${_escHtml(i.best.name || '')} ${i.best.score}${(i.best.boost_why || []).length ? ' +' + i.best.boost_why.join(',') : ''})` : '') +

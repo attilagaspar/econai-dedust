@@ -287,10 +287,11 @@ def test_second_volume_links_by_cross_volume_citation_and_registry_key(client, l
             ["„", "1877. márc. 7.\n40/2", "Neumann Jakab utóda", "Szeged", "", "Czégvezető kilépett. (Lásd az előbbi bejegyzést.)"],
             ["Pesti törvényszék", "1877. márc. 9.\n7/3", "Glück Sámuel", "Tokaj", "", "Ezen czég töröltetett. (Lásd az eredeti bejegyzést »Közp. Ért.« 1. sz.)"],
             ["Pesti törvényszék", "1877. márc. 9.\n901/4", "Hirschl Ábrahám", "Pest", "", "Hirschl Ábrahámné hozománya bejegyeztetett."],
+            ["Pesti törvényszék", "1877. márc. 10.\n77/2", "Neumann Jakab", "Pest", "", "Czégvezető kilépett."],
         ])
         srv._LINKED_CACHE.clear()
         recs = client.get(f"/api/project/{name2}/records").json()["records"]
-        a, b, c, d, e, f, g = [r["id"] for r in recs]
+        a, b, c, d, e, f, g, h = [r["id"] for r in recs]
         ca = client.get(f"/api/project/{name2}/records/candidates", params={"gid": a}).json()
         assert ca["identity"]["issue_ref"] == {"issue": 1, "volume": "I", "volume_no": 1} and ca["identity"]["registry_no"] == {"folio": 32, "sub": 2}
         assert ca["candidates"][0]["id"] == "R000001" and "cited issue" in ca["candidates"][0]["boost_why"]
@@ -309,6 +310,8 @@ def test_second_volume_links_by_cross_volume_citation_and_registry_key(client, l
         assert by[f]["decision"] == "same" and by[f]["entity"] == "R000002" and "cited issue" in by[f]["best"]["boost_why"]
         # a change event at a registry position nobody holds is a new entry, no mint_changes needed
         assert by[g]["decision"] == "new" and "new registry position" in by[g]["reason"]
+        # the same name at the same court but another folio: not Neumann's entry (which holds 40)
+        assert by[h]["decision"] == "new" and by[h]["entity"] != nb and "registry position differs" in by[h]["reason"]
         auth = json.loads((auth_dir / AUTH).read_text(encoding="utf-8"))
         ents = {x["id"]: x for x in auth["entities"]}
         z = ents["R000001"]["slices"]

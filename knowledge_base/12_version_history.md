@@ -650,3 +650,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   synchronous request stalled the tab and the tunnel); a ledger row whose
   registry sub-number is 1 is a first entry by definition and skips the
   candidate search (about four fifths of a volume's rows).
+- **Nov 14 — Folio conflict blocks a match** (`folio_agrees`, `decide` →
+  "registry position differs"): a candidate holding another folio at the
+  row's court is another registry entry; the 1877 run on Azure (585 same,
+  4,486 new, 78 open, 5 nameless; 5,071 events, 4,605 with a folio) had
+  13 such attachments. The batch panel's dry-run summary says that a dry
+  run cannot attach later events to the firms the run itself would create.

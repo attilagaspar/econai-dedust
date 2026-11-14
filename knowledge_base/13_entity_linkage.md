@@ -338,4 +338,8 @@ printed above (its entity, via the record collector's `prev_head`). Decree
 numbers before "Lásd" ("14333. számú végzés") are not citations. A change
 or deletion at a registry position nobody holds is minted as a new entry
 whatever its verb — the key proves a distinct entry whose registration
-predates the series — so `mint_changes` is only for the first volume.
+predates the series — so `mint_changes` is only for the first volume. The
+key also blocks: a candidate that already holds a *different* folio at the
+row's court is another entry whatever the name ("registry position
+differs"); the 1877 run on Azure, before this rule, attached 13 rows of 585
+that way.
