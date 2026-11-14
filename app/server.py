@@ -10270,10 +10270,20 @@ def _resolve_records_run(name: str, body: ResolveRecordsBatch, job: dict | None 
             items.append({"id": gid, "name": rec.get("name"), "decision": "kept", "entity": cur.get("id")})
             continue
         rec["gid"] = gid
-        c = _record_candidates(name, rec, by_stem, fname, 3, crops=False)
-        cands = c["candidates"]
-        best = cands[0] if cands else None
-        verdict, reason = _rr.decide(cands, body.accept_floor, body.margin)
+        ident0 = rec.get("identity") or {}
+        rn0 = ident0.get("registry_no") if isinstance(ident0.get("registry_no"), dict) else None
+        if (kind == "ledger" and rn0 and rn0.get("sub") == 1 and rn0.get("folio") is not None
+                and ident0.get("event_type") in (None, "registered") and not ident0.get("issue_ref")):
+            # a ledger row whose sub-number is 1 is the FIRST entry at its registry
+            # position: a new entry by definition, no candidate search needed
+            # (four fifths of a volume's rows; the search is the batch's cost)
+            c = {"candidates": [], "identity": ident0, "kind": kind, "key_hits": 0}
+            cands, best, verdict, reason = [], None, "open", "first entry at its registry position"
+        else:
+            c = _record_candidates(name, rec, by_stem, fname, 3, crops=False)
+            cands = c["candidates"]
+            best = cands[0] if cands else None
+            verdict, reason = _rr.decide(cands, body.accept_floor, body.margin)
         ev = (c.get("identity") or {}).get("event_type")
         rn = (c.get("identity") or {}).get("registry_no")
         has_new_key = (c.get("kind") == "ledger" and isinstance(rn, dict) and rn.get("folio") is not None

@@ -887,7 +887,12 @@ async function runResolveRecords(sorted, {dryRun = false} = {}) {
     (d.counts.error ? ` · ${d.counts.error} error(s)` : '') + ` (of ${d.n_records} records, ${_escHtml(d.authority_file)}, year ${d.source_year ?? 'not set'})`;
   try {
     if (prog) prog.textContent = 'Dry run…';
-    const plan = await post(body);
+    // the dry run is the same work as the real run (a candidate search per
+    // record): a server job with the progress line, not a request the tab
+    // (and the tunnel) must wait for
+    await post({...body, background: true});
+    const plan = await _recWatchResolveJob(prog, fmt);
+    if (!plan) return null;
     const head = `${dryRun ? 'Dry run' : 'Preview'}: ${fmt(plan)}`;
     if (prog) prog.innerHTML = _escHtml(head) + '<div style="max-height:200px;overflow:auto;margin-top:4px;color:#8a94a6;">' +
       plan.items.filter(i => i.decision !== 'kept').map(i => `record ${i.id} · ${_escHtml(i.name || '')} → <b>${i.decision}</b>` +

@@ -645,3 +645,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   made every `git pull` on the VM refuse to merge. It stays in the working
   tree, ignored by git; a new instance starts it from the empty header
   (see 13 §6b).
+- **Nov 14 — Batch speed for ledgers**: the panel's dry run is a server job
+  with the progress line too (it is the same work as the write run; a
+  synchronous request stalled the tab and the tunnel); a ledger row whose
+  registry sub-number is 1 is a first entry by definition and skips the
+  candidate search (about four fifths of a volume's rows).
