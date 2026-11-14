@@ -156,8 +156,9 @@ function _ddRenderHead() {
     `${_escHtml(x.name)}${x.error ? ' ⚠' : ''}</option>`).join('');
   h.innerHTML =
     '<b style="color:#e0e0e0;font-size:13px;">📋 Dataset</b>' +
-    `<select onchange="_ddSwitch(this.value)" style="${_ddInput}">${opts}` +
-      `<option value="__new__" ${_dd.isNew ? 'selected' : ''}>➕ new dataset…</option></select>` +
+    `<select id="dd-switch" onchange="_ddSwitch(this.value)" style="${_ddInput}">${opts}` +
+      `<option value="__new__" ${_dd.isNew ? 'selected' : ''}>➕ new dataset…</option>` +
+      `<option value="__copy__">⇩ copy from another project…</option></select>` +
     (_dd.isNew ? `<input id="dd-name" placeholder="name, e.g. machines_main" value="${_escHtml(_dd.decl.name || '')}" ` +
                  `onchange="_dd.decl.name=this.value.trim()" style="${_ddInput}width:170px;">` : '') +
     '<div style="flex:1"></div>' +
@@ -171,6 +172,10 @@ function _ddRenderHead() {
 }
 
 async function _ddSwitch(v) {
+  if (v === '__copy__') {
+    _ddCopyChooser();
+    return;
+  }
   if (v === '__new__') {
     _dd.decl = _ddBlank(); _dd.name = null; _dd.isNew = true;
     _dd.preview = null; _dd.suggestions = null;
@@ -179,6 +184,47 @@ async function _ddSwitch(v) {
     await _ddLoad(v);
   }
   _ddRender();
+}
+
+// "⇩ copy from another project…": every project's declarations
+// (GET /api/datasets/catalog) in an inline chooser; one click copies the
+// chosen one here (POST /api/datasets/copy, never overwriting) and opens it.
+// A new volume of the same book starts from the previous volume's files.
+async function _ddCopyChooser() {
+  const sel = document.getElementById('dd-switch');
+  if (sel) sel.value = _dd.isNew ? '__new__' : (_dd.name || '__new__');
+  document.getElementById('dd-copy-box')?.remove();
+  let all = [];
+  try { const r = await fetch(`${API}/api/datasets/catalog`); all = (await r.json()).datasets || []; }
+  catch (e) { showToast('Could not list the declarations of the other projects'); return; }
+  const here = (typeof _recCtx !== 'undefined' && _recCtx?.project) || null;
+  const list = all.filter(x => x.project !== here);
+  if (!list.length) { showToast('No other project has a declaration to copy'); return; }
+  const box = document.createElement('div');
+  box.id = 'dd-copy-box';
+  box.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%;margin-top:6px;padding:4px 6px;' +
+    'border-left:3px solid #e94560;background:#0d1b35;font-size:11px;color:#aaa;';
+  box.innerHTML = `<span>copy</span><select id="dd-copy-pick" style="${_ddInput}flex:1;min-width:220px;">` +
+    list.map((x, i) => `<option value="${i}">${_escHtml(x.project)} · ${_escHtml(x.name)} (${_escHtml(x.unit || '')}, ${x.variables} vars${x.header ? ', by header' : ''})</option>`).join('') + `</select>` +
+    `<span>as</span><input id="dd-copy-as" value="${_escHtml(list[0].name)}" style="${_ddInput}width:120px;">` +
+    `<button class="nav-btn" id="dd-copy-go">⇩ Copy</button><button class="nav-btn" id="dd-copy-x">✕</button>`;
+  document.getElementById('dd-head')?.appendChild(box);
+  const pick = box.querySelector('#dd-copy-pick'), as = box.querySelector('#dd-copy-as');
+  pick.onchange = () => { as.value = list[+pick.value].name; };
+  box.querySelector('#dd-copy-x').onclick = () => box.remove();
+  box.querySelector('#dd-copy-go').onclick = async () => {
+    const x = list[+pick.value];
+    try {
+      const r = await fetch(`${API}/api/datasets/copy?folder=${encodeURIComponent(folder)}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({from_project: x.project, name: x.name, as_name: as.value.trim() || x.name})});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+      box.remove();
+      showToast(`Declaration "${d.name}" copied from ${x.project}`);
+      await _ddLoadList(); await _ddLoad(d.name); _ddRender();
+    } catch (e) { showToast('Copy failed: ' + (e?.message || e), 6000); }
+  };
 }
 
 // ── section 1: which pages ─────────────────────────────────────────────────

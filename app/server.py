@@ -12496,6 +12496,58 @@ def api_list_datasets(folder: str = Query(...)):
     return {"datasets": out}
 
 
+@app.get("/api/datasets/catalog")
+def api_datasets_catalog():
+    """Every project's dataset declarations (project, name, unit, pattern,
+    header patterns, variable count), so the declarations written for one
+    volume can be copied to the next from the Dataset window."""
+    out = []
+    if PROJECTS_ROOT.exists():
+        for pdir in sorted(PROJECTS_ROOT.iterdir()):
+            ddir = pdir / "datasets"
+            if not pdir.is_dir() or not ddir.is_dir():
+                continue
+            for f in sorted(ddir.glob("*.dataset.json")):
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                sc, rc = d.get("scope") or {}, d.get("record") or {}
+                out.append({"project": pdir.name, "name": f.name[:-len(".dataset.json")],
+                            "unit": rc.get("unit"), "pattern": sc.get("pattern"),
+                            "header": sc.get("header"), "variables": len(d.get("variables") or [])})
+    return {"datasets": out}
+
+
+class DatasetCopy(BaseModel):
+    from_project: str
+    name:         str
+    as_name:      Optional[str] = None
+
+
+@app.post("/api/datasets/copy")
+def api_datasets_copy(folder: str = Query(...), body: DatasetCopy = ...):
+    """Copy another project's declaration into this project's datasets/
+    folder (its `name` field renamed when `as_name` is given; never
+    overwrites: 409 when the name is taken here)."""
+    if not body.from_project or any(ch in body.from_project for ch in "/\\") or body.from_project.startswith("."):
+        raise HTTPException(status_code=400, detail="from_project must be a project name")
+    safe = re.sub(r"[^A-Za-z0-9_\-]+", "", body.name or "")
+    src = PROJECTS_ROOT / body.from_project / "datasets" / f"{safe}.dataset.json"
+    if not safe or not src.exists():
+        raise HTTPException(status_code=404, detail=f"No declaration {body.name!r} in project {body.from_project!r}")
+    new_name = re.sub(r"[^A-Za-z0-9_\-]+", "_", (body.as_name or body.name).strip()) or safe
+    ddir = _datasets_dir(folder)
+    ddir.mkdir(parents=True, exist_ok=True)
+    dst = ddir / f"{new_name}.dataset.json"
+    if dst.exists():
+        raise HTTPException(status_code=409, detail=f"This project already has a declaration named {new_name!r}")
+    d = json.loads(src.read_text(encoding="utf-8"))
+    d["name"] = new_name
+    dst.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "name": new_name, "from_project": body.from_project}
+
+
 @app.get("/api/datasets/coverage")
 def api_datasets_coverage(folder: str = Query(...), limit: int = Query(300, ge=1, le=5000)):
     """Which declaration covers which lattice table: for every page and

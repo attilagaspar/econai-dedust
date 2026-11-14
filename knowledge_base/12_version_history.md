@@ -615,3 +615,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   `/api/notes` (topics CRUD, notes add / edit / delete). The sidebar's
   + New, Inbox and trash buttons belong to the Projects view and hide
   elsewhere; + New becomes + Topic in Notes. Tests: `tests/test_notes.py`.
+- **Nov 14 — Declaration copy between projects**: `GET /api/datasets/catalog`
+  (every project's declarations with unit, pattern, header patterns,
+  variable count), `POST /api/datasets/copy {from_project, name, as_name}`
+  (renames the `name` field, 409 when taken); "⇩ copy from another
+  project…" in the Dataset window's picker (`_ddCopyChooser`). Test:
+  `tests/test_dataset_copy.py`.

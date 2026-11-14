@@ -504,7 +504,11 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   `GET /api/datasets/coverage` lists uncovered / doubly covered tables —
   the 📋 Dataset window's **🗂 Coverage** button shows them with a page
   jump and the header texts; the window **minimizes to a pill** (▁, or by
-  itself when a page is clicked in a list) and keeps its state), record
+  itself when a page is clicked in a list) and keeps its state; its
+  dataset picker ends with **"⇩ copy from another project…"** —
+  `GET /api/datasets/catalog`, `POST /api/datasets/copy`, never
+  overwriting — so the next volume of a book starts from the previous
+  volume's declarations), record
   spec (internal_row / lattice_row; **join**: positional by page-level
   column sequence, or keyed by the identifier column; `exclude_keys` regexes
   for printed total/header rows), position → named **variables**
