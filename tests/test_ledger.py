@@ -34,6 +34,10 @@ def test_parsers():
     assert ledger.parse_issue_ref("(Lásd az eredeti be- jegyzést, 14. szám.)") == {"issue": 14}
     assert ledger.parse_issue_ref("Lásd a II. évf. 34. számát") == {"issue": 34, "volume": "II", "volume_no": 2}
     assert ledger.parse_issue_ref("(Lásd 1924. évf. 8.)") == {"issue": 8, "year": 1924}
+    assert ledger.parse_issue_ref("(Lásd az eredeti be- jegyzést »Közp. Ért.« 97. sz.)") == {"issue": 97, "gazette": True}
+    assert ledger.parse_issue_ref("(Lásd az előbbi be- jegyzést.)") == {"previous": True}
+    assert ledger.parse_issue_ref("A kir. törvényszéknek 1876 évi november 17-én 14333 számú végzése alapján") is None
+    assert ledger.parse_issue_ref("töröltetett 1876. évi 14333. számú végzés. (Lásd »Közp. Ért.« 5. sz.)") == {"issue": 5, "gazette": True}
     assert ledger.parse_issue_ref("Ezen czég töröltetett.") is None
     assert ledger.parse_issue_ref("( L á s d  a z I.  évfolyam  e r e d e t i  bejegyzését 14. szám)") == {"issue": 14, "volume": "I", "volume_no": 1}
     assert ledger.parse_issue_ref("Lásd a II. évf. 34. számát")["volume_no"] == 2 and ledger.roman_to_int("xiv") == 14
@@ -280,10 +284,13 @@ def test_second_volume_links_by_cross_volume_citation_and_registry_key(client, l
         _page(ann, "q2", 2, [
             ["Pesti törvényszék", "1877. márc. 5.\n40/2", "Neumann Jakab és társa", "Pest", "Belépett Kohn Áron", "Kohn Áron belépett."],
             ["Szegedi törvényszék", "1877. márc. 6.\n40/1", "Neumann Jakab", "Szeged", "Neumann Jakab szatócs", ""],
+            ["„", "1877. márc. 7.\n40/2", "Neumann Jakab utóda", "Szeged", "", "Czégvezető kilépett. (Lásd az előbbi bejegyzést.)"],
+            ["Pesti törvényszék", "1877. márc. 9.\n7/3", "Glück Sámuel", "Tokaj", "", "Ezen czég töröltetett. (Lásd az eredeti bejegyzést »Közp. Ért.« 1. sz.)"],
+            ["Pesti törvényszék", "1877. márc. 9.\n901/4", "Hirschl Ábrahám", "Pest", "", "Hirschl Ábrahámné hozománya bejegyeztetett."],
         ])
         srv._LINKED_CACHE.clear()
         recs = client.get(f"/api/project/{name2}/records").json()["records"]
-        a, b, c, d = [r["id"] for r in recs]
+        a, b, c, d, e, f, g = [r["id"] for r in recs]
         ca = client.get(f"/api/project/{name2}/records/candidates", params={"gid": a}).json()
         assert ca["identity"]["issue_ref"] == {"issue": 1, "volume": "I", "volume_no": 1} and ca["identity"]["registry_no"] == {"folio": 32, "sub": 2}
         assert ca["candidates"][0]["id"] == "R000001" and "cited issue" in ca["candidates"][0]["boost_why"]
@@ -295,6 +302,13 @@ def test_second_volume_links_by_cross_volume_citation_and_registry_key(client, l
         assert by[c]["decision"] == "same" and by[c]["entity"] == nb and by[c]["reason"] == "registry key"   # renamed, same folio
         assert "registry key" in by[c]["best"]["boost_why"]
         assert by[d]["decision"] == "new" and by[d]["entity"] != nb                     # same folio, another court
+        # "the entry above": the row after d points at d's entity (and shares its folio at that court)
+        assert by[e]["decision"] == "same" and by[e]["entity"] == by[d]["entity"]
+        assert by[e]["reason"] in ("registry key", "cites the entry above")
+        # a citation by issue number alone looks in this volume and the one before: Glück's 1876 issue 1
+        assert by[f]["decision"] == "same" and by[f]["entity"] == "R000002" and "cited issue" in by[f]["best"]["boost_why"]
+        # a change event at a registry position nobody holds is a new entry, no mint_changes needed
+        assert by[g]["decision"] == "new" and "new registry position" in by[g]["reason"]
         auth = json.loads((auth_dir / AUTH).read_text(encoding="utf-8"))
         ents = {x["id"]: x for x in auth["entities"]}
         z = ents["R000001"]["slices"]

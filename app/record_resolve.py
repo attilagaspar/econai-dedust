@@ -289,7 +289,7 @@ def founded_after_seen(ident: dict, entity: dict):
 def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                      rescore=None, exclude_source: str | None = None, own_gid=None,
                      members: dict | None = None, cited: set | None = None,
-                     keyed: set | None = None) -> list:
+                     keyed: set | None = None, pointed: set | None = None) -> list:
     """Union of the matcher's candidate lists (one per query), best score per
     entity, blocking boosts applied for ranking; `score` is the string
     similarity (re-scored by `rescore(query, matched)` when given — the
@@ -325,11 +325,14 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
         is_keyed = bool(keyed and cid in keyed)
         if is_keyed:                          # the entity holds this row's registry position
             b += BOOST_KEY; why.append("registry key")
+        is_pointed = bool(pointed and cid in pointed)
+        if is_pointed:                        # "Lásd az előbbi bejegyzést": the entry printed above
+            b += BOOST_KEY; why.append("cites the entry above")
         facts = entity_facts(ent)
         slices = ent.get("slices") or []
         last = slices[-1] if slices else {}
         out.append({**c, "boost": b, "boost_why": why, "ranked": c["score"] + b,
-                    "keyed": is_keyed,
+                    "keyed": is_keyed, "pointed": is_pointed,
                     "facts": facts, "n_slices": len(slices),
                     "seat_agree": seats_agree(ident.get("seat"), facts.get("seat")),
                     "year_agree": years_agree(ident.get("founded"), facts.get("founded")),
@@ -368,6 +371,8 @@ def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
         return "open", "court differs"
     if best.get("keyed"):                       # the registry position IS the identity: a rename keeps it
         return "same", "registry key"
+    if best.get("pointed"):                     # an explicit pointer to the entry above
+        return "same", "cites the entry above"
     sure, weak = floor + (SURE_NAME - GOOD_NAME), floor - (GOOD_NAME - WEAK_NAME)
     if sc >= sure:
         if sa is False and ya is False:

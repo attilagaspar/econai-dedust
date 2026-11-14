@@ -79,25 +79,41 @@ def parse_date_hu(text) -> str | None:
 
 
 def parse_issue_ref(text) -> dict | None:
-    """The earlier publication a note cites: '(Lásd az eredeti bejegyzést,
-    14. szám.)' → {"issue": 14}; 'Lásd a II. évf. 34. számát' → {"issue": 34,
-    "volume": "II"}; '(Lásd 1924. évf. 8.)' → {"issue": 8, "year": 1924};
-    None when the text cites nothing."""
+    """The earlier publication a note cites, read from the text AFTER the
+    word "Lásd" (decree numbers before it, "14333. számú végzés", are not
+    citations): '(Lásd az eredeti bejegyzést »Közp. Ért.« 97. sz.)' →
+    {"issue": 97, "gazette": True}; 'Lásd a II. évf. 34. számát' →
+    {"issue": 34, "volume": "II", "volume_no": 2}; '(Lásd 1924. évf. 8.)'
+    → {"issue": 8, "year": 1924}; '(Lásd az előbbi bejegyzést.)' →
+    {"previous": True} (the entry printed above); None when the text cites
+    nothing. A volume or year narrows the lookup; without one the issue is
+    looked up in this volume and the one before."""
     t = _fold(text).replace("\n", " ")
-    if not re.search(r"l\s*a\s*s\s*d", t):
-        return None
-    out = {}
-    m = re.search(r"\b([ivxl]{1,5})\s*\.?\s*evf", t)
-    if m:
-        out["volume"] = m.group(1).upper()
-        out["volume_no"] = roman_to_int(m.group(1))
-    m = re.search(r"\b(1[6-9]\d\d|20\d\d)\s*\.?\s*(?:evi|evf)", t)
-    if m:
-        out["year"] = int(m.group(1))
-    m = re.search(r"(\d{1,3})\s*\.?\s*(?:ik\s+)?sz\s*[aá]?\s*m", t) or re.search(r"evf\.?\s*(\d{1,3})\s*\.?\)", t)
+    m = re.search(r"l\s*a\s*s\s*d", t)
     if not m:
         return None
-    out["issue"] = int(m.group(1))
+    seg = t[m.end():]
+    cut = seg.find(")")
+    if cut > 0:
+        seg = seg[:cut]
+    out = {}
+    mv = re.search(r"\b([ivxl]{1,5})\s*\.?\s*evf", seg)
+    if mv:
+        out["volume"] = mv.group(1).upper()
+        out["volume_no"] = roman_to_int(mv.group(1))
+    my = re.search(r"\b(1[6-9]\d\d|20\d\d)\s*\.?\s*(?:evi|evf)", seg)
+    if my:
+        out["year"] = int(my.group(1))
+    mi = (re.search(r"\b(\d{1,3})\s*\.?\s*(?:ik\s+)?(?:szam|sz\b)", seg)
+          or re.search(r"evf\.?\s*(\d{1,3})\b", seg))
+    if mi:
+        out["issue"] = int(mi.group(1))
+    elif re.search(r"\b(elobbi|elozo|fennebbi|fentebbi|fenti)\b", seg):
+        out["previous"] = True
+    else:
+        return None
+    if re.search(r"kozp\.?\s*ert", seg):
+        out["gazette"] = True
     return out
 
 

@@ -330,3 +330,12 @@ year; run on Azure 2026-11-13: 18,762 entities, 80 later events attached.
 issues on 651, so from 1877 on the key and the citation carry the linkage;
 the name is the fallback. The key lane learns an entry's folio the first
 time a volume prints it (1876 entities get theirs from their 1877 event).
+How the gazette actually cites (measured on 1877's 973 "Lásd" notes): by
+issue number alone, "(Lásd az eredeti bejegyzést »Közp. Ért.« 97. sz.)",
+so without a volume the lookup covers this volume and the one before and
+the name decides; "(Lásd az előbbi bejegyzést.)" points at the entry
+printed above (its entity, via the record collector's `prev_head`). Decree
+numbers before "Lásd" ("14333. számú végzés") are not citations. A change
+or deletion at a registry position nobody holds is minted as a new entry
+whatever its verb — the key proves a distinct entry whose registration
+predates the series — so `mint_changes` is only for the first volume.

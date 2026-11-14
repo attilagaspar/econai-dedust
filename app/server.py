@@ -9804,22 +9804,42 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
         return (q0, via, [{"id": i, "score": _auth_whole_name_score(q0, (raw.get(i) or {}).get("name") or "", index),
                            "via": via, "raw": (raw.get(i) or {}).get("name") or ""} for i in ids])
     cited = None
+    pointed = None
     ref = ident.get("issue_ref") if isinstance(ident.get("issue_ref"), dict) else None
     if ref and ref.get("issue") is not None:
-        # the row cites an earlier issue — of this volume, or of another
-        # volume by year or ordinal ("Lásd az I. évfolyam 14. számát"): the
-        # entities printed there are candidates by name, boosted (13 §6b)
-        src = name
+        # the row cites an earlier issue — of another volume by year or
+        # ordinal ("Lásd az I. évfolyam 14. számát"), or by number alone
+        # ("»Közp. Ért.« 97. sz."): then this volume and the one before it
+        # are both looked up and the name decides. The entities printed
+        # there are candidates by name, boosted (13 §6b).
+        srcs = []
         if ref.get("year") or ref.get("volume_no"):
             year = ref.get("year")
             if year is None:
                 base = (_authority_meta(fname).get("first_volume_year"))
                 year = base + int(ref["volume_no"]) - 1 if base else None
-            src = next((lp["name"] for lp in _linked_projects_cached(fname) if lp.get("source_year") == year), None)
-        ids = (index.get("by_source_issue") or {}).get((src, int(ref["issue"]))) if src else None
+            srcs = [lp["name"] for lp in _linked_projects_cached(fname) if lp.get("source_year") == year]
+        else:
+            own_year = load_config(name).get("source_year")
+            srcs = [name] + [lp["name"] for lp in _linked_projects_cached(fname)
+                             if own_year is not None and lp.get("source_year") == own_year - 1]
+        ids = []
+        for src in srcs:
+            for i in (index.get("by_source_issue") or {}).get((src, int(ref["issue"]))) or []:
+                if i not in ids:
+                    ids.append(i)
         if ids:
             cited = set(ids)
             per_query.append(_lane(ids, "issue"))
+    if ref and ref.get("previous") and rec.get("prev_head"):
+        # "Lásd az előbbi bejegyzést": the entity of the record printed above
+        ph = rec["prev_head"]
+        pshapes = (by_stem.get(ph["stem"]) or {}).get("shapes") or []
+        pm = (pshapes[ph["idx"]].get("authority") if 0 <= ph["idx"] < len(pshapes) else None) or {}
+        if pm.get("id"):
+            pid = (index.get("canonical") or {}).get(pm["id"], pm["id"])
+            pointed = {pid}
+            per_query.append(_lane([pid], "previous"))
     keyed = None
     rn = ident.get("registry_no") if isinstance(ident.get("registry_no"), dict) else None
     if rn and rn.get("folio") is not None and ident.get("court"):
@@ -9832,7 +9852,7 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
                                  rescore=lambda q, m: _auth_whole_name_score(q, m, index),
                                  exclude_source=None if kind == "ledger" else name,
                                  own_gid=_rr_own_gid(rec),
-                                 members=index.get("members"), cited=cited, keyed=keyed)
+                                 members=index.get("members"), cited=cited, keyed=keyed, pointed=pointed)
     for c in cands:
         if not crops:          # the batch needs no crop locations (each lookup walks a project's records)
             break
@@ -9853,7 +9873,8 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
     if cur:   # the mark may name an id since merged into a survivor
         cur["canonical_id"] = (index.get("canonical") or {}).get(cur["id"], cur["id"])
     return {"queries": queries, "identity": ident, "candidates": cands, "search": q or None,
-            "kind": kind, "head": {"stem": head["stem"], "idx": head["idx"]}, "current": cur}
+            "kind": kind, "key_hits": len(keyed) if keyed else 0,
+            "head": {"stem": head["stem"], "idx": head["idx"]}, "current": cur}
 
 
 def _collect_for(name: str, label, mode):
@@ -9890,6 +9911,7 @@ def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
     records: dict = {}
     n_boxes = 0
     for di, dsn in enumerate(ds_names):
+        prev_head = None                                   # the record printed above, within a declaration
         try:
             decl = _ds_load_decl(str(ann), dsn)
         except HTTPException as e:
@@ -9944,8 +9966,9 @@ def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
             records[gid] = {"fragments": frags, "first_stem": stem, "page_span": [stem, stem],
                             "n_pages": 1, "orphan": False, "name": name,
                             "values": values, "identity": identity, "dataset": dsn,
-                            "derived": r.get("derived") or {},
+                            "derived": r.get("derived") or {}, "prev_head": prev_head,
                             "table": r.get("table"), "lattice_row": r.get("lattice_row")}
+            prev_head = {"stem": stem, "idx": head_idx}
             n_boxes += len(frags)
     return {"records": records, "unswept": [], "n_boxes": n_boxes}
 
@@ -10252,10 +10275,17 @@ def _resolve_records_run(name: str, body: ResolveRecordsBatch, job: dict | None 
         best = cands[0] if cands else None
         verdict, reason = _rr.decide(cands, body.accept_floor, body.margin)
         ev = (c.get("identity") or {}).get("event_type")
+        rn = (c.get("identity") or {}).get("registry_no")
+        has_new_key = (c.get("kind") == "ledger" and isinstance(rn, dict) and rn.get("folio") is not None
+                       and not c.get("key_hits"))
         if verdict == "same":
             decision, ent = "same", best["id"]
         elif body.mint_unmatched and (c.get("kind") != "ledger" or ev in (None, "registered") or body.mint_changes):
             decision, ent = "new", None
+        elif body.mint_unmatched and has_new_key:
+            # a ledger row at a registry position nobody holds is a new
+            # entry whatever its verb (its registration predates the series)
+            decision, ent, reason = "new", None, f"{reason}; new registry position"
         elif body.mint_unmatched:
             # ledger: a later event of a firm nobody registered is a gap to look at, not a new firm
             decision, ent, reason = "unresolved", None, f"{reason}; a '{ev}' event is not minted"

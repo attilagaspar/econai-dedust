@@ -632,3 +632,11 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   dehyphenation in `ledger._fold`). `firms_registry_hu` gets
   `first_volume_year: 1876`. Measured on 1877: 4,594 of 5,121 rows carry a
   folio, 651 cite 1876. Tests in `tests/test_ledger.py`.
+- **Nov 14 — Citations as printed**: `parse_issue_ref` reads only after
+  "Lásd", accepts "97. sz.", `»Közp. Ért.«`, and "az előbbi bejegyzést"
+  (`previous`); a citation without a volume is looked up in this volume
+  and the previous one; the entry-above lane (`pointed`, the collector's
+  `prev_head`) decides "same"; a ledger row at an unknown registry key is
+  minted whatever its verb ("new registry position"). First 1877
+  rehearsal before this: 576 same (370 name, 110 key, 96 name + facts),
+  510 open; 0 citations parsed of 973 — the format differed from 1876's.
