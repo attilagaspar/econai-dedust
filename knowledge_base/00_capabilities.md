@@ -389,9 +389,12 @@ only ever written by a person.
   ditto` (a column printed only when it changes) and `record.derive`
   (parsers: `date_hu`, `issue_ref`, `folio`, `event_type`); the page's
   issue comes from the mastheads. A decision writes a dated, typed slice
-  with the issue in its provenance; candidates: no same-source exclusion,
-  the entities printed in a cited issue boosted, the same court boosted, a
-  different court blocks; the batch mints registrations only and leaves
+  with the issue and the registry position in its provenance; candidates:
+  no same-source exclusion, the entities printed in a cited issue boosted
+  (same volume, or another volume by year / ordinal via the authority's
+  `first_volume_year`), the entity holding the row's **registry key**
+  (court + folio) is the match whatever its name, the same court boosted,
+  a different court blocks; the batch mints registrations only and leaves
   change events without a match open. **Batch runs as a server job**
   (`background: true`; `GET …/resolve-records/status`, `POST …/stop`):
   the batch panel shows pass, done / total, counts and elapsed time every

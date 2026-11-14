@@ -32,9 +32,12 @@ def test_parsers():
     assert ledger.parse_date_hu("kelt 1880") == "1880"
     assert ledger.parse_date_hu("no date here") is None
     assert ledger.parse_issue_ref("(Lásd az eredeti be- jegyzést, 14. szám.)") == {"issue": 14}
-    assert ledger.parse_issue_ref("Lásd a II. évf. 34. számát") == {"issue": 34, "volume": "II"}
+    assert ledger.parse_issue_ref("Lásd a II. évf. 34. számát") == {"issue": 34, "volume": "II", "volume_no": 2}
     assert ledger.parse_issue_ref("(Lásd 1924. évf. 8.)") == {"issue": 8, "year": 1924}
     assert ledger.parse_issue_ref("Ezen czég töröltetett.") is None
+    assert ledger.parse_issue_ref("( L á s d  a z I.  évfolyam  e r e d e t i  bejegyzését 14. szám)") == {"issue": 14, "volume": "I", "volume_no": 1}
+    assert ledger.parse_issue_ref("Lásd a II. évf. 34. számát")["volume_no"] == 2 and ledger.roman_to_int("xiv") == 14
+    assert ledger.event_type("E z e n  czégnek  kitör- lése bejegyeztetet") == "deleted"
     assert ledger.parse_folio("1880. márc. 22.\n7/4") == {"folio": 7, "sub": 4}
     assert ledger.parse_folio("1876. jan. 5.") is None
     assert ledger.event_type("Ezen czég a czégjegyzékből kitöröltetett.") == "deleted"
@@ -109,6 +112,7 @@ def ledger_project(tmp_path, monkeypatch):
     (d / AUTH).write_text(json.dumps({
         "authority": "_smoke_registry", "version": "0.3", "entity_types": ["firm"],
         "id_scheme": {"prefix": "R", "width": 6}, "normalize": {"strip_tokens": ["és társa"]},
+        "first_volume_year": 1876,
         "slices_present": [], "counts": {}, "edges": [], "entities": []}), encoding="utf-8")
     monkeypatch.setattr(srv, "AUTHORITIES_DIR", d)
     srv._AUTH_CACHE.clear(); srv._AUTH_META_CACHE.clear(); ent._CACHE.clear()
@@ -248,3 +252,57 @@ def test_census_projects_keep_the_same_source_exclusion(client, ledger_project):
     client.patch(f"/api/project/{name}/config", json={"record_source_kind": "ledger"})
     cc = client.get(f"/api/project/{name}/records/candidates", params={"gid": c}).json()
     assert [x["id"] for x in cc["candidates"]][:1] == ["R000001"] and cc["auto"]["verdict"] == "same"
+
+
+def test_second_volume_links_by_cross_volume_citation_and_registry_key(client, ledger_project):
+    """1877 after 1876: a deletion citing 'az I. évfolyam 1. szám' finds the
+    1876 firm; a change with the same court + folio as an earlier
+    registration is the same registry entry even under a new name; the
+    same folio at another court is another entry."""
+    name, auth_dir = ledger_project
+    client.post(f"/api/project/{name}/resolve-records", json={"mint_unmatched": True, "mint_changes": True})
+    # the second volume: same authority, same declaration, year 1877
+    name2 = name + "_v2"
+    create_project(name2, "A", ["table_cell", "table_header", "document_header"])
+    pd = PROJECTS_ROOT / name2
+    try:
+        cfg = json.loads((pd / "config.json").read_text(encoding="utf-8"))
+        cfg.update({"record_authority": AUTH, "source_year": 1877, "record_datasets": [DS], "record_source_kind": "ledger"})
+        (pd / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        decl = json.loads(json.dumps(DECL)); decl["record"]["derive"]["registry_no"] = {"from": "order", "parser": "folio"}
+        (pd / "datasets").mkdir(exist_ok=True)
+        (pd / "datasets" / f"{DS}.dataset.json").write_text(json.dumps(decl, ensure_ascii=False), encoding="utf-8")
+        ann = pd / "annotations"; ann.mkdir(parents=True, exist_ok=True)
+        _page(ann, "q1", 1, [
+            ["Pesti törvényszék", "1877. jan. 9.\n32/2", "Zinner Móritz", "Pest", "", "Ezen czég töröltetett. (Lásd az I. évfolyam 1. számát.)"],
+            ["„", "1877. febr. 1.\n40/1", "Neumann Jakab", "Pest", "Neumann Jakab kereskedő", ""],
+        ])
+        _page(ann, "q2", 2, [
+            ["Pesti törvényszék", "1877. márc. 5.\n40/2", "Neumann Jakab és társa", "Pest", "Belépett Kohn Áron", "Kohn Áron belépett."],
+            ["Szegedi törvényszék", "1877. márc. 6.\n40/1", "Neumann Jakab", "Szeged", "Neumann Jakab szatócs", ""],
+        ])
+        srv._LINKED_CACHE.clear()
+        recs = client.get(f"/api/project/{name2}/records").json()["records"]
+        a, b, c, d = [r["id"] for r in recs]
+        ca = client.get(f"/api/project/{name2}/records/candidates", params={"gid": a}).json()
+        assert ca["identity"]["issue_ref"] == {"issue": 1, "volume": "I", "volume_no": 1} and ca["identity"]["registry_no"] == {"folio": 32, "sub": 2}
+        assert ca["candidates"][0]["id"] == "R000001" and "cited issue" in ca["candidates"][0]["boost_why"]
+        out = client.post(f"/api/project/{name2}/resolve-records", json={"mint_unmatched": True}).json()
+        by = {i["id"]: i for i in out["items"]}
+        assert by[a]["decision"] == "same" and by[a]["entity"] == "R000001"           # across volumes, by citation
+        assert by[b]["decision"] == "new"
+        nb = by[b]["entity"]
+        assert by[c]["decision"] == "same" and by[c]["entity"] == nb and by[c]["reason"] == "registry key"   # renamed, same folio
+        assert "registry key" in by[c]["best"]["boost_why"]
+        assert by[d]["decision"] == "new" and by[d]["entity"] != nb                     # same folio, another court
+        auth = json.loads((auth_dir / AUTH).read_text(encoding="utf-8"))
+        ents = {x["id"]: x for x in auth["entities"]}
+        z = ents["R000001"]["slices"]
+        assert [(sl["as_of"], sl.get("event"), (sl.get("registry_no") or {}).get("folio")) for sl in z][-1] == (1877, "deleted", 32)
+        n = ents[nb]["slices"]
+        assert [(sl.get("seq"), sl.get("event")) for sl in n] == [(1, "registered"), (2, "changed")]
+        assert "Neumann Jakab és társa" in [al["name"] for al in ents[nb]["aliases"]]
+        idx = srv._load_authority(AUTH)
+        assert idx["by_key"][("pesti", 40)] == [nb] and idx["by_key"][("pesti", 32)] == ["R000001"]
+    finally:
+        _rm(pd)

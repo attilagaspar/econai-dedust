@@ -30,6 +30,7 @@ BOOST_COUNTY   = 4.0
 BOOST_FORM     = 3.0
 BOOST_COURT    = 8.0    # ledger: the same registering court
 BOOST_ISSUE    = 25.0   # ledger: the entity has an event in the issue this row cites
+BOOST_KEY      = 40.0   # ledger: the entity holds this row's registry position (court + folio)
 
 IDENT_KEYS = ("serial_no", "name_hu", "name_de", "other_names", "legal_form", "seat",
               "county", "address", "founded", "charter_until", "capital_nominal",
@@ -287,7 +288,8 @@ def founded_after_seen(ident: dict, entity: dict):
 
 def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
                      rescore=None, exclude_source: str | None = None, own_gid=None,
-                     members: dict | None = None, cited: set | None = None) -> list:
+                     members: dict | None = None, cited: set | None = None,
+                     keyed: set | None = None) -> list:
     """Union of the matcher's candidate lists (one per query), best score per
     entity, blocking boosts applied for ranking; `score` is the string
     similarity (re-scored by `rescore(query, matched)` when given — the
@@ -320,10 +322,14 @@ def merge_candidates(per_query: list, raw_by_id: dict, ident: dict, k: int = 8,
         b, why = boost_for(ent, ident)
         if cited and cid in cited:            # the row cites the issue this entity was printed in
             b += BOOST_ISSUE; why.append("cited issue")
+        is_keyed = bool(keyed and cid in keyed)
+        if is_keyed:                          # the entity holds this row's registry position
+            b += BOOST_KEY; why.append("registry key")
         facts = entity_facts(ent)
         slices = ent.get("slices") or []
         last = slices[-1] if slices else {}
         out.append({**c, "boost": b, "boost_why": why, "ranked": c["score"] + b,
+                    "keyed": is_keyed,
                     "facts": facts, "n_slices": len(slices),
                     "seat_agree": seats_agree(ident.get("seat"), facts.get("seat")),
                     "year_agree": years_agree(ident.get("founded"), facts.get("founded")),
@@ -360,6 +366,8 @@ def decide(cands: list, floor: float = GOOD_NAME, margin: float = 5.0) -> tuple:
     sa, ya = best.get("seat_agree"), best.get("year_agree")
     if best.get("court_agree") is False:        # another court = another registry entry (13 §6b)
         return "open", "court differs"
+    if best.get("keyed"):                       # the registry position IS the identity: a rename keeps it
+        return "same", "registry key"
     sure, weak = floor + (SURE_NAME - GOOD_NAME), floor - (GOOD_NAME - WEAK_NAME)
     if sc >= sure:
         if sa is False and ya is False:

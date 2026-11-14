@@ -621,3 +621,14 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   (renames the `name` field, 409 when taken); "⇩ copy from another
   project…" in the Dataset window's picker (`_ddCopyChooser`). Test:
   `tests/test_dataset_copy.py`.
+- **Nov 14 — Registry key and cross-volume citation lanes** (13 §6b): the
+  authority index maps (court key, folio) → entities (`by_key`, kept
+  current in sessions); a row whose order column prints `folio/sub` finds
+  the entry holding that position (`BOOST_KEY`, `decide` → "registry key"
+  even under a new name, never across courts); citations of another volume
+  ("Lásd az I. évfolyam 14. számát") map ordinal → year via the authority
+  file's `first_volume_year` → the linked project of that year → its issue
+  map; letter-spaced and line-broken notes are parsed (`unspace`,
+  dehyphenation in `ledger._fold`). `firms_registry_hu` gets
+  `first_volume_year: 1876`. Measured on 1877: 4,594 of 5,121 rows carry a
+  folio, 651 cite 1876. Tests in `tests/test_ledger.py`.

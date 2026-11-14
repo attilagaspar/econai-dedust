@@ -284,10 +284,14 @@ back-references, event dates) needs as named fields, not as free text.
 ## 6b. Ledger sources (built 2026-11-13)
 
 **Status: BUILT — ditto inheritance, parsed event fields, the `ledger`
-source kind, court and cited-issue lanes, the batch's minting rule.
-NOT BUILT: the registry-key lane (folio / sub-number: no volume with
-folios is ready yet), cross-volume back-references ("Lásd a II. évf."),
-the year-end index validator, the lifecycle export.**
+source kind, court and cited-issue lanes (same volume and, since
+2026-11-14, across volumes: "Lásd az I. évfolyam 14. számát" → the year of
+volume I from the authority's `first_volume_year`, the project of that year
+among the linked ones, its issue map), the registry-key lane (court +
+folio from the order column's `32/2`; the key IS the identity, so a renamed
+firm on the same folio is the same entry; the same folio at another court
+is not), the batch's minting rule. NOT BUILT: the year-end index
+validator, the lifecycle export.**
 
 A *census* lists a firm once per volume (the Compass); a *ledger* prints
 every registry act (the Gazette), so one firm has many rows in a volume
@@ -321,6 +325,8 @@ and the rows are events. A project declares `record_source_kind: ledger`
 
 First target: gazette_1876, the year the register was set up — 18.7k rows,
 nearly all first registrations, 241 rows citing an earlier issue of the
-year. The registry key arrives with the first volume that prints folio and
-sub-number (1880 does; 1877–1879 to be checked), and with it the lane that
-makes later volumes a lookup.
+year; run on Azure 2026-11-13: 18,762 entities, 80 later events attached.
+1877 already prints the folio on 4,594 of its 5,121 rows and cites 1876
+issues on 651, so from 1877 on the key and the citation carry the linkage;
+the name is the fallback. The key lane learns an entry's folio the first
+time a volume prints it (1876 entities get theirs from their 1877 event).

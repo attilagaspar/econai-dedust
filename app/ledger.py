@@ -29,12 +29,32 @@ for _n, _names in _MONTHS.items():
 
 
 def _fold(s) -> str:
+    """ASCII lower case with letter-spaced print collapsed first ("L á s d
+    a z I. évfolyam" → "lasd az i. evfolyam")."""
+    from app.record_resolve import unspace
+    s = unspace(s)
+    s = re.sub(r"(\w)-\s+(\w)", r"\1\2", s)      # a word broken at a line end: "kitör- lése"
     try:
         from unidecode import unidecode
         s = unidecode(str(s or ""))
     except ImportError:
         s = str(s or "")
     return s.lower()
+
+
+_ROMAN = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100}
+
+
+def roman_to_int(s: str):
+    """'ii' → 2, 'xiv' → 14; None when not a numeral."""
+    s = (s or "").lower()
+    if not s or any(ch not in _ROMAN for ch in s):
+        return None
+    total = 0
+    for i, ch in enumerate(s):
+        v = _ROMAN[ch]
+        total += -v if i + 1 < len(s) and _ROMAN[s[i + 1]] > v else v
+    return total
 
 
 def parse_date_hu(text) -> str | None:
@@ -70,6 +90,7 @@ def parse_issue_ref(text) -> dict | None:
     m = re.search(r"\b([ivxl]{1,5})\s*\.?\s*evf", t)
     if m:
         out["volume"] = m.group(1).upper()
+        out["volume_no"] = roman_to_int(m.group(1))
     m = re.search(r"\b(1[6-9]\d\d|20\d\d)\s*\.?\s*(?:evi|evf)", t)
     if m:
         out["year"] = int(m.group(1))

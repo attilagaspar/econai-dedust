@@ -6063,6 +6063,12 @@ def _build_auth_index(data: dict) -> dict:
                     by_source_issue.setdefault((prov["project"], int(prov["issue"])), []).append(e["id"])
                 except (TypeError, ValueError):
                     pass
+    # Ledger sources: the registry position (court + folio) an entity holds,
+    # from its slices' registry_no, for the key lane.
+    from app import record_resolve as _rr_idx
+    by_key: dict = {}
+    for e in data.get("entities", []):
+        _auth_key_entries(by_key, e, _rr_idx)
     canonical: dict = {}
     members: dict = {}        # survivor -> the ids merged into it (13 §5.3)
     for a in dup_of:
@@ -6072,7 +6078,7 @@ def _build_auth_index(data: dict) -> dict:
         canonical[a] = cur
         members.setdefault(cur, []).append(a)
     return {"by_id": by_id, "children": children, "pools": pools, "members": members,
-            "by_source_issue": by_source_issue,
+            "by_source_issue": by_source_issue, "by_key": by_key,
             "folds_by_type": folds_by_type, "exact_by_type": exact_by_type,
             "pool_all": pool_all, "folds_all": folds_all, "exact_all": exact_all,
             "strip": strip, "phrases": phrases, "fold_phrases": fold_phrases,
@@ -6159,6 +6165,26 @@ def _auth_session_flush(fname: str, end: bool = False) -> None:
             _AUTH_SESSIONS.pop(fname, None)
 
 
+def _auth_key_entries(by_key: dict, e: dict, _rr, slices=None) -> None:
+    """Add an entity's registry positions to the key map: (court key,
+    folio) → ids. The court is the slice's, else the entity's."""
+    eid = e.get("id")
+    if not eid:
+        return
+    ecourt = (e.get("attrs") or {}).get("court")
+    for sl in (slices if slices is not None else (e.get("slices") or [])):
+        rn = sl.get("registry_no") if isinstance(sl.get("registry_no"), dict) else None
+        court = (sl.get("attrs") or {}).get("court") or ecourt
+        if not rn or rn.get("folio") is None or not court:
+            continue
+        ck = _rr.court_key(court)
+        if not ck:
+            continue
+        lst = by_key.setdefault((ck, int(rn["folio"])), [])
+        if eid not in lst:
+            lst.append(eid)
+
+
 def _auth_session_note_slice(fname: str, e: dict, sl: dict, new_aliases: list) -> None:
     """During a session a 'same' decision adds a slice (and maybe an alias)
     to an existing entity: keep the issue map and the name pools current so
@@ -6168,6 +6194,8 @@ def _auth_session_note_slice(fname: str, e: dict, sl: dict, new_aliases: list) -
         if not sess or not e.get("id"):
             return
         index = sess["index"]
+        from app import record_resolve as _rr_k
+        _auth_key_entries(index.setdefault("by_key", {}), e, _rr_k, slices=[sl] if sl else [])
         prov = (sl or {}).get("provenance") or {}
         if prov.get("issue") is not None and prov.get("project"):
             try:
@@ -6234,6 +6262,8 @@ def _auth_index_add_entity(index: dict, data: dict, e: dict) -> None:
                 index.setdefault("by_source_issue", {}).setdefault((prov["project"], int(prov["issue"])), []).append(v["id"])
             except (TypeError, ValueError):
                 pass
+    from app import record_resolve as _rr_k
+    _auth_key_entries(index.setdefault("by_key", {}), e, _rr_k)
 
 
 def _authority_meta(fname: str) -> dict:
@@ -6253,6 +6283,8 @@ def _authority_meta(fname: str) -> dict:
         "counts":         data.get("counts") or {},
         "id_scheme":      data.get("id_scheme"),
         "normalize":      data.get("normalize"),
+        # periodical sources: the year of volume I, so "Lásd a II. évf." → a year
+        "first_volume_year": data.get("first_volume_year"),
         "n_edges":        len(data.get("edges") or []),
         "n_entities":     len(data.get("entities") or []),
     }
@@ -9765,24 +9797,42 @@ def _record_candidates(name: str, rec: dict, by_stem: dict, fname: str, k: int,
         if ent:   # an entity id typed verbatim
             per_query.append((q, "id", [{"id": ent.get("id"), "score": 100.0, "via": "id", "raw": ent.get("name") or q}]))
     kind = _record_kind(load_config(name))
+    raw = index.get("raw_by_id") or {}
+    q0 = queries[0][0] if queries else (rec.get("name") or "")
+
+    def _lane(ids, via):
+        return (q0, via, [{"id": i, "score": _auth_whole_name_score(q0, (raw.get(i) or {}).get("name") or "", index),
+                           "via": via, "raw": (raw.get(i) or {}).get("name") or ""} for i in ids])
     cited = None
     ref = ident.get("issue_ref") if isinstance(ident.get("issue_ref"), dict) else None
-    if ref and ref.get("issue") is not None and not ref.get("year") and not ref.get("volume"):
-        # the row cites an earlier issue of THIS volume: the entities printed
-        # there are candidates by name, boosted (13 §6b, the issue lane)
-        ids = (index.get("by_source_issue") or {}).get((name, int(ref["issue"]))) or []
+    if ref and ref.get("issue") is not None:
+        # the row cites an earlier issue — of this volume, or of another
+        # volume by year or ordinal ("Lásd az I. évfolyam 14. számát"): the
+        # entities printed there are candidates by name, boosted (13 §6b)
+        src = name
+        if ref.get("year") or ref.get("volume_no"):
+            year = ref.get("year")
+            if year is None:
+                base = (_authority_meta(fname).get("first_volume_year"))
+                year = base + int(ref["volume_no"]) - 1 if base else None
+            src = next((lp["name"] for lp in _linked_projects_cached(fname) if lp.get("source_year") == year), None)
+        ids = (index.get("by_source_issue") or {}).get((src, int(ref["issue"]))) if src else None
         if ids:
             cited = set(ids)
-            raw = index.get("raw_by_id") or {}
-            q0 = queries[0][0] if queries else (rec.get("name") or "")
-            per_query.append((q0, "issue", [
-                {"id": i, "score": _auth_whole_name_score(q0, (raw.get(i) or {}).get("name") or "", index),
-                 "via": "issue", "raw": (raw.get(i) or {}).get("name") or ""} for i in ids]))
+            per_query.append(_lane(ids, "issue"))
+    keyed = None
+    rn = ident.get("registry_no") if isinstance(ident.get("registry_no"), dict) else None
+    if rn and rn.get("folio") is not None and ident.get("court"):
+        # the registry key: the entity that holds this court + folio (13 §6b)
+        ids = (index.get("by_key") or {}).get((_rr.court_key(ident["court"]), int(rn["folio"]))) or []
+        if ids:
+            keyed = set(ids)
+            per_query.append(_lane(ids, "key"))
     cands = _rr.merge_candidates(per_query, index.get("raw_by_id") or {}, ident, k,
                                  rescore=lambda q, m: _auth_whole_name_score(q, m, index),
                                  exclude_source=None if kind == "ledger" else name,
                                  own_gid=_rr_own_gid(rec),
-                                 members=index.get("members"), cited=cited)
+                                 members=index.get("members"), cited=cited, keyed=keyed)
     for c in cands:
         if not crops:          # the batch needs no crop locations (each lookup walks a project's records)
             break
@@ -10319,6 +10369,20 @@ def _linked_projects(fname: str) -> list:
     for p in list_projects():
         if p.get("record_authority") == fname:
             out.append({"name": p["name"], "source_year": p.get("source_year"), "pages": p.get("pages")})
+    return out
+
+
+_LINKED_CACHE: dict = {}      # fname -> (time, list)
+
+
+def _linked_projects_cached(fname: str, ttl: float = 30.0) -> list:
+    """`_linked_projects` with a short cache: the candidate function asks per
+    record and a batch asks thousands of times."""
+    hit = _LINKED_CACHE.get(fname)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    out = _linked_projects(fname)
+    _LINKED_CACHE[fname] = (time.time(), out)
     return out
 
 
