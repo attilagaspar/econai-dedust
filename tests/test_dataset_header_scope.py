@@ -10,11 +10,13 @@ import pytest
 from app import server as srv
 
 
-def _cell(sr, sc, text, table=0, label="table_cell"):
+def _cell(sr, sc, text, table=0, label="table_cell", ocr=None):
     sh = {"label": label, "points": [[sc * 100, sr * 60 + table * 1000], [sc * 100 + 90, sr * 60 + 50 + table * 1000]],
           "shape_type": "rectangle", "flags": {}, "super_row": sr, "super_column": sc, "table": table}
     if text:
         sh["pdf_text"] = text
+    if ocr is not None:
+        sh["tesseract_output"] = {"ocr_text": ocr, "mean_conf": 90.0}
     return sh
 
 
@@ -50,7 +52,9 @@ def book(tmp_path):
     ann = tmp_path / "proj" / "annotations"; ann.mkdir(parents=True)
     dsd = tmp_path / "proj" / "datasets"; dsd.mkdir()
     pages = {
-        # p1: sole traders (table 0) over companies (table 1)
+        # p1: sole traders (table 0) over companies (table 1); the sole-trader
+        # header's column 5 was OCR'd as a bare "a" (the OCR layer is the best
+        # layer) — the PDF layer's reading must still match
         "p1": _table(0, H_EGYENI, [["Pesti tvsz", "1876. jun. 1.", "Zinner Móritz", "Pest", "Zinner M. kereskedő", "", ""],
                                    ["„", "1876. jun. 2.", "Glück Sámuel", "Tokaj", "Glück S.", "", ""]])
             + _table(1, H_TARSAS, [["Pesti tvsz", "1876. jun. 3.", "Első pesti gőzmalom", "Pest", "", "Részvénytársaság", ""]]),
@@ -65,6 +69,9 @@ def book(tmp_path):
         # p4: a table of a type no declaration knows
         "p4": _table(0, ["Védjegy", "Tulajdonos", "Bejelentve"], [["csillag", "X. Y.", "1876"]]),
     }
+    for sh in pages["p1"]:
+        if sh["label"] == "table_header" and sh["super_column"] == 5 and sh["table"] == 0:
+            sh["tesseract_output"] = {"ocr_text": "a", "mean_conf": 40.0}
     for stem, shapes in pages.items():
         (ann / f"{stem}.json").write_text(json.dumps({"version": "5.0.1", "flags": {}, "shapes": shapes,
                                                       "imagePath": f"{stem}.jpg", "imageWidth": 900, "imageHeight": 2200},

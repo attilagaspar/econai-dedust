@@ -66,3 +66,8 @@ def test_grid_line_debris_is_stripped_from_line_edges():
     assert g(["Weisz", "&", "Co."]) == "Weisz & Co."           # inner punctuation and a trailing dot stay
     assert g(["S.", "Reichardnő", "|"]) == "S. Reichardnő"
     assert srv._ocr_strip_edges("“1876. jun. 26.”") == "1876. jun. 26."
+    # a one-character line between real lines is grid debris; alone it stays
+    multi = srv._tess_group_lines({"text": ["Aradi", "1", "törvényszék"], "conf": [90, 80, 90], "block_num": [1, 1, 1],
+                                   "par_num": [1, 1, 1], "line_num": [1, 2, 3], "top": [2, 20, 40]})[0]
+    assert multi == "Aradi\ntörvényszék"
+    assert srv._tess_group_lines({"text": ["7"], "conf": [90], "block_num": [1], "par_num": [1], "line_num": [1], "top": [2]})[0] == "7"

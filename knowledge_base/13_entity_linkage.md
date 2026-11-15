@@ -330,7 +330,13 @@ year; run on Azure 2026-11-13: 18,762 entities, 80 later events attached.
 issues on 651, so from 1877 on the key and the citation carry the linkage;
 the name is the fallback. The key lane learns an entry's folio the first
 time a volume prints it (1876 entities get theirs from their 1877 event).
-How the gazette actually cites (measured on 1877's 973 "Lásd" notes): by
+Text layers (2026-11-15): new volumes are batch-OCR'd (Tesseract, hun)
+rather than PDF-filled — Tesseract reads the spaced bold names as words
+and glues a quarter as many — and the engine takes the best layer per
+cell with the PDF reading as the fallback where OCR is empty; the header
+matcher reads every layer; a court without a town takes another layer's
+reading, then the record above. How the gazette actually cites (measured
+on 1877's 973 "Lásd" notes): by
 issue number alone, "(Lásd az eredeti bejegyzést »Közp. Ért.« 97. sz.)",
 so without a volume the lookup covers this volume and the one before and
 the name decides; "(Lásd az előbbi bejegyzést.)" points at the entry

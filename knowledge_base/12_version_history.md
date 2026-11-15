@@ -662,3 +662,13 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   trailing dot stays ("Jós."). Applies to the single-cell and the batch
   path. The PDF layer is no longer the plan for new Gazette volumes: batch
   OCR (an hour per volume) wins in the best-layer rule.
+- **Nov 15 — OCR layer made usable for the Gazette** (after the first
+  OCR-based rebuild lost 450 rows and 80 cross-year links): OCR crops get
+  12 px of padding (`_OCR_PAD`; the cell's top edge cut the ascenders and
+  Tesseract dropped the first line — "Aradi" above "törvényszék"); a
+  one-character line beside real lines is dropped as grid debris; the
+  header matcher reads every text layer of a header cell (an OCR "a" no
+  longer hides the PDF layer's "A czég birtokosa": 31 tables of 1876 had
+  vanished); a court reading without a town falls back to another layer
+  of the cell, then to the record above (`_ds_collect_records`). The
+  existing OCR layer predates the padding; a re-OCR improves it further.

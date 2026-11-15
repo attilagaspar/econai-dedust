@@ -65,7 +65,10 @@ def _cell(sr, sc, text, label="table_cell"):
     sh = {"label": label, "points": [[sc * 100, sr * 60 + 80], [sc * 100 + 90, sr * 60 + 130]],
           "shape_type": "rectangle", "flags": {}, "group_id": None,
           "super_row": sr, "super_column": sc, "table": 0}
-    if text:
+    if isinstance(text, tuple):                 # (pdf layer, ocr layer): the OCR reading is the best layer
+        sh["pdf_text"] = text[0]
+        sh["tesseract_output"] = {"ocr_text": text[1], "mean_conf": 90.0}
+    elif text:
         sh["pdf_text"] = text
     return sh
 
@@ -130,7 +133,8 @@ def ledger_project(tmp_path, monkeypatch):
     (pd / "datasets" / f"{DS}.dataset.json").write_text(json.dumps(DECL, ensure_ascii=False), encoding="utf-8")
     ann = pd / "annotations"; ann.mkdir(parents=True, exist_ok=True)
     _page(ann, "p1", 1, [
-        ["Pesti törvényszék", "1876. jan. 5.", "Zinner Móritz", "Pest", "Zinner Móritz kereskedő Pesten", ""],
+        # the OCR layer lost the town line of the court cell; the PDF layer has it
+        [("Pesti törvényszék", "törvényszék"), "1876. jan. 5.", "Zinner Móritz", "Pest", "Zinner Móritz kereskedő Pesten", ""],
         ["„", "1876. jan. 6.", "Glück Sámuel", "Tokaj", "Glück Sámuel bőrkereskedő", ""],
     ])
     _page(ann, "p2", 2, [
@@ -149,7 +153,9 @@ def test_rows_carry_inherited_court_and_parsed_event_fields(client, ledger_proje
     d = client.get(f"/api/project/{name}/records").json()
     assert d["record_source_kind"] == "ledger" and len(d["records"]) == 5
     a, b, c, dd, e = d["records"]
-    assert a["values"]["court"] == "Pesti törvényszék" and b["values"]["court"] == "Pesti törvényszék"   # ditto inherited
+    assert a["values"]["court"] == "törvényszék" and b["values"]["court"] == "törvényszék"   # the raw best layer, ditto inherited
+    cb = client.get(f"/api/project/{name}/records/candidates", params={"gid": b["id"]}).json()
+    assert cb["identity"]["court"] == "Pesti törvényszék"                 # the court with a town: another layer, then carried
     assert e["values"]["court"] == "Szegedi törvényszék"                                                # OCR's ">" too
     assert srv._ds_decl_problems(srv.DatasetDecl(**DECL)) == []
     bad = json.loads(json.dumps(DECL)); bad["variables"][0]["inherit"] = "up"; bad["record"]["derive"]["x"] = {"from": "nope", "parser": "date_hu"}

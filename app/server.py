@@ -1435,6 +1435,9 @@ _OCR_EDGE_LEAD  = re.compile(r"""^[\s|\[\]{}()<>!'"´`‘’“”.,:;_\-—–~
 _OCR_EDGE_TRAIL = re.compile(r"""[\s|\[\]{}()<>!'"´`‘’“”,:;_\-—–~*^°]+$""")   # a trailing "." stays: "Jós."
 
 
+_OCR_PAD = 12   # px around a cell for OCR: the box edge cuts ascenders, and a cut first line is a lost line
+
+
 def _ocr_strip_edges(line: str) -> str:
     """Drop grid-line debris from both ends of an OCR line ("| Masszaner
     Gyula |" → "Masszaner Gyula"; "[TT" → ""); a line with no letter or
@@ -1463,8 +1466,10 @@ def _tess_group_lines(tess: dict) -> tuple:
             line_top[key] = min(line_top[key], int(top))
             conf_values.append(c)
     sorted_keys = sorted(line_words.keys(), key=lambda k: line_top[k])
-    lines = [_ocr_strip_edges(" ".join(line_words[k])) for k in sorted_keys]
-    ocr_text  = "\n".join(l for l in lines if l).strip()
+    lines = [l for l in (_ocr_strip_edges(" ".join(line_words[k])) for k in sorted_keys) if l]
+    if len(lines) > 1:                       # a one-character line beside real lines is grid debris
+        lines = [l for l in lines if len(l.strip()) > 1] or lines
+    ocr_text  = "\n".join(lines).strip()
     mean_conf = round(sum(conf_values) / len(conf_values), 1) if conf_values else 0.0
     return ocr_text, mean_conf
 
@@ -1505,7 +1510,7 @@ def api_ocr_cell(
 
     shadow     = _get_shadow_page(folder, stem, img_path)
     sw, sh     = shadow.size
-    pad        = 4
+    pad        = _OCR_PAD
     crop_grey  = shadow.crop((
         max(0, int(x1) - pad), max(0, int(y1) - pad),
         min(sw, int(x2) + pad), min(sh, int(y2) + pad),
@@ -3523,8 +3528,8 @@ def _run_ocr_batch_job(folder: str, d: Path, body: OcrBatchBody, job: dict):
                     pts = shapes[i]["points"]
                     xs = [pt[0] for pt in pts]; ys = [pt[1] for pt in pts]
                     x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
-                    crops.append(shadow.crop((max(0, int(x1) - 4), max(0, int(y1) - 4),
-                                              min(sw, int(x2) + 4), min(sh_, int(y2) + 4))).convert("L"))
+                    crops.append(shadow.crop((max(0, int(x1) - _OCR_PAD), max(0, int(y1) - _OCR_PAD),
+                                              min(sw, int(x2) + _OCR_PAD), min(sh_, int(y2) + _OCR_PAD))).convert("L"))
                     idxs.append(i)
                 try:
                     results = _tess_batch_data(crops, body.lang, "--psm 4")
@@ -3547,7 +3552,7 @@ def _run_ocr_batch_job(folder: str, d: Path, body: OcrBatchBody, job: dict):
                 pts = sh["points"]
                 xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
                 x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
-                pad = 4
+                pad = _OCR_PAD
                 crop = shadow.crop((max(0, int(x1) - pad), max(0, int(y1) - pad),
                                     min(sw, int(x2) + pad), min(sh_, int(y2) + pad)))
                 try:
@@ -9926,6 +9931,7 @@ def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
     n_boxes = 0
     for di, dsn in enumerate(ds_names):
         prev_head = None                                   # the record printed above, within a declaration
+        prev_court = None                                  # its court, for readings without a town
         try:
             decl = _ds_load_decl(str(ann), dsn)
         except HTTPException as e:
@@ -9969,6 +9975,20 @@ def _ds_collect_records(ann: Path, pages: list, ds_names: list) -> dict:
                     identity[ik] = [x.strip() for x in re.split(r"\s*[;/|]\s*|\n", t) if x.strip()]
                 else:
                     identity[ik] = t
+            if "court" in ident_map:
+                # a court without a distinguishing token ("törvényszék" alone:
+                # the OCR dropped the town line) takes another layer's reading
+                # of the same cell, else the court of the record above
+                if not _rr.court_key(identity.get("court", "")):
+                    v = r["values"].get(ident_map["court"]) or {}
+                    cell = shapes[v["idx"]] if v.get("idx") is not None and 0 <= v["idx"] < len(shapes) else {}
+                    for lt in _ds_cell_layers(cell).values():
+                        if _rr.court_key(_rr.unspace(lt or "")):
+                            identity["court"] = _rr.unspace(lt); break
+                if not _rr.court_key(identity.get("court", "")) and prev_court:
+                    identity["court"] = prev_court
+                if _rr.court_key(identity.get("court", "")):
+                    prev_court = identity["court"]
             for dk, dv in (r.get("derived") or {}).items():    # parsed ledger fields (13 §6b)
                 if dv not in (None, "", {}):
                     identity[dk] = dv
@@ -12819,8 +12839,11 @@ def _ds_table_headers(data: dict, header_labels) -> dict:
             continue
         tb = sh.get("table") or 0
         if tb in hdr_rows and int(sh["super_row"]) == hdr_rows[tb]:
+            # every layer's reading, not only the best one: a header OCR'd as
+            # "a" must not hide the PDF layer's "A czég birtokosa"
+            texts = list(dict.fromkeys(t.strip() for t in _ds_cell_layers(sh).values() if t and t.strip()))
             out[tb][int(sh["super_column"]) + shift.get(tb, 0)] = \
-                _auth_fold(_rr.unspace(_ds_best(_ds_cell_layers(sh))[1]))
+                _auth_fold(_rr.unspace(" ".join(texts)))
     return out
 
 
