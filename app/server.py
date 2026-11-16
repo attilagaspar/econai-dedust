@@ -12698,13 +12698,15 @@ def api_datasets_copy(folder: str = Query(...), body: DatasetCopy = ...):
 
 
 @app.get("/api/datasets/prompts")
-def api_datasets_prompts(folder: str = Query(...), stems: Optional[str] = Query(None)):
+def api_datasets_prompts(folder: str = Query(...), stems: Optional[str] = Query(None), summary: bool = Query(False)):
     """The reading prompt of every lattice cell the declarations give one
     to: {"prompts": {key: text}, "cells": {stem: {idx: key}}}. A cell's
     prompt is its declaration's `prompt` (what the table is) followed by its
     variable's `prompt` (what the column is); tables are found by header,
     as the builder finds them, and a column whose variable has no prompt is
-    left out. `stems` (comma-separated) restricts the pages."""
+    left out. `stems` (comma-separated) restricts the pages; `summary`
+    skips the pages and answers with the declarations and their variables
+    only (`variables`: {decl: [{name, prompt: bool}]}, the picker's data)."""
     d = _resolve_folder(folder)
     ddir = _datasets_dir(folder)
     decls = []
@@ -12721,6 +12723,11 @@ def api_datasets_prompts(folder: str = Query(...), stems: Optional[str] = Query(
         for v in dc.variables:
             if v.prompt:
                 prompts[f"{dc.name}.{v.name}"] = ((dc.prompt.strip() + "\n\n") if dc.prompt else "") + v.prompt.strip()
+    variables = {dc.name: [{"name": v.name, "prompt": bool(v.prompt)} for v in dc.variables] for dc in decls}
+    decl_prompts = {dc.name: (dc.prompt or "") for dc in decls}
+    if summary:
+        return {"prompts": prompts, "declarations": [dc.name for dc in decls],
+                "variables": variables, "decl_prompts": decl_prompts}
     cells: dict = {}
     carry = {dc.name: False for dc in decls}
     n = 0
@@ -12752,7 +12759,8 @@ def api_datasets_prompts(folder: str = Query(...), stems: Optional[str] = Query(
             cells[jf.stem] = page
             n += len(page)
     return {"prompts": prompts, "cells": cells, "n_cells": n,
-            "declarations": [dc.name for dc in decls]}
+            "declarations": [dc.name for dc in decls],
+            "variables": variables, "decl_prompts": decl_prompts}
 
 
 @app.get("/api/datasets/coverage")

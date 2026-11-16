@@ -695,3 +695,11 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   two lines, verbatim name and note); plan 13 §6b keeps the set as the
   example for later volumes. `parse_date_hu` accepts `1877-01-30` /
   `1877-03` as is, so the LLM's ISO output feeds `event_date`.
+- **Nov 16 — One LLM op with an overnight tick; declaration / column
+  picker**: the "🌙 LLM — overnight batch" op is gone, the LLM op has an
+  *overnight* tick instead (`_batchOp()` maps it to the overnight lane;
+  nothing else changed underneath). Ticking *prompts from the dataset
+  declarations* opens a picker (`/api/datasets/prompts?summary=1`): every
+  declaration with prompts, its columns in a row beside it, the
+  declaration's box ticking all of them; only the ticked columns are sent
+  ("column not ticked" in the preview tally).

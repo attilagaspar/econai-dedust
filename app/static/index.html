@@ -900,7 +900,6 @@
         <option value="ocr">OCR (EasyOCR / Tesseract)</option>
         <option value="mark_blanks">🚫 Mark structural blanks (ink scan — free, no API)</option>
         <option value="llm">LLM</option>
-        <option value="llm_batchapi">🌙 LLM — overnight batch (half price)</option>
         <option value="score_delete">Delete shapes below score threshold</option>
         <option value="clear_ocr">✕ Remove OCR results</option>
         <option value="pdf_text_layer">PDF text layer extraction</option>
@@ -1228,6 +1227,10 @@
 
     <!-- LLM options -->
     <div id="batch-llm-opts" style="display:none;flex-direction:column;gap:10px;">
+      <label class="row" style="color:#fde68a;" title="Package the requests and hand them to the provider's batch service (OpenAI / Azure Global Batch): half price, done within 24h, nothing runs in this browser. Unticked: the cells are sent now, from this browser.">
+        <input type="checkbox" id="batch-llm-overnight" onchange="onBatchOpChange()" style="accent-color:#f59e0b;width:13px;height:13px;">
+        <span>🌙 overnight — provider batch service, half price, done within 24h</span>
+      </label>
       <div style="display:flex;gap:8px;">
         <select id="batch-llm-model" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;">
           <option value="gpt-4.1-mini">4.1-mini</option>
@@ -1285,7 +1288,8 @@
         <button class="field-run-btn" onclick="reloadSchemas().then(_fillBatchSchemaSelect)" title="Reload schemas">⟳</button>
       </div>
       <label class="row" style="margin:0 0 4px;font-size:11px;color:#aaa;" title="Each cell gets the prompt of its column from the dataset declaration that covers its table (📋 Dataset: a prompt per variable, and one for the table). The prompt box below is then ignored; cells no declaration gives a prompt to are skipped.">
-        <input type="checkbox" id="batch-llm-decl-prompts" style="accent-color:#22c55e;width:13px;height:13px;"><span>prompts from the dataset declarations (per column)</span></label>
+        <input type="checkbox" id="batch-llm-decl-prompts" onchange="_declPromptPickerToggle()" style="accent-color:#22c55e;width:13px;height:13px;"><span>prompts from the dataset declarations (per column)</span></label>
+      <div id="batch-llm-decl-pick" style="display:none;flex-direction:column;gap:4px;margin:0 0 6px 18px;font-size:11px;color:#ccc;"></div>
       <textarea id="batch-llm-prompt" rows="3" placeholder="Prompt…"
         style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
       <div style="display:flex;gap:6px;">

@@ -144,9 +144,11 @@ Notes:
   conventions) put in front of each. The batch LLM op's checkbox *prompts
   from the dataset declarations* reads them through
   `GET /api/datasets/prompts?folder=` (tables found by header, as the
-  builder finds them) and sends every covered cell with its own prompt,
-  live or overnight; the prompt box is then ignored and cells no
-  declaration gives a prompt to are skipped. So the prompts live with the
+  builder finds them) and opens a picker: the declarations that give a
+  prompt, each with its columns beside it (the declaration's box ticks all
+  of them); the ticked columns' cells go out with their prompt, live or
+  with the overnight tick; the prompt box is then ignored and every other
+  cell is skipped. So the prompts live with the
   definition of each table kind (a sole-trader register, a company
   register and a bankruptcy list have different columns).
 - **`record.identity`** (added 2026-11-13, plan 13 §6) turns a

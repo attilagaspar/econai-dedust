@@ -202,8 +202,15 @@ function _batchSideSync() {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
 
-function onBatchOpChange() {
+// The op the panel is set to; the LLM op with the overnight tick is the
+// overnight lane (the provider's batch service), 'llm_batchapi' inside.
+function _batchOp() {
   const op = document.getElementById('batch-op').value;
+  return op === 'llm' && document.getElementById('batch-llm-overnight')?.checked ? 'llm_batchapi' : op;
+}
+
+function onBatchOpChange() {
+  const op = _batchOp();
   document.getElementById('batch-status-opts').style.display    = op === 'set_status' ? '' : 'none';
   document.getElementById('batch-ol-opts').style.display        = (op === 'overlaps_lattice' || op === 'overlaps_lattice_snap_trim') ? 'flex' : 'none';
   document.getElementById('batch-ocr-opts').style.display = op === 'ocr' ? 'flex' : 'none';
@@ -212,7 +219,7 @@ function onBatchOpChange() {
   document.getElementById('batch-llm-opts').style.display       = isLlmOp ? 'flex' : 'none';
   document.getElementById('batch-llm-parallel-wrap').style.display = op === 'llm' ? '' : 'none';
   document.getElementById('batch-overnight-opts').style.display = op === 'llm_batchapi' ? 'flex' : 'none';
-  document.getElementById('batch-run-btn').textContent = op === 'llm_batchapi' ? '🌙 Submit job' : 'Run';
+  document.getElementById('batch-run-btn').textContent = op === 'llm_batchapi' ? '🌙 Submit overnight job' : 'Run';
   if (op === 'llm_batchapi') _refreshOvernightJobs();
   document.getElementById('batch-score-opts').style.display     = op === 'score_delete' ? 'flex' : 'none';
   document.getElementById('batch-clear-ocr-opts').style.display = op === 'clear_ocr'         ? 'flex' : 'none';
@@ -338,7 +345,7 @@ async function _batchRecordsSetting(key, value) {
                record_authority: value ? `Record authority: ${value}` : 'Record authority cleared',
                source_year: value ? `Source year: ${value}` : 'Source year cleared'}[key] || `Layout columns: ${value}`);
   } catch (e) { showToast('Config error: ' + (e?.message || e), 5000); return; }
-  await _batchRecordsInit(document.getElementById('batch-op').value);
+  await _batchRecordsInit(_batchOp());
 }
 
 // OCR target row height matters only when re-detecting rows from the image
@@ -620,7 +627,7 @@ async function runBatch() {
     document.getElementById('batch-progress').textContent = 'Stopping after the current item…';
     return;
   }
-  const op       = document.getElementById('batch-op').value;
+  const op       = _batchOp();
   const rawPages   = document.getElementById('batch-pages').value;
   const indices    = _parsePageRange(rawPages);
   if (!indices) return;
@@ -1574,6 +1581,56 @@ function _collectLlmSettings() {
   return s;
 }
 
+// ── Prompts from the dataset declarations: which declarations / columns ──
+// The picker lists every declaration of the project that gives a prompt to
+// at least one column, with its columns beside it; the declaration's tick
+// ticks all of its columns. Only the ticked columns are sent.
+async function _declPromptPickerToggle() {
+  const box = document.getElementById('batch-llm-decl-pick');
+  const on = document.getElementById('batch-llm-decl-prompts').checked;
+  if (!box) return;
+  box.style.display = on ? 'flex' : 'none';
+  if (!on) return;
+  box.innerHTML = '<span style="color:#888;">Reading the declarations…</span>';
+  let d = null;
+  try {
+    const r = await fetch(`${API}/api/datasets/prompts?folder=${encodeURIComponent(folder)}&summary=1`);
+    d = r.ok ? await r.json() : null;
+  } catch (e) { d = null; }
+  if (!d || !d.declarations.length) {
+    box.innerHTML = '<span style="color:#f87171;">No declaration of this project gives a prompt to any column (📋 Dataset → prompt per variable).</span>';
+    return;
+  }
+  box.innerHTML = d.declarations.map(name => {
+    const vars = d.variables[name] || [];
+    const cols = vars.map(v => v.prompt
+      ? `<label class="row" style="margin:0;gap:3px;white-space:nowrap;" title="${_escHtml(d.prompts[name + '.' + v.name] || '')}"><input type="checkbox" data-pkey="${_escHtml(name + '.' + v.name)}" data-pdecl="${_escHtml(name)}" checked onchange="_declPromptColChanged(this)" style="accent-color:#22c55e;width:12px;height:12px;"><span>${_escHtml(v.name)}</span></label>`
+      : `<span style="color:#555;white-space:nowrap;" title="no prompt on this variable">${_escHtml(v.name)}</span>`).join('');
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <label class="row" style="margin:0;gap:4px;min-width:90px;font-weight:600;color:#9fd;" title="${_escHtml(d.decl_prompts?.[name] || '')}"><input type="checkbox" data-pdeclall="${_escHtml(name)}" checked onchange="_declPromptDeclChanged(this)" style="accent-color:#22c55e;width:13px;height:13px;"><span>${_escHtml(name)}</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${cols}</div></div>`;
+  }).join('');
+}
+function _declPromptDeclChanged(cb) {
+  const name = cb.dataset.pdeclall;
+  document.querySelectorAll(`#batch-llm-decl-pick input[data-pdecl="${CSS.escape(name)}"]`).forEach(c => { c.checked = cb.checked; });
+}
+function _declPromptColChanged(cb) {
+  const name = cb.dataset.pdecl;
+  const cols = [...document.querySelectorAll(`#batch-llm-decl-pick input[data-pdecl="${CSS.escape(name)}"]`)];
+  const all = document.querySelector(`#batch-llm-decl-pick input[data-pdeclall="${CSS.escape(name)}"]`);
+  if (!all) return;
+  const n = cols.filter(c => c.checked).length;
+  all.checked = n === cols.length;
+  all.indeterminate = n > 0 && n < cols.length;
+}
+// the picked column keys ("decl.variable"); null = the picker was never shown, every column counts
+function _declPromptPicked() {
+  const inputs = [...document.querySelectorAll('#batch-llm-decl-pick input[data-pkey]')];
+  if (!inputs.length) return null;
+  return new Set(inputs.filter(c => c.checked).map(c => c.dataset.pkey));
+}
+
 async function _collectLlmTargets(sorted, s, progText, stats = null) {
   const tally = k => { if (stats) stats[k] = (stats[k] || 0) + 1; };
   if (document.getElementById('batch-condition').value.startsWith('rows_llm_empty') && !s.overwrite) {
@@ -1589,7 +1646,10 @@ async function _collectLlmTargets(sorted, s, progText, stats = null) {
     const r = await fetch(`${API}/api/datasets/prompts?folder=${encodeURIComponent(folder)}&stems=${encodeURIComponent(sorted.map(i => pages[i].stem).join(','))}`);
     declMap = r.ok ? await r.json() : null;
     if (!declMap || !declMap.n_cells) { showToast('No declaration gives a prompt to any cell of these pages (📋 Dataset → prompt per variable)', 7000); return []; }
-    batchLog(`${declMap.n_cells} cell(s) have a prompt from ${declMap.declarations.join(', ')}`);
+    const picked = _declPromptPicked();
+    if (picked && !picked.size) { showToast('No column is ticked under "prompts from the dataset declarations"'); return []; }
+    if (picked) for (const k of Object.keys(declMap.prompts)) if (!picked.has(k)) delete declMap.prompts[k];
+    batchLog(`${declMap.n_cells} cell(s) have a prompt from ${declMap.declarations.join(', ')}` + (picked ? `; columns sent: ${[...picked].join(', ')}` : ''));
   }
   for (const idx of sorted) {
     if (_batchStop) break;
@@ -1607,6 +1667,7 @@ async function _collectLlmTargets(sorted, s, progText, stats = null) {
       if (pagePrompts) {
         const k = pagePrompts[si];
         if (!k) { tally('no declaration prompt for this cell'); continue; }
+        if (!declMap.prompts[k]) { tally('column not ticked'); continue; }
         cellPrompt = declMap.prompts[k];
       }
       if (condFilter !== null && !condFilter.has(si)) { tally('condition filter'); continue; }
@@ -1935,7 +1996,7 @@ function _batchSelectedIndices() {
 }
 
 async function previewBatch() {
-  const op = document.getElementById('batch-op').value;
+  const op = _batchOp();
   const sorted = _batchSelectedIndices();
   const progText = document.getElementById('batch-progress');
   if (!sorted || !sorted.size && !sorted.length) { progText.textContent = 'No pages in range.'; return; }

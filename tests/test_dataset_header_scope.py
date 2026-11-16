@@ -172,3 +172,9 @@ def test_prompts_per_cell_come_from_the_covering_declaration(client, book):
     assert d["n_cells"] == sum(len(v) for v in d["cells"].values())
     # restricting the pages
     assert set(client.get("/api/datasets/prompts", params={"folder": str(book), "stems": "p2"}).json()["cells"]) == {"p2"}
+    # the picker's summary: declarations and their variables, which carry a prompt
+    sm = client.get("/api/datasets/prompts", params={"folder": str(book), "summary": "1"}).json()
+    assert "cells" not in sm and sorted(sm["declarations"]) == ["egyeni", "tarsas"]
+    assert {v["name"]: v["prompt"] for v in sm["variables"]["egyeni"]}["name"] is True
+    assert any(v["prompt"] is False for v in sm["variables"]["egyeni"])
+    assert sm["decl_prompts"]["egyeni"] == "Sole-trader register, 1876." and sm["decl_prompts"]["tarsas"] == ""
