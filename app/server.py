@@ -13326,10 +13326,34 @@ def _ds_build(d: Path, decl: DatasetDecl, extra_pages: Optional[str] = None,
                 carry, origin = t, here
     if decl.record.derive:
         from app import ledger as _ledger
+        spec_all = decl.record.derive
         for rec in records:
-            if not rec.get("excluded"):
-                rec["derived"] = _ledger.derive({k: (v.get("text") or "") for k, v in rec["values"].items()},
-                                                decl.record.derive)
+            if rec.get("excluded"):
+                continue
+            best = {k: (v.get("text") or "") for k, v in rec["values"].items()}
+            derived = _ledger.derive(best, spec_all)
+            # a field the best layer does not yield is tried on the other
+            # layers of its source cells (OCR reads names best, the PDF layer
+            # reads a folio "32/2" that OCR turned into "ÉLRE"): layer order
+            for dk, dv in list(derived.items()):
+                if dv is not None:
+                    continue
+                spec = spec_all.get(dk) or {}
+                src = spec.get("from")
+                srcs = [src] if isinstance(src, str) else list(src or [])
+                for layer in ("human", "llm", "ocr", "pdf"):
+                    alt, changed = dict(best), False
+                    for sv in srcs:
+                        lt = (((rec["values"].get(sv) or {}).get("layers") or {}).get(layer) or "").strip()
+                        if lt and lt != (best.get(sv) or "").strip():
+                            alt[sv] = lt; changed = True
+                    if not changed:
+                        continue
+                    got = _ledger.derive(alt, {dk: spec}).get(dk)
+                    if got is not None:
+                        derived[dk] = got
+                        break
+            rec["derived"] = derived
 
     stats = {"pages": n_pages_used, "cycles": len(cycles),
              "records": sum(1 for r in records if not r.get("excluded")),

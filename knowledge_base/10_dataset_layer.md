@@ -133,7 +133,10 @@ Notes:
 - **`record.derive`** (added 2026-11-13, plan 13 §6b): fields parsed from
   the row's text by named parsers (`app/ledger.py`: `date_hu`, `issue_ref`,
   `folio`, `event_type`), `{"event_date": {"from": "order", "parser":
-  "date_hu"}}`; several source variables join with a newline. The record
+  "date_hu"}}`; several source variables join with a newline. A field the
+  best layer does not yield is tried on the cells' other layers in layer
+  order (OCR reads names best; the PDF layer reads a folio "32/2" that OCR
+  turned into "ÉLRE" — on 1877, 1,115 of 5,445 order cells). The record
   bridge folds them into the identity object.
 - **`record.identity`** (added 2026-11-13, plan 13 §6) turns a
   `lattice_row` declaration into a *record source*: when the project's

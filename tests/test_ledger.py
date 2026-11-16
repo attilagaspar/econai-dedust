@@ -87,6 +87,7 @@ DECL = {
     "record": {"unit": "lattice_row", "key": {"slot": 1, "column": 3, "dtype": "text"},
                "identity": {"name_hu": "name", "seat": "seat", "court": "court"},
                "derive": {"event_date": {"from": "order", "parser": "date_hu"},
+                          "registry_no": {"from": "order", "parser": "folio"},
                           "issue_ref": {"from": "note", "parser": "issue_ref"},
                           "event_type": {"from": ["note", "owner"], "parser": "event_type"}}},
     "variables": [{"name": "court", "column": 1, "inherit": "ditto"}, {"name": "order", "column": 2},
@@ -138,7 +139,9 @@ def ledger_project(tmp_path, monkeypatch):
         ["„", "1876. jan. 6.", "Glück Sámuel", "Tokaj", "Glück Sámuel bőrkereskedő", ""],
     ])
     _page(ann, "p2", 2, [
-        ["Pesti törvényszék", "1876. jan. 30.", "Zinner Móritz", "Pest", "", "Ezen czég töröltetett. (Lásd az eredeti bejegyzést, 1. szám.)"],
+        # the OCR layer garbled the folio and the citation; the PDF layer has them
+        ["Pesti törvényszék", ("1876. jan. 30.\n32/2", "1876. jan. 30.\nÉLRE"), "Zinner Móritz", "Pest", "",
+         ("Ezen czég töröltetett. (Lásd az eredeti bejegyzést, 1. szám.)", "Ezen czég töröltetett. (Lásd az eredeti be")],
         ["Szegedi törvényszék", "1876. febr. 2.", "Zinner Móritz", "Szeged", "Zinner Móritz rőfös kereskedő Szegeden", ""],
         ["3>", "1876. febr. 3.", "Kis János", "Szeged", "Kis János társ kilépett", ""],   # a footnote digit beside the ditto
     ])
@@ -167,6 +170,7 @@ def test_rows_carry_inherited_court_and_parsed_event_fields(client, ledger_proje
                               "event_date": "1876-01-05", "event_type": "registered", "issue": 1}
     cc = client.get(f"/api/project/{name}/records/candidates", params={"gid": c["id"]}).json()["identity"]
     assert cc["event_type"] == "deleted" and cc["issue_ref"] == {"issue": 1} and cc["issue"] == 2 and cc["event_date"] == "1876-01-30"
+    assert cc["registry_no"] == {"folio": 32, "sub": 2}           # from the PDF layer: the OCR layer read "ÉLRE"
 
 
 def test_ledger_batch_mints_registrations_attaches_cited_events_and_leaves_gaps_open(client, ledger_project):

@@ -672,3 +672,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   vanished); a court reading without a town falls back to another layer
   of the cell, then to the record above (`_ds_collect_records`). The
   existing OCR layer predates the padding; a re-OCR improves it further.
+- **Nov 16 — Derived fields fall back across layers**: when a parser gets
+  nothing from the best layer, `_ds_build` retries it on the other layers
+  of the source cells (human, llm, ocr, pdf). Measured on 1877: the PDF
+  layer parses the folio on 1,115 more order cells and the citation on 407
+  more notes than the OCR layer, which is why the clean OCR rebuild
+  (23,336 firms; 1877: 433 same, 66 by key, 146 open) linked fewer rows
+  across the years than the PDF run (585 same, 144 by key).
