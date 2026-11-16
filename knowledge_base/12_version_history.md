@@ -679,3 +679,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   more notes than the OCR layer, which is why the clean OCR rebuild
   (23,336 firms; 1877: 433 same, 66 by key, 146 open) linked fewer rows
   across the years than the PDF run (585 same, 144 by key).
+- **Nov 16 — Column prompts live in the dataset declarations**: a `prompt`
+  per variable and one per declaration (the table preamble), edited in the
+  Dataset window; `GET /api/datasets/prompts` maps every cell of the tables
+  a declaration covers (by header) to its column's prompt; the batch LLM
+  op's checkbox *prompts from the dataset declarations* sends each cell
+  with its own prompt, live and overnight (`LlmBatchSubmit` targets carry
+  `prompt`; `_gen_batch_requests` prefers it over the job's prompt). Cells
+  without a declared prompt are skipped. Tests: dataset header scope,
+  OCR batch tess (413 passing).

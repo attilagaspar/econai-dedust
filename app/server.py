@@ -2688,6 +2688,9 @@ def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
     by_stem = defaultdict(list)
     for t in body.targets:
         by_stem[t["stem"]].append(int(t["idx"]))
+    # a target may carry its own prompt (the declarations' per-column
+    # prompts); the job's prompt is the default
+    _prompt_by_key = {f"{t['stem']}|{int(t['idx'])}": t["prompt"] for t in body.targets if t.get("prompt")}
     for stem, idxs in by_stem.items():
         jf = d / f"{stem}.json"
         img_path = _find_image(d, stem)
@@ -2709,6 +2712,7 @@ def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
             x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
             pad = 4
             ckey = f"{stem}|{idx}"
+            cell_prompt = _prompt_by_key.get(ckey) or body.prompt
 
             if body.mode == "linebyline":
                 if img is None:
@@ -2744,9 +2748,9 @@ def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
                 mval = {"stem": stem, "idx": idx,
                         "bands": [[t0 + crop_top, b0 + crop_top] for t0, b0 in rows]}
                 for i, (top, bottom) in enumerate(rows):
-                    txt = body.prompt
+                    txt = cell_prompt
                     if body.payload in ("ocr", "image+ocr"):
-                        txt = f"{body.prompt}\n\nOCR text:\n{row_ocr[i] if i < len(row_ocr) else ''}"
+                        txt = f"{cell_prompt}\n\nOCR text:\n{row_ocr[i] if i < len(row_ocr) else ''}"
                     content = [{"type": "text", "text": txt}]
                     if body.payload in ("image", "image+ocr"):
                         rt = max(0, top - row_pad)
@@ -2777,12 +2781,12 @@ def _gen_batch_requests(d, folder, body, json_mode, rf, stats=None):
                     continue
                 crop = img.crop((cl, ct, cr, cb))
                 content.append(_img_part(crop))
-            prompt_text = body.prompt
+            prompt_text = cell_prompt
             ocr_text = (shape.get("tesseract_output") or {}).get("ocr_text", "")
             if body.mode == "image+ocr" and ocr_text:
-                prompt_text = f"{body.prompt}\n\nOCR text:\n{ocr_text}"
+                prompt_text = f"{cell_prompt}\n\nOCR text:\n{ocr_text}"
             elif body.mode == "ocr":
-                prompt_text = f"{body.prompt}\n\n{ocr_text}"
+                prompt_text = f"{cell_prompt}\n\n{ocr_text}"
             content.append({"type": "text", "text": prompt_text})
             messages = ([{"role": "user", "content": prompt_text}] if body.mode == "ocr"
                         else [{"role": "user", "content": content}])
@@ -12443,6 +12447,10 @@ class DatasetVariable(BaseModel):
     # "ditto": a blank cell or a ditto mark („ » ") takes the value of the
     # record above in reading order (a court printed only when it changes)
     inherit: Optional[str] = None
+    # The reading instruction for this column's cells (the LLM batch's
+    # "prompts from the declarations"): the declaration's `prompt` is put
+    # in front of it. Columns without one are not sent.
+    prompt: Optional[str] = None
 
 
 class DatasetIdentity(BaseModel):
@@ -12485,6 +12493,9 @@ class DatasetDecl(BaseModel):
     totals:      Optional[DatasetTotals] = None
     ratios:      List[DatasetRatio] = []
     diagnostics: dict = {}             # overrides of diagnostics.DEFAULTS
+    # what every cell of this table is (put before each variable's prompt):
+    # "A cell of the sole-trader register of the Hungarian company gazette, 1876…"
+    prompt:      Optional[str] = None
 
 
 def _datasets_dir(folder: str) -> Path:
@@ -12684,6 +12695,64 @@ def api_datasets_copy(folder: str = Query(...), body: DatasetCopy = ...):
     d["name"] = new_name
     dst.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"ok": True, "name": new_name, "from_project": body.from_project}
+
+
+@app.get("/api/datasets/prompts")
+def api_datasets_prompts(folder: str = Query(...), stems: Optional[str] = Query(None)):
+    """The reading prompt of every lattice cell the declarations give one
+    to: {"prompts": {key: text}, "cells": {stem: {idx: key}}}. A cell's
+    prompt is its declaration's `prompt` (what the table is) followed by its
+    variable's `prompt` (what the column is); tables are found by header,
+    as the builder finds them, and a column whose variable has no prompt is
+    left out. `stems` (comma-separated) restricts the pages."""
+    d = _resolve_folder(folder)
+    ddir = _datasets_dir(folder)
+    decls = []
+    for f in (sorted(ddir.glob("*.dataset.json")) if ddir.exists() else []):
+        try:
+            dc = DatasetDecl(**json.loads(f.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+        if any(v.prompt for v in dc.variables):
+            decls.append(dc)
+    want = {x.strip() for x in stems.split(",") if x.strip()} if stems else None
+    prompts: dict = {}
+    for dc in decls:
+        for v in dc.variables:
+            if v.prompt:
+                prompts[f"{dc.name}.{v.name}"] = ((dc.prompt.strip() + "\n\n") if dc.prompt else "") + v.prompt.strip()
+    cells: dict = {}
+    carry = {dc.name: False for dc in decls}
+    n = 0
+    for jf in sorted(d.glob("*.json"), key=lambda p: _page_sort_key(p.stem)):
+        if want is not None and jf.stem not in want:
+            continue
+        try:
+            data = json.loads(jf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if (data.get("flags") or {}).get("status") == "skip":
+            continue
+        page: dict = {}
+        for dc in decls:
+            tabs, info = _ds_tables_in_scope(data, dc, carry[dc.name])
+            present = sorted(info) if info else []
+            carry[dc.name] = bool(present) and present[-1] in tabs
+            if not tabs:
+                continue
+            struct, _dups = _ds_page_struct(data, dc, tabs)
+            by_col = {v.column: f"{dc.name}.{v.name}" for v in dc.variables if v.prompt}
+            for tb in tabs:
+                for _sr, cols in struct.get(tb, {}).get("rows", []):
+                    for col, (idx, _sh) in cols.items():
+                        key = by_col.get(col)
+                        if key and idx not in page:
+                            page[idx] = key
+        if page:
+            cells[jf.stem] = page
+            n += len(page)
+    return {"prompts": prompts, "cells": cells, "n_cells": n,
+            "declarations": [dc.name for dc in decls]}
 
 
 @app.get("/api/datasets/coverage")

@@ -71,3 +71,19 @@ def test_grid_line_debris_is_stripped_from_line_edges():
                                    "par_num": [1, 1, 1], "line_num": [1, 2, 3], "top": [2, 20, 40]})[0]
     assert multi == "Aradi\ntörvényszék"
     assert srv._tess_group_lines({"text": ["7"], "conf": [90], "block_num": [1], "par_num": [1], "line_num": [1], "top": [2]})[0] == "7"
+
+
+def test_overnight_requests_take_a_per_target_prompt(tmp_path):
+    """A target carrying its own prompt (the declarations' per-column
+    prompt) is built with it; the others keep the job's prompt."""
+    import json as _json
+    ann = tmp_path / "annotations"; ann.mkdir()
+    shapes = [{"label": "cell", "points": [[10, 10], [80, 40]], "shape_type": "rectangle", "flags": {}},
+              {"label": "cell", "points": [[10, 50], [80, 80]], "shape_type": "rectangle", "flags": {}}]
+    (ann / "b1.json").write_text(_json.dumps({"shapes": shapes, "imagePath": "b1.jpg", "imageWidth": 100, "imageHeight": 100}), encoding="utf-8")
+    body = srv.LlmBatchSubmit(targets=[{"stem": "b1", "idx": 0, "prompt": "Read the court."}, {"stem": "b1", "idx": 1}],
+                              model="gpt-4o-mini", mode="ocr", prompt="Transcribe.")
+    lines = list(srv._gen_batch_requests(ann, str(ann), body, False, None, {}))
+    assert len(lines) == 2
+    texts = [l[0]["body"]["messages"][0]["content"] for l in lines]
+    assert texts[0].startswith("Read the court.") and texts[1].startswith("Transcribe.")

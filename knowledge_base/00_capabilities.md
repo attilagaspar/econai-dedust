@@ -272,7 +272,10 @@ only ever written by a person.
   response cache; conditions (PDF-content filters, rows-without-LLM, …);
   **🌙 overnight lane** via OpenAI/Azure Batch API at half price (JSONL
   packaging, auto-split at size limits, job tracking per project, apply /
-  cancel / remove, failure reasons surfaced).
+  cancel / remove, failure reasons surfaced); **prompts from the dataset
+  declarations** (a prompt per variable + one per table in the Dataset
+  window; each covered cell goes out with its column's prompt, live or
+  overnight; §10).
 - **JSON / structured mode**: schema-constrained extraction (see §8).
 - **LLM consistency test modal**; **magic wand** (experimental whole-page
   vision layout detection); vision benchmark harness (whole-page vision LLM

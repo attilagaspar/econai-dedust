@@ -136,3 +136,39 @@ def test_header_scope_is_validated_and_table_ids_still_work_without_it(client, b
     (book.parent / "datasets" / "byid.dataset.json").write_text(json.dumps(
         _decl("byid", None, 3, [("name", 3)])), encoding="utf-8")
     assert [x[0] for x in _names(client, book, "byid")] == ["p1", "p1", "p2", "p3", "p4"]
+
+
+def test_prompts_per_cell_come_from_the_covering_declaration(client, book):
+    """Each declaration gives its columns a prompt (table prompt first); the
+    endpoint maps every covered cell to the right one, by header."""
+    dsd = book.parent / "datasets"
+    for name, tprompt, vprompts in (("egyeni", "Sole-trader register, 1876.", {"name": "The firm's name as printed.", "owner": "The owner."}),
+                                    ("tarsas", None, {"legal": "The legal facts."})):
+        d = json.loads((dsd / f"{name}.dataset.json").read_text(encoding="utf-8"))
+        if tprompt:
+            d["prompt"] = tprompt
+        for v in d["variables"]:
+            if v["name"] in vprompts:
+                v["prompt"] = vprompts[v["name"]]
+        (dsd / f"{name}.dataset.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    r = client.get("/api/datasets/prompts", params={"folder": str(book)})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["prompts"] == {"egyeni.name": "Sole-trader register, 1876.\n\nThe firm's name as printed.",
+                            "egyeni.owner": "Sole-trader register, 1876.\n\nThe owner.",
+                            "tarsas.legal": "The legal facts."}
+    assert sorted(d["declarations"]) == ["egyeni", "tarsas"]
+    # p1: the sole-trader table's name (col 3) and owner (col 5) cells of its 2 rows, and the company table's legal (col 6) cell
+    p1 = json.loads((book / "p1.json").read_text(encoding="utf-8"))["shapes"]
+    got = {int(k): v for k, v in d["cells"]["p1"].items()}
+    assert sorted(set(got.values())) == ["egyeni.name", "egyeni.owner", "tarsas.legal"]
+    for idx, key in got.items():
+        sh = p1[idx]
+        assert sh["label"] == "table_cell"
+        assert (key, sh["table"], sh["super_column"]) in {("egyeni.name", 0, 3), ("egyeni.owner", 0, 5), ("tarsas.legal", 1, 6)}
+    assert len([k for k in got.values() if k == "egyeni.name"]) == 2
+    # p3 (header-less, inherited company table) gets the company prompt; p4 (uncovered) nothing
+    assert set(d["cells"].get("p3", {}).values()) == {"tarsas.legal"} and "p4" not in d["cells"]
+    assert d["n_cells"] == sum(len(v) for v in d["cells"].values())
+    # restricting the pages
+    assert set(client.get("/api/datasets/prompts", params={"folder": str(book), "stems": "p2"}).json()["cells"]) == {"p2"}

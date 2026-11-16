@@ -870,14 +870,14 @@ async function runBatch() {
                   : scp === 'rows-detect' ? 'internal rows (re-detect)' : 'internal rows (keep structure)';
     if (!confirm(`Run ${eng} OCR — ${scpDesc} — on ${sorted.length} page(s)?`)) return;
   } else if (op === 'llm') {
-    if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
+    if (!document.getElementById('batch-llm-prompt').value.trim() && !document.getElementById('batch-llm-decl-prompts')?.checked) { showToast('Prompt is empty'); return; }
     const _bjson = document.getElementById('batch-llm-json').checked;
     if (_bjson && !document.getElementById('batch-llm-schema').value) { showToast('Pick a schema for JSON mode'); return; }
     if (!confirm(`Run ${_bjson ? 'JSON extraction' : 'LLM'} on ${sorted.length} page(s)?`)) return;
   } else if (op === 'llm_batchapi') {
     const _bjson = document.getElementById('batch-llm-json').checked;
     if (_bjson && !document.getElementById('batch-llm-schema').value) { showToast('Pick a schema for JSON mode'); return; }
-    if (!document.getElementById('batch-llm-prompt').value.trim()) { showToast('Prompt is empty'); return; }
+    if (!document.getElementById('batch-llm-prompt').value.trim() && !document.getElementById('batch-llm-decl-prompts')?.checked) { showToast('Prompt is empty'); return; }
     const m = document.getElementById('batch-llm-model').value;
     if (m.includes(':') && !m.startsWith('azure:') && !m.startsWith('azure-us:')) {
       showToast('Overnight batches need an OpenAI or Azure model'); return;
@@ -1071,7 +1071,7 @@ async function runBatch() {
         const r = await fetch(`${API}/api/llm_batch/submit?folder=${encodeURIComponent(folder)}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            targets: tasks.map(t => ({ stem: t.stem, idx: t.si })),
+            targets: tasks.map(t => (t.prompt ? { stem: t.stem, idx: t.si, prompt: t.prompt } : { stem: t.stem, idx: t.si })),
             model: s.model, mode: s.mode, prompt: s.prompt,
             cell_height: s.cellHeight, use_shadow: s.useShadow,
             json_schema: s.schema, schema_name: s.schemaName,
@@ -1563,6 +1563,7 @@ function _collectLlmSettings() {
     requireOcrNums: document.getElementById('batch-llm-require-ocr-numbers').checked,
     labelSet:       new Set(selLabels),
     jsonOn:  document.getElementById('batch-llm-json').checked,
+    declPrompts: !!document.getElementById('batch-llm-decl-prompts')?.checked,
     schema:  null, schemaName: null,
   };
   if (s.jsonOn) {
@@ -1580,6 +1581,16 @@ async function _collectLlmTargets(sorted, s, progText, stats = null) {
               + 'check Overwrite, otherwise they are all skipped', 7000);
   }
   const tasks = [];
+  // prompts from the dataset declarations: one per column of the tables
+  // they cover (by header); cells no declaration gives a prompt are skipped
+  let declMap = null;
+  if (s.declPrompts) {
+    progText.textContent = 'Reading the declarations\' prompts…';
+    const r = await fetch(`${API}/api/datasets/prompts?folder=${encodeURIComponent(folder)}&stems=${encodeURIComponent(sorted.map(i => pages[i].stem).join(','))}`);
+    declMap = r.ok ? await r.json() : null;
+    if (!declMap || !declMap.n_cells) { showToast('No declaration gives a prompt to any cell of these pages (📋 Dataset → prompt per variable)', 7000); return []; }
+    batchLog(`${declMap.n_cells} cell(s) have a prompt from ${declMap.declarations.join(', ')}`);
+  }
   for (const idx of sorted) {
     if (_batchStop) break;
     const stem = pages[idx].stem;
@@ -1588,9 +1599,16 @@ async function _collectLlmTargets(sorted, s, progText, stats = null) {
     const shapes = (await res.json()).shapes || [];
     const condFilter = _computeConditionFilter(shapes);
     const colFilter  = _computeColumnFilter(shapes);
+    const pagePrompts = declMap ? (declMap.cells[stem] || {}) : null;
     for (let si = 0; si < shapes.length; si++) {
       const sh = shapes[si];
       if (!s.labelSet.has(sh.label)) { tally('label not selected'); continue; }
+      let cellPrompt = null;
+      if (pagePrompts) {
+        const k = pagePrompts[si];
+        if (!k) { tally('no declaration prompt for this cell'); continue; }
+        cellPrompt = declMap.prompts[k];
+      }
       if (condFilter !== null && !condFilter.has(si)) { tally('condition filter'); continue; }
       if (colFilter  !== null && !colFilter.has(si))  { tally('column filter'); continue; }
       if (!s.overwrite && (s.jsonOn ? sh.structured : sh.openai_output?.response)) {
@@ -1599,7 +1617,7 @@ async function _collectLlmTargets(sorted, s, progText, stats = null) {
       const ocrTxt = sh.tesseract_output?.ocr_text || sh.easyocr_output?.ocr_text
         || ((sh.row_struct?.rows || []).map(r => r.ocr || '').join('\n'));
       if (s.requireOcrNums && !/\d/.test(ocrTxt)) { tally('no digits in OCR'); continue; }
-      tasks.push({ stem, si, label: sh.label, row: sh.super_row, col: sh.super_column });
+      tasks.push({ stem, si, label: sh.label, row: sh.super_row, col: sh.super_column, prompt: cellPrompt });
     }
   }
   return tasks;
@@ -1625,7 +1643,7 @@ async function _runBatchLlmParallel(sorted, progText, progBar) {
       if (!t) return;
       batchLog(`[${t.stem}] shape ${t.si} (${t.label}) row=${t.row} col=${t.col}`);
       try {
-        await _batchLlmShape(t.stem, t.si, model, mode, prompt, cellHeight, useShadow, schema, schemaName);
+        await _batchLlmShape(t.stem, t.si, model, mode, t.prompt || prompt, cellHeight, useShadow, schema, schemaName);
       } catch (e) {
         errors++;
         batchLog(`  ✕ [${t.stem}#${t.si}] ${e.message}`);

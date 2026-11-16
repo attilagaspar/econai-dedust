@@ -1284,6 +1284,8 @@
         <select id="batch-llm-schema" style="flex:1;background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:5px 8px;font-size:12px;"></select>
         <button class="field-run-btn" onclick="reloadSchemas().then(_fillBatchSchemaSelect)" title="Reload schemas">⟳</button>
       </div>
+      <label class="row" style="margin:0 0 4px;font-size:11px;color:#aaa;" title="Each cell gets the prompt of its column from the dataset declaration that covers its table (📋 Dataset: a prompt per variable, and one for the table). The prompt box below is then ignored; cells no declaration gives a prompt to are skipped.">
+        <input type="checkbox" id="batch-llm-decl-prompts" style="accent-color:#22c55e;width:13px;height:13px;"><span>prompts from the dataset declarations (per column)</span></label>
       <textarea id="batch-llm-prompt" rows="3" placeholder="Prompt…"
         style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:6px 8px;font-size:12px;resize:vertical;width:100%;box-sizing:border-box;"></textarea>
       <div style="display:flex;gap:6px;">

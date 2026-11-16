@@ -138,6 +138,17 @@ Notes:
   order (OCR reads names best; the PDF layer reads a folio "32/2" that OCR
   turned into "ÉLRE" — on 1877, 1,115 of 5,445 order cells). The record
   bridge folds them into the identity object.
+- **`prompt`** on a variable, and `prompt` on the declaration (added
+  2026-11-16): the LLM's reading instruction for that column's cells, the
+  declaration's prompt (what the table is, the period, the print
+  conventions) put in front of each. The batch LLM op's checkbox *prompts
+  from the dataset declarations* reads them through
+  `GET /api/datasets/prompts?folder=` (tables found by header, as the
+  builder finds them) and sends every covered cell with its own prompt,
+  live or overnight; the prompt box is then ignored and cells no
+  declaration gives a prompt to are skipped. So the prompts live with the
+  definition of each table kind (a sole-trader register, a company
+  register and a bankruptcy list have different columns).
 - **`record.identity`** (added 2026-11-13, plan 13 §6) turns a
   `lattice_row` declaration into a *record source*: when the project's
   config lists the declaration in `record_datasets`, each row is a record

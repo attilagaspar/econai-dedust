@@ -373,6 +373,7 @@ function _ddVarsSection() {
     <tr><th title="the column that identifies a record">key</th><th>slot·col</th><th>name</th><th>type</th>
     <th>printed header</th><th title="hard bounds">min</th><th>max</th>
     <th title="include in statistical checks (switch off for row numbers / codes)">stats</th>
+    <th title="the LLM's reading instruction for this column's cells (batch LLM op → prompts from the declarations); empty = the column is not sent">prompt</th>
     <th>${_dd.preview ? 'read ✓ / ✗' : 'sample values (this page)'}</th><th></th></tr>`;
   vars.forEach((v, i) => {
     const isKey = key.slot === v.slot && key.column === v.column;
@@ -394,10 +395,15 @@ function _ddVarsSection() {
       <td><input value="${v.min ?? ''}" onchange="_ddVarSet(${i},'min',this.value)" style="${_ddInput}width:44px;"></td>
       <td><input value="${v.max ?? ''}" onchange="_ddVarSet(${i},'max',this.value)" style="${_ddInput}width:44px;"></td>
       <td><input type="checkbox" ${v.stats === false ? '' : 'checked'} onchange="_ddVarSet(${i},'stats',this.checked)"></td>
+      <td><textarea rows="1" placeholder="how to read this column…" onchange="_ddVarSet(${i},'prompt',this.value)"
+           style="${_ddInput}width:220px;min-height:24px;resize:vertical;font-family:inherit;">${_escHtml(v.prompt || '')}</textarea></td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sample}</td>
       <td><span style="cursor:pointer;color:#fca5a5;" title="remove" onclick="_ddVarDel(${i})">✕</span></td></tr>`;
   });
   html += '</table></div>';
+  html += `<div style="margin-top:6px;color:#8a94a6;">Table prompt <span style="color:#667;">(put before every column prompt: what this table is, the period, the print conventions)</span><br>
+    <textarea rows="2" placeholder="e.g. A cell of the sole-trader register of the Hungarian company gazette (Központi Értesítő), 1876. Transcribe exactly as printed, in the original language…"
+      onchange="_dd.decl.prompt=this.value.trim()||null" style="${_ddInput}width:100%;max-width:720px;resize:vertical;font-family:inherit;">${_escHtml(_dd.decl.prompt || '')}</textarea></div>`;
   const kv = vars.find(v => key.slot === v.slot && key.column === v.column);
   html += `<div style="margin-top:6px;color:#8a94a6;">Key: ${kv ? `<b style="color:#ccc;">${_escHtml(kv.name || `${kv.slot}·${kv.column}`)}</b>` : '<b style="color:#fbbf24;">none — pick one</b>'}
     ${key.dtype === 'entity' ? ` · resolves against authority <input style="${_ddInput}width:120px;" value="${_escHtml(key.authority || '')}" placeholder="e.g. places_hu" onchange="_dd.decl.record.key.authority=this.value.trim()||null">` : ''}</div>`;
@@ -414,8 +420,8 @@ function _ddVarSet(i, field, val) {
     if (val === '' || isNaN(n)) delete v[field]; else v[field] = n;
   } else if (field === 'stats') {
     if (val) delete v.stats; else v.stats = false;
-  } else if (field === 'label') {
-    v.label = val || undefined;
+  } else if (field === 'label' || field === 'prompt') {
+    v[field] = (val || '').trim() || undefined;
   } else {
     v[field] = val;
   }
