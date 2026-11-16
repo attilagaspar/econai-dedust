@@ -349,3 +349,33 @@ key also blocks: a candidate that already holds a *different* folio at the
 row's court is another entry whatever the name ("registry position
 differs"); the 1877 run on Azure, before this rule, attached 13 rows of 585
 that way.
+
+LLM reading through the declarations (2026-11-16): the per-column prompts
+live on the three declarations (doc 10, `prompt`), so the batch LLM op
+reads a volume's key columns with the checkbox *prompts from the dataset
+declarations*, live or overnight. The example set written for the
+1876/1877 gazette, kept short to keep it cheap — the table prompt, shared
+by every column:
+
+> One cell of a ruled table in the Hungarian company-registry gazette
+> (Központi Értesítő, 1877): the register of sole traders (egyéni czégek).
+> Transcribe the printed text exactly, original Hungarian spelling, normal
+> letter spacing. Rules: the ruled lines and strokes at the cell edges are
+> table borders, not characters (never read them as | l I 1 _ - ). A cell
+> holding only a repetition mark („ » " ,, dto. ua.) → output exactly „ .
+> An empty cell → output nothing. Output the text only, no commentary.
+
+and per column: *court* "The royal court (kir. törvényszék) that ordered
+the entry, as printed. Repetition mark → „"; *order* "Line 1: the date of
+the order in ISO form YYYY-MM-DD (1877. jan. 30. → 1877-01-30). Line 2:
+the registry folio and sub-number exactly as printed, e.g. 32/2 (omit this
+line if none is printed)."; *name* "The firm's name verbatim (a czég
+szószerinti szövege), one line, normal spacing even if printed
+letter-spaced."; *note* "The note verbatim, including every citation such
+as (Lásd … sz.) and decree numbers."; seat / owner / signatories / legal
+"…, as printed."; the bankruptcy list's *deadline* "as an ISO date
+YYYY-MM-DD; keep any time or place printed after it." The rules the
+pipeline relies on: a lone „ is what the ditto inheritance recognises
+(`_auth_is_ditto`), so every repetition mark comes back as that one
+token; `parse_date_hu` accepts the ISO form; `parse_folio` reads the
+second line; the citation parser reads the verbatim note.

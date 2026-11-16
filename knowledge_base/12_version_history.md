@@ -688,3 +688,10 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   `prompt`; `_gen_batch_requests` prefers it over the job's prompt). Cells
   without a declared prompt are skipped. Tests: dataset header scope,
   OCR batch tess (413 passing).
+- **Nov 16 — Example prompts for the gazette declarations; ISO dates
+  parse**: the 1876/1877 `egyeni` / `tarsas` / `csod` declarations on the
+  Azure instance carry a table prompt (edges are borders, every repetition
+  mark → „, empty → nothing) and one line per column (ISO date + folio on
+  two lines, verbatim name and note); plan 13 §6b keeps the set as the
+  example for later volumes. `parse_date_hu` accepts `1877-01-30` /
+  `1877-03` as is, so the LLM's ISO output feeds `event_date`.

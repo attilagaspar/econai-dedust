@@ -333,3 +333,13 @@ def test_second_volume_links_by_cross_volume_citation_and_registry_key(client, l
         assert idx["by_key"][("pesti", 40)] == [nb] and idx["by_key"][("pesti", 32)] == ["R000001"]
     finally:
         _rm(pd)
+
+
+def test_parse_date_iso_and_folio_from_a_prompted_cell():
+    """The declarations' prompts make the LLM return the order cell as an
+    ISO date on line 1 and the folio on line 2; both parsers read it."""
+    assert ledger.parse_date_hu("1877-01-30\n32/2") == "1877-01-30"
+    assert ledger.parse_date_hu("1877-03") == "1877-03"
+    assert ledger.parse_folio("1877-01-30\n32/2") == {"folio": 32, "sub": 2}
+    assert ledger.parse_folio("1877-01-30") is None
+    assert ledger.parse_date_hu("1876. jan. 5.") == "1876-01-05"      # the printed form still parses

@@ -59,8 +59,14 @@ def roman_to_int(s: str):
 
 def parse_date_hu(text) -> str | None:
     """'1876. jan. 5.' / '1876. évi január hó 5-én' / '1876 jun. 26' →
-    '1876-01-05'; a year and month alone → '1876-01'; None when no year."""
+    '1876-01-05'; an ISO date '1877-01-30' (the LLM prompts' output form)
+    as is; a year and month alone → '1876-01'; None when no year."""
     t = _fold(text).replace("\n", " ")
+    # an ISO date (what the declarations' prompts ask the LLM to return)
+    iso = re.search(r"\b(1[6-9]\d\d|20\d\d)-(\d\d)(?:-(\d\d))?\b", t)
+    if iso and 1 <= int(iso.group(2)) <= 12:
+        y, mo, dd = int(iso.group(1)), int(iso.group(2)), iso.group(3)
+        return f"{y:04d}-{mo:02d}-{int(dd):02d}" if dd and 1 <= int(dd) <= 31 else f"{y:04d}-{mo:02d}"
     m = re.search(r"(1[6-9]\d\d|20\d\d)\s*\.?\s*(?:evi\s+)?([a-z]{3,10})\.?\s*(?:ho\s*)?(\d{1,2})?", t)
     if not m:
         m2 = re.search(r"\b(1[6-9]\d\d|20\d\d)\b", t)
