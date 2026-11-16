@@ -703,3 +703,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   declaration with prompts, its columns in a row beside it, the
   declaration's box ticking all of them; only the ticked columns are sent
   ("column not ticked" in the preview tally).
+- **Nov 16 — Ink scan in chunks**: "Mark structural blanks" sends 20 pages
+  per request and shows progress (Stop works); a whole volume in one
+  request outlived the Cloudflare tunnel's 100 s limit and the panel got an
+  HTML error page ("Unexpected token '<'") although the server finished the
+  scan (1876: 15,342 blank cells marked). A non-JSON answer is now reported
+  as a proxy time-out with the page count reached.

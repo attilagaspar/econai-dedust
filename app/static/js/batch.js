@@ -988,26 +988,40 @@ async function runBatch() {
     return;
   }
 
-  // Structural-blank ink scan — one server-side call (free, local, no API).
+  // Structural-blank ink scan — server-side (free, local, no API), sent in
+  // chunks of pages so no single request outlives a proxy's time limit
+  // (a whole volume in one request came back as an HTML error page).
   if (op === 'mark_blanks') {
     const stems = sorted.map(i => pages[i]?.stem).filter(Boolean);
     if (!stems.length) { showToast('No pages in range'); return; }
-    progText.textContent = `Ink-scanning ${stems.length} page(s)…`;
+    const colFilter = document.getElementById('batch-col-filter').value.trim() || null;
+    const CHUNK = 20;
+    const t = { scanned: 0, cells_blank: 0, rows_blank: 0, cells_inked: 0 };
+    let done = 0;
     try {
-      const r = await fetch(`${API}/api/batch/mark_blanks?folder=${encodeURIComponent(folder)}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stems,
-          col_filter: document.getElementById('batch-col-filter').value.trim() || null }),
-      });
-      const dd = await r.json();
-      if (!r.ok) throw new Error(dd.detail || r.status);
-      const t = dd.totals || {};
-      progText.style.color = '#4caf50';
-      progText.textContent = `✓ ${dd.pages} page(s) · ${t.scanned} cell(s) scanned · `
+      for (let i = 0; i < stems.length; i += CHUNK) {
+        if (_batchStop) break;
+        const part = stems.slice(i, i + CHUNK);
+        progText.style.color = '';
+        progText.textContent = `Ink-scanning page ${i + 1}–${Math.min(i + CHUNK, stems.length)} of ${stems.length} · ${t.cells_blank} blank cell(s) so far`;
+        const r = await fetch(`${API}/api/batch/mark_blanks?folder=${encodeURIComponent(folder)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stems: part, col_filter: colFilter }),
+        });
+        const txt = await r.text();
+        let dd;
+        try { dd = JSON.parse(txt); } catch (e) { throw new Error(`${r.status} — the server did not answer with JSON (proxy time-out?)`); }
+        if (!r.ok) throw new Error(dd.detail || r.status);
+        for (const k of Object.keys(t)) t[k] += (dd.totals || {})[k] || 0;
+        done += dd.pages || part.length;
+      }
+      progText.style.color = _batchStop ? '#ff9800' : '#4caf50';
+      progText.textContent = `${_batchStop ? '■ stopped — ' : '✓ '}${done} page(s) · ${t.scanned} cell(s) scanned · `
         + `${t.cells_blank} blank cell(s), ${t.rows_blank} blank row(s) marked`
         + (t.cells_inked ? `, ${t.cells_inked} un-marked (ink returned)` : '');
-      showToast(`Ink scan: ${t.cells_blank} blank cell(s) marked on ${dd.pages} page(s)`, 5000);
-    } catch (e) { progText.style.color = '#ff9800'; progText.textContent = '✕ ' + (e.message || e); }
+      showToast(`Ink scan: ${t.cells_blank} blank cell(s) marked on ${done} page(s)`, 5000);
+    } catch (e) { progText.style.color = '#ff9800'; progText.textContent = `✕ after ${done} page(s): ` + (e.message || e); }
+
     _batchRunning = false;
     document.getElementById('batch-run-btn').textContent = 'Run';
     document.getElementById('batch-run-btn').disabled = false;
