@@ -22,7 +22,12 @@ from pathlib import Path
 
 PDF_IMAGE_EXTS = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
-_FOLDER_RE = re.compile(r"^[A-Za-z0-9._ -]+$")   # no slashes — no traversal
+# The folder name is only a blob-name prefix (files land under the project's
+# own sources/ with sanitized names), so any name the listing can show is
+# importable — "mihok_1924_II_(22-24)", accents, etc. Only path separators
+# (which would reach into other folders), control characters and dot-only
+# names are refused.
+_FOLDER_BAD = re.compile(r"[/\\\x00-\x1f\x7f]")
 
 _JOBS: dict = {}          # project name -> job status dict
 _JOBS_LOCK = threading.Lock()
@@ -44,7 +49,8 @@ def _container_client():
 
 
 def valid_folder(name: str) -> bool:
-    return bool(name) and bool(_FOLDER_RE.match(name))
+    return (bool(name) and len(name) <= 255 and not _FOLDER_BAD.search(name)
+            and name.strip(".") != "")
 
 
 def list_folders() -> list[dict]:

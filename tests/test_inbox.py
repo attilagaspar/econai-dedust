@@ -77,8 +77,13 @@ def test_list_folders_groups_and_filters(fake_inbox):
 def test_folder_name_validation():
     assert inbox.valid_folder("KE_1876")
     assert inbox.valid_folder("Mihok_1879")
+    assert inbox.valid_folder("mihok_1924_II_(22-24)")      # real folder, was refused
+    assert inbox.valid_folder("Központi Értesítő 1890 [2]")
     assert not inbox.valid_folder("../projects")
     assert not inbox.valid_folder("a/b")
+    assert not inbox.valid_folder("a\\b")
+    assert not inbox.valid_folder("..")
+    assert not inbox.valid_folder("bad\nname")
     assert not inbox.valid_folder("")
 
 

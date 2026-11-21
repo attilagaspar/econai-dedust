@@ -709,3 +709,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   HTML error page ("Unexpected token '<'") although the server finished the
   scan (1876: 15,342 blank cells marked). A non-JSON answer is now reported
   as a proxy time-out with the page count reached.
+- **Nov 21 — Inbox accepts any listed folder name**: `valid_folder` only
+  allowed `[A-Za-z0-9._ -]`, so a blob folder like
+  `mihok_1924_II_(22-24)` was listed but refused at import ("Invalid folder
+  name"). The name is only a blob prefix, so now only path separators,
+  control characters and dot-only names are refused.
