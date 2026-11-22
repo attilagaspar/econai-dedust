@@ -39,9 +39,10 @@ echo "@@END"
 def listing_script(remote_path: str, train_container: str, predict_container: str) -> str:
     """The shell script that lists one server; `remote_path` is the profile's
     workspace (the host directory the train container mounts as /workspace)."""
+    dot = chr(92) + "."          # a literal backslash-dot for grep -E
     return (_SCRIPT.replace("__REMOTE__", remote_path.rstrip("/"))
-                   .replace("__TRAIN__", train_container.replace(".", "\."))
-                   .replace("__PREDICT__", predict_container.replace(".", "\.")))
+                   .replace("__TRAIN__", train_container.replace(".", dot))
+                   .replace("__PREDICT__", predict_container.replace(".", dot)))
 
 
 def _ts(epoch: str) -> str | None:
