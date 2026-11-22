@@ -104,7 +104,7 @@ def test_models_listing_over_ssh_with_local_project_info(client, proj, monkeypat
     # an unreachable host is a 502 with the reason, not an empty server
     monkeypatch.setattr(ssh_ops, "run_command", lambda *a, **k: {"ok": False, "error": "timed out"})
     r = client.get("/api/models/servers/boxA/models")
-    assert r.status_code == 502 and "timed out" in r.json()["detail"]
+    assert r.status_code == 503 and "timed out" in r.json()["detail"]
     assert client.get("/api/models/servers/nope/models").status_code == 404
 
 
@@ -161,7 +161,7 @@ def test_azure_vm_state_start_stop_and_settings(client, profiles, monkeypatch):
             def instance_view(rg, name): raise RuntimeError("(AuthorizationFailed) The client does not have authorization")
     monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: Bad())
     r = client.get("/api/models/servers/boxB/vm")
-    assert r.status_code == 502 and "Virtual Machine Contributor" in r.json()["detail"]
+    assert r.status_code == 503 and "Virtual Machine Contributor" in r.json()["detail"]
 
 
 def test_power_state_helper():

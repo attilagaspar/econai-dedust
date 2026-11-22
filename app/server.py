@@ -746,7 +746,7 @@ def api_rule_llm(
         resp   = _llm_complete(client, model,
                                [{"role": "user", "content": content}], 2048)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
     return {"response": (resp.choices[0].message.content or "").strip()}
 
 
@@ -799,7 +799,7 @@ def api_llm_layout(
         client = _make_llm_client(model)
         resp   = _llm_complete(client, model, [{"role": "user", "content": content}], 4096)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
     raw = (resp.choices[0].message.content or "").strip()
 
     # Parse the first JSON array in the reply
@@ -3007,7 +3007,7 @@ def api_llm_batch_cancel(folder: str = Query(...), job: str = Query(...)):
             remote = client.batches.cancel(j["remote_id"])
             j["status"] = getattr(remote, "status", "cancelling")
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Cancel failed: {exc}")
+            raise HTTPException(status_code=503, detail=f"Cancel failed: {exc}")
         _llm_jobs_save(folder, jobs)
     return {"ok": True, "status": j["status"]}
 
@@ -3050,11 +3050,11 @@ def api_llm_batch_apply(folder: str = Query(...), job: str = Query(...)):
         client = _make_llm_client(j["model"])
         remote = client.batches.retrieve(j["remote_id"])
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Job lookup failed: {exc}")
+        raise HTTPException(status_code=503, detail=f"Job lookup failed: {exc}")
     if remote.status != "completed":
         raise HTTPException(status_code=400, detail=f"Job is {remote.status}, not completed")
     if not getattr(remote, "output_file_id", None):
-        raise HTTPException(status_code=502, detail="Completed job has no output file")
+        raise HTTPException(status_code=503, detail="Completed job has no output file")
 
     raw = client.files.content(remote.output_file_id).text
     answers, failed = {}, []
@@ -4387,7 +4387,7 @@ def api_llm_cell(
             response = _llm_complete(client, model, messages, 1024, temperature=0.2,
                                      use_cache=use_cache)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
 
     from_cache  = bool(getattr(response, "cached", False))
     raw_content = response.choices[0].message.content
@@ -4403,7 +4403,7 @@ def api_llm_cell(
         try:
             parsed = json.loads(result)
         except Exception as exc:
-            raise HTTPException(status_code=502,
+            raise HTTPException(status_code=503,
                 detail=f"LLM did not return valid JSON: {exc}. Raw: {result[:200]}")
         if not dry_run:
             prev = shape.get("structured") or {}
@@ -5508,6 +5508,10 @@ def api_gpu_profiles_delete(name: str):
 
 # ── Models view: the GPU servers and the trained models on each ─────────────
 
+# Upstream failures (an unreachable GPU host, Azure, the LLM provider) answer
+# 503, never 502 or 504: a Cloudflare tunnel in front replaces an origin's
+# 502/504 with its own HTML error page, and the browser would lose the reason.
+
 def _models_profile(profile: str) -> dict:
     from app import gpu_profiles
     srv = gpu_profiles.get(profile)
@@ -5588,7 +5592,7 @@ def api_models_list(profile: str, passphrase: Optional[str] = Query(None)):
     script = model_registry.listing_script(remote, _train_container(srv), _predict_container(srv))
     res = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"], f"bash -s <<'DEDUST_EOF'\n{script}\nDEDUST_EOF", pw)
     if res.get("error") or (not res.get("ok") and not (res.get("stdout") or "").strip()):
-        raise HTTPException(status_code=502, detail=f"Could not reach {srv.get('host')}: {res.get('error') or res.get('stderr') or 'no answer'}")
+        raise HTTPException(status_code=503, detail=f"Could not reach {srv.get('host')}: {res.get('error') or res.get('stderr') or 'no answer'}")
     data = model_registry.parse_listing(res.get("stdout") or "")
     for m in data["models"]:
         m["local"] = _models_local_info(m["name"], profile)
@@ -5617,7 +5621,7 @@ def api_models_delete(profile: str, model: str, passphrase: Optional[str] = Quer
     res = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"],
                               f"test -d '{target}' && rm -rf '{target}' && echo removed || echo missing", pw)
     if res.get("error"):
-        raise HTTPException(status_code=502, detail=f"Could not reach {srv.get('host')}: {res['error']}")
+        raise HTTPException(status_code=503, detail=f"Could not reach {srv.get('host')}: {res['error']}")
     out = (res.get("stdout") or "").strip()
     if out != "removed":
         raise HTTPException(status_code=404 if out == "missing" else 502,
@@ -5691,7 +5695,7 @@ def _azure_vm_call(profile: str, what: str):
         if "AuthorizationFailed" in msg or "does not have authorization" in msg:
             hint = (" — give this instance's identity the 'Virtual Machine Contributor' role "
                     "(or a custom role with start/deallocate/read) on the VM or its resource group")
-        raise HTTPException(status_code=502, detail=f"Azure: {msg[:400]}{hint}")
+        raise HTTPException(status_code=503, detail=f"Azure: {msg[:400]}{hint}")
 
 
 @app.get("/api/models/servers/{profile}/vm")
@@ -5895,7 +5899,7 @@ def api_inbox_list():
     try:
         return {"configured": True, "folders": inbox.list_folders()}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Inbox listing failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Inbox listing failed: {e}")
 
 
 @app.post("/api/inbox/ingest")
@@ -7794,7 +7798,7 @@ def api_authority_llm_pick(folder: str = Query(...), body: AuthorityLlmPick = ..
         client = _make_llm_client(body.model)
         resp = _llm_complete(client, body.model, [{"role": "user", "content": content}], 256)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
     raw = (resp.choices[0].message.content or "").strip()
     choice = next((c.get("id") for c in body.candidates
                    if c.get("id") and c.get("id") in raw), None)

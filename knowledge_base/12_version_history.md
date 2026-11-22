@@ -728,3 +728,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   power state with Start / Stop (deallocate) via `azure-mgmt-compute`
   (new in requirements) and the instance's own identity. Endpoints under
   `/api/models/…`; tests `tests/test_models_view.py`.
+- **Nov 22 — upstream errors answer 503, not 502**: an unreachable GPU host,
+  an Azure call or an LLM provider error is reported with status 503 and the
+  reason in `detail`. Cloudflare (the tunnel in front of the Azure instance)
+  replaces an origin's 502/504 with its own HTML page, so the dashboard only
+  saw "HTTP 502" with no explanation.
+
