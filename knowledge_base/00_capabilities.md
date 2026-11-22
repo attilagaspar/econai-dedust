@@ -218,6 +218,10 @@ one LabelMe-style JSON per page as the single source of truth.
   merge, lattice cells are left alone; the kept box is the group's
   highest-scoring one, its OCR/LLM text is dropped (the box changed);
   merged boxes are selected; Ctrl+Z undoes it.
+- **▯ VTrim** (editor toolbar, hotkey `T`): every box on the page — or
+  the selection, when two or more boxes are selected — takes the median
+  left and the median right edge of the set: one width, one column;
+  heights untouched; Ctrl+Z undoes it.
 - **Multi-table pages**: independent lattices per page (`table` id), carve /
   ✂ split / ✕ delete per table; **multi-lattice segmentation** option
   (stacked tables split at coverage gaps or divider annotations) on both the

@@ -51,6 +51,11 @@ document.addEventListener('keydown', e => {
     if (b && !b.disabled && typeof openLatticeModal==='function') openLatticeModal();
     return;
   }
+  if (e.key==='t'||e.key==='T') {           // the ▯ VTrim button, when it is enabled
+    const b = document.getElementById('vtrim-btn');
+    if (b && !b.disabled && typeof verticalTrim==='function') verticalTrim();
+    return;
+  }
   if (e.key==='p'||e.key==='P') { cloneSelectionToPage(-1); return; }
   if (e.key==='o'||e.key==='O') { cloneSelectionToPage(-2); return; }
   if (e.key==='ArrowRight') { navigateLattice('right'); return; }
@@ -160,6 +165,7 @@ async function loadFolder() {
   document.getElementById('overlap-btn').disabled=false;
   document.getElementById('trim-overlaps-btn').disabled=false;
   document.getElementById('merge-overlaps-btn').disabled=false;
+  document.getElementById('vtrim-btn').disabled=false;
   document.getElementById('lattice-btn').disabled=false;
   document.getElementById('lattice-sel-btn').disabled=false;
   document.getElementById('newsflow-btn').disabled=false;

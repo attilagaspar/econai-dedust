@@ -669,6 +669,36 @@ async function trimOverlaps() {
 // until no two same-label boxes overlap, so a merged box that now reaches a
 // further box absorbs it too; boxes of different labels are never merged.
 // Lattice cells are left alone. Undoable (Ctrl+Z).
+// ── Vertical trim ───────────────────────────────────────────────────────────
+// Every box takes the median left edge and the median right edge of the set
+// (the selection when two or more boxes are selected, else every box on the
+// page): one column of equal-width boxes. Heights are untouched.
+async function verticalTrim() {
+  if (!pageData?.shapes?.length) return;
+  const shapes = pageData.shapes;
+  const idxs = selSet.size >= 2 ? [...selSet] : shapes.map((_, i) => i);
+  const rects = idxs.map(i => _shapeRect(shapes[i])).filter(r => r.x2 > r.x1 && r.y2 > r.y1);
+  if (rects.length < 2) { showToast('Vertical trim needs at least two boxes'); return; }
+  const median = arr => {
+    const a = [...arr].sort((p, q) => p - q), m = a.length >> 1;
+    return a.length % 2 ? a[m] : Math.round((a[m - 1] + a[m]) / 2);
+  };
+  const x1 = median(rects.map(r => r.x1)), x2 = median(rects.map(r => r.x2));
+  if (x2 <= x1) { showToast('Vertical trim: the median edges cross'); return; }
+  pushUndo();
+  let changed = 0;
+  for (const i of idxs) {
+    const r = _shapeRect(shapes[i]);
+    if (!(r.x2 > r.x1 && r.y2 > r.y1)) continue;
+    if (r.x1 !== x1 || r.x2 !== x2) changed++;
+    shapes[i].points = [[x1, r.y1], [x2, r.y2]];
+  }
+  drawOverlay();
+  await replaceAllShapes();      // before updatePanel: the crop URL is geometry-keyed
+  updatePanel();
+  showToast(`Vertical trim: ${changed} of ${idxs.length} box${idxs.length !== 1 ? 'es' : ''} set to ${x1}–${x2}`);
+}
+
 async function mergeOverlaps() {
   if (!pageData?.shapes?.length) return;
   const before = pageData.shapes.length;

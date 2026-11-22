@@ -714,3 +714,8 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   `mihok_1924_II_(22-24)` was listed but refused at import ("Invalid folder
   name"). The name is only a blob prefix, so now only path separators,
   control characters and dot-only names are refused.
+- **Nov 22 — VTrim**: editor button "▯ VTrim" (hotkey `T`): every box on
+  the page — or the selection, when two or more boxes are selected — takes
+  the median left and the median right edge of the set, so all boxes get
+  one width in one column; heights untouched; Ctrl+Z undoes it
+  (`verticalTrim` in core.js).
