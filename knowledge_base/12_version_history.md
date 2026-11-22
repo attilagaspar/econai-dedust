@@ -743,4 +743,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   …/vm/history`); a ☁ badge next to "Dedust" in the header while any GPU
   server is alive (`GET /api/models/alive`: Azure power state, else a port-22
   knock), polled every minute.
+- **Nov 22 — Models view: training facts without a summary**: a project
+  prepared before Dedust wrote `train_summary.json` gets its page count from
+  the COCO export (`from: "coco"`, with the export's date), and a clone whose
+  train / infer scripts point at another project's output folder is shown
+  as "uses the model of <that project>" (`model_of`).
 

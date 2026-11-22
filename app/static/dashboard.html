@@ -1141,8 +1141,11 @@ function _mdlHeaderHtml(s, d) {
 // current model was trained on, and the projects pooled into that training.
 function _mdlProjectRow(s, p) {
   const t = (s.project_info || {})[p] || {};
-  const n = t.n_train_pages != null ? `${t.n_train_pages} pages${t.n_test_pages ? ` <span style="color:#777;">+${t.n_test_pages} test</span>` : ''}` : '<span style="color:#666;">never prepared</span>';
-  const src = t.training_sources?.length
+  const coco = t.from === 'coco' ? ` title="counted from the COCO export of ${escHtml(t.prepared_at || '?')} — prepared before Dedust kept a training summary"` : '';
+  const n = t.n_train_pages != null ? `<span${coco}>${t.n_train_pages} pages${t.n_test_pages ? ` <span style="color:#777;">+${t.n_test_pages} test</span>` : ''}${t.from === 'coco' ? ` <span style="color:#777;">(${escHtml(t.prepared_at || 'export')})</span>` : ''}</span>` : '<span style="color:#666;">never prepared</span>';
+  const src = t.model_of
+    ? `<span style="color:#f0c040;" title="This project's train / infer scripts point at ${escHtml(t.model_of)}'s output folder: it uses that model (a clone that kept its source's scripts)">uses the model of ${escHtml(t.model_of)}</span>`
+    : t.training_sources?.length
     ? `with ${t.training_sources.map(x => `${escHtml(x)}${t.sources?.[x] != null ? ` (${t.sources[x]})` : ''}`).join(', ')}`
     : (t.n_train_pages != null ? 'own pages only' : '');
   return `<div class="mdl-proj"><a href="#" onclick="modelsGoProject(event,'${escHtml(p)}')">${escHtml(p)}</a><span class="n">${n}</span><span class="src">${src}</span></div>`;

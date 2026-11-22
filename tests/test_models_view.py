@@ -231,3 +231,21 @@ def test_alive_probe_azure_state_and_ssh_knock(client, profiles, monkeypatch):
     d = client.get("/api/models/alive").json()
     assert {s["name"]: s["alive"] for s in d["servers"]} == {"boxA": False, "boxB": None}
     assert "boom" in {s["name"]: s for s in d["servers"]}["boxB"]["error"]
+
+
+def test_training_facts_fall_back_to_the_coco_export_and_name_a_borrowed_model(client, proj):
+    inter = PROJECTS_ROOT / proj / "intermediate"
+    inter.mkdir(parents=True, exist_ok=True)
+    # a project prepared before the training summary existed: only the COCO export and the scripts
+    inter.joinpath("annotations.json").write_text(json.dumps({"images": [{"id": i, "file_name": f"p{i}.jpg"} for i in range(3)],
+                                                             "annotations": [], "categories": []}), encoding="utf-8")
+    inter.joinpath("train.sh").write_text("python train.py --annotation-path /workspace/other_1876/annotations.json\n"
+                                          "rm -f /workspace/layout-model-training/outputs/other_1876/fast_rcnn_R_50_FPN_3x/*.pth\n", encoding="utf-8")
+    t = srv._project_training_facts(proj)
+    assert t["n_train_pages"] == 3 and t["from"] == "coco" and len(t["prepared_at"]) == 10
+    assert t["model_of"] == "other_1876"            # a clone that kept its source's scripts uses that model
+    # scripts pointing at the project's own output folder: no model_of
+    inter.joinpath("train.sh").write_text(f"rm -f /workspace/layout-model-training/outputs/{proj}/fast_rcnn_R_50_FPN_3x/*.pth\n", encoding="utf-8")
+    assert "model_of" not in srv._project_training_facts(proj)
+    d = client.get("/api/models/servers").json()
+    assert {x["name"]: x for x in d["servers"]}["boxA"]["project_info"][proj]["n_train_pages"] == 3

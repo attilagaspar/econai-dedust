@@ -5522,25 +5522,65 @@ def _models_profile(profile: str) -> dict:
     return srv
 
 
-def _project_training_facts(name: str) -> dict:
-    """What the project's current model was trained on, from the prepare
-    step's train_summary.json: the number of training pages, the pooled
-    projects and each one's page count. Empty when it never prepared."""
+_coco_count_cache: dict = {}
+
+
+def _coco_image_count(path: Path) -> int | None:
+    """The number of images in a COCO export, counted from the text (the file
+    can be tens of MB; one `"file_name"` per image) and cached by size + mtime."""
     try:
-        summ = json.loads((project_dir(name) / "intermediate" / "train_summary.json").read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_size, int(st.st_mtime))
+    if key not in _coco_count_cache:
+        try:
+            _coco_count_cache[key] = path.read_text(encoding="utf-8", errors="replace").count('"file_name"')
+        except OSError:
+            return None
+    return _coco_count_cache[key]
+
+
+def _project_training_facts(name: str) -> dict:
+    """What the project's current model was trained on. From the prepare
+    step's train_summary.json when there is one: the number of training
+    pages, the pooled projects and each one's page count. A project prepared
+    before Dedust wrote that summary falls back to its COCO export (the image
+    count, `from: "coco"`, the export's date). `model_of` names another
+    project when the scripts train and infer with THAT project's model (a
+    clone that kept its source's scripts). Empty when it never prepared."""
+    inter = project_dir(name) / "intermediate"
     out: dict = {}
-    for k in ("n_train_pages", "n_test_pages", "n_negatives"):
-        if isinstance(summ.get(k), int):
-            out[k] = summ[k]
-    srcs = summ.get("training_sources") or []
-    if srcs:
-        per = summ.get("sources") or {}
-        out["training_sources"] = [str(x) for x in srcs]
-        out["sources"] = {str(k): (v.get("n_train_pages") if isinstance(v, dict) else None) for k, v in per.items()}
-    if summ.get("model_labels"):
-        out["n_labels"] = len(summ["model_labels"])
+    try:
+        summ = json.loads((inter / "train_summary.json").read_text(encoding="utf-8"))
+    except Exception:
+        summ = None
+    if summ:
+        for k in ("n_train_pages", "n_test_pages", "n_negatives"):
+            if isinstance(summ.get(k), int):
+                out[k] = summ[k]
+        srcs = summ.get("training_sources") or []
+        if srcs:
+            per = summ.get("sources") or {}
+            out["training_sources"] = [str(x) for x in srcs]
+            out["sources"] = {str(k): (v.get("n_train_pages") if isinstance(v, dict) else None) for k, v in per.items()}
+        if summ.get("model_labels"):
+            out["n_labels"] = len(summ["model_labels"])
+    else:
+        coco = inter / "annotations.json"
+        n = _coco_image_count(coco)
+        if n is not None:
+            out["n_train_pages"] = n
+            out["from"] = "coco"
+            out["prepared_at"] = time.strftime("%Y-%m-%d", time.localtime(coco.stat().st_mtime))
+    for script in ("train.sh", "infer.sh"):
+        try:
+            m = re.search(r"outputs/([A-Za-z0-9_.\-]+)/", (inter / script).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if m and m.group(1) != name:
+            out["model_of"] = m.group(1)
+            break
     return out
 
 

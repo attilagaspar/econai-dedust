@@ -596,7 +596,10 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   span (`app/vm_events.py`, `gpu_vm_events.jsonl` next to the profile
   store). The server's **project list** is vertical: each project with the
   number of pages its current model was trained on and the projects pooled
-  into that training (from `train_summary.json`). A **☁ badge next to
+  into that training (from `train_summary.json`; a project prepared before
+  that summary existed is counted from its COCO export, and a clone whose
+  scripts point at another project's output folder says "uses the model
+  of" that project). A **☁ badge next to
   "Dedust"** in the dashboard header shows while any GPU server is alive
   (`GET /api/models/alive`, every minute: an Azure VM by its power state,
   any other host by a knock on port 22); it opens the Models view.
