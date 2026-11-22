@@ -733,4 +733,14 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   reason in `detail`. Cloudflare (the tunnel in front of the Azure instance)
   replaces an origin's 502/504 with its own HTML page, so the dashboard only
   saw "HTTP 502" with no explanation.
+- **Nov 22 — Models view, round two**: the server's project list is
+  vertical, each line with the pages the project's model was trained on and
+  the projects pooled into it (`project_info` in `GET /api/models/servers`,
+  from `train_summary.json`); a history box under the Azure switch shows
+  when the VM was started / stopped recently (`app/vm_events.py` logs the
+  dashboard's requests and every observed state change to
+  `gpu_vm_events.jsonl` beside the profile store; `GET
+  …/vm/history`); a ☁ badge next to "Dedust" in the header while any GPU
+  server is alive (`GET /api/models/alive`: Azure power state, else a port-22
+  knock), polled every minute.
 

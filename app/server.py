@@ -5522,6 +5522,28 @@ def _models_profile(profile: str) -> dict:
     return srv
 
 
+def _project_training_facts(name: str) -> dict:
+    """What the project's current model was trained on, from the prepare
+    step's train_summary.json: the number of training pages, the pooled
+    projects and each one's page count. Empty when it never prepared."""
+    try:
+        summ = json.loads((project_dir(name) / "intermediate" / "train_summary.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out: dict = {}
+    for k in ("n_train_pages", "n_test_pages", "n_negatives"):
+        if isinstance(summ.get(k), int):
+            out[k] = summ[k]
+    srcs = summ.get("training_sources") or []
+    if srcs:
+        per = summ.get("sources") or {}
+        out["training_sources"] = [str(x) for x in srcs]
+        out["sources"] = {str(k): (v.get("n_train_pages") if isinstance(v, dict) else None) for k, v in per.items()}
+    if summ.get("model_labels"):
+        out["n_labels"] = len(summ["model_labels"])
+    return out
+
+
 def _models_local_info(name: str, profile: str) -> dict:
     """What this instance knows about a model's project: whether the project
     exists, whether it points at this server, its trained classes, its
@@ -5539,6 +5561,7 @@ def _models_local_info(name: str, profile: str) -> dict:
     except Exception:
         pass
     info["labels"] = _trained_labels(name)
+    info["training"] = _project_training_facts(name)
     try:
         rows = training_meta.load_ledger(pdir)
         if rows:
@@ -5568,11 +5591,13 @@ def api_models_servers():
     out = []
     for pname, srv in gpu_profiles.load_all().items():
         az = srv.get("azure_vm") or {}
+        names = sorted(by_profile.get(pname, []))
         out.append({"name": pname, "host": srv.get("host"), "user": srv.get("user"),
                     "remote_path": srv.get("remote_path"),
                     "predict_remote_path": srv.get("predict_remote_path"),
                     "has_passphrase": bool(srv.get("passphrase")),
-                    "projects": sorted(by_profile.get(pname, [])),
+                    "projects": names,
+                    "project_info": {n: _project_training_facts(n) for n in names},
                     "azure_vm": {k: az.get(k) for k in ("subscription_id", "resource_group", "name")} if az else None,
                     "train_container": _train_container(srv), "predict_container": _predict_container(srv)})
     return {"servers": out}
@@ -5674,19 +5699,23 @@ def _azure_compute_client(subscription_id: str):
 
 
 def _azure_vm_call(profile: str, what: str):
-    from app import model_registry
+    from app import model_registry, vm_events
     sub, rg, name = _azure_vm_of(profile)
     try:
         client = _azure_compute_client(sub)
         vms = client.virtual_machines
         if what == "start":
             vms.begin_start(rg, name)          # not awaited: the view polls the state
+            vm_events.record(profile, "start requested")
             return {"ok": True, "state": "starting", "vm": name}
         if what == "stop":
             vms.begin_deallocate(rg, name)
+            vm_events.record(profile, "stop requested")
             return {"ok": True, "state": "deallocating", "vm": name}
         iv = vms.instance_view(rg, name)
-        return {"ok": True, "state": model_registry.power_state(iv.statuses), "vm": name, "resource_group": rg}
+        state = model_registry.power_state(iv.statuses)
+        vm_events.observe(profile, state, at=model_registry.provisioning_time(iv.statuses))
+        return {"ok": True, "state": state, "vm": name, "resource_group": rg}
     except HTTPException:
         raise
     except Exception as exc:
@@ -5712,6 +5741,55 @@ def api_models_vm_start(profile: str):
 def api_models_vm_stop(profile: str):
     """Deallocate: the VM stops billing for compute (the disk stays)."""
     return _azure_vm_call(profile, "stop")
+
+
+@app.get("/api/models/servers/{profile}/vm/history")
+def api_models_vm_history(profile: str, limit: int = Query(40, ge=1, le=500)):
+    """When the server was started and stopped recently, as Dedust saw it:
+    the dashboard's own requests and every state change a poll observed."""
+    from app import vm_events
+    _models_profile(profile)
+    return {"profile": profile, "events": vm_events.recent(profile, limit)}
+
+
+def _ssh_port_open(host: str, timeout: float = 2.0) -> bool:
+    """A TCP knock on port 22 — the cheap liveness test for a server that is
+    not an Azure VM Dedust can ask about."""
+    import socket
+    try:
+        with socket.create_connection((host, 22), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _server_alive(pname: str, srv: dict) -> dict:
+    """{"name", "alive": bool | None, "state", "how"}: an Azure VM by its
+    power state (logged like any poll), another host by port 22."""
+    if srv.get("azure_vm"):
+        try:
+            d = _azure_vm_call(pname, "state")
+            return {"name": pname, "alive": d["state"] == "running", "state": d["state"], "how": "azure"}
+        except HTTPException as exc:
+            return {"name": pname, "alive": None, "state": "unknown", "how": "azure", "error": str(exc.detail)[:200]}
+    host = srv.get("host") or ""
+    up = bool(host) and _ssh_port_open(host)
+    return {"name": pname, "alive": up, "state": "running" if up else "unreachable", "how": "ssh"}
+
+
+@app.get("/api/models/alive")
+def api_models_alive():
+    """Which GPU servers are alive right now — the dashboard's cloud badge.
+    Every profile is probed at once (a dead private address costs the
+    probe's two-second timeout)."""
+    from app import gpu_profiles
+    import concurrent.futures
+    profiles = gpu_profiles.load_all()
+    if not profiles:
+        return {"servers": [], "any_alive": False}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(8, len(profiles)))) as pool:
+        rows = list(pool.map(lambda kv: _server_alive(kv[0], kv[1]), profiles.items()))
+    return {"servers": rows, "any_alive": any(r["alive"] for r in rows)}
 
 
 class SshRequest(BaseModel):

@@ -167,3 +167,67 @@ def test_azure_vm_state_start_stop_and_settings(client, profiles, monkeypatch):
 def test_power_state_helper():
     assert model_registry.power_state([{"code": "PowerState/running"}]) == "running"
     assert model_registry.power_state([]) == "unknown"
+
+
+def test_servers_list_carries_each_projects_training_facts(client, proj):
+    summ = PROJECTS_ROOT / proj / "intermediate" / "train_summary.json"
+    summ.parent.mkdir(parents=True, exist_ok=True)
+    summ.write_text(json.dumps({"n_train_pages": 42, "n_test_pages": 5, "model_labels": ["a", "b"],
+                                "training_sources": ["other_1890"],
+                                "sources": {proj: {"n_train_pages": 30}, "other_1890": {"n_train_pages": 12}}}), encoding="utf-8")
+    d = client.get("/api/models/servers").json()
+    s = {x["name"]: x for x in d["servers"]}["boxA"]
+    assert s["project_info"][proj] == {"n_train_pages": 42, "n_test_pages": 5, "n_labels": 2,
+                                       "training_sources": ["other_1890"],
+                                       "sources": {proj: 30, "other_1890": 12}}
+    # a project that never prepared has no facts, not an error
+    summ.unlink()
+    d = client.get("/api/models/servers").json()
+    assert {x["name"]: x for x in d["servers"]}["boxA"]["project_info"][proj] == {}
+
+
+def test_vm_history_logs_requests_and_observed_changes(client, profiles, monkeypatch):
+    from app import vm_events
+    from datetime import datetime
+    vms = _FakeVms("running")
+    class C: virtual_machines = vms
+    monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: C())
+    assert client.get("/api/models/servers/boxB/vm/history").json()["events"] == []
+    client.get("/api/models/servers/boxB/vm")          # observed: running (dated by the provisioning time when given)
+    client.get("/api/models/servers/boxB/vm")          # same state again: not logged twice
+    client.post("/api/models/servers/boxB/vm/stop")    # a request from the dashboard
+    vms.state = "deallocated"
+    client.get("/api/models/servers/boxB/vm")          # observed: deallocated, closes the running span
+    ev = client.get("/api/models/servers/boxB/vm/history").json()["events"]
+    assert [(e["event"], e["source"]) for e in ev] == [("deallocated", "observed"), ("stop requested", "dashboard"), ("running", "observed")]
+    assert ev[0]["hours"] is not None and ev[0]["hours"] >= 0
+    assert all(e["profile"] == "boxB" and len(e["at"]) == 19 for e in ev)
+    # the log lives next to the profile store, one JSON line per event
+    assert (gpu_profiles._PROFILES_PATH.parent / "gpu_vm_events.jsonl").read_text(encoding="utf-8").count("\n") == 3
+    # a running span still open reports its length so far; Azure's own time stamps an observed change
+    vm_events.observe("boxB", "running", at=datetime(2026, 11, 22, 8, 0, 0))
+    r = vm_events.recent("boxB")[0]
+    assert r["at"] == "2026-11-22T08:00:00" and r["hours_so_far"] > 0
+    assert client.get("/api/models/servers/nope/vm/history").status_code == 404
+
+
+def test_alive_probe_azure_state_and_ssh_knock(client, profiles, monkeypatch):
+    vms = _FakeVms("running")
+    class C: virtual_machines = vms
+    monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: C())
+    knocked = []
+    monkeypatch.setattr(srv, "_ssh_port_open", lambda host, timeout=2.0: knocked.append(host) or host == "10.0.0.9")
+    d = client.get("/api/models/alive").json()
+    by = {s["name"]: s for s in d["servers"]}
+    assert by["boxB"] == {"name": "boxB", "alive": True, "state": "running", "how": "azure"}
+    assert by["boxA"] == {"name": "boxA", "alive": True, "state": "running", "how": "ssh"} and knocked == ["10.0.0.9"]
+    assert d["any_alive"] is True
+    vms.state = "deallocated"
+    monkeypatch.setattr(srv, "_ssh_port_open", lambda host, timeout=2.0: False)
+    d = client.get("/api/models/alive").json()
+    assert d["any_alive"] is False and {s["alive"] for s in d["servers"]} == {False}
+    # an Azure error is reported on that server, not raised for all
+    monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: (_ for _ in ()).throw(RuntimeError("boom")))
+    d = client.get("/api/models/alive").json()
+    assert {s["name"]: s["alive"] for s in d["servers"]} == {"boxA": False, "boxB": None}
+    assert "boom" in {s["name"]: s for s in d["servers"]}["boxB"]["error"]

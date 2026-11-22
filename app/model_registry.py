@@ -128,6 +128,16 @@ def parse_listing(stdout: str) -> dict:
     return out
 
 
+def provisioning_time(statuses):
+    """The `time` of the ProvisioningState status — when the VM last finished
+    starting or deallocating — or None."""
+    for s in statuses or []:
+        code = getattr(s, "code", None) or (s.get("code") if isinstance(s, dict) else None) or ""
+        if code.startswith("ProvisioningState/"):
+            return getattr(s, "time", None) or (s.get("time") if isinstance(s, dict) else None)
+    return None
+
+
 def power_state(statuses) -> str:
     """An Azure instance view's power state: running / deallocated / stopped /
     starting / deallocating / stopping / unknown."""

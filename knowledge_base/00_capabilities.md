@@ -589,7 +589,17 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   VM name — "Set up start / stop…"); the panel then shows the power state
   with ▶ Start / ■ Stop (deallocate), through the instance's own identity
   (managed identity on the Dedust VM, `az login` on a PC), which needs the
-  Virtual Machine Contributor role on the VM.
+  Virtual Machine Contributor role on the VM. Under the switch a **history
+  box** lists when the VM was started and stopped recently as Dedust saw
+  it (its own Start/Stop requests, and every state change a poll noticed,
+  dated by Azure's provisioning time), with the length of each running
+  span (`app/vm_events.py`, `gpu_vm_events.jsonl` next to the profile
+  store). The server's **project list** is vertical: each project with the
+  number of pages its current model was trained on and the projects pooled
+  into that training (from `train_summary.json`). A **☁ badge next to
+  "Dedust"** in the dashboard header shows while any GPU server is alive
+  (`GET /api/models/alive`, every minute: an Azure VM by its power state,
+  any other host by a knock on port 22); it opens the Models view.
 
 - **Pipeline**: LabelMe→COCO prepare (always re-run before train), train /
   infer Detectron2 in Docker over SSH (paramiko), detached (nohup) with live

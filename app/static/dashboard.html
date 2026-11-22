@@ -74,6 +74,16 @@ header span { color: #888; font-size: 0.85rem; }
 .mdl-del { background: none; border: 1px solid transparent; color: #889; cursor: pointer; border-radius: 4px; padding: 2px 6px; font-size: 0.8rem; }
 .mdl-del:hover { border-color: #e94560; color: #e94560; }
 .mdl-partial { margin-top: 12px; font-size: 0.8rem; color: #bbb; }
+.mdl-projects { display: flex; flex-direction: column; gap: 2px; font-size: 0.82rem; }
+.mdl-projects .mdl-proj { display: flex; gap: 10px; align-items: baseline; color: #bbb; }
+.mdl-projects .mdl-proj a { color: #8ab4f8; text-decoration: none; min-width: 180px; }
+.mdl-projects .mdl-proj .n { color: #ddd; min-width: 130px; white-space: nowrap; }
+.mdl-projects .mdl-proj .src { color: #889; font-size: 0.76rem; }
+.mdl-hist { margin: 4px 0 6px 102px; max-height: 120px; overflow-y: auto; background: #0d1b35; border: 1px solid #0f3460; border-radius: 4px;
+            padding: 6px 10px; font-family: ui-monospace, Consolas, monospace; font-size: 0.74rem; color: #aab; white-space: pre; }
+.mdl-hist .on { color: #8fd19e; } .mdl-hist .off { color: #999; } .mdl-hist .req { color: #fde68a; }
+#hdr-cloud { display: none; color: #8ab4f8; font-size: 1.1rem; cursor: pointer; margin-left: -6px; }
+#hdr-cloud.on { display: inline; }
 .auth-group { padding: 8px 12px 6px; border-bottom: 1px solid #1a3a6e; }
 .auth-group .auth-head { display: flex; align-items: center; gap: 8px; }
 .auth-group .auth-name { font-weight: 700; color: #e0e0e0; }
@@ -259,6 +269,7 @@ header span { color: #888; font-size: 0.85rem; }
 
 <header>
   <h1>Dedust</h1>
+  <span id="hdr-cloud" onclick="setSidebarView('models')" title="A GPU server is alive">☁</span>
   <span>Historical document digitization pipeline</span>
 </header>
 
@@ -1110,7 +1121,8 @@ function _mdlHeaderHtml(s, d) {
          <button class="notes-btn" id="mdl-vm-start" onclick="modelsVm('start')" disabled>▶ Start</button>
          <button class="notes-btn" id="mdl-vm-stop" onclick="modelsVm('stop')" disabled title="Deallocate: no compute billing while it is off; the disk stays">■ Stop</button>
          <a href="#" onclick="modelsAzureForm(event)" style="color:#667;font-size:0.75rem;">settings</a>
-         <span id="mdl-vm-msg" style="color:#e94560;font-size:0.78rem;"></span></div>`
+         <span id="mdl-vm-msg" style="color:#e94560;font-size:0.78rem;"></span></div>
+       <div id="mdl-vm-hist" class="mdl-hist" title="When the VM was started and stopped recently, as Dedust saw it: its own buttons, and every change a poll noticed (dated by Azure's provisioning time)">…</div>`
     : `<div class="mdl-az">☁ <span style="color:#777;">Not an Azure VM Dedust can switch.</span> <a href="#" onclick="modelsAzureForm(event)" style="color:#8ab4f8;font-size:0.8rem;">Set up start / stop…</a></div>`;
   return `<div class="notes-board">
     <div class="notes-head"><h2 style="cursor:default;">🖥 ${escHtml(s.name)}</h2>
@@ -1122,9 +1134,43 @@ function _mdlHeaderHtml(s, d) {
     ${disk ? `<div class="mdl-stat"><span>Disk</span>${disk}</div>` : ''}
     ${az}
     <div id="mdl-az-form"></div>
-    ${s.projects.length ? `<div class="mdl-stat"><span>Projects here</span>${s.projects.map(p => `<a href="#" onclick="modelsGoProject(event,'${escHtml(p)}')">${escHtml(p)}</a>`).join(', ')}</div>` : ''}
+    ${s.projects.length ? `<div class="mdl-stat" style="align-items:flex-start;"><span>Projects here</span><div class="mdl-projects">${s.projects.map(p => _mdlProjectRow(s, p)).join('')}</div></div>` : ''}
   </div>`;
 }
+// One line of the server's project list: the project, how many pages its
+// current model was trained on, and the projects pooled into that training.
+function _mdlProjectRow(s, p) {
+  const t = (s.project_info || {})[p] || {};
+  const n = t.n_train_pages != null ? `${t.n_train_pages} pages${t.n_test_pages ? ` <span style="color:#777;">+${t.n_test_pages} test</span>` : ''}` : '<span style="color:#666;">never prepared</span>';
+  const src = t.training_sources?.length
+    ? `with ${t.training_sources.map(x => `${escHtml(x)}${t.sources?.[x] != null ? ` (${t.sources[x]})` : ''}`).join(', ')}`
+    : (t.n_train_pages != null ? 'own pages only' : '');
+  return `<div class="mdl-proj"><a href="#" onclick="modelsGoProject(event,'${escHtml(p)}')">${escHtml(p)}</a><span class="n">${n}</span><span class="src">${src}</span></div>`;
+}
+async function _mdlHistRefresh(name) {
+  const box = document.getElementById('mdl-vm-hist'); if (!box) return;
+  try {
+    const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm/history`);
+    if (!d.events.length) { box.textContent = 'no start / stop seen yet'; return; }
+    box.innerHTML = d.events.map(e => {
+      const cls = e.event === 'running' ? 'on' : /requested/.test(e.event) ? 'req' : 'off';
+      const dur = e.hours != null ? `  · ran ${e.hours} h` : e.hours_so_far != null ? `  · running for ${e.hours_so_far} h` : '';
+      return `<span class="${cls}">${escHtml(e.at.replace('T', ' '))}  ${escHtml(e.event.padEnd(15))}</span> <span style="color:#667;">${escHtml(e.source)}</span>${escHtml(dur)}`;
+    }).join('\n');
+  } catch (e) { box.textContent = e.message; }
+}
+// The cloud next to "Dedust": shown while any GPU server is alive. Checked
+// at load and every minute, and right after a Start / Stop from the Models view.
+async function _aliveTick() {
+  const b = document.getElementById('hdr-cloud'); if (!b) return;
+  try {
+    const d = await _notesApi('GET', '/api/models/alive');
+    const up = (d.servers || []).filter(s => s.alive);
+    b.classList.toggle('on', up.length > 0);
+    b.title = up.length ? `GPU server alive: ${up.map(s => s.name).join(', ')} — click for the Models view` : 'No GPU server alive';
+  } catch (e) { /* no profiles, or the API is away: no badge */ }
+}
+_aliveTick(); setInterval(_aliveTick, 60000);
 function _mdlFmtBytes(b) { if (b == null) return ''; return b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(0) + ' MB'; }
 function _mdlTableHtml(s, d) {
   const rows = [...d.models].sort((a, b) => (b.trained || '').localeCompare(a.trained || ''));
@@ -1177,8 +1223,9 @@ async function _mdlVmRefresh(name) {
   try {
     const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm`);
     _mdlVmShow(d.state);
+    _mdlHistRefresh(name);
     if (/starting|deallocating|stopping/.test(d.state)) { if (!_mdlVmTimer) _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), 8000); }
-    else _mdlStopVmPoll();
+    else { _mdlStopVmPoll(); _aliveTick(); }
   } catch (e) {
     st.textContent = 'state unknown'; st.className = 'mdl-state';
     const m = document.getElementById('mdl-vm-msg'); if (m) m.textContent = e.message;
@@ -1198,6 +1245,7 @@ async function modelsVm(action) {
   try {
     const d = await _notesApi('POST', `/api/models/servers/${encodeURIComponent(name)}/vm/${action}`);
     _mdlVmShow(d.state);
+    _mdlHistRefresh(name);
     if (!_mdlVmTimer) _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), 8000);
   } catch (e) { if (m) m.textContent = e.message; }
 }
