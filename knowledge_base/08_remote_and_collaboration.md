@@ -178,11 +178,14 @@ Linux VM, NOT App Service / Container Apps.
     choose "No infrastructure redundancy required".
   - **C3b** (no code): GPU VM lives DEALLOCATED (~$5/mo disk); portal Start
     before a job (~90 s), Stop after; nightly auto-shutdown as backstop.
-  - **C3c** (later, if C3b annoys): managed identity on dedust-vm scoped to
-    start/stop the GPU VM; optional `server.azure_vm: {resource_group, name}`
-    in project config → train/infer/fine-tune wake the VM, wait for SSH, run,
-    deallocate after. Projects without the field (all local/Koren ones) are
-    untouched.
+  - **C3c — the switch is BUILT (2026-11-22)**: the dashboard's Models view
+    starts / deallocates the VM named on the GPU *profile* (`azure_vm:
+    {subscription_id, resource_group, name}`, not the project) through the
+    instance's identity (`azure-mgmt-compute`, DefaultAzureCredential);
+    the Dedust VM's managed identity needs the Virtual Machine Contributor
+    role on the GPU VM. Still manual: starting before a job and stopping
+    after (the automatic wake-run-deallocate around train/infer is not
+    built).
 - **Total ≈ $90–160/mo**, dominated by the always-on webapp VM; GPU negligible.
 - **Caveats to check early**: (1) university subscriptions often have NC-family
   GPU quota = 0 → file quota request if Azure GPU wanted; (2) confirm credits

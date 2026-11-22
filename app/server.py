@@ -5506,6 +5506,210 @@ def api_gpu_profiles_delete(name: str):
     return {"ok": True}
 
 
+# ── Models view: the GPU servers and the trained models on each ─────────────
+
+def _models_profile(profile: str) -> dict:
+    from app import gpu_profiles
+    srv = gpu_profiles.get(profile)
+    if srv is None:
+        raise HTTPException(status_code=404, detail=f"GPU profile '{profile}' is not defined on this instance")
+    srv = dict(srv)
+    srv.setdefault("key_path", "")
+    return srv
+
+
+def _models_local_info(name: str, profile: str) -> dict:
+    """What this instance knows about a model's project: whether the project
+    exists, whether it points at this server, its trained classes, its
+    training sources and the last training-ledger row."""
+    from app import training_meta
+    pdir = project_dir(name)
+    if not pdir.exists():
+        return {"project": False}
+    info: dict = {"project": True}
+    try:
+        cfg = load_config(name)
+        info["this_server"] = cfg.get("server_profile") == profile
+        info["server_profile"] = cfg.get("server_profile")
+        info["training_sources"] = list(cfg.get("training_sources") or [])
+    except Exception:
+        pass
+    info["labels"] = _trained_labels(name)
+    try:
+        rows = training_meta.load_ledger(pdir)
+        if rows:
+            last = rows[-1]
+            info["ledger"] = {k: last.get(k) for k in ("mode", "status", "started", "finished",
+                                                       "n_train_pages", "n_test_pages", "ap") if k in last}
+            info["n_runs"] = len(rows)
+    except Exception:
+        pass
+    return info
+
+
+@app.get("/api/models/servers")
+def api_models_servers():
+    """The GPU server profiles of this instance, each with the projects that
+    point at it and whether an Azure VM is configured behind it."""
+    from app import gpu_profiles
+    by_profile: dict = {}
+    for p in list_projects():
+        nm = p["name"] if isinstance(p, dict) else p
+        try:
+            prof = load_config(nm).get("server_profile")
+        except Exception:
+            continue
+        if prof:
+            by_profile.setdefault(prof, []).append(nm)
+    out = []
+    for pname, srv in gpu_profiles.load_all().items():
+        az = srv.get("azure_vm") or {}
+        out.append({"name": pname, "host": srv.get("host"), "user": srv.get("user"),
+                    "remote_path": srv.get("remote_path"),
+                    "predict_remote_path": srv.get("predict_remote_path"),
+                    "has_passphrase": bool(srv.get("passphrase")),
+                    "projects": sorted(by_profile.get(pname, [])),
+                    "azure_vm": {k: az.get(k) for k in ("subscription_id", "resource_group", "name")} if az else None,
+                    "train_container": _train_container(srv), "predict_container": _predict_container(srv)})
+    return {"servers": out}
+
+
+@app.get("/api/models/servers/{profile}/models")
+def api_models_list(profile: str, passphrase: Optional[str] = Query(None)):
+    """One SSH call: the models in the server's workspace (weights date and
+    size, the model's own AP), the GPU, the Dedust containers, the disk —
+    plus what this instance knows about each model's project."""
+    from app import ssh_ops, model_registry
+    srv = _models_profile(profile)
+    pw = passphrase or srv.get("passphrase") or None
+    remote = (srv.get("remote_path") or "").rstrip("/")
+    if not remote:
+        raise HTTPException(status_code=400, detail=f"Profile '{profile}' has no remote_path")
+    script = model_registry.listing_script(remote, _train_container(srv), _predict_container(srv))
+    res = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"], f"bash -s <<'DEDUST_EOF'\n{script}\nDEDUST_EOF", pw)
+    if res.get("error") or (not res.get("ok") and not (res.get("stdout") or "").strip()):
+        raise HTTPException(status_code=502, detail=f"Could not reach {srv.get('host')}: {res.get('error') or res.get('stderr') or 'no answer'}")
+    data = model_registry.parse_listing(res.get("stdout") or "")
+    for m in data["models"]:
+        m["local"] = _models_local_info(m["name"], profile)
+    for m in data["partial"]:
+        m["local"] = _models_local_info(m["name"], profile)
+    data["profile"] = profile
+    data["host"] = srv.get("host")
+    data["remote_path"] = remote
+    return data
+
+
+@app.delete("/api/models/servers/{profile}/models/{model}")
+def api_models_delete(profile: str, model: str, passphrase: Optional[str] = Query(None)):
+    """Remove a model's output folder (weights, metrics, checkpoints) from the
+    server. The project, its pages and its training ledger stay; the project
+    simply has no model until it trains again."""
+    from app import ssh_ops
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]+", model) or model in (".", ".."):
+        raise HTTPException(status_code=400, detail="Bad model name")
+    srv = _models_profile(profile)
+    pw = passphrase or srv.get("passphrase") or None
+    remote = (srv.get("remote_path") or "").rstrip("/")
+    if not remote:
+        raise HTTPException(status_code=400, detail=f"Profile '{profile}' has no remote_path")
+    target = f"{remote}/layout-model-training/outputs/{model}"
+    res = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"],
+                              f"test -d '{target}' && rm -rf '{target}' && echo removed || echo missing", pw)
+    if res.get("error"):
+        raise HTTPException(status_code=502, detail=f"Could not reach {srv.get('host')}: {res['error']}")
+    out = (res.get("stdout") or "").strip()
+    if out != "removed":
+        raise HTTPException(status_code=404 if out == "missing" else 502,
+                            detail=f"{model}: {out or res.get('stderr') or 'not removed'}")
+    return {"ok": True, "removed": target}
+
+
+class AzureVmBody(BaseModel):
+    subscription_id: Optional[str] = None
+    resource_group: Optional[str] = None
+    name: Optional[str] = None
+
+
+@app.post("/api/models/servers/{profile}/azure")
+def api_models_azure_save(profile: str, body: AzureVmBody):
+    """Remember which Azure VM a profile's server is (empty = forget it)."""
+    from app import gpu_profiles
+    srv = dict(_models_profile(profile))
+    az = {k: (getattr(body, k) or "").strip() for k in ("subscription_id", "resource_group", "name")}
+    if any(az.values()):
+        if not (az["resource_group"] and az["name"]):
+            raise HTTPException(status_code=400, detail="Resource group and VM name are required")
+        srv["azure_vm"] = {k: v for k, v in az.items() if v}
+    else:
+        srv.pop("azure_vm", None)
+    gpu_profiles.save(profile, srv)
+    return {"ok": True, "azure_vm": srv.get("azure_vm")}
+
+
+def _azure_vm_of(profile: str) -> tuple:
+    srv = _models_profile(profile)
+    az = srv.get("azure_vm") or {}
+    sub = az.get("subscription_id") or os.environ.get("AZURE_SUBSCRIPTION_ID")
+    if not (az.get("resource_group") and az.get("name")):
+        raise HTTPException(status_code=400, detail=f"Profile '{profile}' has no Azure VM configured")
+    if not sub:
+        raise HTTPException(status_code=400, detail="No subscription id: set it on the profile or AZURE_SUBSCRIPTION_ID")
+    return sub, az["resource_group"], az["name"]
+
+
+def _azure_compute_client(subscription_id: str):
+    """Azure Compute, authenticated as this instance (the VM's managed
+    identity, or a developer's az login). Monkeypatched in tests."""
+    try:
+        from azure.identity import DefaultAzureCredential
+        from azure.mgmt.compute import ComputeManagementClient
+    except ImportError as exc:
+        raise HTTPException(status_code=501, detail=f"Azure SDK not installed on this instance ({exc}); pip install azure-mgmt-compute")
+    return ComputeManagementClient(DefaultAzureCredential(), subscription_id)
+
+
+def _azure_vm_call(profile: str, what: str):
+    from app import model_registry
+    sub, rg, name = _azure_vm_of(profile)
+    try:
+        client = _azure_compute_client(sub)
+        vms = client.virtual_machines
+        if what == "start":
+            vms.begin_start(rg, name)          # not awaited: the view polls the state
+            return {"ok": True, "state": "starting", "vm": name}
+        if what == "stop":
+            vms.begin_deallocate(rg, name)
+            return {"ok": True, "state": "deallocating", "vm": name}
+        iv = vms.instance_view(rg, name)
+        return {"ok": True, "state": model_registry.power_state(iv.statuses), "vm": name, "resource_group": rg}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        msg = str(exc)
+        hint = ""
+        if "AuthorizationFailed" in msg or "does not have authorization" in msg:
+            hint = (" — give this instance's identity the 'Virtual Machine Contributor' role "
+                    "(or a custom role with start/deallocate/read) on the VM or its resource group")
+        raise HTTPException(status_code=502, detail=f"Azure: {msg[:400]}{hint}")
+
+
+@app.get("/api/models/servers/{profile}/vm")
+def api_models_vm_state(profile: str):
+    return _azure_vm_call(profile, "state")
+
+
+@app.post("/api/models/servers/{profile}/vm/start")
+def api_models_vm_start(profile: str):
+    return _azure_vm_call(profile, "start")
+
+
+@app.post("/api/models/servers/{profile}/vm/stop")
+def api_models_vm_stop(profile: str):
+    """Deallocate: the VM stops billing for compute (the disk stays)."""
+    return _azure_vm_call(profile, "stop")
+
+
 class SshRequest(BaseModel):
     passphrase: Optional[str] = None
 

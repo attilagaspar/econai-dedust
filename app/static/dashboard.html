@@ -58,6 +58,22 @@ header span { color: #888; font-size: 0.85rem; }
 .note-card .note-foot button.sure { color: #fff; background: #b0202a; border-radius: 3px; padding: 0 6px; }
 .notes-btn { background: #0f3460; border: 1px solid #1a3a6e; color: #e0e0e0; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; }
 .notes-btn:hover { border-color: #e94560; }
+
+/* Models view: servers in the sidebar, the models of one server in the detail panel */
+.mdl-stat { display: flex; gap: 10px; align-items: baseline; font-size: 0.82rem; color: #bbb; padding: 3px 0; }
+.mdl-stat > span:first-child { color: #667; min-width: 92px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.mdl-stat a { color: #8ab4f8; text-decoration: none; }
+.mdl-az { display: flex; gap: 10px; align-items: center; font-size: 0.85rem; color: #bbb; padding: 8px 0 4px; }
+.mdl-state { padding: 1px 8px; border-radius: 10px; font-size: 0.75rem; background: #1a2740; color: #aaa; }
+.mdl-state.on { background: #1a5c38; color: #cfc; } .mdl-state.off { background: #2a2a3e; color: #aaa; } .mdl-state.busy { background: #5a4a10; color: #fde68a; }
+.mdl-wrap { padding: 0 22px 22px; }
+.mdl-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.mdl-table th { text-align: left; color: #667; font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; border-bottom: 1px solid #0f3460; }
+.mdl-table td { padding: 7px 8px; border-bottom: 1px solid #0f2446; vertical-align: top; color: #ccc; }
+.mdl-table a { color: #8ab4f8; text-decoration: none; }
+.mdl-del { background: none; border: 1px solid transparent; color: #889; cursor: pointer; border-radius: 4px; padding: 2px 6px; font-size: 0.8rem; }
+.mdl-del:hover { border-color: #e94560; color: #e94560; }
+.mdl-partial { margin-top: 12px; font-size: 0.8rem; color: #bbb; }
 .auth-group { padding: 8px 12px 6px; border-bottom: 1px solid #1a3a6e; }
 .auth-group .auth-head { display: flex; align-items: center; gap: 8px; }
 .auth-group .auth-name { font-weight: 700; color: #e0e0e0; }
@@ -255,6 +271,7 @@ header span { color: #888; font-size: 0.85rem; }
         <span id="sv-projects" class="sv-tab on" onclick="setSidebarView('projects')" title="All projects">Projects</span>
         <span id="sv-entities" class="sv-tab" onclick="setSidebarView('entities')" title="Projects linked through a shared authority, with the entity browser">Entities</span>
         <span id="sv-notes" class="sv-tab" onclick="setSidebarView('notes')" title="Topics of timestamped notes — candidate data sources, decisions, reminders">Notes</span>
+        <span id="sv-models" class="sv-tab" onclick="setSidebarView('models')" title="The GPU servers and the trained models on each: what is there, what it was trained on, how it scored; start and stop an Azure GPU VM">Models</span>
       </h2>
       <button id="btn-new-project" onclick="sidebarView === 'notes' ? notesNewTopic() : openNewProjectModal()">+ New</button>
       <button id="btn-inbox" onclick="openInboxModal()" style="display:none;background:#1a5c38;border:none;color:#eee;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:0.8rem;position:relative;"
@@ -874,7 +891,7 @@ function setSidebarView(v) {
 // The header buttons belong to the Projects view (+ New, Inbox, trash); the
 // Notes view reuses + New for a topic.
 function _applySidebarView() {
-  ['projects', 'entities', 'notes'].forEach(k => document.getElementById('sv-' + k)?.classList.toggle('on', sidebarView === k));
+  ['projects', 'entities', 'notes', 'models'].forEach(k => document.getElementById('sv-' + k)?.classList.toggle('on', sidebarView === k));
   const isProj = sidebarView === 'projects', isNotes = sidebarView === 'notes';
   const nb = document.getElementById('btn-new-project');
   if (nb) { nb.style.display = (isProj || isNotes) ? '' : 'none'; nb.textContent = isNotes ? '+ Topic' : '+ New'; nb.title = isNotes ? 'A new topic of notes' : ''; }
@@ -1034,10 +1051,184 @@ async function renderEntityGroups() {
   }).join('');
 }
 
+
+// ── Models: GPU servers (sidebar) and the trained models on each (detail) ──
+let _mdlServers = null, _mdlServer = localStorage.getItem('modelsServer') || null, _mdlData = {}, _mdlVmTimer = null;
+async function renderModelsSidebar() {
+  const el = document.getElementById('project-list');
+  if (!_mdlServers) {
+    el.innerHTML = '<div class="empty">Loading servers…</div>';
+    try { _mdlServers = (await _notesApi('GET', '/api/models/servers')).servers || []; }
+    catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message)}</div>`; return; }
+  }
+  if (!_mdlServers.length) {
+    el.innerHTML = '<div class="empty"><div class="big">🖥</div>No GPU server profile on this instance.<br>Add one in a project\'s GPU Server card.</div>';
+    document.getElementById('detail-panel').innerHTML = '<div class="empty"><div class="big">🧠</div><div>Models live on GPU servers. Define a server profile first.</div></div>';
+    return;
+  }
+  el.innerHTML = _mdlServers.map(s => {
+    const d = _mdlData[s.name];
+    const n = d ? `${d.models.length} model${d.models.length === 1 ? '' : 's'}` : `${s.projects.length} project${s.projects.length === 1 ? '' : 's'}`;
+    return `<div class="topic-row ${s.name === _mdlServer ? 'active' : ''}" onclick="modelsSelect('${escHtml(s.name)}')">
+      <span class="topic-title">${escHtml(s.name)}${s.azure_vm ? ' <span title="Azure VM: Dedust can start and stop it" style="color:#8ab4f8;">☁</span>' : ''}</span>
+      <span class="topic-meta">${escHtml(s.host || '')} · ${n}</span></div>`;
+  }).join('');
+  if (!_mdlServer || !_mdlServers.find(s => s.name === _mdlServer)) _mdlServer = _mdlServers[0].name;
+  modelsSelect(_mdlServer);
+}
+function _mdlStopVmPoll() { if (_mdlVmTimer) { clearInterval(_mdlVmTimer); _mdlVmTimer = null; } }
+async function modelsSelect(name, reload = false) {
+  _mdlServer = name; localStorage.setItem('modelsServer', name);
+  _mdlStopVmPoll();
+  document.querySelectorAll('#project-list .topic-row').forEach(r => r.classList.toggle('active', r.textContent.trim().startsWith(name)));
+  const s = (_mdlServers || []).find(x => x.name === name);
+  if (!s) return;
+  const el = document.getElementById('detail-panel');
+  if (!_mdlData[name] || reload) {
+    el.innerHTML = _mdlHeaderHtml(s, null) + '<div class="empty">Reading the server…</div>';
+    if (s.azure_vm) _mdlVmRefresh(name);
+    try { _mdlData[name] = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/models`); }
+    catch (e) {
+      el.innerHTML = _mdlHeaderHtml(s, null) + `<div class="empty" style="color:#e94560;">✕ ${escHtml(e.message)}</div>`
+        + (s.azure_vm ? '<div class="empty" style="font-size:0.8rem;">If the VM is deallocated, start it above and refresh.</div>' : '');
+      if (s.azure_vm) _mdlVmRefresh(name);
+      return;
+    }
+  }
+  const d = _mdlData[name];
+  el.innerHTML = _mdlHeaderHtml(s, d) + _mdlTableHtml(s, d);
+  if (s.azure_vm) _mdlVmRefresh(name);
+}
+function _mdlHeaderHtml(s, d) {
+  const gpu = d?.gpu ? `${escHtml(d.gpu.name)} · ${(d.gpu.mem_used_mb / 1024).toFixed(1)} / ${(d.gpu.mem_total_mb / 1024).toFixed(0)} GB · ${d.gpu.util_pct}% busy` : (d ? 'no GPU answer (nvidia-smi)' : '…');
+  const procs = d?.procs?.length ? ` · ${d.procs.length} process${d.procs.length === 1 ? '' : 'es'} on the GPU` : '';
+  const cont = d ? (d.containers.length ? d.containers.map(c => `<span title="${escHtml(c.status)}" style="color:${c.running ? '#4caf50' : '#777'};">${c.running ? '●' : '○'} ${escHtml(c.name)}</span>`).join(' &nbsp; ') : '<span style="color:#777;">no Dedust container built</span>') : '…';
+  const disk = d?.disk ? `${d.disk.avail_gb} GB free (${d.disk.used_pct}% used)` : (d ? '' : '…');
+  const az = s.azure_vm
+    ? `<div class="mdl-az" id="mdl-az">☁ Azure VM <b>${escHtml(s.azure_vm.name)}</b> <span style="color:#777;">(${escHtml(s.azure_vm.resource_group)})</span>
+         <span id="mdl-vm-state" class="mdl-state">…</span>
+         <button class="notes-btn" id="mdl-vm-start" onclick="modelsVm('start')" disabled>▶ Start</button>
+         <button class="notes-btn" id="mdl-vm-stop" onclick="modelsVm('stop')" disabled title="Deallocate: no compute billing while it is off; the disk stays">■ Stop</button>
+         <a href="#" onclick="modelsAzureForm(event)" style="color:#667;font-size:0.75rem;">settings</a>
+         <span id="mdl-vm-msg" style="color:#e94560;font-size:0.78rem;"></span></div>`
+    : `<div class="mdl-az">☁ <span style="color:#777;">Not an Azure VM Dedust can switch.</span> <a href="#" onclick="modelsAzureForm(event)" style="color:#8ab4f8;font-size:0.8rem;">Set up start / stop…</a></div>`;
+  return `<div class="notes-board">
+    <div class="notes-head"><h2 style="cursor:default;">🖥 ${escHtml(s.name)}</h2>
+      <span class="hint">${escHtml(s.user || '')}@${escHtml(s.host || '')} · ${escHtml(s.remote_path || '')}</span>
+      <span style="flex:1;"></span>
+      <button class="notes-btn" onclick="modelsSelect('${escHtml(s.name)}', true)" title="Read the server again">↻ Refresh</button></div>
+    <div class="mdl-stat"><span>GPU</span>${gpu}${procs}</div>
+    <div class="mdl-stat"><span>Containers</span>${cont}</div>
+    ${disk ? `<div class="mdl-stat"><span>Disk</span>${disk}</div>` : ''}
+    ${az}
+    <div id="mdl-az-form"></div>
+    ${s.projects.length ? `<div class="mdl-stat"><span>Projects here</span>${s.projects.map(p => `<a href="#" onclick="modelsGoProject(event,'${escHtml(p)}')">${escHtml(p)}</a>`).join(', ')}</div>` : ''}
+  </div>`;
+}
+function _mdlFmtBytes(b) { if (b == null) return ''; return b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(0) + ' MB'; }
+function _mdlTableHtml(s, d) {
+  const rows = [...d.models].sort((a, b) => (b.trained || '').localeCompare(a.trained || ''));
+  const partial = d.partial || [];
+  if (!rows.length && !partial.length) return `<div class="empty" style="padding:24px;">No trained model in ${escHtml(d.remote_path)}/layout-model-training/outputs.</div>`;
+  const tr = rows.map(m => {
+    const L = m.local || {};
+    const proj = !L.project ? '<span style="color:#e94560;" title="No project of this name on this instance — a model nobody can use from here (another instance\'s, or a deleted project\'s)">no project</span>'
+      : L.this_server === false ? `<span style="color:#f0c040;" title="The project now points at profile '${escHtml(L.server_profile || '')}' — this copy is stale">${escHtml(m.name)} → ${escHtml(L.server_profile || '?')}</span>`
+      : `<a href="#" onclick="modelsGoProject(event,'${escHtml(m.name)}')">${escHtml(m.name)}</a>`;
+    const pooled = L.training_sources?.length ? `<div style="color:#8ab4f8;font-size:0.72rem;" title="trained with these projects' pages too">pooled: ${escHtml(L.training_sources.join(', '))}</div>` : '';
+    const cls = L.labels ? `<span title="${escHtml(L.labels.join(', '))}">${L.labels.length}: ${escHtml(L.labels.slice(0, 4).join(', '))}${L.labels.length > 4 ? '…' : ''}</span>` : '<span style="color:#666;">?</span>';
+    const ap = m.ap ? `${m.ap.AP ?? ''}${m.ap.AP50 != null ? ` <span style="color:#777;">/ ${m.ap.AP50}</span>` : ''}` : (L.ledger?.ap?.AP != null ? `${L.ledger.ap.AP} <span style="color:#777;" title="from the training ledger">(ledger)</span>` : '<span style="color:#666;">–</span>');
+    const run = L.ledger ? `<span title="${escHtml(JSON.stringify(L.ledger))}">${escHtml(L.ledger.mode || '')} ${escHtml(L.ledger.status || '')}${L.ledger.n_train_pages != null ? ` · ${L.ledger.n_train_pages} pages` : ''}${L.n_runs > 1 ? ` · ${L.n_runs} runs` : ''}</span>` : '';
+    return `<tr>
+      <td><b>${escHtml(m.name)}</b>${pooled}</td><td>${proj}</td><td>${cls}</td>
+      <td>${escHtml((m.trained || '').slice(0, 16).replace('T', ' '))}</td>
+      <td style="text-align:right;">${_mdlFmtBytes(m.weights_bytes)}<div style="color:#777;font-size:0.72rem;">folder ${(m.folder_kb / 1024 / 1024).toFixed(1)} GB</div></td>
+      <td style="text-align:right;" title="the model's own evaluation at the end of training: AP / AP50">${ap}</td>
+      <td style="font-size:0.78rem;color:#aaa;">${run}</td>
+      <td><button class="mdl-del" onclick="modelsDelete(this,'${escHtml(s.name)}','${escHtml(m.name)}')" title="Remove the weights and the whole output folder from the server. The project and its pages stay; Ctrl+Z does not undo this.">🗑</button></td></tr>`;
+  }).join('');
+  const pr = partial.length ? `<div class="mdl-partial"><b>Output folders without final weights</b> <span class="hint">(a run that is still going, or one that died)</span>: ${partial.map(p => `${escHtml(p.name)} <span style="color:#777;">(${(p.folder_kb / 1024).toFixed(0)} MB)</span> <button class="mdl-del" onclick="modelsDelete(this,'${escHtml(s.name)}','${escHtml(p.name)}')" title="Remove this folder">🗑</button>`).join(' · ')}</div>` : '';
+  return `<div class="mdl-wrap"><table class="mdl-table">
+    <thead><tr><th>Model</th><th>Project</th><th>Classes</th><th>Trained</th><th style="text-align:right;">Weights</th><th style="text-align:right;">AP / AP50</th><th>Last run</th><th></th></tr></thead>
+    <tbody>${tr}</tbody></table>${pr}
+    ${d.complete ? '' : '<div class="hint" style="color:#f0c040;padding:6px 0;">⚠ The listing stopped early — the server may be overloaded; refresh.</div>'}</div>`;
+}
+function modelsGoProject(ev, name) {
+  ev.preventDefault();
+  setSidebarView('projects');
+  if (typeof selectProject === 'function') selectProject(name);
+}
+async function modelsDelete(btn, server, model) {
+  // two clicks: the first arms the button for four seconds, the second deletes
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = '1'; btn.textContent = 'delete?'; btn.style.color = '#e94560';
+    setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = '🗑'; btn.style.color = ''; } }, 4000);
+    return;
+  }
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    await _notesApi('DELETE', `/api/models/servers/${encodeURIComponent(server)}/models/${encodeURIComponent(model)}`);
+    showToast(`${model} removed from ${server}`);
+    await modelsSelect(server, true);
+  } catch (e) { btn.disabled = false; btn.textContent = '🗑'; showToast(`✕ ${e.message}`, 5000, 'red'); }
+}
+async function _mdlVmRefresh(name) {
+  const st = document.getElementById('mdl-vm-state'); if (!st) return;
+  try {
+    const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm`);
+    _mdlVmShow(d.state);
+    if (/starting|deallocating|stopping/.test(d.state)) { if (!_mdlVmTimer) _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), 8000); }
+    else _mdlStopVmPoll();
+  } catch (e) {
+    st.textContent = 'state unknown'; st.className = 'mdl-state';
+    const m = document.getElementById('mdl-vm-msg'); if (m) m.textContent = e.message;
+    _mdlStopVmPoll();
+  }
+}
+function _mdlVmShow(state) {
+  const st = document.getElementById('mdl-vm-state'), a = document.getElementById('mdl-vm-start'), b = document.getElementById('mdl-vm-stop');
+  if (!st) return;
+  st.textContent = state; st.className = 'mdl-state ' + (state === 'running' ? 'on' : (state === 'deallocated' || state === 'stopped') ? 'off' : 'busy');
+  if (a) a.disabled = state !== 'deallocated' && state !== 'stopped';
+  if (b) b.disabled = state !== 'running';
+  const m = document.getElementById('mdl-vm-msg'); if (m) m.textContent = state === 'running' ? '' : (state === 'deallocated' ? 'off — no compute billing' : '');
+}
+async function modelsVm(action) {
+  const name = _mdlServer; const m = document.getElementById('mdl-vm-msg');
+  try {
+    const d = await _notesApi('POST', `/api/models/servers/${encodeURIComponent(name)}/vm/${action}`);
+    _mdlVmShow(d.state);
+    if (!_mdlVmTimer) _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), 8000);
+  } catch (e) { if (m) m.textContent = e.message; }
+}
+function modelsAzureForm(ev) {
+  ev.preventDefault();
+  const s = (_mdlServers || []).find(x => x.name === _mdlServer); const az = s?.azure_vm || {};
+  const box = document.getElementById('mdl-az-form'); if (!box) return;
+  const inp = (k, ph, title) => `<input id="mdl-az-${k}" value="${escHtml(az[k] || '')}" placeholder="${ph}" title="${title}" style="background:#0d1b35;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;padding:4px 8px;font-size:0.8rem;width:220px;">`;
+  box.innerHTML = `<div class="mdl-az" style="flex-wrap:wrap;gap:8px;">
+    ${inp('subscription_id', 'subscription id (optional if AZURE_SUBSCRIPTION_ID is set)', 'The Azure subscription the VM lives in')}
+    ${inp('resource_group', 'resource group', 'The VM\'s resource group')}
+    ${inp('name', 'VM name', 'The VM\'s name in the portal')}
+    <button class="notes-btn" onclick="modelsAzureSave()">Save</button>
+    <button class="notes-btn" onclick="modelsAzureSave(true)" title="Forget the Azure VM behind this profile">Forget</button>
+    <button class="notes-btn" onclick="document.getElementById('mdl-az-form').innerHTML=''">Cancel</button>
+    <div class="hint" style="width:100%;">Dedust acts as this instance's identity (the VM's managed identity, or your az login). Give it the <b>Virtual Machine Contributor</b> role on the GPU VM in the portal: VM → Access control (IAM) → Add role assignment.</div></div>`;
+}
+async function modelsAzureSave(forget = false) {
+  const body = forget ? {} : { subscription_id: document.getElementById('mdl-az-subscription_id').value, resource_group: document.getElementById('mdl-az-resource_group').value, name: document.getElementById('mdl-az-name').value };
+  try {
+    await _notesApi('POST', `/api/models/servers/${encodeURIComponent(_mdlServer)}/azure`, body);
+    _mdlServers = null;      // reload the profiles; the listing stays cached
+    await renderModelsSidebar();
+  } catch (e) { showToast(`✕ ${e.message}`); }
+}
+
 function renderProjectList() {
   const el = document.getElementById('project-list');
   if (sidebarView === 'entities') { renderEntityGroups(); return; }
   if (sidebarView === 'notes') { renderNotesSidebar(); return; }
+  if (sidebarView === 'models') { renderModelsSidebar(); return; }
   if (!projects.length) {
     el.innerHTML = `<div class="empty"><div class="big">📂</div>No projects yet.<br>Click <b>+ New</b> to create one.</div>`;
     return;

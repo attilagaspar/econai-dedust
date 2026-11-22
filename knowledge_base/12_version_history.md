@@ -719,3 +719,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   the median left and the median right edge of the set, so all boxes get
   one width in one column; heights untouched; Ctrl+Z undoes it
   (`verticalTrim` in core.js).
+- **Nov 22 — Models view**: dashboard tab "Models": GPU server profiles on
+  the left; per server one SSH listing (`app/model_registry.py`) of the
+  trained models in its workspace with project, classes, date, size, own
+  AP / AP50, last ledger row, plus GPU / containers / disk and the output
+  folders without final weights; 🗑 removes a model's folder. A profile
+  may name the Azure VM behind it (`azure_vm` field); the view shows its
+  power state with Start / Stop (deallocate) via `azure-mgmt-compute`
+  (new in requirements) and the instance's own identity. Endpoints under
+  `/api/models/…`; tests `tests/test_models_view.py`.

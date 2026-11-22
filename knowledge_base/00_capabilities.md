@@ -574,6 +574,23 @@ single source of truth; a dataset is a **view** built on demand. Full design:
 
 ## 12. GPU training & model management
 
+- **Models view** (dashboard, 4th sidebar tab, added 2026-11-22): the GPU
+  server profiles of this instance on the left; a server's panel shows
+  its GPU (name, memory, load), the Dedust containers, the free disk, the
+  projects that point at it, and a table of every trained model in its
+  workspace (`outputs/<name>/…/model_final.pth`): the project (missing or
+  pointing elsewhere is flagged), the trained classes, the date, the
+  weights and folder size, the model's own AP / AP50 from `metrics.json`,
+  the last training-ledger row; output folders without final weights are
+  listed apart. One SSH call per server (`app/model_registry.py`,
+  `GET /api/models/servers/<profile>/models`). 🗑 removes a model's output
+  folder (two clicks; the project stays). **Azure GPU VM switch**: a
+  profile may name the Azure VM behind it (subscription, resource group,
+  VM name — "Set up start / stop…"); the panel then shows the power state
+  with ▶ Start / ■ Stop (deallocate), through the instance's own identity
+  (managed identity on the Dedust VM, `az login` on a PC), which needs the
+  Virtual Machine Contributor role on the VM.
+
 - **Pipeline**: LabelMe→COCO prepare (always re-run before train), train /
   infer Detectron2 in Docker over SSH (paramiko), detached (nohup) with live
   SSE logs, re-attachable, containers self-stop after jobs, per-workspace

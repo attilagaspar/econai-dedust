@@ -37,6 +37,7 @@ unidecode~=1.3       # accent-folding so OCR-dropped diacritics still match
 #    DEDUST_INBOX_URL is set — e.g. on the Azure VM) ──────────────────────────
 azure-identity~=1.19
 azure-storage-blob~=12.24
+azure-mgmt-compute>=31      # Models view: start / stop the GPU VM behind a profile
 
 # ── System utilities ─────────────────────────────────────────────────────────
 psutil~=5.9

@@ -24,7 +24,10 @@ _PROFILES_PATH = Path(os.environ.get("DEDUST_PROFILES_PATH")
                       or (Path(__file__).parent / "gpu_servers.json"))
 
 FIELDS = ("host", "user", "key_path", "remote_path",
-          "predict_remote_path", "passphrase")
+          "predict_remote_path", "passphrase",
+          # the Azure VM this server runs on, when it is one Dedust may start
+          # and stop: {"subscription_id", "resource_group", "name"}
+          "azure_vm")
 
 
 def load_all() -> dict:
