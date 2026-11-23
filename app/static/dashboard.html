@@ -1087,7 +1087,12 @@ async function renderModelsSidebar() {
   if (!_mdlServer || !_mdlServers.find(s => s.name === _mdlServer)) _mdlServer = _mdlServers[0].name;
   modelsSelect(_mdlServer);
 }
-function _mdlStopVmPoll() { if (_mdlVmTimer) { clearInterval(_mdlVmTimer); _mdlVmTimer = null; } }
+function _mdlStopVmPoll() { if (_mdlVmTimer) { clearInterval(_mdlVmTimer); _mdlVmTimer = null; _mdlVmTimerMs = 0; } }
+let _mdlVmTimerMs = 0;
+function _mdlVmPoll(name, ms) {        // (re)start the state poll at this pace
+  if (_mdlVmTimer && _mdlVmTimerMs === ms) return;
+  _mdlStopVmPoll(); _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), ms); _mdlVmTimerMs = ms;
+}
 async function modelsSelect(name, reload = false) {
   _mdlServer = name; localStorage.setItem('modelsServer', name);
   _mdlStopVmPoll();
@@ -1120,8 +1125,10 @@ function _mdlHeaderHtml(s, d) {
          <span id="mdl-vm-state" class="mdl-state">…</span>
          <button class="notes-btn" id="mdl-vm-start" onclick="modelsVm('start')" disabled>▶ Start</button>
          <button class="notes-btn" id="mdl-vm-stop" onclick="modelsVm('stop')" disabled title="Deallocate: no compute billing while it is off; the disk stays">■ Stop</button>
+         <button class="notes-btn" id="mdl-vm-keep" onclick="modelsKeepTrying()" disabled title="Start it again every 5 minutes until Azure has a machine of this size. Stops on any other error, after 12 hours, or when you press it again. Notifies here, as a browser notification, and on your phone when an ntfy topic is set in settings.">⟳ Keep trying</button>
          <a href="#" onclick="modelsAzureForm(event)" style="color:#667;font-size:0.75rem;">settings</a>
          <span id="mdl-vm-msg" style="color:#e94560;font-size:0.78rem;"></span></div>
+       <div id="mdl-vm-keepmsg" style="margin:0 0 2px 102px;font-size:0.78rem;color:#fde68a;display:none;"></div>
        <div id="mdl-vm-hist" class="mdl-hist" title="When the VM was started and stopped recently, as Dedust saw it: its own buttons, and every change a poll noticed (dated by Azure's provisioning time)">…</div>`
     : `<div class="mdl-az">☁ <span style="color:#777;">Not an Azure VM Dedust can switch.</span> <a href="#" onclick="modelsAzureForm(event)" style="color:#8ab4f8;font-size:0.8rem;">Set up start / stop…</a></div>`;
   return `<div class="notes-board">
@@ -1156,9 +1163,9 @@ async function _mdlHistRefresh(name) {
     const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm/history`);
     if (!d.events.length) { box.textContent = 'no start / stop seen yet'; return; }
     box.innerHTML = d.events.map(e => {
-      const cls = e.event === 'running' ? 'on' : /requested/.test(e.event) ? 'req' : e.event === 'failed' ? 'bad' : 'off';
+      const cls = e.event === 'running' || /keep trying: running/.test(e.event) ? 'on' : /requested|keep trying started/.test(e.event) ? 'req' : e.event === 'failed' || /keep trying: error/.test(e.event) ? 'bad' : 'off';
       const dur = e.hours != null ? `  · ran ${e.hours} h` : e.hours_so_far != null ? `  · running for ${e.hours_so_far} h` : e.note ? `  · ${e.note.split(':')[0]}` : '';
-      return `<span class="${cls}">${escHtml(e.at.replace('T', ' '))}  ${escHtml(e.event.padEnd(15))}</span> <span style="color:#667;">${escHtml(e.source)}</span>${escHtml(dur)}`;
+      return `<span class="${cls}">${escHtml(e.at.replace('T', ' '))}  ${escHtml(e.event.length > 15 ? e.event : e.event.padEnd(15))}</span> <span style="color:#667;">${escHtml(e.source)}</span>${escHtml(dur)}`;
     }).join('\n');
   } catch (e) { box.textContent = e.message; }
 }
@@ -1225,9 +1232,11 @@ async function _mdlVmRefresh(name) {
   const st = document.getElementById('mdl-vm-state'); if (!st) return;
   try {
     const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm`);
-    _mdlVmShow(d.state, d.message ? `${d.message}${d.hint ? ' — ' + d.hint : ''}` : '');
+    _mdlVmShow(d.state, d.message ? `${d.message}${d.hint ? ' — ' + d.hint : ''}` : '', d.keep_trying);
     _mdlHistRefresh(name);
-    if (/starting|deallocating|stopping/.test(d.state)) { if (!_mdlVmTimer) _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), 8000); }
+    _mdlKeepOutcome(name, d.keep_trying);
+    if (/starting|deallocating|stopping/.test(d.state)) _mdlVmPoll(name, 8000);
+    else if (d.keep_trying?.active) _mdlVmPoll(name, 30000);
     else { _mdlStopVmPoll(); _aliveTick(); }
   } catch (e) {
     st.textContent = 'state unknown'; st.className = 'mdl-state';
@@ -1235,16 +1244,54 @@ async function _mdlVmRefresh(name) {
     _mdlStopVmPoll();
   }
 }
-function _mdlVmShow(state, message = '') {
-  const st = document.getElementById('mdl-vm-state'), a = document.getElementById('mdl-vm-start'), b = document.getElementById('mdl-vm-stop');
+function _mdlVmShow(state, message = '', kt = null) {
+  const st = document.getElementById('mdl-vm-state'), a = document.getElementById('mdl-vm-start'), b = document.getElementById('mdl-vm-stop'), k = document.getElementById('mdl-vm-keep');
   if (!st) return;
   const off = state === 'deallocated' || state === 'stopped' || state === 'failed' || state === 'unknown';
-  st.textContent = state === 'failed' ? 'start failed' : state;
-  st.className = 'mdl-state ' + (state === 'running' ? 'on' : state === 'failed' ? 'bad' : off ? 'off' : 'busy');
-  if (a) a.disabled = !off;                       // a failed or unknown state may be retried
+  const trying = !!kt?.active;
+  st.textContent = trying ? 'keep trying' : state === 'failed' ? 'start failed' : state;
+  st.className = 'mdl-state ' + (state === 'running' ? 'on' : trying ? 'busy' : state === 'failed' ? 'bad' : off ? 'off' : 'busy');
+  if (a) a.disabled = !off || trying;             // a failed or unknown state may be retried
   if (b) b.disabled = state !== 'running';
+  if (k) { k.disabled = !trying && !off; k.textContent = trying ? '■ Stop trying' : '⟳ Keep trying'; }
   const m = document.getElementById('mdl-vm-msg');
-  if (m) m.textContent = message || (state === 'deallocated' ? 'off — no compute billing' : state === 'unknown' ? 'Azure reported no power state' : '');
+  if (m) m.textContent = trying ? '' : (message || (state === 'deallocated' ? 'off — no compute billing' : state === 'unknown' ? 'Azure reported no power state' : ''));
+  const km = document.getElementById('mdl-vm-keepmsg');
+  if (km) {
+    const hm = iso => (iso || '').slice(11, 16);
+    let txt = '';
+    if (trying) txt = `trying since ${hm(kt.started_at)} · attempt ${kt.attempts}${kt.last_error ? ` · last: ${kt.last_error.split(':')[0].split('.')[0]}` : ''}${kt.next_try ? ` · next try ${hm(kt.next_try)}` : ' · starting…'}${kt.ntfy ? ' · phone push on' : ''}`;
+    else if (kt?.result === 'running') txt = `✓ keep trying: started at ${hm(kt.finished_at)} after ${kt.attempts} attempt${kt.attempts === 1 ? '' : 's'}`;
+    else if (kt?.result) txt = `keep trying ${kt.result.replace('_', ' ')} at ${hm(kt.finished_at)} after ${kt.attempts} attempt${kt.attempts === 1 ? '' : 's'}${kt.last_error && kt.result === 'error' ? `: ${kt.last_error}` : ''}`;
+    km.textContent = txt; km.style.display = txt ? '' : 'none';
+    km.style.color = kt?.result === 'running' ? '#8fd19e' : kt?.result === 'error' ? '#e94560' : '#fde68a';
+  }
+}
+let _mdlKeepSeen = {};
+// A keep-trying job that just ended: a toast, and a browser notification
+// when the page is in the background (the phone push comes from the server).
+function _mdlKeepOutcome(name, kt) {
+  const prev = _mdlKeepSeen[name];
+  _mdlKeepSeen[name] = kt ? `${kt.started_at}|${kt.result || 'active'}` : null;
+  if (!kt || kt.active || !prev || !prev.endsWith('|active') || !prev.startsWith(kt.started_at)) return;
+  const msg = kt.result === 'running' ? `${kt.vm} is running (started after ${kt.attempts} attempts). It bills until you stop it.`
+    : kt.result === 'error' ? `${kt.vm}: start failed, retrying stopped — ${kt.last_error || ''}`
+    : kt.result === 'gave_up' ? `${kt.vm}: no capacity after ${kt.attempts} attempts` : '';
+  if (!msg) return;
+  showToast(msg, 8000, kt.result === 'running' ? 'green' : 'red');
+  try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Dedust · ' + name, { body: msg }); } catch (e) {}
+}
+async function modelsKeepTrying() {
+  const name = _mdlServer; const m = document.getElementById('mdl-vm-msg');
+  const k = document.getElementById('mdl-vm-keep'); const active = k && k.textContent.includes('Stop');
+  try {
+    if (active) { await _notesApi('DELETE', `/api/models/servers/${encodeURIComponent(name)}/vm/keep_trying`); }
+    else {
+      try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+      await _notesApi('POST', `/api/models/servers/${encodeURIComponent(name)}/vm/keep_trying`, { interval_min: 5, max_hours: 12 });
+    }
+    await _mdlVmRefresh(name);
+  } catch (e) { if (m) m.textContent = e.message; }
 }
 async function modelsVm(action) {
   const name = _mdlServer; const m = document.getElementById('mdl-vm-msg');
@@ -1264,13 +1311,14 @@ function modelsAzureForm(ev) {
     ${inp('subscription_id', 'subscription id (optional if AZURE_SUBSCRIPTION_ID is set)', 'The Azure subscription the VM lives in')}
     ${inp('resource_group', 'resource group', 'The VM\'s resource group')}
     ${inp('name', 'VM name', 'The VM\'s name in the portal')}
+    ${inp('ntfy_topic', 'ntfy topic (optional: phone push)', 'A topic name of your choosing on https://ntfy.sh — subscribe to it in the ntfy app on your phone and "Keep trying" pushes its outcome there')}
     <button class="notes-btn" onclick="modelsAzureSave()">Save</button>
     <button class="notes-btn" onclick="modelsAzureSave(true)" title="Forget the Azure VM behind this profile">Forget</button>
     <button class="notes-btn" onclick="document.getElementById('mdl-az-form').innerHTML=''">Cancel</button>
     <div class="hint" style="width:100%;">Dedust acts as this instance's identity (the VM's managed identity, or your az login). Give it the <b>Virtual Machine Contributor</b> role on the GPU VM in the portal: VM → Access control (IAM) → Add role assignment.</div></div>`;
 }
 async function modelsAzureSave(forget = false) {
-  const body = forget ? {} : { subscription_id: document.getElementById('mdl-az-subscription_id').value, resource_group: document.getElementById('mdl-az-resource_group').value, name: document.getElementById('mdl-az-name').value };
+  const body = forget ? {} : { subscription_id: document.getElementById('mdl-az-subscription_id').value, resource_group: document.getElementById('mdl-az-resource_group').value, name: document.getElementById('mdl-az-name').value, ntfy_topic: document.getElementById('mdl-az-ntfy_topic').value };
   try {
     await _notesApi('POST', `/api/models/servers/${encodeURIComponent(_mdlServer)}/azure`, body);
     _mdlServers = null;      // reload the profiles; the listing stays cached

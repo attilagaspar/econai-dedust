@@ -5638,7 +5638,7 @@ def api_models_servers():
                     "has_passphrase": bool(srv.get("passphrase")),
                     "projects": names,
                     "project_info": {n: _project_training_facts(n) for n in names},
-                    "azure_vm": {k: az.get(k) for k in ("subscription_id", "resource_group", "name")} if az else None,
+                    "azure_vm": {k: az.get(k) for k in ("subscription_id", "resource_group", "name", "ntfy_topic")} if az else None,
                     "train_container": _train_container(srv), "predict_container": _predict_container(srv)})
     return {"servers": out}
 
@@ -5698,6 +5698,7 @@ class AzureVmBody(BaseModel):
     subscription_id: Optional[str] = None
     resource_group: Optional[str] = None
     name: Optional[str] = None
+    ntfy_topic: Optional[str] = None      # a phone push via https://ntfy.sh/<topic> when "Keep trying" ends
 
 
 @app.post("/api/models/servers/{profile}/azure")
@@ -5705,7 +5706,7 @@ def api_models_azure_save(profile: str, body: AzureVmBody):
     """Remember which Azure VM a profile's server is (empty = forget it)."""
     from app import gpu_profiles
     srv = dict(_models_profile(profile))
-    az = {k: (getattr(body, k) or "").strip() for k in ("subscription_id", "resource_group", "name")}
+    az = {k: (getattr(body, k) or "").strip() for k in ("subscription_id", "resource_group", "name", "ntfy_topic")}
     if any(az.values()):
         if not (az["resource_group"] and az["name"]):
             raise HTTPException(status_code=400, detail="Resource group and VM name are required")
@@ -5757,6 +5758,9 @@ def _azure_vm_call(profile: str, what: str):
         message = model_registry.provisioning_message(iv.statuses)
         vm_events.observe(profile, state, at=model_registry.provisioning_time(iv.statuses), note=message)
         out = {"ok": True, "state": state, "vm": name, "resource_group": rg}
+        kt = _vm_waiters.get(profile)
+        if kt:
+            out["keep_trying"] = dict(kt["status"])
         if message:
             out["message"] = message
             if "AllocationFailed" in message:
@@ -5789,6 +5793,139 @@ def api_models_vm_start(profile: str):
 def api_models_vm_stop(profile: str):
     """Deallocate: the VM stops billing for compute (the disk stays)."""
     return _azure_vm_call(profile, "stop")
+
+
+# ── Keep trying: start the VM again every few minutes until Azure has capacity ──
+# The server-side twin of gpu_scaffold/wait_for_vm.ps1: one background thread
+# per profile retries `start` on capacity errors only, stops on any other
+# error, on a deadline or on Stop, and notifies (ntfy topic from the Azure
+# settings; the dashboard shows the outcome too).
+
+_CAPACITY_RE = re.compile(r"AllocationFailed|ZonalAllocationFailed|OverconstrainedAllocationRequest|"
+                          r"OverconstrainedZonalAllocationRequest|SkuNotAvailable|AllocationTimedOut")
+_vm_waiters: dict = {}            # profile → {"stop": Event, "status": dict, "thread": Thread}
+_vm_waiters_lock = threading.Lock()
+
+
+def _ntfy_push(topic: str, title: str, body: str) -> bool:
+    """POST a message to https://ntfy.sh/<topic> (a free push to the ntfy
+    app on a phone). Never raises."""
+    if not topic:
+        return False
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"https://ntfy.sh/{topic}", data=body.encode("utf-8"),
+                                     headers={"Title": title.encode("ascii", "replace").decode(), "Content-Type": "text/plain; charset=utf-8"},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=10):
+            return True
+    except Exception:
+        return False
+
+
+def _vm_keep_trying_loop(profile: str, sub: str, rg: str, name: str, interval_s: float,
+                         deadline: float, stop: threading.Event, status: dict, ntfy_topic: str = ""):
+    """The retry loop (run in a thread; synchronous in tests). Outcomes in
+    status["result"]: running / error / gave_up / stopped."""
+    from app import model_registry, vm_events
+
+    def finish(result: str, note: str = ""):
+        status.update({"active": False, "result": result, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "next_try": None})
+        vm_events.record(profile, f"keep trying: {result}" + (f" ({note[:80]})" if note else ""), source="server")
+        titles = {"running": f"{name} is running", "error": f"{name}: start failed", "gave_up": f"{name}: gave up"}
+        bodies = {"running": f"Azure VM {name} started on attempt {status['attempts']}. It bills until you stop it.",
+                  "error": f"Not a capacity error, so retrying stopped: {note[:200]}",
+                  "gave_up": f"No capacity after {status['attempts']} attempts over {status['max_hours']} hours."}
+        if result in titles:
+            status["notified"] = _ntfy_push(ntfy_topic, titles[result], bodies[result])
+
+    try:
+        vms = _azure_compute_client(sub).virtual_machines
+    except Exception as exc:
+        finish("error", str(getattr(exc, "detail", exc)))
+        return
+    while not stop.is_set():
+        status["attempts"] += 1
+        status["last_try"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            iv = vms.instance_view(rg, name)
+            if model_registry.power_state(iv.statuses) == "running":
+                vm_events.observe(profile, "running", at=model_registry.provisioning_time(iv.statuses))
+                finish("running")
+                return
+            poller = vms.begin_start(rg, name)
+            if hasattr(poller, "result"):
+                poller.result()                      # raises when Azure could not start it
+            iv = vms.instance_view(rg, name)
+            state = model_registry.power_state(iv.statuses)
+            if state == "running":
+                vm_events.observe(profile, "running", at=model_registry.provisioning_time(iv.statuses))
+                finish("running")
+                return
+            status["last_error"] = model_registry.provisioning_message(iv.statuses) or f"state after start: {state}"
+        except Exception as exc:
+            msg = str(exc)
+            status["last_error"] = msg[:300]
+            if not _CAPACITY_RE.search(msg):
+                finish("error", msg)
+                return
+        if stop.is_set():
+            break
+        if time.time() + interval_s > deadline:
+            finish("gave_up")
+            return
+        status["next_try"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + interval_s))
+        stop.wait(interval_s)
+    finish("stopped")
+
+
+class KeepTryingBody(BaseModel):
+    interval_min: float = Field(5, ge=0.5, le=120)
+    max_hours: float = Field(12, ge=0.1, le=72)
+
+
+@app.post("/api/models/servers/{profile}/vm/keep_trying")
+def api_models_vm_keep_trying(profile: str, body: KeepTryingBody = KeepTryingBody()):
+    """Start the VM again every `interval_min` minutes until it runs, a
+    non-capacity error, `max_hours` pass, or Stop. Returns the job's status;
+    409 while one is already running for the profile."""
+    from app import vm_events
+    sub, rg, name = _azure_vm_of(profile)
+    topic = (_models_profile(profile).get("azure_vm") or {}).get("ntfy_topic") or ""
+    with _vm_waiters_lock:
+        cur = _vm_waiters.get(profile)
+        if cur and cur["status"].get("active"):
+            raise HTTPException(status_code=409, detail="Already trying — stop it first")
+        status = {"active": True, "profile": profile, "vm": name, "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                  "attempts": 0, "interval_min": body.interval_min, "max_hours": body.max_hours,
+                  "last_try": None, "last_error": None, "next_try": None, "result": None, "finished_at": None,
+                  "ntfy": bool(topic)}
+        stop = threading.Event()
+        th = threading.Thread(target=_vm_keep_trying_loop, name=f"keep-trying-{profile}", daemon=True,
+                              args=(profile, sub, rg, name, body.interval_min * 60, time.time() + body.max_hours * 3600, stop, status, topic))
+        _vm_waiters[profile] = {"stop": stop, "status": status, "thread": th}
+    vm_events.record(profile, f"keep trying started (every {body.interval_min:g} min, up to {body.max_hours:g} h)")
+    th.start()
+    return {"ok": True, "keep_trying": dict(status)}
+
+
+@app.delete("/api/models/servers/{profile}/vm/keep_trying")
+def api_models_vm_keep_trying_stop(profile: str):
+    _models_profile(profile)
+    cur = _vm_waiters.get(profile)
+    if not cur:
+        return {"ok": True, "keep_trying": None}
+    cur["stop"].set()
+    if cur["status"].get("active"):
+        cur["status"].update({"active": False, "result": "stopped", "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "next_try": None})
+    return {"ok": True, "keep_trying": dict(cur["status"])}
+
+
+@app.get("/api/models/servers/{profile}/vm/keep_trying")
+def api_models_vm_keep_trying_status(profile: str):
+    _models_profile(profile)
+    cur = _vm_waiters.get(profile)
+    return {"ok": True, "keep_trying": dict(cur["status"]) if cur else None}
 
 
 @app.get("/api/models/servers/{profile}/vm/history")

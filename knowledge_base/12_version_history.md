@@ -755,4 +755,12 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   hint instead of "unknown", Start stays enabled for a retry, and the
   history box logs the failure (`power_state` / `provisioning_message` in
   `model_registry.py`).
+- **Nov 23 — Keep trying**: the Azure switch gets "⟳ Keep trying", the
+  server-side twin of `gpu_scaffold/wait_for_vm.ps1`: a background thread
+  per profile retries `start` every 5 min on capacity errors only
+  (`AllocationFailed` & co.), stops on any other error, after 12 h, or on
+  "■ Stop trying"; the state answer carries the job's status (attempts, last
+  error, next try), the dashboard polls it every 30 s and announces the
+  outcome (toast + browser notification); an optional **ntfy topic** in the
+  Azure settings pushes the outcome to a phone. Events in the history box.
 

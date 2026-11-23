@@ -589,7 +589,14 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   VM name — "Set up start / stop…"); the panel then shows the power state
   with ▶ Start / ■ Stop (deallocate), through the instance's own identity
   (managed identity on the Dedust VM, `az login` on a PC), which needs the
-  Virtual Machine Contributor role on the VM. Under the switch a **history
+  Virtual Machine Contributor role on the VM. **⟳ Keep trying** (the
+  server-side twin of `gpu_scaffold/wait_for_vm.ps1`): when Azure has no
+  machine of the size free (`AllocationFailed`), a background job starts the
+  VM again every 5 minutes until it runs, a non-capacity error, 12 hours, or
+  the button pressed again; the panel shows attempts and the next try, the
+  outcome arrives as a toast, a browser notification and, with an ntfy topic
+  in the Azure settings, a push to the ntfy app on a phone
+  (`POST/GET/DELETE …/vm/keep_trying`). Under the switch a **history
   box** lists when the VM was started and stopped recently as Dedust saw
   it (its own Start/Stop requests, and every state change a poll noticed,
   dated by Azure's provisioning time), with the length of each running

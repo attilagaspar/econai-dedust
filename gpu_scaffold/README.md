@@ -54,4 +54,8 @@ powershell -ExecutionPolicy Bypass -File gpu_scaffold\wait_for_vm.ps1
 
 Options: `-IntervalMinutes`, `-MaxHours`, `-ResourceGroup`, `-VmName`,
 `-NtfyTopic <topic>` (also pushes to https://ntfy.sh/<topic>, for a phone).
+
+The same loop runs inside Dedust: the Models view's Azure block has a
+"⟳ Keep trying" button (and an ntfy topic in its settings), so the PC need
+not stay on.
 The VM bills from the moment it starts, until stopped or the nightly auto-shutdown.

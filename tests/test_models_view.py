@@ -83,7 +83,7 @@ def test_servers_list_profiles_with_their_projects(client, proj):
     by = {s["name"]: s for s in d["servers"]}
     assert set(by) == {"boxA", "boxB"}
     assert by["boxA"]["projects"] == [proj] and by["boxA"]["azure_vm"] is None
-    assert by["boxB"]["azure_vm"] == {"subscription_id": "sub-1", "resource_group": "rg1", "name": "gpu-vm"}
+    assert by["boxB"]["azure_vm"] == {"subscription_id": "sub-1", "resource_group": "rg1", "name": "gpu-vm", "ntfy_topic": None}
     assert by["boxA"]["train_container"] and by["boxA"]["host"] == "10.0.0.9"
     assert "passphrase" not in by["boxA"]
 
@@ -270,3 +270,92 @@ def test_failed_start_is_named_with_azure_reason(client, profiles, monkeypatch):
     assert ev[0]["event"] == "failed" and ev[0]["note"].startswith("AllocationFailed")
     client.get("/api/models/servers/boxB/vm")                 # the same failure again is not logged twice
     assert len(client.get("/api/models/servers/boxB/vm/history").json()["events"]) == 1
+
+
+class _KeepVms:
+    """begin_start fails `fail_n` times with the given error text, then the VM runs."""
+    def __init__(self, fail_n, err="(AllocationFailed) Allocation failed. We do not have sufficient capacity"):
+        self.fail_n, self.err, self.state, self.starts = fail_n, err, "deallocated", 0
+    def instance_view(self, rg, name):
+        class S: pass
+        s = S(); s.code = f"PowerState/{self.state}"; s.time = None
+        class IV: statuses = [s]
+        return IV()
+    def begin_start(self, rg, name):
+        self.starts += 1
+        if self.starts <= self.fail_n:
+            raise RuntimeError(self.err)
+        self.state = "running"
+        class P:
+            @staticmethod
+            def result(): return None
+        return P()
+
+
+def _status(**kw):
+    d = {"active": True, "attempts": 0, "interval_min": 0, "max_hours": 1, "last_try": None, "last_error": None,
+         "next_try": None, "result": None, "finished_at": None, "max_hours": 12}
+    d.update(kw); return d
+
+
+def test_keep_trying_loop_retries_capacity_errors_then_notifies(client, profiles, monkeypatch):
+    import threading, time as _t
+    pushed = []
+    monkeypatch.setattr(srv, "_ntfy_push", lambda topic, title, body: pushed.append((topic, title, body)) or True)
+    vms = _KeepVms(2)
+    class C: virtual_machines = vms
+    monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: C())
+    st = _status()
+    srv._vm_keep_trying_loop("boxB", "sub-1", "rg1", "gpu-vm", 0, _t.time() + 3600, threading.Event(), st, "my-topic")
+    assert st["result"] == "running" and st["attempts"] == 3 and st["active"] is False and vms.starts == 3
+    assert pushed and pushed[0][0] == "my-topic" and "attempt 3" in pushed[0][2]
+    ev = [e["event"] for e in client.get("/api/models/servers/boxB/vm/history").json()["events"]]
+    assert ev[0].startswith("keep trying: running") and "running" in ev
+    # a non-capacity error stops the loop at once
+    vms = _KeepVms(5, err="(AuthorizationFailed) The client does not have authorization")
+    C.virtual_machines = vms
+    st = _status()
+    srv._vm_keep_trying_loop("boxB", "sub-1", "rg1", "gpu-vm", 0, _t.time() + 3600, threading.Event(), st, "")
+    assert st["result"] == "error" and st["attempts"] == 1 and "AuthorizationFailed" in st["last_error"]
+    # the deadline
+    vms = _KeepVms(5); C.virtual_machines = vms
+    st = _status()
+    srv._vm_keep_trying_loop("boxB", "sub-1", "rg1", "gpu-vm", 60, _t.time() + 1, threading.Event(), st, "")
+    assert st["result"] == "gave_up" and st["attempts"] == 1
+    # a VM that already runs needs no start
+    vms = _KeepVms(0); vms.state = "running"; C.virtual_machines = vms
+    st = _status()
+    srv._vm_keep_trying_loop("boxB", "sub-1", "rg1", "gpu-vm", 0, _t.time() + 3600, threading.Event(), st, "")
+    assert st["result"] == "running" and vms.starts == 0
+
+
+def test_keep_trying_endpoints_start_report_and_stop(client, profiles, monkeypatch):
+    vms = _KeepVms(10 ** 6)                       # never gets capacity
+    class C: virtual_machines = vms
+    monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: C())
+    monkeypatch.setattr(srv, "_ntfy_push", lambda *a: False)
+    srv._vm_waiters.clear()
+    assert client.get("/api/models/servers/boxB/vm/keep_trying").json()["keep_trying"] is None
+    assert client.delete("/api/models/servers/boxB/vm/keep_trying").json()["keep_trying"] is None
+    r = client.post("/api/models/servers/boxB/vm/keep_trying", json={"interval_min": 1, "max_hours": 1})
+    assert r.status_code == 200 and r.json()["keep_trying"]["active"] is True
+    assert client.post("/api/models/servers/boxB/vm/keep_trying").status_code == 409
+    import time as _t
+    for _ in range(50):                            # the first attempt has failed and the loop waits for the next
+        kt = client.get("/api/models/servers/boxB/vm").json().get("keep_trying") or {}
+        if kt.get("attempts", 0) >= 1 and kt.get("next_try"):
+            break
+        _t.sleep(0.05)
+    assert kt["active"] and kt["attempts"] == 1 and "AllocationFailed" in kt["last_error"]
+    d = client.delete("/api/models/servers/boxB/vm/keep_trying").json()["keep_trying"]
+    assert d["active"] is False and d["result"] == "stopped"
+    srv._vm_waiters["boxB"]["thread"].join(5)
+    assert not srv._vm_waiters["boxB"]["thread"].is_alive()
+    ev = [e["event"] for e in client.get("/api/models/servers/boxB/vm/history").json()["events"]]
+    assert ev[0] == "keep trying: stopped" and ev[-1].startswith("keep trying started")
+    # a profile without an Azure VM, and the ntfy topic kept in the settings
+    assert client.post("/api/models/servers/boxA/vm/keep_trying").status_code == 400
+    client.post("/api/models/servers/boxA/azure", json={"resource_group": "rg9", "name": "vm9", "ntfy_topic": "dedust-gpu-x"})
+    assert gpu_profiles.get("boxA")["azure_vm"]["ntfy_topic"] == "dedust-gpu-x"
+    assert {s["name"]: s for s in client.get("/api/models/servers").json()["servers"]}["boxA"]["azure_vm"]["ntfy_topic"] == "dedust-gpu-x"
+    srv._vm_waiters.clear()
