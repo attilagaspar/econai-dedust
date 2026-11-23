@@ -249,3 +249,24 @@ def test_training_facts_fall_back_to_the_coco_export_and_name_a_borrowed_model(c
     assert "model_of" not in srv._project_training_facts(proj)
     d = client.get("/api/models/servers").json()
     assert {x["name"]: x for x in d["servers"]}["boxA"]["project_info"][proj]["n_train_pages"] == 3
+
+
+def test_failed_start_is_named_with_azure_reason(client, profiles, monkeypatch):
+    class S: pass
+    failed = S(); failed.code = "ProvisioningState/failed/AllocationFailed"; failed.time = None
+    failed.message = "Allocation failed. We do not have sufficient capacity for the requested VM size in this region."
+    assert model_registry.power_state([failed]) == "failed"
+    assert model_registry.provisioning_message([failed]).startswith("AllocationFailed: Allocation failed")
+    assert model_registry.provisioning_message([{"code": "ProvisioningState/succeeded"}]) is None
+    class IV: statuses = [failed]
+    class Vms:
+        @staticmethod
+        def instance_view(rg, name): return IV()
+    class C: virtual_machines = Vms
+    monkeypatch.setattr(srv, "_azure_compute_client", lambda sub: C())
+    d = client.get("/api/models/servers/boxB/vm").json()
+    assert d["state"] == "failed" and "AllocationFailed" in d["message"] and "no machine of this size" in d["hint"]
+    ev = client.get("/api/models/servers/boxB/vm/history").json()["events"]
+    assert ev[0]["event"] == "failed" and ev[0]["note"].startswith("AllocationFailed")
+    client.get("/api/models/servers/boxB/vm")                 # the same failure again is not logged twice
+    assert len(client.get("/api/models/servers/boxB/vm/history").json()["events"]) == 1

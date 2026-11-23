@@ -65,7 +65,7 @@ header span { color: #888; font-size: 0.85rem; }
 .mdl-stat a { color: #8ab4f8; text-decoration: none; }
 .mdl-az { display: flex; gap: 10px; align-items: center; font-size: 0.85rem; color: #bbb; padding: 8px 0 4px; }
 .mdl-state { padding: 1px 8px; border-radius: 10px; font-size: 0.75rem; background: #1a2740; color: #aaa; }
-.mdl-state.on { background: #1a5c38; color: #cfc; } .mdl-state.off { background: #2a2a3e; color: #aaa; } .mdl-state.busy { background: #5a4a10; color: #fde68a; }
+.mdl-state.on { background: #1a5c38; color: #cfc; } .mdl-state.off { background: #2a2a3e; color: #aaa; } .mdl-state.busy { background: #5a4a10; color: #fde68a; } .mdl-state.bad { background: #5a1a28; color: #fbb; }
 .mdl-wrap { padding: 0 22px 22px; }
 .mdl-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 .mdl-table th { text-align: left; color: #667; font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 8px; border-bottom: 1px solid #0f3460; }
@@ -81,7 +81,7 @@ header span { color: #888; font-size: 0.85rem; }
 .mdl-projects .mdl-proj .src { color: #889; font-size: 0.76rem; }
 .mdl-hist { margin: 4px 0 6px 102px; max-height: 120px; overflow-y: auto; background: #0d1b35; border: 1px solid #0f3460; border-radius: 4px;
             padding: 6px 10px; font-family: ui-monospace, Consolas, monospace; font-size: 0.74rem; color: #aab; white-space: pre; }
-.mdl-hist .on { color: #8fd19e; } .mdl-hist .off { color: #999; } .mdl-hist .req { color: #fde68a; }
+.mdl-hist .on { color: #8fd19e; } .mdl-hist .off { color: #999; } .mdl-hist .req { color: #fde68a; } .mdl-hist .bad { color: #f88; }
 #hdr-cloud { display: none; color: #8ab4f8; font-size: 1.1rem; cursor: pointer; margin-left: -6px; }
 #hdr-cloud.on { display: inline; }
 .auth-group { padding: 8px 12px 6px; border-bottom: 1px solid #1a3a6e; }
@@ -1156,8 +1156,8 @@ async function _mdlHistRefresh(name) {
     const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm/history`);
     if (!d.events.length) { box.textContent = 'no start / stop seen yet'; return; }
     box.innerHTML = d.events.map(e => {
-      const cls = e.event === 'running' ? 'on' : /requested/.test(e.event) ? 'req' : 'off';
-      const dur = e.hours != null ? `  · ran ${e.hours} h` : e.hours_so_far != null ? `  · running for ${e.hours_so_far} h` : '';
+      const cls = e.event === 'running' ? 'on' : /requested/.test(e.event) ? 'req' : e.event === 'failed' ? 'bad' : 'off';
+      const dur = e.hours != null ? `  · ran ${e.hours} h` : e.hours_so_far != null ? `  · running for ${e.hours_so_far} h` : e.note ? `  · ${e.note.split(':')[0]}` : '';
       return `<span class="${cls}">${escHtml(e.at.replace('T', ' '))}  ${escHtml(e.event.padEnd(15))}</span> <span style="color:#667;">${escHtml(e.source)}</span>${escHtml(dur)}`;
     }).join('\n');
   } catch (e) { box.textContent = e.message; }
@@ -1225,7 +1225,7 @@ async function _mdlVmRefresh(name) {
   const st = document.getElementById('mdl-vm-state'); if (!st) return;
   try {
     const d = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/vm`);
-    _mdlVmShow(d.state);
+    _mdlVmShow(d.state, d.message ? `${d.message}${d.hint ? ' — ' + d.hint : ''}` : '');
     _mdlHistRefresh(name);
     if (/starting|deallocating|stopping/.test(d.state)) { if (!_mdlVmTimer) _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), 8000); }
     else { _mdlStopVmPoll(); _aliveTick(); }
@@ -1235,13 +1235,16 @@ async function _mdlVmRefresh(name) {
     _mdlStopVmPoll();
   }
 }
-function _mdlVmShow(state) {
+function _mdlVmShow(state, message = '') {
   const st = document.getElementById('mdl-vm-state'), a = document.getElementById('mdl-vm-start'), b = document.getElementById('mdl-vm-stop');
   if (!st) return;
-  st.textContent = state; st.className = 'mdl-state ' + (state === 'running' ? 'on' : (state === 'deallocated' || state === 'stopped') ? 'off' : 'busy');
-  if (a) a.disabled = state !== 'deallocated' && state !== 'stopped';
+  const off = state === 'deallocated' || state === 'stopped' || state === 'failed' || state === 'unknown';
+  st.textContent = state === 'failed' ? 'start failed' : state;
+  st.className = 'mdl-state ' + (state === 'running' ? 'on' : state === 'failed' ? 'bad' : off ? 'off' : 'busy');
+  if (a) a.disabled = !off;                       // a failed or unknown state may be retried
   if (b) b.disabled = state !== 'running';
-  const m = document.getElementById('mdl-vm-msg'); if (m) m.textContent = state === 'running' ? '' : (state === 'deallocated' ? 'off — no compute billing' : '');
+  const m = document.getElementById('mdl-vm-msg');
+  if (m) m.textContent = message || (state === 'deallocated' ? 'off — no compute billing' : state === 'unknown' ? 'Azure reported no power state' : '');
 }
 async function modelsVm(action) {
   const name = _mdlServer; const m = document.getElementById('mdl-vm-msg');

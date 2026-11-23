@@ -5754,8 +5754,16 @@ def _azure_vm_call(profile: str, what: str):
             return {"ok": True, "state": "deallocating", "vm": name}
         iv = vms.instance_view(rg, name)
         state = model_registry.power_state(iv.statuses)
-        vm_events.observe(profile, state, at=model_registry.provisioning_time(iv.statuses))
-        return {"ok": True, "state": state, "vm": name, "resource_group": rg}
+        message = model_registry.provisioning_message(iv.statuses)
+        vm_events.observe(profile, state, at=model_registry.provisioning_time(iv.statuses), note=message)
+        out = {"ok": True, "state": state, "vm": name, "resource_group": rg}
+        if message:
+            out["message"] = message
+            if "AllocationFailed" in message:
+                out["hint"] = ("Azure had no machine of this size free in the region when it tried; "
+                               "nothing is running or billed. Try again in a few minutes (or at another hour), "
+                               "or resize the VM / move it in the portal.")
+        return out
     except HTTPException:
         raise
     except Exception as exc:

@@ -748,4 +748,11 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   the COCO export (`from: "coco"`, with the export's date), and a clone whose
   train / infer scripts point at another project's output folder is shown
   as "uses the model of <that project>" (`model_of`).
+- **Nov 23 — Azure switch: a failed start is named**: when Azure's instance
+  view carries no power state but a failed provisioning (a start it could
+  not fulfil, typically `AllocationFailed`: no machine of that size free in
+  the region), the panel shows "start failed" with Azure's reason and a
+  hint instead of "unknown", Start stays enabled for a retry, and the
+  history box logs the failure (`power_state` / `provisioning_message` in
+  `model_registry.py`).
 

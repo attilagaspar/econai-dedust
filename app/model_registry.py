@@ -138,11 +138,31 @@ def provisioning_time(statuses):
     return None
 
 
+def _code(s) -> str:
+    return getattr(s, "code", None) or (s.get("code") if isinstance(s, dict) else None) or ""
+
+
 def power_state(statuses) -> str:
     """An Azure instance view's power state: running / deallocated / stopped /
-    starting / deallocating / stopping / unknown."""
+    starting / deallocating / stopping; "failed" when there is no power state
+    but the last provisioning operation failed (a start Azure could not
+    fulfil, e.g. AllocationFailed); else unknown."""
     for s in statuses or []:
-        code = getattr(s, "code", None) or (s.get("code") if isinstance(s, dict) else None) or ""
-        if code.startswith("PowerState/"):
-            return code.split("/", 1)[1]
+        if _code(s).startswith("PowerState/"):
+            return _code(s).split("/", 1)[1]
+    for s in statuses or []:
+        if _code(s).startswith("ProvisioningState/failed"):
+            return "failed"
     return "unknown"
+
+
+def provisioning_message(statuses) -> str | None:
+    """Why the last provisioning operation ended as it did: the failure code
+    (AllocationFailed, …) with Azure's message, or None when it succeeded."""
+    for s in statuses or []:
+        code = _code(s)
+        if code.startswith("ProvisioningState/failed"):
+            reason = code.split("/", 2)[2] if code.count("/") >= 2 else "failed"
+            msg = getattr(s, "message", None) or (s.get("message") if isinstance(s, dict) else None) or ""
+            return f"{reason}: {msg}".rstrip(": ") if msg else reason
+    return None

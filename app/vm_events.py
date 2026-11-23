@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from app import gpu_profiles
 
 _LOCK = threading.Lock()
-_STEADY = ("running", "deallocated", "stopped")
+_STEADY = ("running", "deallocated", "stopped", "failed")
 
 
 def _path():
@@ -76,16 +76,25 @@ def last_state(profile: str) -> str | None:
     return None
 
 
-def observe(profile: str, state: str, at=None) -> dict | None:
+def observe(profile: str, state: str, at=None, note: str | None = None) -> dict | None:
     """A poll saw `state`: record it when it differs from the last steady
     state on file (transient starting / deallocating are not logged — the
     steady state that follows is). `at` is Azure's provisioning time when
-    known, so a change made in the portal is dated when it happened."""
+    known, so a change made in the portal is dated when it happened. A
+    failed start is logged as "failed" with Azure's reason in `note`."""
     if state not in _STEADY:
         return None
     if last_state(profile) == state:
         return None
-    return record(profile, state, source="observed", at=at)
+    row = {"profile": profile, "event": state, "source": "observed", "at": _iso(at)}
+    if note:
+        row["note"] = note[:300]
+    with _LOCK:
+        p = _path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
 
 
 def recent(profile: str, limit: int = 40) -> list[dict]:
@@ -99,7 +108,7 @@ def recent(profile: str, limit: int = 40) -> list[dict]:
         ev = r.get("event")
         if ev == "running":
             last_run = r
-        elif ev in ("deallocated", "stopped"):
+        elif ev in ("deallocated", "stopped", "failed"):
             if last_run:
                 r["hours"] = _hours_between(last_run["at"], r["at"])
             last_run = None
