@@ -39,7 +39,17 @@ one LabelMe-style JSON per page as the single source of truth.
   (chips with ✕, an add box whose datalist suggests the tags every other
   project uses); the project list shows them as chips in the row, and
   clicking a chip filters the list to that tag (click again / "all"
-  clears). `GET /api/projects` returns `tags` per project. The pipeline
+  clears). `GET /api/projects` returns `tags` per project. **Auto-tags**
+  (added 2026-11-23, `app/auto_tags.py`): two computed chips, outlined in
+  their own colours, before the user's tags and filtering like them —
+  `all-verified` (green: every page verified or skipped, at least one
+  verified) and `has-model` (blue: a finished training-ledger run, the model
+  seen in the last Models-view listing of the project's GPU server, or a
+  clone using another project's model; the tooltip says which).
+  `GET /api/projects` returns `auto_tags` [{tag, title, model_of?}] and
+  `auto_tags_pending` while a folder's first page scan (background) runs;
+  page statuses are read from the head of each annotation JSON and cached
+  per file. The pipeline
   *stage* is vestigial: nothing in the UI shows or changes it any more
   (the Advance Stage button is gone; `pipeline.json` stays on disk, its
   `updated` timestamp still shown in the row; the CLI `advance` /

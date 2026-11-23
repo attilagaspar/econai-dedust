@@ -764,3 +764,16 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   outcome (toast + browser notification); an optional **ntfy topic** in the
   Azure settings pushes the outcome to a phone. Events in the history box.
 
+- **Nov 23 — Auto-tags and the late-answer panel fix**: the project list
+  shows two computed chips next to the user's tags, outlined in their own
+  colours and filtering like them: **all-verified** (green; every page
+  verified or skipped, at least one verified) and **has-model** (blue; a
+  trained model is known — a finished training-ledger run, the model seen in
+  the last Models-view listing of the project's GPU server, kept in
+  `models_seen.json` beside the profile store, or a clone's scripts using
+  another project's model). `app/auto_tags.py`: page statuses from the head
+  of each annotation JSON, cached per file on size + mtime; a folder's first
+  scan in a process runs on a background thread (`auto_tags_pending`, the
+  dashboard refetches the list a few seconds later). Fix: a sidebar view's
+  slow fetch (the Models view's SSH listing above all) no longer paints over
+  the view the user switched to meanwhile.

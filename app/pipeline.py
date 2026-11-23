@@ -292,6 +292,11 @@ def list_projects() -> list[dict]:
             # count annotation files
             ann_dir = pdir / "annotations"
             n_pages = len(list(ann_dir.glob("*.json"))) if ann_dir.exists() else 0
+            try:
+                from app import auto_tags
+                auto, auto_pending = auto_tags.auto_tags(pdir.name, pdir, cfg)
+            except Exception:
+                auto, auto_pending = [], False
             results.append({
                 "name": pdir.name,
                 "type": cfg["type"],
@@ -300,6 +305,8 @@ def list_projects() -> list[dict]:
                 "pages": n_pages,
                 "updated": state.get("updated", ""),
                 "tags": cfg.get("tags") or [],
+                "auto_tags": auto,
+                "auto_tags_pending": auto_pending,     # the pages' first scan is still running
                 "record_authority": cfg.get("record_authority"),
                 "source_year": cfg.get("source_year"),
             })

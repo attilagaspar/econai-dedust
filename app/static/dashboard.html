@@ -118,6 +118,12 @@ header span { color: #888; font-size: 0.85rem; }
 }
 .tag-chip:hover { background: #1d4a8a; color: #fff; }
 .tag-chip.on { background: #e94560; color: #fff; border-color: #e94560; }
+/* auto-tags: computed from the project, not typed — outlined, in their own colours */
+.tag-chip.auto { background: transparent; border-style: dashed; font-weight: 500; }
+.tag-chip.auto.t-all-verified { color: #8fd19e; border-color: #2f7a4a; }
+.tag-chip.auto.t-has-model { color: #8ab4f8; border-color: #2b5aa8; }
+.tag-chip.auto:hover { background: #16213e; }
+.tag-chip.auto.on { background: #e94560; color: #fff; border-color: #e94560; border-style: solid; }
 .tag-filter-bar {
   padding: 8px 16px; border-bottom: 1px solid #0f3460; font-size: 0.75rem; color: #888;
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
@@ -827,6 +833,7 @@ async function loadProjects(selectName = null) {
   _entityGroups = null;                       // linkage may have changed
   _applySidebarView();
   renderProjectList();
+  _autoTagsFollowUp();
   // Explicit selection (e.g. a just-created project) beats the auto-restore —
   // the old fire-and-forget restore raced the caller's selectProject and the
   // PREVIOUS project often won, so new pages landed in the wrong project.
@@ -873,9 +880,33 @@ function toggleGroup(key) {
   renderProjectList();
 }
 
+// The auto-tags' first page scan runs in the background on the server; while
+// any project says it is pending, fetch the list again in a few seconds and
+// repaint the sidebar only (the selection is left alone).
+let _autoTagsTimer = null;
+function _autoTagsFollowUp() {
+  if (_autoTagsTimer || !projects.some(p => p.auto_tags_pending)) return;
+  _autoTagsTimer = setTimeout(async () => {
+    _autoTagsTimer = null;
+    try {
+      const d = await (await fetch('/api/projects')).json();
+      const by = new Map((d.projects || []).map(p => [p.name, p]));
+      projects.forEach(p => { const q = by.get(p.name); if (q) { p.auto_tags = q.auto_tags; p.auto_tags_pending = q.auto_tags_pending; } });
+      if (sidebarView === 'projects') renderProjectList();
+    } catch (e) { return; }
+    _autoTagsFollowUp();
+  }, 4000);
+}
+// A project's tags for filtering: the user's own plus the auto-tags
+// (all-verified, has-model — computed by the server from the project folder).
+function projectTagNames(p) { return [...(p.auto_tags || []).map(t => t.tag), ...(p.tags || [])]; }
 function projectRowHtml(p) {
   const active = activeProj && activeProj.name === p.name ? 'active' : '';
-  const tags = (p.tags || []).map(t =>
+  const auto = (p.auto_tags || []).map(t =>
+    `<span class="tag-chip auto t-${escHtml(t.tag)} ${t.tag === tagFilter ? 'on' : ''}" data-tag="${escHtml(t.tag)}"
+           onclick="event.stopPropagation();setTagFilter(this.dataset.tag)"
+           title="${escHtml(t.title || '')}${t.tag === tagFilter ? ' — click to show all projects' : ' — click to show only such projects'}">${escHtml(t.tag)}</span>`).join('');
+  const tags = auto + (p.tags || []).map(t =>
     `<span class="tag-chip ${t === tagFilter ? 'on' : ''}" data-tag="${escHtml(t)}"
            onclick="event.stopPropagation();setTagFilter(this.dataset.tag)"
            title="${t === tagFilter ? 'click to show all projects' : 'click to show only projects tagged ' + escHtml(t)}">${escHtml(t)}</span>`).join('');
@@ -936,7 +967,8 @@ async function renderNotesSidebar() {
   if (!_notesTopics) {
     el.innerHTML = '<div class="empty"><div class="big">📝</div>Loading…</div>';
     try { _notesTopics = (await _notesApi('GET', '/api/notes')).topics || []; }
-    catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+    catch (e) { if (sidebarView === 'notes') el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+    if (sidebarView !== 'notes') return;      // the user has moved on meanwhile
   }
   if (!_notesTopics.length) {
     el.innerHTML = '<div class="empty"><div class="big">📝</div>No topics yet.<br>Click <b>+ Topic</b> to start one — data sources, decisions, reminders.</div>';
@@ -1040,7 +1072,8 @@ async function renderEntityGroups() {
   if (!_entityGroups) {
     el.innerHTML = '<div class="empty"><div class="big">🏛</div>Loading…</div>';
     try { const r = await fetch('/api/entities/groups'); _entityGroups = (await r.json()).groups || []; }
-    catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+    catch (e) { if (sidebarView === 'entities') el.innerHTML = `<div class="empty">${escHtml(e.message || e)}</div>`; return; }
+    if (sidebarView !== 'entities') return;   // the user has moved on meanwhile
   }
   if (!_entityGroups.length) { el.innerHTML = '<div class="empty"><div class="big">🏛</div>No authority files.</div>'; return; }
   el.innerHTML = _entityGroups.map(g => {
@@ -1070,7 +1103,8 @@ async function renderModelsSidebar() {
   if (!_mdlServers) {
     el.innerHTML = '<div class="empty">Loading servers…</div>';
     try { _mdlServers = (await _notesApi('GET', '/api/models/servers')).servers || []; }
-    catch (e) { el.innerHTML = `<div class="empty">${escHtml(e.message)}</div>`; return; }
+    catch (e) { if (sidebarView === 'models') el.innerHTML = `<div class="empty">${escHtml(e.message)}</div>`; return; }
+    if (sidebarView !== 'models') return;     // the user has moved on meanwhile
   }
   if (!_mdlServers.length) {
     el.innerHTML = '<div class="empty"><div class="big">🖥</div>No GPU server profile on this instance.<br>Add one in a project\'s GPU Server card.</div>';
@@ -1103,8 +1137,14 @@ async function modelsSelect(name, reload = false) {
   if (!_mdlData[name] || reload) {
     el.innerHTML = _mdlHeaderHtml(s, null) + '<div class="empty">Reading the server…</div>';
     if (s.azure_vm) _mdlVmRefresh(name);
-    try { _mdlData[name] = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/models`); }
+    // The listing is one SSH round trip and can take a while (or time out
+    // on a server that is off). If the user has left the Models view, or
+    // picked another server, by the time it answers, keep the data but
+    // leave the panel alone — it is someone else's now.
+    const stale = () => sidebarView !== 'models' || _mdlServer !== name;
+    try { const got = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/models`); _mdlData[name] = got; if (stale()) return; }
     catch (e) {
+      if (stale()) return;
       el.innerHTML = _mdlHeaderHtml(s, null) + `<div class="empty" style="color:#e94560;">✕ ${escHtml(e.message)}</div>`
         + (s.azure_vm ? '<div class="empty" style="font-size:0.8rem;">If the VM is deallocated, start it above and refresh.</div>' : '');
       if (s.azure_vm) _mdlVmRefresh(name);
@@ -1336,7 +1376,7 @@ function renderProjectList() {
     return;
   }
   if (tagFilter) {
-    const rows = projects.filter(p => (p.tags || []).includes(tagFilter));
+    const rows = projects.filter(p => projectTagNames(p).includes(tagFilter));
     el.innerHTML =
       `<div class="tag-filter-bar">showing tag
          <span class="tag-chip on" data-tag="${escHtml(tagFilter)}" onclick="setTagFilter(this.dataset.tag)"

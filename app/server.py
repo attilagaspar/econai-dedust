@@ -5659,6 +5659,9 @@ def api_models_list(profile: str, passphrase: Optional[str] = Query(None)):
     if res.get("error") or (not res.get("ok") and not (res.get("stdout") or "").strip()):
         raise HTTPException(status_code=503, detail=f"Could not reach {srv.get('host')}: {res.get('error') or res.get('stderr') or 'no answer'}")
     data = model_registry.parse_listing(res.get("stdout") or "")
+    if data.get("complete"):
+        from app import auto_tags
+        auto_tags.remember_models(profile, [m["name"] for m in data["models"]])
     for m in data["models"]:
         m["local"] = _models_local_info(m["name"], profile)
     for m in data["partial"]:
@@ -5689,8 +5692,10 @@ def api_models_delete(profile: str, model: str, passphrase: Optional[str] = Quer
         raise HTTPException(status_code=503, detail=f"Could not reach {srv.get('host')}: {res['error']}")
     out = (res.get("stdout") or "").strip()
     if out != "removed":
-        raise HTTPException(status_code=404 if out == "missing" else 502,
+        raise HTTPException(status_code=404 if out == "missing" else 503,
                             detail=f"{model}: {out or res.get('stderr') or 'not removed'}")
+    from app import auto_tags
+    auto_tags.forget_model(profile, model)
     return {"ok": True, "removed": target}
 
 
