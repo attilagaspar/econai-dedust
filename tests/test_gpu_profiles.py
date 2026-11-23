@@ -51,6 +51,15 @@ def test_profile_crud_api(client, clean_profiles):
                                     "key_path": "/k", "remote_path": "/home/g/ws"}})
     assert gpu_profiles.get("koren")["passphrase"] == "sesame"
     assert gpu_profiles.get("koren")["host"] == "gpu2.example.org"
+    # the Azure VM behind the profile (set in the Models view) survives a
+    # save from a project's GPU Server card, which never carries it
+    assert client.post("/api/models/servers/koren/azure",
+                       json={"subscription_id": "sub-1", "resource_group": "rg1", "name": "gpu-vm"}).status_code == 200
+    client.post("/api/gpu-profiles", json={
+        "name": "koren", "server": {"host": "gpu3.example.org", "user": "g",
+                                    "key_path": "/k", "remote_path": "/home/g/ws"}})
+    assert gpu_profiles.get("koren")["azure_vm"] == {"subscription_id": "sub-1", "resource_group": "rg1", "name": "gpu-vm"}
+    assert gpu_profiles.get("koren")["host"] == "gpu3.example.org"
     client.delete("/api/gpu-profiles/koren")
     assert gpu_profiles.get("koren") is None
 

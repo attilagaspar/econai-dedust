@@ -777,3 +777,9 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   dashboard refetches the list a few seconds later). Fix: a sidebar view's
   slow fetch (the Models view's SSH listing above all) no longer paints over
   the view the user switched to meanwhile.
+- **Nov 23 — Azure settings survive a profile save**: saving a GPU server
+  profile from a project's GPU Server card (`POST /api/gpu-profiles`)
+  replaced the whole profile and so dropped the `azure_vm` block set in the
+  Models view (the switch then said "Not an Azure VM Dedust can switch").
+  The endpoint now keeps the stored `azure_vm` when the payload has none,
+  as it already did for the passphrase.

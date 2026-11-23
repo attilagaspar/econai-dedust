@@ -5491,10 +5491,14 @@ def api_gpu_profiles_save(body: GpuProfileBody):
     server = dict(body.server or {})
     # empty passphrase in the payload = keep the stored one (the UI never
     # echoes it back); to actually clear it the UI sends passphrase=None + clear
+    old = gpu_profiles.get(name) or {}
     if not server.get("passphrase") and not server.pop("clear_passphrase", False):
-        old = gpu_profiles.get(name) or {}
         if old.get("passphrase"):
             server["passphrase"] = old["passphrase"]
+    # the Azure VM behind the profile is set in the Models view, not here:
+    # a save from a project's GPU Server card keeps it
+    if "azure_vm" not in server and old.get("azure_vm"):
+        server["azure_vm"] = old["azure_vm"]
     gpu_profiles.save(name, server)
     return {"ok": True}
 
