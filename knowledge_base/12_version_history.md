@@ -783,3 +783,19 @@ totals/headers as non-records. Scoreboard counts clutter correctly.
   Models view (the switch then said "Not an Azure VM Dedust can switch").
   The endpoint now keeps the stored `azure_vm` when the payload has none,
   as it already did for the passphrase.
+- Nov 24 — **Storage on the server, with bulk removal** (Models view).
+  Nothing Dedust put on a GPU server was ever removed: deleting a project is
+  local, every push re-uploads the images and every inference adds
+  predictions, so the host filled up. The server listing now also reports
+  every project's footprint on the host (`@@WS` rows: images, predictions,
+  parents, eval runs, data folder, model folder, configs / scripts) and the
+  panel shows it as a "Storage on the server" table with a checkbox per
+  cell, per column (one kind for every project) and per row (everything of
+  a project), plus a select-all. A sticky bar sums the selection and asks
+  once, inline, before `POST /api/models/servers/<profile>/remove` removes
+  it all in one SSH call (`model_registry.remove_script`; the four data
+  parts together become the whole data folder; `model` also takes the
+  project's configs and scripts; each path is reported removed / missing /
+  failed; removed models lose their has-model tag). Projects no longer on
+  the instance are flagged "no project here". The models table's 🗑 now
+  feeds the same selection. 3 tests.

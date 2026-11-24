@@ -74,6 +74,23 @@ header span { color: #888; font-size: 0.85rem; }
 .mdl-del { background: none; border: 1px solid transparent; color: #889; cursor: pointer; border-radius: 4px; padding: 2px 6px; font-size: 0.8rem; }
 .mdl-del:hover { border-color: #e94560; color: #e94560; }
 .mdl-partial { margin-top: 12px; font-size: 0.8rem; color: #bbb; }
+/* Storage on the server: one row per project, a checkbox per artifact cell */
+.mdl-store { margin-top: 26px; }
+.mdl-store h4 { margin: 0 0 4px; font-size: 0.9rem; color: #e0e0e0; }
+.mdl-store .hint { color: #889; font-size: 0.76rem; margin-bottom: 8px; }
+.mdl-table .cell { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.mdl-table .cell .n { color: #777; font-size: 0.72rem; }
+.mdl-table .cell input, .mdl-table th input, .mdl-table td.pick input { accent-color: #e94560; cursor: pointer; margin: 0; vertical-align: -1px; }
+.mdl-table td.pick, .mdl-table th.pick { width: 24px; padding-left: 4px; padding-right: 4px; }
+.mdl-table tr.sel td { background: #1c1430; }
+.mdl-table th label, .mdl-table td.pick label { cursor: pointer; }
+.mdl-selbar { position: sticky; bottom: 0; margin-top: 10px; padding: 10px 12px; background: #16213e; border: 1px solid #e94560; border-radius: 6px;
+              display: flex; gap: 12px; align-items: center; font-size: 0.85rem; color: #e0e0e0; flex-wrap: wrap; }
+.mdl-selbar .grow { flex: 1; }
+.mdl-selbar button { border-radius: 4px; padding: 5px 12px; cursor: pointer; font-size: 0.82rem; border: 1px solid #1a3a6e; background: #0f3460; color: #e0e0e0; }
+.mdl-selbar button.danger { background: #b0202a; border-color: #b0202a; color: #fff; }
+.mdl-selbar button:disabled { opacity: 0.5; cursor: default; }
+.mdl-selbar .warn { color: #fde68a; font-size: 0.8rem; }
 .mdl-projects { display: flex; flex-direction: column; gap: 2px; font-size: 0.82rem; }
 .mdl-projects .mdl-proj { display: flex; gap: 10px; align-items: baseline; color: #bbb; }
 .mdl-projects .mdl-proj a { color: #8ab4f8; text-decoration: none; min-width: 180px; }
@@ -1128,6 +1145,7 @@ function _mdlVmPoll(name, ms) {        // (re)start the state poll at this pace
   _mdlStopVmPoll(); _mdlVmTimer = setInterval(() => _mdlVmRefresh(name), ms); _mdlVmTimerMs = ms;
 }
 async function modelsSelect(name, reload = false) {
+  if (_mdlServer !== name) { _mdlSel.clear(); _mdlSelArmed = false; }   // a selection belongs to one server
   _mdlServer = name; localStorage.setItem('modelsServer', name);
   _mdlStopVmPoll();
   document.querySelectorAll('#project-list .topic-row').forEach(r => r.classList.toggle('active', r.textContent.trim().startsWith(name)));
@@ -1142,7 +1160,7 @@ async function modelsSelect(name, reload = false) {
     // picked another server, by the time it answers, keep the data but
     // leave the panel alone — it is someone else's now.
     const stale = () => sidebarView !== 'models' || _mdlServer !== name;
-    try { const got = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/models`); _mdlData[name] = got; if (stale()) return; }
+    try { const got = await _notesApi('GET', `/api/models/servers/${encodeURIComponent(name)}/models`); _mdlData[name] = got; _mdlSel.clear(); _mdlSelArmed = false; if (stale()) return; }
     catch (e) {
       if (stale()) return;
       el.innerHTML = _mdlHeaderHtml(s, null) + `<div class="empty" style="color:#e94560;">✕ ${escHtml(e.message)}</div>`
@@ -1153,6 +1171,7 @@ async function modelsSelect(name, reload = false) {
   }
   const d = _mdlData[name];
   el.innerHTML = _mdlHeaderHtml(s, d) + _mdlTableHtml(s, d);
+  _mdlSelSync();
   if (s.azure_vm) _mdlVmRefresh(name);
 }
 function _mdlHeaderHtml(s, d) {
@@ -1235,38 +1254,144 @@ function _mdlTableHtml(s, d) {
     const cls = L.labels ? `<span title="${escHtml(L.labels.join(', '))}">${L.labels.length}: ${escHtml(L.labels.slice(0, 4).join(', '))}${L.labels.length > 4 ? '…' : ''}</span>` : '<span style="color:#666;">?</span>';
     const ap = m.ap ? `${m.ap.AP ?? ''}${m.ap.AP50 != null ? ` <span style="color:#777;">/ ${m.ap.AP50}</span>` : ''}` : (L.ledger?.ap?.AP != null ? `${L.ledger.ap.AP} <span style="color:#777;" title="from the training ledger">(ledger)</span>` : '<span style="color:#666;">–</span>');
     const run = L.ledger ? `<span title="${escHtml(JSON.stringify(L.ledger))}">${escHtml(L.ledger.mode || '')} ${escHtml(L.ledger.status || '')}${L.ledger.n_train_pages != null ? ` · ${L.ledger.n_train_pages} pages` : ''}${L.n_runs > 1 ? ` · ${L.n_runs} runs` : ''}</span>` : '';
-    return `<tr>
+    return `<tr data-row="${escHtml(m.name)}">
+      <td class="pick"><input type="checkbox" data-sel="${escHtml(m.name)}|model" onchange="mdlSelToggle(this)" title="select this model (removed together with the project's configs and scripts)"></td>
       <td><b>${escHtml(m.name)}</b>${pooled}</td><td>${proj}</td><td>${cls}</td>
       <td>${escHtml((m.trained || '').slice(0, 16).replace('T', ' '))}</td>
       <td style="text-align:right;">${_mdlFmtBytes(m.weights_bytes)}<div style="color:#777;font-size:0.72rem;">folder ${(m.folder_kb / 1024 / 1024).toFixed(1)} GB</div></td>
       <td style="text-align:right;" title="the model's own evaluation at the end of training: AP / AP50">${ap}</td>
       <td style="font-size:0.78rem;color:#aaa;">${run}</td>
-      <td><button class="mdl-del" onclick="modelsDelete(this,'${escHtml(s.name)}','${escHtml(m.name)}')" title="Remove the weights and the whole output folder from the server. The project and its pages stay; Ctrl+Z does not undo this.">🗑</button></td></tr>`;
+      <td><button class="mdl-del" onclick="mdlSelOnly('${escHtml(m.name)}','model')" title="Remove this model (the output folder with the weights, plus the project's configs and scripts) from the server. The project and its pages stay; this cannot be undone.">🗑</button></td></tr>`;
   }).join('');
-  const pr = partial.length ? `<div class="mdl-partial"><b>Output folders without final weights</b> <span class="hint">(a run that is still going, or one that died)</span>: ${partial.map(p => `${escHtml(p.name)} <span style="color:#777;">(${(p.folder_kb / 1024).toFixed(0)} MB)</span> <button class="mdl-del" onclick="modelsDelete(this,'${escHtml(s.name)}','${escHtml(p.name)}')" title="Remove this folder">🗑</button>`).join(' · ')}</div>` : '';
-  return `<div class="mdl-wrap"><table class="mdl-table">
-    <thead><tr><th>Model</th><th>Project</th><th>Classes</th><th>Trained</th><th style="text-align:right;">Weights</th><th style="text-align:right;">AP / AP50</th><th>Last run</th><th></th></tr></thead>
-    <tbody>${tr}</tbody></table>${pr}
+  const pr = partial.length ? `<div class="mdl-partial"><b>Output folders without final weights</b> <span class="hint">(a run that is still going, or one that died)</span>: ${partial.map(p => `<label><input type="checkbox" data-sel="${escHtml(p.name)}|model" onchange="mdlSelToggle(this)"> ${escHtml(p.name)}</label> <span style="color:#777;">(${(p.folder_kb / 1024).toFixed(0)} MB)</span> <button class="mdl-del" onclick="mdlSelOnly('${escHtml(p.name)}','model')" title="Remove this folder">🗑</button>`).join(' · ')}</div>` : '';
+  const table = (rows.length || partial.length) ? `<table class="mdl-table">
+    <thead><tr><th class="pick"></th><th>Model</th><th>Project</th><th>Classes</th><th>Trained</th><th style="text-align:right;">Weights</th><th style="text-align:right;">AP / AP50</th><th>Last run</th><th></th></tr></thead>
+    <tbody>${tr}</tbody></table>${pr}` : `<div class="empty" style="padding:24px;">No trained model in ${escHtml(d.remote_path)}/layout-model-training/outputs.</div>`;
+  return `<div class="mdl-wrap">${table}
+    ${_mdlStorageHtml(s, d)}
+    <div id="mdl-selbar"></div>
     ${d.complete ? '' : '<div class="hint" style="color:#f0c040;padding:6px 0;">⚠ The listing stopped early — the server may be overloaded; refresh.</div>'}</div>`;
+}
+
+// ── Storage on the server: what Dedust has put there, by project, with a
+//    checkbox per artifact so any of it — one kind everywhere, everything of
+//    one project, or all of it — can be removed in one go. ──
+const _MDL_KINDS = [['images', 'Images', 'the page images pushed for training or inference'],
+                    ['predictions', 'Predictions', 'the inferred JSONs (already pulled into the project if you pulled them)'],
+                    ['parents', 'Parents', 'the parent files uploaded for a child project'],
+                    ['eval', 'Eval runs', 'the per-project scoring runs (symlinks + predictions)'],
+                    ['model', 'Model', 'the output folder (weights, metrics, checkpoints) with the project\'s configs and scripts']];
+function _mdlFmtKb(kb) { if (!kb) return '–'; return kb >= 1024 * 1024 ? (kb / 1024 / 1024).toFixed(2) + ' GB' : kb >= 1024 ? (kb / 1024).toFixed(0) + ' MB' : kb + ' KB'; }
+function _mdlRowKb(w, k) { return k === 'model' ? (w.model_kb || (w.scripts_n ? 1 : 0)) : (w[k + '_kb'] || 0); }
+function _mdlStorageHtml(s, d) {
+  const ws = [...(d.workspace || [])].sort((a, b) => ((b.data_kb || 0) + (b.model_kb || 0)) - ((a.data_kb || 0) + (a.model_kb || 0)));
+  _mdlSelKb = {};
+  if (!ws.length) return d.complete ? `<div class="mdl-store"><h4>Storage on the server</h4><div class="hint">Nothing of Dedust's in ${escHtml(d.remote_path)} apart from the training code.</div></div>` : '';
+  let totData = 0, totModel = 0;
+  const tr = ws.map(w => {
+    const L = w.local || {};
+    totData += w.data_kb || 0; totModel += w.model_kb || 0;
+    const name = !L.project ? `<b>${escHtml(w.name)}</b> <span style="color:#e94560;font-size:0.72rem;" title="No project of this name on this instance any more — nothing here can use these files">no project here</span>`
+      : L.server_profile && L.server_profile !== s.name ? `<a href="#" onclick="modelsGoProject(event,'${escHtml(w.name)}')">${escHtml(w.name)}</a> <span style="color:#f0c040;font-size:0.72rem;" title="The project now points at profile '${escHtml(L.server_profile)}'">→ ${escHtml(L.server_profile)}</span>`
+      : `<a href="#" onclick="modelsGoProject(event,'${escHtml(w.name)}')">${escHtml(w.name)}</a>`;
+    const cells = _MDL_KINDS.map(([k]) => {
+      const kb = _mdlRowKb(w, k);
+      if (!kb) return '<td><span style="color:#555;">–</span></td>';
+      _mdlSelKb[`${w.name}|${k}`] = kb;
+      const n = k === 'images' ? w.images_n : k === 'predictions' ? w.predictions_n : null;
+      const size = k === 'model' && !w.model_kb ? '<span class="n" title="no output folder, only the configs and scripts of a push">scripts only</span>' : _mdlFmtKb(kb);
+      return `<td><label class="cell"><input type="checkbox" data-sel="${escHtml(w.name)}|${k}" onchange="mdlSelToggle(this)"> ${size}${n != null ? `<span class="n">${n} files</span>` : ''}</label></td>`;
+    }).join('');
+    const other = w.other_kb ? `<span class="n" title="other files in the project's data folder — removed with 'everything of this project'">+ ${_mdlFmtKb(w.other_kb)} other</span>` : '';
+    const any = _MDL_KINDS.some(([k]) => _mdlRowKb(w, k));
+    return `<tr data-row="${escHtml(w.name)}"><td>${name}</td>${cells}
+      <td style="text-align:right;">${_mdlFmtKb((w.data_kb || 0) + (w.model_kb || 0))} ${other}</td>
+      <td class="pick">${any ? `<input type="checkbox" data-row-all="${escHtml(w.name)}" onchange="mdlSelRow(this.dataset.rowAll, this.checked)" title="everything of this project: its data folder and its model">` : ''}</td></tr>`;
+  }).join('');
+  const th = _MDL_KINDS.map(([k, label, tip]) => `<th title="${escHtml(tip)}"><label><input type="checkbox" data-col-all="${k}" onchange="mdlSelCol(this.dataset.colAll, this.checked)" title="select the ${escHtml(label.toLowerCase())} of every project"> ${label}</label></th>`).join('');
+  return `<div class="mdl-store"><h4>Storage on the server</h4>
+    <div class="hint">Everything Dedust has put in <code>${escHtml(d.remote_path)}</code> on ${escHtml(s.host || s.name)}, by project — ${_mdlFmtKb(totData)} of pages and predictions, ${_mdlFmtKb(totModel)} of models.
+      Nothing here is ever removed on its own: deleting a project in Dedust is local, and every push and inference adds files. Tick what to remove; a column header ticks that kind for every project, the last column ticks everything of a project.</div>
+    <table class="mdl-table"><thead><tr><th>Project</th>${th}<th style="text-align:right;">Total</th><th class="pick" title="everything of every project"><input type="checkbox" data-all onchange="mdlSelAll(this.checked)"></th></tr></thead>
+    <tbody>${tr}</tbody></table></div>`;
+}
+
+// the selection: keys "project|kind"; cleared whenever a fresh listing arrives
+let _mdlSel = new Set(), _mdlSelKb = {}, _mdlSelArmed = false;
+function _mdlSelData() { const d = _mdlData[_mdlServer]; return d ? (d.workspace || []) : []; }
+function mdlSelToggle(cb) { const k = cb.dataset.sel; if (cb.checked) _mdlSel.add(k); else _mdlSel.delete(k); _mdlSelArmed = false; _mdlSelSync(); }
+function mdlSelRow(name, on) { _MDL_KINDS.forEach(([k]) => { const key = `${name}|${k}`; if (!(key in _mdlSelKb)) return; if (on) _mdlSel.add(key); else _mdlSel.delete(key); }); _mdlSelArmed = false; _mdlSelSync(); }
+function mdlSelCol(kind, on) { _mdlSelData().forEach(w => { const key = `${w.name}|${kind}`; if (!(key in _mdlSelKb)) return; if (on) _mdlSel.add(key); else _mdlSel.delete(key); }); _mdlSelArmed = false; _mdlSelSync(); }
+function mdlSelAll(on) { if (on) Object.keys(_mdlSelKb).forEach(k => _mdlSel.add(k)); else _mdlSel.clear(); _mdlSelArmed = false; _mdlSelSync(); }
+function mdlSelOnly(name, kind) { _mdlSel.clear(); _mdlSel.add(`${name}|${kind}`); _mdlSelArmed = true; _mdlSelSync(); document.getElementById('mdl-selbar')?.scrollIntoView({block: 'nearest'}); }
+function mdlSelClear() { _mdlSel.clear(); _mdlSelArmed = false; _mdlSelSync(); }
+// what the selection comes to: items grouped by project, the size (a project
+// whose four data parts are all ticked loses its whole data folder, so the
+// "other" files count too)
+function _mdlSelSummary() {
+  const by = {};
+  _mdlSel.forEach(key => { const [p, k] = key.split('|'); (by[p] = by[p] || []).push(k); });
+  let kb = 0;
+  const ws = Object.fromEntries(_mdlSelData().map(w => [w.name, w]));
+  Object.entries(by).forEach(([p, kinds]) => {
+    const w = ws[p] || {};
+    const allData = ['images', 'predictions', 'parents', 'eval'].every(k => kinds.includes(k) || !_mdlRowKb(w, k));
+    kinds.forEach(k => { kb += _mdlSelKb[`${p}|${k}`] || 0; });
+    if (allData && kinds.some(k => k !== 'model')) {
+      kb += w.other_kb || 0;
+      by[p] = [...new Set([...kinds, 'images', 'predictions', 'parents', 'eval'])];   // → the server takes the whole data folder
+    }
+  });
+  return {by, kb, n: _mdlSel.size, projects: Object.keys(by)};
+}
+function _mdlSelSync() {
+  document.querySelectorAll('#detail-panel [data-sel]').forEach(cb => { cb.checked = _mdlSel.has(cb.dataset.sel); });
+  document.querySelectorAll('#detail-panel tr[data-row]').forEach(tr => tr.classList.toggle('sel', [..._mdlSel].some(k => k.startsWith(tr.dataset.row + '|'))));
+  document.querySelectorAll('#detail-panel [data-row-all]').forEach(cb => { const n = cb.dataset.rowAll; const keys = Object.keys(_mdlSelKb).filter(k => k.startsWith(n + '|')); cb.checked = keys.length > 0 && keys.every(k => _mdlSel.has(k)); });
+  document.querySelectorAll('#detail-panel [data-col-all]').forEach(cb => { const k = cb.dataset.colAll; const keys = Object.keys(_mdlSelKb).filter(x => x.endsWith('|' + k)); cb.checked = keys.length > 0 && keys.every(x => _mdlSel.has(x)); });
+  const all = document.querySelector('#detail-panel [data-all]'); if (all) { const keys = Object.keys(_mdlSelKb); all.checked = keys.length > 0 && keys.every(k => _mdlSel.has(k)); }
+  const bar = document.getElementById('mdl-selbar'); if (!bar) return;
+  if (!_mdlSel.size) { bar.innerHTML = ''; bar.className = ''; return; }
+  const sum = _mdlSelSummary();
+  const d = _mdlData[_mdlServer] || {};
+  const what = `<b>${sum.n}</b> item${sum.n > 1 ? 's' : ''} of ${sum.projects.length} project${sum.projects.length > 1 ? 's' : ''} · ${_mdlFmtKb(sum.kb)}`;
+  const busy = (d.procs || []).length ? `<span class="warn">⚠ Something is computing on the GPU right now — a running job that reads these files would fail.</span>` : '';
+  bar.className = 'mdl-selbar';
+  bar.innerHTML = _mdlSelArmed
+    ? `<span class="grow">Remove ${what} from <b>${escHtml(_mdlServer)}</b>? This cannot be undone. ${busy}</span>
+       <button class="danger" onclick="mdlRemoveGo()">Yes, remove</button><button onclick="_mdlSelArmed=false;_mdlSelSync()">No</button>`
+    : `<span class="grow">${what} selected on <b>${escHtml(_mdlServer)}</b>${busy ? ' ' + busy : ''}</span>
+       <button class="danger" onclick="_mdlSelArmed=true;_mdlSelSync()">Remove from server…</button><button onclick="mdlSelClear()">Clear</button>`;
+}
+async function mdlRemoveGo() {
+  const server = _mdlServer, sum = _mdlSelSummary();
+  const items = Object.entries(sum.by).map(([project, kinds]) => ({project, kinds}));
+  const bar = document.getElementById('mdl-selbar');
+  if (bar) bar.innerHTML = `<span class="grow">Removing ${sum.n} item${sum.n > 1 ? 's' : ''} from ${escHtml(server)}…</span>`;
+  try {
+    const r = await _notesApi('POST', `/api/models/servers/${encodeURIComponent(server)}/remove`, {items});
+    const freed = _mdlFmtKb(sum.kb);
+    if (r.failed?.length) showToast(`✕ ${r.failed.length} path(s) could not be removed: ${r.failed.map(p => p.split('/').slice(-2).join('/')).join(', ')}`, 8000, 'red');
+    else showToast(`Removed ${r.removed.length} path${r.removed.length === 1 ? '' : 's'} (${freed}) from ${server}`);
+    _mdlSel.clear(); _mdlSelArmed = false;
+    await modelsSelect(server, true);
+    _refreshAutoTags();
+  } catch (e) { _mdlSelArmed = false; _mdlSelSync(); showToast(`✕ ${e.message}`, 6000, 'red'); }
+}
+// the has-model tags may have changed: fetch the project list again and
+// repaint the sidebar only when it shows the projects
+async function _refreshAutoTags() {
+  try {
+    const d = await (await fetch('/api/projects')).json();
+    const by = new Map((d.projects || []).map(p => [p.name, p]));
+    projects.forEach(p => { const q = by.get(p.name); if (q) { p.auto_tags = q.auto_tags; p.auto_tags_pending = q.auto_tags_pending; } });
+    if (sidebarView === 'projects') renderProjectList();
+  } catch (e) { /* the next load will */ }
 }
 function modelsGoProject(ev, name) {
   ev.preventDefault();
   setSidebarView('projects');
   if (typeof selectProject === 'function') selectProject(name);
-}
-async function modelsDelete(btn, server, model) {
-  // two clicks: the first arms the button for four seconds, the second deletes
-  if (!btn.dataset.armed) {
-    btn.dataset.armed = '1'; btn.textContent = 'delete?'; btn.style.color = '#e94560';
-    setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = '🗑'; btn.style.color = ''; } }, 4000);
-    return;
-  }
-  btn.disabled = true; btn.textContent = '…';
-  try {
-    await _notesApi('DELETE', `/api/models/servers/${encodeURIComponent(server)}/models/${encodeURIComponent(model)}`);
-    showToast(`${model} removed from ${server}`);
-    await modelsSelect(server, true);
-  } catch (e) { btn.disabled = false; btn.textContent = '🗑'; showToast(`✕ ${e.message}`, 5000, 'red'); }
 }
 async function _mdlVmRefresh(name) {
   const st = document.getElementById('mdl-vm-state'); if (!st) return;

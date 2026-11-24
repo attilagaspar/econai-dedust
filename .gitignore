@@ -50,6 +50,7 @@ server.err
 server.out
 app/ocr_settings.json
 app/gpu_servers.json
+app/models_seen.json
 .llm_cache.sqlite
 
 # Model weights (never in git)

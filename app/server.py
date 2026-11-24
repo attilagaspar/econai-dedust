@@ -5670,6 +5670,14 @@ def api_models_list(profile: str, passphrase: Optional[str] = Query(None)):
         m["local"] = _models_local_info(m["name"], profile)
     for m in data["partial"]:
         m["local"] = _models_local_info(m["name"], profile)
+    for w in data.get("workspace") or []:
+        pdir = project_dir(w["name"])
+        w["local"] = {"project": pdir.exists()}
+        if pdir.exists():
+            try:
+                w["local"]["server_profile"] = load_config(w["name"]).get("server_profile")
+            except Exception:
+                pass
     data["profile"] = profile
     data["host"] = srv.get("host")
     data["remote_path"] = remote
@@ -5701,6 +5709,51 @@ def api_models_delete(profile: str, model: str, passphrase: Optional[str] = Quer
     from app import auto_tags
     auto_tags.forget_model(profile, model)
     return {"ok": True, "removed": target}
+
+
+class RemoveBody(BaseModel):
+    items: list[dict] = []        # [{"project": name, "kinds": ["images", "predictions", "parents", "eval", "data", "model"]}]
+    passphrase: Optional[str] = None
+
+
+@app.post("/api/models/servers/{profile}/remove")
+def api_models_remove(profile: str, body: RemoveBody):
+    """Remove what Dedust has put on the server for any number of projects,
+    in one SSH call: their images, predictions, parents, scoring runs (or
+    the whole data folder), their models (output folder + configs + scripts).
+    Everything is reported path by path as removed / missing / failed. The
+    projects themselves (local) stay; a removed model loses its has-model tag."""
+    from app import ssh_ops, model_registry, auto_tags
+    srv = _models_profile(profile)
+    pw = body.passphrase or srv.get("passphrase") or None
+    remote = (srv.get("remote_path") or "").rstrip("/")
+    if not remote:
+        raise HTTPException(status_code=400, detail=f"Profile '{profile}' has no remote_path")
+    roots = [remote]
+    pr = (srv.get("predict_remote_path") or "").rstrip("/")
+    if pr and pr != remote:
+        roots.append(pr)
+    items = []
+    for it in body.items or []:
+        if not isinstance(it, dict):
+            raise HTTPException(status_code=400, detail="each item is {project, kinds}")
+        items.append({"project": str(it.get("project") or ""), "kinds": [str(k) for k in (it.get("kinds") or [])]})
+    if not items:
+        raise HTTPException(status_code=400, detail="Nothing selected")
+    try:
+        script = model_registry.remove_script(remote, roots, items)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    res = ssh_ops.run_command(srv["host"], srv["user"], srv["key_path"], f"bash -s <<'DEDUST_EOF'\n{script}\nDEDUST_EOF", pw)
+    if res.get("error") or (not res.get("ok") and not (res.get("stdout") or "").strip()):
+        raise HTTPException(status_code=503, detail=f"Could not reach {srv.get('host')}: {res.get('error') or res.get('stderr') or 'no answer'}")
+    out = model_registry.parse_removal(res.get("stdout") or "")
+    for it in items:
+        if "model" in it["kinds"]:
+            auto_tags.forget_model(profile, it["project"])
+    out["ok"] = not out["failed"] and out["complete"]
+    out["items"] = items
+    return out
 
 
 class AzureVmBody(BaseModel):

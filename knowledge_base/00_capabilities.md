@@ -593,8 +593,18 @@ single source of truth; a dataset is a **view** built on demand. Full design:
   weights and folder size, the model's own AP / AP50 from `metrics.json`,
   the last training-ledger row; output folders without final weights are
   listed apart. One SSH call per server (`app/model_registry.py`,
-  `GET /api/models/servers/<profile>/models`). 🗑 removes a model's output
-  folder (two clicks; the project stays). **Azure GPU VM switch**: a
+  `GET /api/models/servers/<profile>/models`). **Storage on the server**
+  (added 2026-11-24): the same listing reports every project's footprint
+  on the host — images, predictions, parents, eval runs, model folder with
+  configs / scripts, sizes and file counts — as a table under the models,
+  with a checkbox per cell, per column (one kind for every project), per
+  row (everything of a project) and a select-all; projects no longer on
+  the instance are flagged. A sticky bar sums the selection and confirms
+  inline once; `POST /api/models/servers/<profile>/remove` then removes it
+  all in one SSH call and reports each path (removed / missing / failed).
+  The 🗑 on a model row feeds the same selection. Nothing on a server is
+  ever removed otherwise (deleting a project is local). **Azure GPU VM
+  switch**: a
   profile may name the Azure VM behind it (subscription, resource group,
   VM name — "Set up start / stop…"); the panel then shows the power state
   with ▶ Start / ■ Stop (deallocate), through the instance's own identity

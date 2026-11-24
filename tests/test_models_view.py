@@ -359,3 +359,84 @@ def test_keep_trying_endpoints_start_report_and_stop(client, profiles, monkeypat
     assert gpu_profiles.get("boxA")["azure_vm"]["ntfy_topic"] == "dedust-gpu-x"
     assert {s["name"]: s for s in client.get("/api/models/servers").json()["servers"]}["boxA"]["azure_vm"]["ntfy_topic"] == "dedust-gpu-x"
     srv._vm_waiters.clear()
+
+
+# ── storage on the server: the workspace rows of the listing, and bulk removal ──
+
+WORKSPACE = """@@WORKSPACE
+@@WS gend_1900|2400000|812|900|812|40|0|2401000|1200000|3
+@@WS compass_1892|500000|200|0|0|0|30000|531000|800000|2
+@@WS cfgonly|0|0|0|0|0|0|0|0|1
+@@END
+"""
+
+
+def test_listing_reports_each_projects_footprint(client, proj, monkeypatch):
+    out = model_registry.parse_listing(LISTING.replace("@@END\n", WORKSPACE))
+    ws = {w["name"]: w for w in out["workspace"]}
+    assert ws["gend_1900"]["images_kb"] == 2400000 and ws["gend_1900"]["images_n"] == 812
+    assert ws["gend_1900"]["predictions_n"] == 812 and ws["gend_1900"]["model_kb"] == 1200000
+    assert ws["gend_1900"]["other_kb"] == 2401000 - 2400000 - 900 - 40          # whatever else sits in the data folder
+    assert ws["compass_1892"]["eval_kb"] == 30000 and ws["cfgonly"]["scripts_n"] == 1
+    assert out["complete"] and model_registry.parse_listing(LISTING)["workspace"] == []   # an older listing: no rows
+    script = model_registry.listing_script("/home/u/ws", "t", "p")
+    assert "@@WORKSPACE" in script and '"$W"/*/' in script and 'layout-model-training" ] && continue' in script
+    # the endpoint says which rows still have a project on this instance
+    monkeypatch.setattr(ssh_ops, "run_command", lambda *a, **k: {"ok": True, "returncode": 0, "stderr": "",
+                                                                 "stdout": LISTING.replace("@@END\n", WORKSPACE).replace("compass_1892", proj)})
+    d = client.get("/api/models/servers/boxA/models").json()
+    ws = {w["name"]: w for w in d["workspace"]}
+    assert ws[proj]["local"] == {"project": True, "server_profile": "boxA"}
+    assert ws["gend_1900"]["local"] == {"project": False}
+
+
+def test_remove_paths_promote_a_whole_data_folder_and_refuse_bad_names():
+    rp = model_registry.remove_paths
+    exact, globs = rp("/ws", ["/ws"], "gend_1900", ["images", "predictions"])
+    assert exact == ["/ws/gend_1900/images", "/ws/gend_1900/predictions"] and globs == []
+    exact, globs = rp("/ws", ["/ws"], "gend_1900", ["images", "predictions", "parents", "eval"])
+    assert exact == ["/ws/gend_1900"]                                       # all four parts → the whole data folder
+    exact, globs = rp("/ws", ["/ws", "/pws"], "gend_1900", ["model"])
+    assert "/ws/layout-model-training/outputs/gend_1900" in exact and "/pws/layout-model-training/configs/gend_1900" in exact
+    assert "/ws/layout-model-training/scripts/gend_1900_infer.sh" in exact
+    assert globs == ["/ws/layout-model-training/scripts/gend_1900_finetune_from_*.sh",
+                     "/pws/layout-model-training/scripts/gend_1900_finetune_from_*.sh"]
+    for bad in ("..", "a/b", "layout-model-training", "", "x y"):
+        with pytest.raises(ValueError):
+            rp("/ws", ["/ws"], bad, ["images"])
+    with pytest.raises(ValueError):
+        rp("/ws", ["/ws"], "ok", ["weights"])
+    with pytest.raises(ValueError):
+        rp("/ws", ["/ws"], "ok", [])
+    s = model_registry.remove_script("/ws", ["/ws"], [{"project": "gend_1900", "kinds": ["images"]}])
+    assert "rm -rf /ws/gend_1900/images" in s and "rmdir /ws/gend_1900" in s and s.rstrip().endswith('echo "@@DONE"')
+
+
+def test_bulk_remove_endpoint_removes_everything_selected_in_one_call(client, profiles, monkeypatch, tmp_path):
+    from app import auto_tags
+    auto_tags.remember_models("boxA", ["gend_1900", "compass_1892"])
+    seen = {}
+    def fake_run(host, user, key_path, cmd, passphrase=None):
+        seen["cmd"] = cmd
+        return {"ok": True, "returncode": 0, "stderr": "", "stdout":
+                "@@OK /home/u/ws/gend_1900\n@@OK /home/u/ws/layout-model-training/outputs/gend_1900\n"
+                "@@MISSING /home/u/ws/layout-model-training/configs/gend_1900\n@@OK /home/u/ws/compass_1892/images\n@@DONE\n"}
+    monkeypatch.setattr(ssh_ops, "run_command", fake_run)
+    r = client.post("/api/models/servers/boxA/remove", json={"items": [
+        {"project": "gend_1900", "kinds": ["images", "predictions", "parents", "eval", "model"]},
+        {"project": "compass_1892", "kinds": ["images"]}]})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] and len(d["removed"]) == 3 and d["missing"] == ["/home/u/ws/layout-model-training/configs/gend_1900"]
+    assert "rm -rf /home/u/ws/gend_1900 " in seen["cmd"] and "rm -rf /home/u/ws/compass_1892/images" in seen["cmd"]
+    assert "/home/u/ws/compass_1892/predictions" not in seen["cmd"]
+    assert auto_tags.seen_models("boxA") == {"compass_1892"}              # the model went; the other project's stays
+    # bad input is refused before anything reaches the server
+    seen.clear()
+    assert client.post("/api/models/servers/boxA/remove", json={"items": []}).status_code == 400
+    assert client.post("/api/models/servers/boxA/remove", json={"items": [{"project": "../etc", "kinds": ["images"]}]}).status_code == 400
+    assert client.post("/api/models/servers/boxA/remove", json={"items": [{"project": "ok", "kinds": ["everything"]}]}).status_code == 400
+    assert client.post("/api/models/servers/nope/remove", json={"items": [{"project": "ok", "kinds": ["images"]}]}).status_code == 404
+    assert not seen
+    monkeypatch.setattr(ssh_ops, "run_command", lambda *a, **k: {"ok": False, "error": "timed out"})
+    assert client.post("/api/models/servers/boxA/remove", json={"items": [{"project": "ok", "kinds": ["images"]}]}).status_code == 503
